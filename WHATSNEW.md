@@ -1,3 +1,202 @@
+# What's New in v1.12.4
+
+> **Patch release — Command Palette open-session prioritisation.**
+> A single-issue UX patch for operators who keep multiple sessions
+> open and use the `Ctrl+K` palette as their primary session
+> switcher. The connection list previously rendered in raw API
+> order with no preferential placement for the sessions that were
+> already open, so the fastest possible "jump to the other open
+> session" interaction (`Ctrl+K → Enter`) was impossible without
+> scrolling, arrow-keying, or typing a disambiguating substring.
+> v1.12.4 sorts the list into three stable buckets — other open
+> sessions, the session you're currently on, then everything else
+> — so the most useful target is always the default. No backend
+> changes, no API surface changes, no migrations, no new
+> environment variables, no new Cargo or npm dependencies; the
+> change is entirely scoped to
+> `frontend/src/components/CommandPalette.tsx` plus its matching
+> test.
+
+## Theme 1 — `Ctrl+K` palette open-session prioritisation
+
+### 1.1 Symptom
+
+A user with several sessions open (e.g. an analyst comparing
+records across `bnym-tracker-01`, `dataflow-01-live`, and
+`dfviewer-prod`) uses the in-session Command Palette as their
+day-to-day session switcher. They press `Ctrl+K`, type nothing,
+and the palette opens with the **first connection in the user's
+stored connections list** highlighted — regardless of whether
+that connection is one of the open sessions or not. To switch to
+a specific open session the user has to either (a) scroll the
+list, (b) arrow-key down through every inactive connection until
+they land on an open one, or (c) type a disambiguating substring
+of the target's name. None of these are bad on their own, but
+the most common case — _"I'm on Session A and I want to switch
+to Session B which is also open"_ — is the slowest path through
+the palette.
+
+### 1.2 Root cause
+
+The `filtered` array inside
+[`CommandPalette.tsx`](../frontend/src/components/CommandPalette.tsx)
+was the raw `connections.filter(...)` output, which preserves the
+order returned by
+[`GET /api/user/connections`](api-reference.md). That endpoint
+does not surface any notion of session state — it returns the
+user's _authored_ connection list in the order their admin
+created them in. The `activeConnectionIds` set (used to render
+the green **Active** pill on each row) was already computed at
+render time but only drove the pill, not the row order. As a
+result: open sessions were visually marked, but were not
+positionally promoted.
+
+### 1.3 Fix
+
+After the existing query filter runs, the array is sorted
+through a single stable comparator that maps each row to one of
+three rank buckets:
+
+```
+0 — open session you are NOT currently looking at
+1 — open session you ARE currently looking at
+2 — connection that is not open
+```
+
+With two helpers derived at render time:
+
+- `activeConnectionIds: Set<string>` — already-present pre-render
+  set, computed once per render via
+  `new Set(sessions.map((s) => s.connectionId))`.
+- `activeConnectionId: string | null` — newly-introduced helper
+  that resolves the **connection id of the session the user is
+  currently focused on** by intersecting `sessions` with the
+  existing `activeSessionId` from `useSessionManager()`.
+
+The comparator is a one-liner against a per-row `rank()` lookup:
+
+```ts
+const rank = (id: string) => {
+  if (!activeConnectionIds.has(id)) return 2;
+  if (id === activeConnectionId) return 1;
+  return 0;
+};
+```
+
+ECMAScript 2019+ specifies `Array.prototype.sort` as **stable**,
+so the original API order is preserved _within_ each rank
+bucket. This means:
+
+- Open sessions don't reshuffle when another session opens or
+  closes — only the bucket boundaries shift.
+- Inactive connections continue to appear in exactly the same
+  order they always did beneath the open sessions, so users who
+  have internalised the existing presentation order over the
+  past six minor versions don't have to relearn anything.
+- The currently-displayed session sits at rank 1 (just below the
+  other open sessions), keeping it one keystroke away for the
+  rare case the operator actually does want to re-focus or
+  reconnect it.
+
+### 1.4 User-visible effect
+
+With two open sessions (`prod-db` and `dev-rdp`) and the user
+currently focused on `prod-db`:
+
+1. Press `Ctrl+K`.
+2. `dev-rdp` is highlighted at the top of the list.
+3. Press `Enter` → jump straight to `dev-rdp` — the fastest
+   possible "switch to the other open session" interaction.
+4. To return to `prod-db`: `Ctrl+K`, `↓`, `Enter`.
+
+With one open session (`prod-db`) and the user currently focused
+on it:
+
+1. Press `Ctrl+K`.
+2. `prod-db` is highlighted at the top (rank 1 — it's the only
+   open session and the user is on it).
+3. Press `Enter` → no-op (already on it; SessionManager keeps it
+   foregrounded). Behaviour is identical to v1.12.3.
+
+With no open sessions:
+
+1. Press `Ctrl+K`.
+2. The first connection in API order is highlighted, exactly as
+   in every previous version.
+3. Press `Enter` → launch that connection. Behaviour is
+   identical to v1.12.3.
+
+### 1.5 What did NOT change
+
+Everything else about the palette is untouched:
+
+- The query filter still matches against `name`, `protocol`,
+  `hostname`, `description`, `folder_name`, and every assigned
+  user-tag name (case-insensitive substring).
+- The `:command` surface (colon-prefixed input) is unchanged —
+  same fixed-order built-in registry, same user-mapped commands
+  from `user_preferences.preferences.commandMappings`, same
+  ghost-text autocomplete, same audit-row emission via
+  [`POST /api/user/command-audit`](api-reference.md).
+- The green **Active** pill on rows is unchanged.
+- Connection folders and tag pills are unchanged.
+- The pop-out vanilla-DOM palette
+  ([`utils/popoutPalette.ts`](../frontend/src/utils/popoutPalette.ts))
+  is unchanged — it serves a single pop-out window's own
+  session-switcher, where the three-bucket rank is not
+  meaningful.
+
+### 1.6 Tests
+
+One new test in
+[`__tests__/CommandPalette.test.tsx`](../frontend/src/__tests__/CommandPalette.test.tsx)
+asserts the new behaviour end-to-end:
+
+> _"sorts open sessions to the top, with the currently-displayed
+> one second"_
+
+The test mocks `useSessionManager` with two sessions (`c1` and
+`c3` open, user focused on `c1`), renders the palette, and
+asserts:
+
+1. The DOM order of `[role="option"]` rows is `[c3, c1, c2]`
+   (rank-0 → rank-1 → rank-2).
+2. The default-highlighted row is the first one (`c3`).
+3. Pressing `Enter` navigates to `/session/c3` — the **other**
+   open session, not the one already on screen.
+
+All 15 pre-existing palette tests continue to pass without
+modification — their mock fixtures happen to put the (single)
+active session first in API order already, so the new sort is a
+no-op for those fixtures and the original assertion targets
+remain valid.
+
+### 1.7 Operator impact
+
+None in the operational sense — no migrations, no new env vars,
+no config file changes, no new Cargo or npm dependencies, no
+new images or containers. Recommended deploy:
+`docker compose pull && docker compose up -d --build` (or the
+ghcr/k8s equivalent) and nothing else.
+
+The backend container image is byte-identical to v1.12.3 in
+everything except the `[workspace.package].version` field
+embedded into the binary; the frontend container image differs
+only in the rebuilt JS bundle (new sort logic + new test, with
+`__APP_VERSION__` bumped so the **What's New** carousel
+surfaces on first sign-in). Mixed v1.12.3 / v1.12.4 deployments
+handshake cleanly; the `strata-dmz` relay binary cosmetically
+bumps version (shared workspace `[workspace.package].version`)
+but its wire protocol is byte-identical, so the **Admin → DMZ
+Links** tab will show a _Mixed_ indicator until every relay is
+upgraded.
+
+Sites that do not use the Command Palette feature (configured
+out via `commandPaletteBinding = ""` in user preferences, or
+simply unused) see zero behavioural change.
+
+---
+
 # What's New in v1.12.3
 
 > **Patch release — Safeguard JIT post-approval username regression
@@ -6,13 +205,13 @@
 > the SPA flipped the request to "Released" the moment the
 > approver acted, but every subsequent tunnel attempt against the
 > protected target failed with `Authentication failure (invalid
-> credentials?)` because the cached row carried `username = NULL`
+credentials?)` because the cached row carried `username = NULL`
 > and the tunnel was therefore sending an empty NLA username with
 > a correct password. The auto-released (no-approval) path was
 > unaffected. No protocol changes, no migrations, no new
 > environment variables, no new Cargo or npm dependencies; existing
 > v1.12.x deployments upgrade with `docker compose pull && docker
-> compose up -d --build`. The fix is entirely scoped to
+compose up -d --build`. The fix is entirely scoped to
 > `backend/src/services/safeguard/*`.
 
 ## Theme 1 — Safeguard JIT post-approval username regression
@@ -160,20 +359,20 @@ runs, so the audit trail is unaffected by refetch outcome.
 
 ### 1.4 Backwards compatibility
 
-| Surface                                           | Status         |
-| ------------------------------------------------- | -------------- |
-| `POST /api/user/safeguard/bulk-checkout` request  | Unchanged      |
-| `POST /api/user/safeguard/bulk-checkout` response | Unchanged      |
-| `POST /api/user/safeguard/release` request        | Unchanged      |
-| `POST /api/user/safeguard/release` response       | Unchanged      |
-| `GET /api/user/safeguard/cached` shape            | Unchanged      |
-| `safeguard_cached_passwords` table schema         | Unchanged      |
-| `safeguard_checkout_audit` table schema           | Unchanged      |
-| `safeguard_config` table schema                   | Unchanged      |
-| Migrations introduced                             | None           |
-| Environment variables added                       | None           |
-| Cargo dependencies added                          | None           |
-| npm dependencies added                            | None           |
+| Surface                                           | Status    |
+| ------------------------------------------------- | --------- |
+| `POST /api/user/safeguard/bulk-checkout` request  | Unchanged |
+| `POST /api/user/safeguard/bulk-checkout` response | Unchanged |
+| `POST /api/user/safeguard/release` request        | Unchanged |
+| `POST /api/user/safeguard/release` response       | Unchanged |
+| `GET /api/user/safeguard/cached` shape            | Unchanged |
+| `safeguard_cached_passwords` table schema         | Unchanged |
+| `safeguard_checkout_audit` table schema           | Unchanged |
+| `safeguard_config` table schema                   | Unchanged |
+| Migrations introduced                             | None      |
+| Environment variables added                       | None      |
+| Cargo dependencies added                          | None      |
+| npm dependencies added                            | None      |
 
 Cache rows persisted by v1.12.2 against approval-required
 accounts will continue to carry `username = NULL` until they
@@ -193,7 +392,7 @@ Two reasons:
    `jit_checkout → Released` happy path extensively (which
    does populate username correctly from the
    `CreateAccessRequest` response). The `PendingApproval →
-   poll → Released` path requires an approver-in-the-loop
+poll → Released` path requires an approver-in-the-loop
    setup that the lab appliance was not configured for at
    integration time.
 2. **The cache row looked superficially complete.** All other

@@ -722,6 +722,58 @@ integrity guarantees described in
 [security.md → Audit Trail](security.md#audit-trail) apply uniformly to
 this stream.
 
+### Open-session prioritisation (v1.12.4)
+
+The connection-search path (typed text **without** a leading colon)
+sorts the filtered list into three stable rank buckets after the
+existing query filter runs, so the most useful target is always
+the default selection:
+
+| Rank | Bucket                                            |
+| :--: | :------------------------------------------------ |
+|  0   | Open session you are **not** currently looking at |
+|  1   | Open session you **are** currently looking at     |
+|  2   | Connection that is not open                       |
+
+The ranks are derived from two render-time helpers:
+
+- `activeConnectionIds: Set<string>` — already-present pre-render
+  set, computed once per render via
+  `new Set(sessions.map((s) => s.connectionId))`. Also drives the
+  green **Active** pill on each row.
+- `activeConnectionId: string | null` — the connection id of the
+  session the user is currently focused on, resolved by
+  intersecting `sessions` with the existing `activeSessionId`
+  from `useSessionManager()` (`sessions.find((s) => s.id ===
+activeSessionId)?.connectionId ?? null`).
+
+ECMAScript 2019+ specifies `Array.prototype.sort` as **stable**,
+so the relative order **within** each rank bucket is preserved:
+open sessions don't reshuffle when another session opens or
+closes (only the bucket boundaries shift), and inactive
+connections continue to appear in exactly the same API order they
+always did beneath the open sessions. The existing green
+**Active** pill on rows visually reinforces the new ordering
+without needing a section header.
+
+The result: with two open sessions and the user focused on one of
+them, pressing `Ctrl+K → Enter` jumps straight to the **other**
+open session (the fastest possible session-switch). The
+currently-displayed session sits at rank 1 (one keystroke away),
+which keeps it cheap to re-focus or reconnect when the operator
+actually wants that. Inactive connections at rank 2 preserve
+muscle memory for users who have internalised the existing
+presentation order over the past six minor versions.
+
+The colon-prefixed `:command` surface is unaffected — built-in
+and user-mapped commands render in their existing fixed-order
+registry regardless of session state, and the ghost-text
+autocomplete and audit-row emission paths are unchanged. The
+pop-out vanilla-DOM palette
+([`utils/popoutPalette.ts`](../frontend/src/utils/popoutPalette.ts))
+is also unchanged — it serves a single pop-out window's own
+session-switcher, where the three-bucket rank is not meaningful.
+
 ### Pop-out Command Palette (v1.5.1)
 
 When a session is detached into its own pop-out window the main

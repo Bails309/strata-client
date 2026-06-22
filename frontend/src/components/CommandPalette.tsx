@@ -218,24 +218,46 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const lowerQuery = query.toLowerCase();
   const activeConnectionIds = new Set(sessions.map((s) => s.connectionId));
 
+  // Connection id of the session you're currently looking at (if any).
+  // Used to push your *other* open sessions to the very top of the list,
+  // with the already-displayed one just below them — so `Ctrl+K → Enter`
+  // jumps you to a different open session instead of re-navigating to
+  // the one already on screen.
+  const activeConnectionId =
+    sessions.find((s) => s.id === activeSessionId)?.connectionId ?? null;
+
   // Pre-resolve tag id → tag for O(1) lookup during the per-row render.
   const tagById = new Map(tags.map((t) => [t.id, t]));
 
-  const filtered = connections.filter((c) => {
-    if (!query) return true;
-    const tagIds = connectionTags[c.id] || [];
-    const tagNamesMatch = tagIds.some((id) =>
-      tagById.get(id)?.name.toLowerCase().includes(lowerQuery)
-    );
-    return (
-      c.name.toLowerCase().includes(lowerQuery) ||
-      c.protocol.toLowerCase().includes(lowerQuery) ||
-      (c.hostname || "").toLowerCase().includes(lowerQuery) ||
-      (c.description || "").toLowerCase().includes(lowerQuery) ||
-      (c.folder_name || "").toLowerCase().includes(lowerQuery) ||
-      tagNamesMatch
-    );
-  });
+  const filtered = connections
+    .filter((c) => {
+      if (!query) return true;
+      const tagIds = connectionTags[c.id] || [];
+      const tagNamesMatch = tagIds.some((id) =>
+        tagById.get(id)?.name.toLowerCase().includes(lowerQuery)
+      );
+      return (
+        c.name.toLowerCase().includes(lowerQuery) ||
+        c.protocol.toLowerCase().includes(lowerQuery) ||
+        (c.hostname || "").toLowerCase().includes(lowerQuery) ||
+        (c.description || "").toLowerCase().includes(lowerQuery) ||
+        (c.folder_name || "").toLowerCase().includes(lowerQuery) ||
+        tagNamesMatch
+      );
+    })
+    // Stable sort (ES2019+) so the original connection order is preserved
+    // *within* each rank bucket.
+    //   0 — open session you're NOT currently on (fastest to switch to)
+    //   1 — open session you ARE currently on
+    //   2 — not open
+    .sort((a, b) => {
+      const rank = (id: string) => {
+        if (!activeConnectionIds.has(id)) return 2;
+        if (id === activeConnectionId) return 1;
+        return 0;
+      };
+      return rank(a.id) - rank(b.id);
+    });
 
   // Clamp selected index when filtered list changes
   useEffect(() => {

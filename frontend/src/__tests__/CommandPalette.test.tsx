@@ -235,4 +235,42 @@ describe("CommandPalette", () => {
     // Should render a generic monitor icon SVG (not crash)
     expect(screen.getByText("Telnet Box").closest('[role="option"]')).toBeInTheDocument();
   });
+
+  it("sorts open sessions to the top, with the currently-displayed one second", async () => {
+    // API returns connections in alphabetical-ish API order: c1, c2, c3.
+    // Two are open: c1 (currently displayed) and c3.
+    // Expected list order: c3 (other open) → c1 (currently displayed) → c2 (not open).
+    (getMyConnections as ReturnType<typeof vi.fn>).mockResolvedValue(mockConnections);
+    (getTags as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (getConnectionTags as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (useSessionManager as ReturnType<typeof vi.fn>).mockReturnValue({
+      sessions: [
+        { id: "s1", connectionId: "c1" },
+        { id: "s3", connectionId: "c3" },
+      ],
+      activeSessionId: "s1", // user is currently on c1
+    });
+
+    const onClose = vi.fn();
+    render(
+      <MemoryRouter>
+        <CommandPalette open={true} onClose={onClose} />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
+
+    // Read DOM order of result rows.
+    const rows = Array.from(document.querySelectorAll('[role="option"]'));
+    const names = rows.map((r) => r.querySelector("span")?.textContent);
+    expect(names).toEqual(["QA Desktop", "Dev Server", "Prod DB"]);
+
+    // Enter on the highlighted (top) row should jump to the *other* open
+    // session — c3 — not the one already on screen.
+    const input = screen.getByPlaceholderText(/Search connections/i);
+    input.focus();
+    const user = userEvent.setup();
+    await user.keyboard("{Enter}");
+    expect(mockNavigate).toHaveBeenCalledWith("/session/c3");
+  });
 });

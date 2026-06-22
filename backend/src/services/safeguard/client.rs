@@ -475,19 +475,35 @@ pub async fn checkout_password(
     Ok(CheckoutOutcome::Released(pw))
 }
 
+/// Snapshot of an access request returned by `GET /AccessRequests/{id}`.
+/// Only the fields strata actually consumes are kept:
+///
+/// * `state` — appliance-reported workflow state
+///   (`PasswordCheckedOut`, `PendingApproval`, etc.) used by the
+///   password-cache validator to decide whether the row is still live.
+/// * `account_name` — Safeguard's `AccountName` for the target. The
+///   appliance only echoes this back at request-creation time and on
+///   this GET, NOT from `CheckoutPassword`, so callers that release a
+///   pending request after approval rely on this endpoint to recover
+///   the username they need to feed into RDP/SSH NLA.
+#[derive(Debug, Clone, Default)]
+pub struct AccessRequestStatus {
+    pub state: Option<String>,
+    pub account_name: Option<String>,
+}
+
 /// GET `/AccessRequests/{id}` and return the appliance-reported
-/// `State` string. Used by the password-cache validator to decide
-/// whether a previously-issued request is still live (i.e. the user
-/// hasn't already checked it back in via the Safeguard portal).
+/// state plus account name. Used by the password-cache validator
+/// (state) and the post-approval release path (account name).
 ///
 /// Returns `Ok(None)` when the appliance responds 404 — the request
 /// has been purged, so the cache row should be evicted.
-pub async fn get_access_request_state(
+pub async fn get_access_request_status(
     client: &Client,
     base: &str,
     bearer: &str,
     request_id: &str,
-) -> Result<Option<String>, AppError> {
+) -> Result<Option<AccessRequestStatus>, AppError> {
     let url = format!("{base}/service/core/v4/AccessRequests/{request_id}");
     let resp = client
         .get(&url)
@@ -507,15 +523,20 @@ pub async fn get_access_request_state(
         )));
     }
     #[derive(serde::Deserialize)]
-    struct AccessRequestState {
+    struct AccessRequestStateDto {
         #[serde(rename = "State", default)]
         state: Option<String>,
+        #[serde(rename = "AccountName", default)]
+        account_name: Option<String>,
     }
-    let parsed: AccessRequestState = resp
+    let parsed: AccessRequestStateDto = resp
         .json()
         .await
         .map_err(|e| AppError::Internal(format!("safeguard AR state decode: {e}")))?;
-    Ok(parsed.state)
+    Ok(Some(AccessRequestStatus {
+        state: parsed.state,
+        account_name: parsed.account_name.filter(|s| !s.is_empty()),
+    }))
 }
 
 /// GET `/Me/ActionableRequests` and return the caller's active

@@ -594,14 +594,40 @@ pub async fn release_pending(
                 None,
             )
             .await;
+            // Safeguard's `CheckoutPassword` endpoint does not echo
+            // the AccountName back, but the original
+            // `CreateAccessRequest` did — and a subsequent
+            // `GET /AccessRequests/{id}` still reports it. Refetch
+            // here so the caller can cache a row with a real
+            // username; otherwise downstream RDP/SSH NLA sees an
+            // empty user and the target rejects with "invalid
+            // credentials" even though the password is correct.
+            // Refetch failure is non-fatal: we still hand back the
+            // password and let the caller fall back to whatever it
+            // had before this fix landed.
+            let username = match client::get_access_request_status(
+                &http, &base, &bearer, request_id,
+            )
+            .await
+            {
+                Ok(Some(status)) => status.account_name,
+                Ok(None) => {
+                    tracing::warn!(
+                        "Safeguard released request {request_id} returned 404 on AccountName refetch; cached username will be empty"
+                    );
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Safeguard AccountName refetch failed for released request {request_id}: {e}; cached username will be empty"
+                    );
+                    None
+                }
+            };
             Ok(JitOutcome::Released(CheckoutResult {
                 request_id: request_id.to_string(),
                 password,
-                // The username Safeguard reported at request-creation
-                // time is not echoed back from CheckoutPassword; the
-                // caller is expected to use the profile's stored
-                // username or refetch the request details.
-                username: None,
+                username,
             }))
         }
         client::CheckoutOutcome::PendingApproval { state } => {
@@ -771,14 +797,17 @@ pub async fn check_request_validity(
         return Ok(CacheValidity::Unknown);
     };
 
-    match client::get_access_request_state(&http, &base, &bearer, request_id).await {
-        Ok(state) => {
-            if matches!(state.as_deref(), Some("PasswordCheckedOut")) {
+    match client::get_access_request_status(&http, &base, &bearer, request_id).await {
+        Ok(Some(status)) => {
+            if matches!(status.state.as_deref(), Some("PasswordCheckedOut")) {
                 Ok(CacheValidity::Active)
             } else {
                 Ok(CacheValidity::Inactive)
             }
         }
+        // 404 → purged from the appliance, treat as inactive so the
+        // cache row gets evicted on the caller side.
+        Ok(None) => Ok(CacheValidity::Inactive),
         Err(e) => {
             tracing::debug!("safeguard cache validation: state probe failed: {e}");
             Ok(CacheValidity::Unknown)

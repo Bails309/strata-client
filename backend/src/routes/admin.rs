@@ -4606,7 +4606,10 @@ mod tests {
                 "some_future_secret".into(),
                 "vault:{\"ct\":\"x\",\"dek\":\"vault:v1:y\",\"n\":\"z\"}".into(),
             ),
-            ("another_future_setting".into(), "vault:v1:rawTransitCt".into()),
+            (
+                "another_future_setting".into(),
+                "vault:v1:rawTransitCt".into(),
+            ),
             ("plain_setting".into(), "vault is not a prefix here".into()),
         ];
         let result = redact_settings(input);

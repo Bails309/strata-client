@@ -5,6 +5,79 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.12.5] — 2026-06-25
+
+### Patch Release — `GET /api/admin/settings` masks Vault-sealed values
+
+A penetration test against a v1.12.4 deployment identified that the
+sealed Azure Storage access key used for session-recording upload
+was being returned in full from `GET /api/admin/settings` as its
+Vault Transit envelope (`vault:{"ct":...,"dek":"vault:v1:...","n":...}`).
+The encrypted ciphertext itself is not directly exploitable — recovering
+the plaintext requires `transit/decrypt` capability on the Vault server
+holding the Transit master key — but the value should never have been
+returned at all. The redaction list in `backend/src/routes/admin.rs`
+already enumerated the SMTP, SSO, AD bind, and Vault-token keys; it
+also listed `azure_storage_access_key`, which is the wrong key name
+for the recordings setting (the actual key is `recordings_azure_access_key`),
+so the substring-based filter silently let the envelope through to
+the response. The same gap existed for `smtp_encrypted_password`,
+which had been added in v0.25.0 but never wired into the redaction list.
+
+If the deployment is misconfigured to run without Vault (the
+`unseal_setting` helper falls back to plaintext for legacy values),
+the same response path would have returned the **plaintext** Azure
+key. v1.12.5 closes both holes.
+
+### Security
+
+- `recordings_azure_access_key` and `smtp_encrypted_password` are now
+  explicitly listed in `SENSITIVE_SETTINGS` and masked on every
+  `GET /api/admin/settings` response.
+- **Defence-in-depth**: any setting value that begins with the literal
+  prefix `vault:` is now masked regardless of its key name. New sealed
+  settings added in future releases will be masked by this rule the
+  moment they are written, even before their key is added to the
+  explicit list.
+- `azure_access_key` (the unprefixed substring) is also now in the
+  list, so any future sealed Azure-style key whose name contains
+  `azure_access_key` is covered.
+
+### Changed
+
+- `update_recordings` (`PUT /api/admin/recordings`) now recognises the
+  redaction mask sentinels (`********` and `••••••••`) on the
+  `azure_access_key` field and treats them as "no change", rather than
+  Vault-sealing the literal mask string and overwriting the live access
+  key. This matches the round-trip safety already present for SSO and
+  AD bind passwords in `update_settings`.
+
+### Tests
+
+- Three new unit tests in `backend/src/routes/admin.rs`:
+  - `redact_settings_masks_recordings_azure_access_key`
+    (regression test for the pentest finding).
+  - `redact_settings_masks_smtp_encrypted_password`.
+  - `redact_settings_masks_any_vault_envelope_value`
+    (defence-in-depth: a key with no explicit mention is still masked
+    if its value starts with `vault:`).
+
+### Operator impact
+
+- No migrations. No new environment variables. No new dependencies.
+  Drop-in upgrade from v1.12.4: `docker compose pull &&
+docker compose up -d --build` (or the ghcr / k8s equivalent).
+- Operators who previously consumed `recordings_azure_access_key` or
+  `smtp_encrypted_password` from the admin settings API for any
+  reason will now see `********` in those fields. The dedicated
+  `PUT /api/admin/recordings` and `PUT /api/admin/notifications/smtp`
+  endpoints continue to accept new values; passing `********` is
+  now a no-op (preserves the existing value).
+- No frontend changes are required: `RecordingsTab.tsx` already
+  populates its password-style input from whatever the settings API
+  returns; with v1.12.5 that input shows the mask until the operator
+  types a new value or clears it.
+
 ## [1.12.4] — 2026-06-22
 
 ### Patch Release — Command Palette open-session prioritisation

@@ -267,13 +267,29 @@ pub fn validate_share_mode(mode: &str) -> Result<String, AppError> {
 // ── Settings ───────────────────────────────────────────────────────────
 
 /// Settings keys whose values must be redacted from API responses.
+///
+/// Matched as substrings against the setting key (so e.g. `azure_access_key`
+/// matches `recordings_azure_access_key`). When adding a new sealed setting,
+/// add its key (or a sufficiently-unique substring) here so it is masked on
+/// `GET /api/admin/settings`. The `vault:` envelope-prefix check below acts
+/// as a defence-in-depth fallback if a key is forgotten.
 const SENSITIVE_SETTINGS: &[&str] = &[
     "sso_client_secret",
     "ad_bind_password",
     "azure_storage_access_key",
+    "azure_access_key",
+    "recordings_azure_access_key",
+    "smtp_encrypted_password",
     "vault_token",
     "vault_unseal_key",
 ];
+
+/// Prefix of values stored under the Vault Transit envelope format
+/// (`vault:{"ct":...,"dek":"vault:v1:...","n":...}`). Any setting value
+/// starting with this prefix is, by construction, a sealed secret and is
+/// masked regardless of its key. Belt-and-braces for sealed values whose
+/// key name is missing from `SENSITIVE_SETTINGS`.
+const VAULT_ENVELOPE_PREFIX: &str = "vault:";
 
 const DOT_MASK: &str = "••••••••";
 const STAR_MASK: &str = "********";
@@ -283,7 +299,9 @@ fn redact_settings(settings: Vec<(String, String)>) -> Vec<(String, String)> {
     settings
         .into_iter()
         .map(|(k, v)| {
-            if SENSITIVE_SETTINGS.iter().any(|s| k.contains(s)) {
+            if SENSITIVE_SETTINGS.iter().any(|s| k.contains(s))
+                || v.starts_with(VAULT_ENVELOPE_PREFIX)
+            {
                 (k, STAR_MASK.to_string())
             } else {
                 (k, v)
@@ -1301,21 +1319,27 @@ pub async fn update_recordings(
         settings::set(&db.pool, "recordings_azure_container_name", container).await?;
     }
     if let Some(ref key) = body.azure_access_key {
-        // Encrypt access key via Vault if configured
-        let stored = if !key.is_empty() {
-            let vault_cfg = {
-                let s = state.read().await;
-                s.config.as_ref().and_then(|c| c.vault.clone())
-            };
-            if let Some(ref vc) = vault_cfg {
-                crate::services::vault::seal_setting(vc, key).await?
+        // If the UI re-sent the redaction mask (because GET
+        // /api/admin/settings now masks vault-sealed values), treat it as
+        // "no change" rather than sealing the literal mask string and
+        // overwriting the real access key.
+        if key != STAR_MASK && key != DOT_MASK {
+            // Encrypt access key via Vault if configured
+            let stored = if !key.is_empty() {
+                let vault_cfg = {
+                    let s = state.read().await;
+                    s.config.as_ref().and_then(|c| c.vault.clone())
+                };
+                if let Some(ref vc) = vault_cfg {
+                    crate::services::vault::seal_setting(vc, key).await?
+                } else {
+                    key.clone()
+                }
             } else {
-                key.clone()
-            }
-        } else {
-            String::new()
-        };
-        settings::set(&db.pool, "recordings_azure_access_key", &stored).await?;
+                String::new()
+            };
+            settings::set(&db.pool, "recordings_azure_access_key", &stored).await?;
+        }
     }
     audit::log(
         &db.pool,
@@ -4546,6 +4570,50 @@ mod tests {
         let result = redact_settings(input);
         assert_eq!(result[0].1, "dark");
         assert_eq!(result[1].1, "en");
+    }
+
+    #[test]
+    fn redact_settings_masks_recordings_azure_access_key() {
+        // Regression: pentest 2026-06-25 found this key was leaking its
+        // Vault envelope via GET /api/admin/settings because the old
+        // SENSITIVE_SETTINGS list used the substring `azure_storage_access_key`,
+        // which does NOT appear in `recordings_azure_access_key`.
+        let input = vec![(
+            "recordings_azure_access_key".into(),
+            r#"vault:{"ct":"abc","dek":"vault:v1:xyz","n":"nnn"}"#.into(),
+        )];
+        let result = redact_settings(input);
+        assert_eq!(result[0].1, STAR_MASK);
+    }
+
+    #[test]
+    fn redact_settings_masks_smtp_encrypted_password() {
+        let input = vec![(
+            "smtp_encrypted_password".into(),
+            r#"vault:{"ct":"abc","dek":"vault:v1:xyz","n":"nnn"}"#.into(),
+        )];
+        let result = redact_settings(input);
+        assert_eq!(result[0].1, STAR_MASK);
+    }
+
+    #[test]
+    fn redact_settings_masks_any_vault_envelope_value() {
+        // Defence-in-depth: even if a future sealed setting's key is
+        // missing from SENSITIVE_SETTINGS, the `vault:` envelope prefix
+        // on the value alone is enough to trigger masking.
+        let input = vec![
+            (
+                "some_future_secret".into(),
+                "vault:{\"ct\":\"x\",\"dek\":\"vault:v1:y\",\"n\":\"z\"}".into(),
+            ),
+            ("another_future_setting".into(), "vault:v1:rawTransitCt".into()),
+            ("plain_setting".into(), "vault is not a prefix here".into()),
+        ];
+        let result = redact_settings(input);
+        assert_eq!(result[0].1, STAR_MASK);
+        assert_eq!(result[1].1, STAR_MASK);
+        // Value does not start with `vault:` -> not masked.
+        assert_eq!(result[2].1, "vault is not a prefix here");
     }
 
     // ── validate_no_restricted_keys ────────────────────────────────

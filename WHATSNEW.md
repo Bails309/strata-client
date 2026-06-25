@@ -1,3 +1,190 @@
+# What's New in v1.12.5
+
+> **Patch release — Security: `GET /api/admin/settings` masks
+> Vault-sealed values.** A penetration test against v1.12.4 found
+> that the sealed Azure Storage access key used for session-recording
+> upload was being returned in full from `GET /api/admin/settings`
+> as its Vault Transit envelope (`vault:{"ct":...,"dek":"vault:v1:..."}`).
+> The encrypted ciphertext itself is not directly exploitable —
+> decrypting it requires the Vault server's Transit master key —
+> but the value should never have been on the wire at all.
+> v1.12.5 closes the redaction-list gap (`recordings_azure_access_key`
+> and `smtp_encrypted_password` are now explicitly masked) and adds
+> a defence-in-depth rule: **any setting value beginning with
+> `vault:` is masked regardless of its key name**, so future sealed
+> settings are protected the moment they are written. The companion
+> change in `PUT /api/admin/recordings` recognises the mask
+> sentinel on round-trip so the UI's pre-filled `********` no
+> longer overwrites the real access key. No migrations, no new
+> environment variables, no new Cargo or npm dependencies.
+
+## Theme 1 — Pentest finding: sealed envelope leaking through `/api/admin/settings`
+
+### 1.1 Symptom
+
+A pentester running an authenticated session as an administrator
+hit `GET /api/admin/settings` against a v1.12.4 deployment and
+observed (excerpt):
+
+```json
+{
+  "recordings_azure_access_key": "vault:{\"ct\":\"TsCYB7Uh…\",\"dek\":\"vault:v1:QY7B2A5P…\",\"n\":\"…\"}",
+  …
+}
+```
+
+The same response carried the SMTP relay password in the same
+envelope form under `smtp_encrypted_password`. Other sealed
+secrets (SSO client secret, AD bind password, Vault token) were
+correctly masked as `********`.
+
+### 1.2 Root cause — redaction list used the wrong key name
+
+`backend/src/routes/admin.rs` already had a `SENSITIVE_SETTINGS`
+list whose entries are substring-matched against every key the
+admin settings handler returns:
+
+```rust
+const SENSITIVE_SETTINGS: &[&str] = &[
+    "sso_client_secret",
+    "ad_bind_password",
+    "azure_storage_access_key",  // ← wrong: the actual key is `recordings_azure_access_key`
+    "vault_token",
+    "vault_unseal_key",
+];
+```
+
+The substring `azure_storage_access_key` does **not** appear in
+`recordings_azure_access_key` (the words are in a different
+order), so the filter silently let the envelope fall through. The
+`smtp_encrypted_password` key — added in the v0.25.0 notifications
+work — was never added to the list at all, because at the time
+the SMTP password was being designed and the focus was on the
+new dedicated `PUT /api/admin/notifications/smtp` route, with
+the legacy generic settings response treated as out-of-scope.
+
+### 1.3 Fix — explicit keys plus a `vault:` envelope-prefix catch-all
+
+Two changes to `redact_settings`:
+
+1. The explicit `SENSITIVE_SETTINGS` list now contains
+   `recordings_azure_access_key`, `smtp_encrypted_password`, and
+   the unprefixed substring `azure_access_key` (so any future
+   sealed Azure-style key whose name contains those words is
+   covered).
+2. A new defence-in-depth rule: **any value beginning with the
+   literal prefix `vault:` is masked regardless of its key**.
+   Because every value Strata writes via `vault::seal_setting`
+   is formatted as `vault:{json}` ([`backend/src/services/vault.rs:291`](backend/src/services/vault.rs)),
+   this rule means the response can never accidentally leak a
+   future sealed setting whose key name happens to be missing
+   from the explicit list.
+
+```rust
+fn redact_settings(settings: Vec<(String, String)>) -> Vec<(String, String)> {
+    settings.into_iter().map(|(k, v)| {
+        if SENSITIVE_SETTINGS.iter().any(|s| k.contains(s))
+            || v.starts_with(VAULT_ENVELOPE_PREFIX) {
+            (k, STAR_MASK.to_string())
+        } else {
+            (k, v)
+        }
+    }).collect()
+}
+```
+
+### 1.4 Round-trip safety — `PUT /api/admin/recordings` skips mask values
+
+Masking the GET response would have introduced a regression in
+`PUT /api/admin/recordings`. The Recordings admin tab populates
+its password-style input directly from
+`settings.recordings_azure_access_key` and submits whatever the
+input contains on save. With the new mask, the UI's input now
+reads `********` until the operator types a new value; without
+the companion fix, clicking **Save Recording Settings** would
+have sealed the literal string `********` and overwritten the
+real Azure key.
+
+`update_recordings` now recognises the redaction sentinels
+(`********` and `••••••••`) on the `azure_access_key` field and
+treats them as "no change" (no `settings::set` call is issued for
+that key). This matches the round-trip pattern already in place
+for SSO and AD bind passwords in `update_settings`. The SMTP path
+is unaffected: `PUT /api/admin/notifications/smtp` already uses a
+three-state discriminated union (`{action: 'keep' | 'clear' |
+'replace', value?}`) on the wire, so the masked GET value is
+never echoed back.
+
+### 1.5 What the encrypted envelope actually was
+
+For the record, the value the pentester saw is the documented
+Vault Transit envelope format, two layers removed from any
+plaintext credential:
+
+- The outer `vault:{json}` envelope is Strata's own per-value
+  AES-256-GCM ciphertext (`ct`), nonce (`n`), and Vault-wrapped
+  data encryption key (`dek`).
+- The inner `vault:v1:<base64>` segment inside `dek` is the
+  native ciphertext format produced by HashiCorp Vault's
+  `transit/encrypt/<key>` endpoint — `v1` is the Transit master
+  key generation, and the base64 payload is opaque AES-256-GCM
+  ciphertext with a random nonce. Decrypting it requires the
+  Vault server's Transit master key, which is generated inside
+  Vault and never traverses the wire.
+
+The defence-in-depth `vault:` prefix rule catches both layers —
+the outer Strata envelope and any raw Transit ciphertext that
+might end up in `system_settings` directly in future work.
+
+### 1.6 Tests
+
+Three new unit tests in `backend/src/routes/admin.rs`:
+
+- `redact_settings_masks_recordings_azure_access_key` — regression
+  test that pins the pentest finding. Passes a row with the exact
+  key name and a representative envelope value, asserts the
+  returned value is `********`.
+- `redact_settings_masks_smtp_encrypted_password` — same shape,
+  for the second key that was missing from the list.
+- `redact_settings_masks_any_vault_envelope_value` — exercises
+  the prefix-based fallback with a key name that is **not** in
+  `SENSITIVE_SETTINGS` but whose value starts with `vault:`,
+  asserting it is still masked. Includes a negative case to
+  confirm that a value containing the word `vault` but not
+  starting with `vault:` is left untouched.
+
+The pre-existing redaction tests
+(`redact_settings_hides_sensitive_values`,
+`redact_settings_passes_through_safe_keys`,
+`redact_settings_masks_all_sensitive`,
+`redact_settings_preserves_key_order`,
+`redact_settings_partial_key_match`,
+`redact_settings_empty_input`) all continue to pass without
+modification — the old `azure_storage_access_key` substring is
+deliberately retained in the list so the legacy test fixture
+still matches.
+
+### 1.7 Operator impact
+
+- No migrations. No environment variables added. No Cargo or npm
+  dependencies added. No new images or containers.
+- Recommended deploy: `docker compose pull && docker compose up
+-d --build` from v1.12.4 (or the ghcr / k8s equivalent).
+- Operators who consumed `recordings_azure_access_key` or
+  `smtp_encrypted_password` directly from the admin settings API
+  for any out-of-band purpose will now see `********` in those
+  fields. The dedicated `PUT /api/admin/recordings` and
+  `PUT /api/admin/notifications/smtp` endpoints continue to
+  accept new values; passing `********` is now a no-op (preserves
+  the existing value), so a save-without-edit from the Recordings
+  tab no longer destroys the Azure key.
+- Pentest reports that previously flagged a sealed envelope as
+  a finding against `/api/admin/settings` will no longer surface
+  the value at all on v1.12.5 — the only thing that comes back
+  for any sealed setting is the eight-asterisk mask.
+
+---
+
 # What's New in v1.12.4
 
 > **Patch release — Command Palette open-session prioritisation.**

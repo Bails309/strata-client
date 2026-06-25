@@ -29,6 +29,48 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.12.5",
+    subtitle:
+      'Patch release — Security: GET /api/admin/settings masks Vault-sealed values. A penetration test against v1.12.4 found that the sealed Azure Storage access key used for session-recording upload was being returned in full from the admin settings API as its Vault Transit envelope (vault:{"ct":...,"dek":"vault:v1:..."}). The encrypted ciphertext is not directly exploitable — decrypting it requires the Vault server\'s Transit master key — but the value should never have been on the wire at all. v1.12.5 closes the redaction-list gap (recordings_azure_access_key and smtp_encrypted_password are now explicitly masked) and adds a defence-in-depth rule: any setting value beginning with `vault:` is masked regardless of its key name, so future sealed settings are protected the moment they are written. PUT /api/admin/recordings now recognises the mask sentinel on round-trip so the UI\'s pre-filled ******** no longer overwrites the real access key. No migrations, no new environment variables, no new Cargo or npm dependencies; entirely scoped to backend/src/routes/admin.rs and its tests.',
+    sections: [
+      {
+        title: "Symptom — sealed envelope leaking through /api/admin/settings",
+        description:
+          'A pentester authenticated as an administrator hit GET /api/admin/settings against a v1.12.4 deployment and observed recordings_azure_access_key returning its full Vault Transit envelope as the response value — vault:{"ct":"TsCYB7Uh...","dek":"vault:v1:QY7B2A5P...","n":"..."} — instead of being masked. The same response carried the SMTP relay password in the same envelope form under smtp_encrypted_password. Other sealed secrets (SSO client secret, AD bind password, Vault token) were correctly masked as ********. A second observation in the same report — "this may be a user/password: vault:v1:QY7B2A5P..." — was a misreading of the format: vault:v1:<b64> is the documented HashiCorp Vault Transit ciphertext, not a credential, and the base64 decodes to opaque AES-256-GCM ciphertext bytes that cannot be inverted without the Vault server\'s Transit master key. The legitimate finding is that the envelope should not have been on the wire.',
+      },
+      {
+        title: "Root cause — substring redaction filter used the wrong key name",
+        description:
+          'backend/src/routes/admin.rs already had a SENSITIVE_SETTINGS list whose entries are substring-matched against every key the admin settings handler returns. The list included the literal "azure_storage_access_key", but the actual setting key for recordings is recordings_azure_access_key — the words "storage" and "access" are in a different order, and the substring "azure_storage_access_key" does not appear anywhere in "recordings_azure_access_key", so the filter silently let the envelope through. The smtp_encrypted_password key (added in the v0.25.0 notifications work) was never added to the list at all, because at the time the focus was on the new dedicated PUT /api/admin/notifications/smtp route with the legacy generic settings response treated as out of scope.',
+      },
+      {
+        title: "Fix — explicit keys plus a `vault:` envelope-prefix catch-all",
+        description:
+          'Two changes to redact_settings. (1) The explicit SENSITIVE_SETTINGS list now contains recordings_azure_access_key, smtp_encrypted_password, and the unprefixed substring azure_access_key (so any future sealed Azure-style key whose name contains those words is covered). The legacy "azure_storage_access_key" entry is retained for back-compat with existing tests and any out-of-tree forks. (2) A new defence-in-depth rule: any setting value beginning with the literal prefix "vault:" is masked regardless of its key. Because every value Strata writes via vault::seal_setting is formatted as vault:{json} (see backend/src/services/vault.rs:291), this rule means the response can never accidentally leak a future sealed setting whose key name happens to be missing from the explicit list. The masked value remains the existing eight-asterisk STAR_MASK constant for round-trip symmetry with should_skip_masked_setting.',
+      },
+      {
+        title: "Round-trip safety — PUT /api/admin/recordings skips mask values",
+        description:
+          'Masking the GET response would have introduced a regression in PUT /api/admin/recordings. The Recordings admin tab populates its password-style input directly from settings.recordings_azure_access_key and submits whatever the input contains on save. With the new mask, the UI\'s input now reads ******** until the operator types a new value; without the companion fix, clicking "Save Recording Settings" would have sealed the literal string ******** and overwritten the real Azure key. update_recordings now recognises the redaction sentinels ("********" and "••••••••") on the azure_access_key field and treats them as "no change" (no settings::set call is issued for that key). This matches the round-trip pattern already in place for SSO and AD bind passwords in update_settings. The SMTP path is unaffected: PUT /api/admin/notifications/smtp already uses a three-state discriminated union ({action: "keep" | "clear" | "replace", value?}) on the wire, so the masked GET value is never echoed back.',
+      },
+      {
+        title: "What the encrypted envelope actually was",
+        description:
+          "The value the pentester saw is the documented Vault Transit envelope format, two layers removed from any plaintext credential. The outer vault:{json} envelope is Strata's own per-value AES-256-GCM ciphertext (ct), nonce (n), and Vault-wrapped data encryption key (dek). The inner vault:v1:<base64> segment inside dek is the native ciphertext format produced by HashiCorp Vault's POST /v1/transit/encrypt/<key> endpoint — \"v1\" is the Transit master key generation (rotated via vault operator rotate), and the base64 payload is opaque AES-256-GCM ciphertext with a random nonce that the Vault server chose at encryption time. Decrypting it requires transit/decrypt capability on the Vault server holding the master key, which is generated inside Vault, sealed by Vault's own unseal keys at startup, and never traverses the wire. The defence-in-depth vault: prefix rule catches both layers — the outer Strata envelope and any raw Transit ciphertext that might end up in system_settings directly in future work.",
+      },
+      {
+        title: "Tests — three new redact_settings cases",
+        description:
+          'Three new unit tests in backend/src/routes/admin.rs. (1) redact_settings_masks_recordings_azure_access_key — regression test that pins the pentest finding; passes a row with the exact key name and a representative envelope value and asserts the returned value is ********. (2) redact_settings_masks_smtp_encrypted_password — same shape, for the second key that was missing from the list. (3) redact_settings_masks_any_vault_envelope_value — exercises the prefix-based fallback with a key name that is NOT in SENSITIVE_SETTINGS but whose value starts with "vault:", asserting it is still masked, plus a negative case to confirm that a value merely containing the word "vault" without starting with it is left untouched. All six pre-existing redact_settings tests continue to pass without modification — the legacy "azure_storage_access_key" substring is deliberately retained in the list so the existing fixture still matches.',
+      },
+      {
+        title: "Operator impact",
+        description:
+          "No migrations, no environment variables added, no Cargo or npm dependencies added, no new images or containers. Recommended deploy: docker compose pull && docker compose up -d --build from v1.12.4 (or the ghcr / k8s equivalent). Operators who consumed recordings_azure_access_key or smtp_encrypted_password directly from the admin settings API for any out-of-band purpose will now see ******** in those fields. The dedicated PUT /api/admin/recordings and PUT /api/admin/notifications/smtp endpoints continue to accept new values; passing ******** is now a no-op (preserves the existing value), so a save-without-edit from the Recordings tab no longer destroys the Azure key. Pentest reports that previously flagged a sealed envelope as a finding against /api/admin/settings will no longer surface the value at all on v1.12.5 — the only thing that comes back for any sealed setting is the eight-asterisk mask.",
+      },
+    ],
+  },
+  {
     version: "1.12.4",
     subtitle:
       'Patch release — `Ctrl+K` Command Palette open-session prioritisation. Single-issue UX patch for operators who keep multiple sessions open and use the palette as their day-to-day session switcher. The connection list previously rendered in raw API order with no preferential placement for sessions that were already open, so the fastest possible "jump to the other open session" interaction (Ctrl+K → Enter) was impossible without scrolling, arrow-keying, or typing a disambiguating substring. v1.12.4 sorts the list into three stable buckets — other open sessions first, the session you are currently on second, then everything else — so the most useful target is always the default. No backend changes, no API surface changes, no migrations, no new environment variables, no new Cargo or npm dependencies; entirely scoped to frontend/src/components/CommandPalette.tsx plus its matching test.',

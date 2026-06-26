@@ -572,6 +572,45 @@ html.light .recent-card-btn:hover {
     @apply opacity-40 cursor-not-allowed;
   }
 
+  /* Solid warning/orange button — mirrors .btn-success but uses
+     --color-warning. Used to draw attention to a required action
+     (e.g. the "Copy snippet" button on the Safeguard sign-in card,
+     which the user MUST press before running the snippet). */
+  .btn-warning {
+    @apply cursor-pointer rounded-sm text-[0.8125rem] font-medium relative overflow-hidden transition-all duration-150 text-white;
+    padding: 0.55rem 1.15rem;
+    font-family: inherit;
+    letter-spacing: -0.005em;
+    background: var(--color-warning);
+    border: 1px solid transparent;
+  }
+  .btn-warning:hover {
+    opacity: 0.9;
+  }
+  .btn-warning:active {
+    opacity: 0.85;
+  }
+  .btn-warning:disabled {
+    @apply opacity-40 cursor-not-allowed;
+  }
+
+  /* Pulsing orange glow ring — applied to a button that needs the
+     operator's attention until they interact with it. Uses box-shadow
+     (not opacity, unlike Tailwind's animate-pulse) so the button label
+     stays fully legible at all times. */
+  @keyframes pulse-warning-glow {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.55);
+    }
+    50% {
+      box-shadow: 0 0 0 6px rgba(234, 179, 8, 0);
+    }
+  }
+  .animate-warning-glow {
+    animation: pulse-warning-glow 1.8s ease-in-out infinite;
+  }
+
   .btn-sm-primary {
     @apply cursor-pointer font-semibold relative overflow-hidden inline-flex items-center gap-1.5 text-white;
     padding: 0.3rem 0.9rem;

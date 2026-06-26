@@ -182,12 +182,70 @@ describe("SafeguardSigninCard", () => {
     const copied = screen.getByRole("button", { name: "Copied!" });
     expect(copied).toBeInTheDocument();
     expect(copied.className).toContain("btn-success");
-    // After 2s the label reverts.
+    // After 2s the label reverts — and because the user has copied at
+    // least once for this code, the button drops to the neutral
+    // btn-secondary look (no more attention-glow).
     await act(async () => {
       vi.advanceTimersByTime(2100);
       await Promise.resolve();
     });
-    expect(screen.getByRole("button", { name: "Copy snippet" })).toBeInTheDocument();
+    const reverted = screen.getByRole("button", { name: "Copy snippet" });
+    expect(reverted).toBeInTheDocument();
+    expect(reverted.className).toContain("btn-secondary");
+    expect(reverted.className).not.toContain("btn-warning");
+    expect(reverted.className).not.toContain("animate-warning-glow");
+  });
+
+  it("Copy snippet button starts in attention-glow orange state for a fresh code", async () => {
+    (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
+    (startSafeguardSignin as any).mockResolvedValue({
+      code: "GLOW-INIT",
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
+    render(<SafeguardSigninCard />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await flush();
+    const btn = screen.getByRole("button", { name: "Copy snippet" });
+    // Pristine state: warning colour + pulsing glow animation.
+    expect(btn.className).toContain("btn-warning");
+    expect(btn.className).toContain("animate-warning-glow");
+    expect(btn.className).not.toContain("btn-secondary");
+    expect(btn.className).not.toContain("btn-success");
+  });
+
+  it("Copy snippet button returns to orange-glow when a fresh code is minted", async () => {
+    (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
+    (startSafeguardSignin as any)
+      .mockResolvedValueOnce({
+        code: "FIRST-CODE",
+        expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+      })
+      .mockResolvedValueOnce({
+        code: "SECOND-COD",
+        expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+      });
+    render(<SafeguardSigninCard />);
+    await flush();
+    // First Sign in → copy → revert (should land at btn-secondary).
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Copy snippet" }));
+    await flush();
+    await act(async () => {
+      vi.advanceTimersByTime(2100);
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "Copy snippet" }).className).toContain(
+      "btn-secondary"
+    );
+    // Now mint a fresh code (handleStart) → orange glow returns.
+    // The card button label is "Sign in" while signed_out (default).
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await flush();
+    const btn = screen.getByRole("button", { name: "Copy snippet" });
+    expect(btn.className).toContain("btn-warning");
+    expect(btn.className).toContain("animate-warning-glow");
   });
 
   it("leaves Copy snippet button unchanged when clipboard write rejects", async () => {

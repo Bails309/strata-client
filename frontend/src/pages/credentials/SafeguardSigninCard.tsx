@@ -52,6 +52,10 @@ export default function SafeguardSigninCard({
   const [showFallback, setShowFallback] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [snippetCopied, setSnippetCopied] = useState(false);
+  // Has the user pressed "Copy snippet" at least once for the *currently
+  // rendered* enrolment code? Reset whenever a fresh code is minted so
+  // the orange attention-glow returns for each new sign-in attempt.
+  const [snippetEverCopied, setSnippetEverCopied] = useState(false);
 
   // Suppresses the auto-close path when the user has cancelled the
   // modal between two polling ticks.
@@ -119,6 +123,11 @@ export default function SafeguardSigninCard({
       setTokenInput("");
       setShowFallback(false);
       setShowSignin(true);
+      // Fresh code → restart the attention-glow lifecycle on the Copy
+      // snippet button. The user must press it before the snippet is
+      // useful, so it pulses orange until they do.
+      setSnippetCopied(false);
+      setSnippetEverCopied(false);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to start sign-in");
     } finally {
@@ -303,11 +312,18 @@ export default function SafeguardSigninCard({
             <div className="flex gap-2">
               <button
                 type="button"
-                className={`btn btn-sm ${snippetCopied ? "btn-success" : "btn-secondary"}`}
+                className={`btn btn-sm ${
+                  snippetCopied
+                    ? "btn-success"
+                    : snippetEverCopied
+                      ? "btn-secondary"
+                      : "btn-warning animate-warning-glow"
+                }`}
                 onClick={() => {
                   navigator.clipboard.writeText(psSnippet).then(
                     () => {
                       setSnippetCopied(true);
+                      setSnippetEverCopied(true);
                       window.setTimeout(() => setSnippetCopied(false), 2000);
                     },
                     () => {

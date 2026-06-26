@@ -170,8 +170,10 @@ pub struct ListRecordingsQuery {
 /// List historical recordings with optional filters
 pub async fn list_recordings(
     State(state): State<SharedState>,
+    Extension(user): Extension<crate::services::middleware::AuthUser>,
     Query(query): Query<ListRecordingsQuery>,
 ) -> Result<Json<Vec<Recording>>, AppError> {
+    crate::services::middleware::check_session_permission(&user)?;
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(AppError::SetupRequired)?
@@ -205,9 +207,11 @@ async fn stream_recording_handler(
 pub async fn stream_recording(
     ws: WebSocketUpgrade,
     State(state): State<SharedState>,
+    Extension(user): Extension<crate::services::middleware::AuthUser>,
     Path(id): Path<uuid::Uuid>,
     Query(query): Query<RecordingStreamQuery>,
 ) -> Result<impl IntoResponse, AppError> {
+    crate::services::middleware::check_session_permission(&user)?;
     let (db, _config) = {
         let s = state.read().await;
         if s.phase != BootPhase::Running {

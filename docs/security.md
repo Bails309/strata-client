@@ -233,6 +233,39 @@ All admin API endpoints enforce fine-grained permission checks beyond the `requi
 
 Endpoints that do not match a specific permission category (e.g. role CRUD) require `can_manage_system`.
 
+#### Per-handler permission checks tightened (v1.12.7)
+
+The `/api/admin/*` router layer applies three middlewares: `require_csrf`, `require_auth`, and `require_admin`. The third is intentionally a **coarse gate** — it answers "is this user an admin-surface user at all?" by checking `AuthUser::has_any_admin_permission()` (true if **any** of the nine admin flags above is set), so a custom delegated role with a single admin flag can still reach the subset of pages that flag covers. The granular access decision is the responsibility of each handler, which calls one of `check_system_permission(&user)?`, `check_user_management_permission(&user)?`, `check_connection_management_permission(&user)?`, `check_audit_permission(&user)?`, or `check_session_permission(&user)?` from `services::middleware` before returning data.
+
+A penetration test against v1.12.6 found that **seventeen handlers were missing that per-handler check**. The CSRF and JWT controls were intact in every case — this was strictly an authorization gap. A delegated user holding only `can_view_audit_logs=true` (a SOC-analyst-style role scoped to the audit log) could call `GET /api/admin/settings`, `GET /api/admin/recordings`, `GET /api/admin/recordings/{id}/stream`, `GET /api/admin/health`, `GET /api/admin/connections`, `GET /api/admin/connection-folders`, `GET /api/admin/tags`, `GET /api/admin/connection-tags`, `GET /api/admin/roles`, `GET /api/admin/roles/{id}/mappings`, `GET /api/admin/certs`, `POST /api/admin/dmz-links/reconnect`, `PUT /api/admin/safeguard/config`, `POST /api/admin/safeguard/test`, `GET /api/admin/metrics`, `PUT /api/admin/connection-folders/{id}`, or `DELETE /api/admin/tags/{id}` — all of which should have required a stronger permission.
+
+v1.12.7 adds the appropriate `check_*_permission(&user)?` call as the first statement of every affected handler. The required flag per endpoint:
+
+| Endpoint | Required permission |
+| --- | --- |
+| `GET /api/admin/settings` | `can_manage_system` |
+| `POST /api/admin/settings/sso/test` | `can_manage_system` |
+| `GET /api/admin/roles` | `can_manage_system` |
+| `GET /api/admin/roles/{id}/mappings` | `can_manage_system` |
+| `GET /api/admin/metrics` | `can_manage_system` |
+| `PUT /api/admin/safeguard/config` | `can_manage_system` |
+| `POST /api/admin/safeguard/test` | `can_manage_system` |
+| `GET /api/admin/health` | `can_manage_system` |
+| `GET /api/admin/certs` | `can_manage_system` |
+| `POST /api/admin/dmz-links/reconnect` | `can_manage_system` |
+| `GET /api/admin/connections` | `can_manage_connections` |
+| `GET /api/admin/connection-folders` | `can_manage_connections` |
+| `PUT /api/admin/connection-folders/{id}` | `can_manage_connections` |
+| `GET /api/admin/tags` | `can_manage_connections` |
+| `DELETE /api/admin/tags/{id}` | `can_manage_connections` |
+| `GET /api/admin/connection-tags` | `can_manage_connections` |
+| `GET /api/admin/recordings` | `can_view_sessions` |
+| `GET /api/admin/recordings/{id}/stream` | `can_view_sessions` |
+
+`can_manage_system` is the super-admin flag and short-circuits every check above; users with the default `admin` role see no behaviour change. The `require_admin` middleware itself is **unchanged** because it correctly models the coarse "is this an admin surface?" question; tightening it would break legitimate delegated roles that should still see the subset of pages their single flag covers.
+
+**Operator action:** if you maintain any custom delegated admin roles, audit them under **Settings → Roles**. Confirm that each role has the flag matching the endpoints its holders need to access. Roles holding only `can_view_audit_logs` continue to access the audit log surface (`GET /api/admin/audit-logs`, `GET /api/admin/audit-logs/export`, etc.) exactly as before — those handlers always had the correct per-handler check.
+
 ---
 
 ## Encryption

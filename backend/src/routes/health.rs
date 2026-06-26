@@ -1,5 +1,5 @@
 use axum::extract::State;
-use axum::Json;
+use axum::{Extension, Json};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::Serialize;
 use std::sync::OnceLock;
@@ -8,8 +8,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock as TokioRwLock;
 
 use crate::config::DatabaseMode;
+use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::av::FailMode as AvFailMode;
+use crate::services::middleware::AuthUser;
 use crate::services::settings;
 
 #[derive(Serialize)]
@@ -178,7 +180,11 @@ pub struct AvHealth {
 }
 
 /// GET /api/admin/health – read-only service health for the admin dashboard.
-pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHealth> {
+pub async fn service_health(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<ServiceHealth>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let s = state.read().await;
 
     // ── Uptime ──
@@ -319,7 +325,7 @@ pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHea
             (None, None, None)
         };
 
-    Json(ServiceHealth {
+    Ok(Json(ServiceHealth {
         version: env!("STRATA_VERSION"),
         database: DatabaseHealth {
             connected: db_connected,
@@ -357,7 +363,7 @@ pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHea
         },
         uptime_secs,
         environment,
-    })
+    }))
 }
 
 /// Split `host:port` into its parts, falling back to `default_port` if
@@ -826,6 +832,27 @@ mod tests {
         assert!(result.local_auth_enabled);
     }
 
+    fn admin_user() -> crate::services::middleware::AuthUser {
+        crate::services::middleware::AuthUser {
+            id: uuid::Uuid::nil(),
+            sub: "test".into(),
+            username: "admin".into(),
+            full_name: None,
+            role: "admin".into(),
+            can_manage_system: true,
+            can_manage_users: false,
+            can_manage_connections: false,
+            can_view_audit_logs: false,
+            can_create_users: false,
+            can_create_user_groups: false,
+            can_create_connections: false,
+            can_create_sharing_profiles: false,
+            can_view_sessions: false,
+            can_use_quick_share: false,
+            can_use_quick_share_outbound: false,
+        }
+    }
+
     #[tokio::test]
     async fn service_health_no_config_no_db() {
         use std::sync::Arc;
@@ -854,7 +881,10 @@ mod tests {
             av_fail_mode: crate::services::av::FailMode::Block,
             started_at: std::time::Instant::now(),
         }));
-        let axum::Json(result) = service_health(axum::extract::State(state)).await;
+        let axum::Json(result) =
+            service_health(axum::extract::State(state), axum::Extension(admin_user()))
+                .await
+                .expect("service_health");
         assert!(!result.database.connected);
         assert_eq!(result.database.mode, "unknown");
         assert_eq!(result.database.host, "—");
@@ -906,7 +936,10 @@ mod tests {
             av_fail_mode: crate::services::av::FailMode::Block,
             started_at: std::time::Instant::now(),
         }));
-        let axum::Json(result) = service_health(axum::extract::State(state)).await;
+        let axum::Json(result) =
+            service_health(axum::extract::State(state), axum::Extension(admin_user()))
+                .await
+                .expect("service_health");
         assert!(!result.database.connected);
         assert_eq!(result.database.mode, "external");
         assert_eq!(result.database.host, "dbhost:5432/testdb");
@@ -960,7 +993,10 @@ mod tests {
             av_fail_mode: crate::services::av::FailMode::Block,
             started_at: std::time::Instant::now(),
         }));
-        let axum::Json(result) = service_health(axum::extract::State(state)).await;
+        let axum::Json(result) =
+            service_health(axum::extract::State(state), axum::Extension(admin_user()))
+                .await
+                .expect("service_health");
         assert_eq!(result.database.mode, "local");
         assert_eq!(result.database.host, "host:5432/db");
         assert!(result.vault.configured);

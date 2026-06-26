@@ -46,6 +46,7 @@ pub async fn put_config(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<SafeguardConfig>,
 ) -> Result<Json<SafeguardConfig>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let (db, vault) = {
         let s = state.read().await;
         if s.phase != BootPhase::Running {
@@ -68,8 +69,10 @@ pub async fn put_config(
 /// can hit "Test" without re-typing the API key.
 pub async fn test_connection(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(draft): Json<SafeguardConfig>,
 ) -> Result<Json<TestConnectionOutcome>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let (db, vault) = {
         let s = state.read().await;
         if s.phase != BootPhase::Running {

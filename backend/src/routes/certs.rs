@@ -17,12 +17,15 @@
 //! a private key. This endpoint is admin-only (mounted under the
 //! `/api/admin/*` router which has `require_admin` + `require_auth`).
 
-use axum::Json;
+use axum::{Extension, Json};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 use rustls_pki_types::pem::PemObject;
+
+use crate::error::AppError;
+use crate::services::middleware::AuthUser;
 
 #[derive(Serialize, Debug, Clone)]
 pub struct CertificateEntry {
@@ -65,17 +68,20 @@ pub struct CertificateError {
 }
 
 /// `GET /api/admin/certs`
-pub async fn list_certs() -> Json<CertificatesResponse> {
+pub async fn list_certs(
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<CertificatesResponse>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let (certificates, errors) = tokio::task::spawn_blocking(scan_certs)
         .await
         .unwrap_or_else(|e| {
             tracing::error!(error = %e, "cert scan task panicked");
             (Vec::new(), Vec::new())
         });
-    Json(CertificatesResponse {
+    Ok(Json(CertificatesResponse {
         certificates,
         errors,
-    })
+    }))
 }
 
 fn scan_certs() -> (Vec<CertificateEntry>, Vec<CertificateError>) {
@@ -387,7 +393,25 @@ mod tests {
         unsafe {
             std::env::set_var("STRATA_CERT_DIR", "/nonexistent/strata/certs");
         }
-        let resp = list_certs().await;
+        let admin = crate::services::middleware::AuthUser {
+            id: uuid::Uuid::nil(),
+            sub: "test".into(),
+            username: "admin".into(),
+            full_name: None,
+            role: "admin".into(),
+            can_manage_system: true,
+            can_manage_users: false,
+            can_manage_connections: false,
+            can_view_audit_logs: false,
+            can_create_users: false,
+            can_create_user_groups: false,
+            can_create_connections: false,
+            can_create_sharing_profiles: false,
+            can_view_sessions: false,
+            can_use_quick_share: false,
+            can_use_quick_share_outbound: false,
+        };
+        let axum::Json(resp) = list_certs(axum::Extension(admin)).await.expect("list_certs");
         assert!(resp.certificates.is_empty());
     }
 }

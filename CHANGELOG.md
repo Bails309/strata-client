@@ -5,6 +5,91 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.12.7] — 2026-06-26
+
+### Patch Release — `/api/admin/*` now enforces per-handler RBAC
+
+A penetration test against v1.12.6 identified a privilege-escalation
+gap in the admin API. The router-level `require_admin` middleware
+guarding `/api/admin/*` is intentionally a coarse gate — it accepts
+any user holding *any* of the nine admin permission flags (e.g.
+`can_view_audit_logs`, `can_create_users`, `can_view_sessions`, …).
+The granular access decision is the responsibility of each handler,
+which is expected to call one of the `check_*_permission(&user)`
+helpers in `services::middleware` before returning data. **Seventeen
+handlers were missing that per-handler check.** A delegated user
+holding only `can_view_audit_logs=true` (for example, a SOC analyst
+account scoped to the audit log) could call `GET /api/admin/settings`
+and read every system setting (SMTP, Vault, DNS, auth method config),
+`GET /api/admin/recordings` + `GET /api/admin/recordings/{id}/stream`
+and watch any user's recorded session, `GET /api/admin/health` and
+fingerprint internal service topology, `GET /api/admin/connections`
+to enumerate every connection target, `POST /api/admin/dmz-links/reconnect`
+to bounce production DMZ links, and so on. The CSRF and authentication
+controls were intact — this was strictly an authorization gap.
+
+v1.12.7 adds the missing per-handler permission check to every
+affected endpoint and tightens the response to `403 Forbidden` when a
+user is missing the required flag. The required flag per endpoint
+matches the existing pattern used by other handlers in the same file:
+
+| Endpoint | Required permission |
+| --- | --- |
+| `GET /api/admin/settings` | `can_manage_system` |
+| `POST /api/admin/settings/sso/test` | `can_manage_system` |
+| `GET /api/admin/roles` | `can_manage_system` |
+| `GET /api/admin/roles/{id}/mappings` | `can_manage_system` |
+| `GET /api/admin/metrics` | `can_manage_system` |
+| `PUT /api/admin/safeguard/config` | `can_manage_system` |
+| `POST /api/admin/safeguard/test` | `can_manage_system` |
+| `GET /api/admin/health` | `can_manage_system` |
+| `GET /api/admin/certs` | `can_manage_system` |
+| `POST /api/admin/dmz-links/reconnect` | `can_manage_system` |
+| `GET /api/admin/connections` | `can_manage_connections` |
+| `GET /api/admin/connection-folders` | `can_manage_connections` |
+| `PUT /api/admin/connection-folders/{id}` | `can_manage_connections` |
+| `GET /api/admin/tags` | `can_manage_connections` |
+| `DELETE /api/admin/tags/{id}` | `can_manage_connections` |
+| `GET /api/admin/connection-tags` | `can_manage_connections` |
+| `GET /api/admin/recordings` | `can_view_sessions` |
+| `GET /api/admin/recordings/{id}/stream` | `can_view_sessions` |
+
+(`can_manage_system` is the super-admin flag and continues to imply
+access to every check above; users who already had it before v1.12.7
+see no behaviour change.)
+
+The fix is structural — the `require_admin` middleware itself is
+unchanged because it correctly models the "is this an admin surface?"
+question. The bug was missing per-handler defense-in-depth on
+seventeen of the ~70 admin handlers. The other ~53 already had the
+right `check_*_permission(&user)?` call at the top of the body.
+
+### Compatibility
+
+- **Server-side**: no DB migrations, no new environment variables, no
+  new Cargo or npm dependencies.
+- **Frontend**: no visible change for users with `can_manage_system`
+  (the super-admin role). Users in custom delegated roles that
+  previously could reach an endpoint via the coarse gate will now see
+  `403 Forbidden` and must be granted the additional permission flag
+  via **Settings → Roles**.
+- **Operators**: review the role grid under **Settings → Roles** if
+  you maintain any custom delegated admin roles. Confirm that each
+  role has the flag matching the endpoints its holders need to
+  access. The default `admin` role (which has every flag) is
+  unaffected.
+
+### Acceptance test
+
+1. In a v1.12.6 deployment, create a delegated role with **only**
+   `can_view_audit_logs` enabled and assign it to a test user.
+2. Have the test user sign in and call `GET /api/admin/settings` —
+   v1.12.6 returns `200 OK` with the entire system settings table;
+   v1.12.7 returns `403 Forbidden`.
+3. Have the same user call `GET /api/admin/audit-logs` — v1.12.7
+   still returns `200 OK`, confirming the legitimate audit-log access
+   is preserved.
+
 ## [1.12.6] — 2026-06-26
 
 ### Patch Release — `POST /api/auth/logout` performs OIDC RP-Initiated Logout

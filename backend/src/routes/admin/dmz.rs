@@ -18,12 +18,13 @@
 //! so a real "drop the socket NOW" verb is available.
 
 use axum::extract::State;
-use axum::Json;
+use axum::{Extension, Json};
 use serde::Serialize;
 
 use crate::error::AppError;
 use crate::services::app_state::SharedState;
 use crate::services::dmz_link::LinkStatus;
+use crate::services::middleware::AuthUser;
 
 /// One row in the response. Stable JSON shape — the frontend depends
 /// on these field names.
@@ -126,7 +127,9 @@ pub struct ReconnectResponse {
 /// be near-instant).
 pub async fn reconnect_links(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<ReconnectResponse>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let registry = {
         let g = state.read().await;
         g.dmz_link_registry.clone()

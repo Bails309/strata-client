@@ -731,19 +731,44 @@ pub async fn logout(
     Ok(response)
 }
 
-/// Decode the unverified `iss` claim from a JWT id_token.
+/// Unverified claims pulled from an id_token cookie for RP-Initiated Logout.
 ///
-/// The id_token in our cookie was cryptographically verified at SSO callback
-/// time (see `services::auth::validate_token`), so trusting its `iss` claim
-/// for the *sole* purpose of looking up the SSO provider in our own table
-/// is safe — an attacker who could forge the cookie would already be inside
-/// the HttpOnly + Secure + SameSite=Strict envelope.
-fn id_token_issuer(id_token: &str) -> Option<String> {
+/// The id_token was cryptographically verified at SSO callback time (see
+/// `services::auth::validate_token`), so trusting these claims for the *sole*
+/// purpose of building the IdP logout URL is safe — an attacker who could
+/// forge the cookie would already be inside the HttpOnly + Secure +
+/// SameSite=Strict envelope.
+struct IdTokenClaims {
+    /// `iss` claim — the IdP that issued the token.
+    iss: String,
+    /// Effective audience: `azp` if present (Keycloak always sets it),
+    /// otherwise the first `aud` value. Keycloak's logout endpoint
+    /// validates this against the `client_id` query parameter.
+    aud: String,
+}
+
+/// Decode the unverified `iss` and `aud`/`azp` claims from a JWT id_token.
+///
+/// Returns `None` if the token is malformed, the payload cannot be base64-
+/// decoded, or either claim is missing.
+fn id_token_claims(id_token: &str) -> Option<IdTokenClaims> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     let payload_b64 = id_token.split('.').nth(1)?;
     let payload_bytes = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
     let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).ok()?;
-    payload.get("iss")?.as_str().map(str::to_string)
+    let iss = payload.get("iss")?.as_str()?.to_string();
+    // Prefer `azp` (authorized party) which is unambiguously a single string
+    // — Keycloak always sets it for ID tokens. Fall back to `aud` which can
+    // be either a string or an array; take the first element if it's an array.
+    let aud = match payload.get("azp").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => match payload.get("aud") {
+            Some(v) if v.is_string() => v.as_str()?.to_string(),
+            Some(v) if v.is_array() => v.as_array()?.first()?.as_str()?.to_string(),
+            _ => return None,
+        },
+    };
+    Some(IdTokenClaims { iss, aud })
 }
 
 /// Build the IdP-side end-session URL for RP-Initiated Logout, if applicable.
@@ -766,34 +791,35 @@ async fn build_rp_initiated_logout_url(
     let id_token = extract_cookie(headers, "id_token")?;
     let pool = db_pool?;
 
-    let iss = match id_token_issuer(id_token) {
-        Some(i) => i,
+    let claims = match id_token_claims(id_token) {
+        Some(c) => c,
         None => {
-            tracing::warn!("logout: id_token cookie present but iss claim missing");
+            tracing::warn!("logout: id_token cookie present but iss/aud claims unparseable");
             return None;
         }
     };
 
-    // Look up the SSO provider row by its issuer_url. Matching on the
-    // cryptographically-verified `iss` claim (verified at SSO callback
-    // time) prevents a malicious cookie from steering the logout
-    // redirect at an arbitrary URL.
-    let provider_row: Option<(String, String)> =
-        sqlx::query_as("SELECT issuer_url, client_id FROM sso_providers WHERE issuer_url = $1")
-            .bind(&iss)
+    // Look up the SSO provider row by its issuer_url. This is a defence-in-
+    // depth allowlist check — matching on the cryptographically-verified
+    // `iss` claim (verified at SSO callback time) prevents a malicious cookie
+    // from steering the logout redirect at an arbitrary URL. The `client_id`
+    // column is intentionally NOT used here: the id_token's `aud`/`azp` claim
+    // is the authoritative client identifier (Keycloak's logout endpoint
+    // validates `id_token_hint.aud == ?client_id`), and the DB may legitimately
+    // hold multiple rows for the same issuer with different client_ids.
+    let exists: Option<(String,)> =
+        sqlx::query_as("SELECT issuer_url FROM sso_providers WHERE issuer_url = $1 LIMIT 1")
+            .bind(&claims.iss)
             .fetch_optional(pool)
             .await
             .ok()
             .flatten();
-    let (issuer_url, client_id) = match provider_row {
-        Some(r) => r,
-        None => {
-            tracing::warn!(iss = %iss, "logout: no SSO provider matches id_token issuer");
-            return None;
-        }
-    };
+    if exists.is_none() {
+        tracing::warn!(iss = %claims.iss, "logout: no SSO provider matches id_token issuer");
+        return None;
+    }
 
-    let discovery = match fetch_oidc_discovery(&issuer_url).await {
+    let discovery = match fetch_oidc_discovery(&claims.iss).await {
         Ok(d) => d,
         Err(e) => {
             tracing::warn!(error = %e, "logout: OIDC discovery failed; skipping RP-initiated logout");
@@ -805,7 +831,7 @@ async fn build_rp_initiated_logout_url(
         Some(e) => e,
         None => {
             tracing::warn!(
-                iss = %iss,
+                iss = %claims.iss,
                 "logout: IdP discovery document omits end_session_endpoint; \
                  RP-Initiated Logout is unavailable for this provider"
             );
@@ -821,7 +847,7 @@ async fn build_rp_initiated_logout_url(
         end_session_endpoint,
         urlencoding::encode(id_token),
         urlencoding::encode(&post_logout_redirect_uri),
-        urlencoding::encode(&client_id),
+        urlencoding::encode(&claims.aud),
     ))
 }
 
@@ -1993,39 +2019,71 @@ mod tests {
     }
 
     #[test]
-    fn id_token_issuer_extracts_iss_from_jwt() {
-        // Build a JWT-shaped string by hand. id_token_issuer must NOT
+    fn id_token_claims_extracts_iss_and_azp_from_jwt() {
+        // Build a JWT-shaped string by hand. id_token_claims must NOT
         // verify the signature; it only base64-decodes the payload to
-        // pull the `iss` claim for SSO-provider lookup.
+        // pull the `iss` and `aud`/`azp` claims for the logout URL.
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
         let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
         let payload = URL_SAFE_NO_PAD.encode(
-            br#"{"sub":"abc","iss":"https://kc.example.com/realms/r","aud":"client","exp":9999999999}"#,
+            br#"{"sub":"abc","iss":"https://kc.example.com/realms/r","aud":"client-A","azp":"client-A","exp":9999999999}"#,
         );
         let signature = URL_SAFE_NO_PAD.encode(b"sig");
         let jwt = format!("{header}.{payload}.{signature}");
-        assert_eq!(
-            id_token_issuer(&jwt).as_deref(),
-            Some("https://kc.example.com/realms/r")
+        let claims = id_token_claims(&jwt).expect("claims should parse");
+        assert_eq!(claims.iss, "https://kc.example.com/realms/r");
+        assert_eq!(claims.aud, "client-A");
+    }
+
+    #[test]
+    fn id_token_claims_prefers_azp_over_aud_when_both_present() {
+        // Per OIDC core 2: when present, `azp` is the authoritative
+        // single client identifier (Keycloak always emits it). `aud`
+        // may be an array; `azp` disambiguates.
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(
+            br#"{"sub":"abc","iss":"https://kc.example.com/realms/r","aud":["other-client","my-client"],"azp":"my-client"}"#,
         );
+        let signature = URL_SAFE_NO_PAD.encode(b"sig");
+        let jwt = format!("{header}.{payload}.{signature}");
+        let claims = id_token_claims(&jwt).expect("claims should parse");
+        assert_eq!(claims.aud, "my-client");
     }
 
     #[test]
-    fn id_token_issuer_returns_none_for_malformed_input() {
-        assert!(id_token_issuer("").is_none());
-        assert!(id_token_issuer("not-a-jwt").is_none());
-        assert!(id_token_issuer("only.two.").is_none()); // empty payload segment after dot
-        assert!(id_token_issuer("a.b").is_none()); // missing third segment & invalid base64 payload
+    fn id_token_claims_falls_back_to_aud_when_azp_missing() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD
+            .encode(br#"{"sub":"abc","iss":"https://kc.example.com/realms/r","aud":"only-aud"}"#);
+        let signature = URL_SAFE_NO_PAD.encode(b"sig");
+        let jwt = format!("{header}.{payload}.{signature}");
+        let claims = id_token_claims(&jwt).expect("claims should parse");
+        assert_eq!(claims.aud, "only-aud");
     }
 
     #[test]
-    fn id_token_issuer_returns_none_when_iss_claim_missing() {
+    fn id_token_claims_returns_none_for_malformed_input() {
+        assert!(id_token_claims("").is_none());
+        assert!(id_token_claims("not-a-jwt").is_none());
+        assert!(id_token_claims("only.two.").is_none()); // empty payload segment after dot
+        assert!(id_token_claims("a.b").is_none()); // missing third segment & invalid base64 payload
+    }
+
+    #[test]
+    fn id_token_claims_returns_none_when_iss_or_aud_missing() {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
         let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
-        let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"abc"}"#);
+        // Missing iss
+        let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"abc","aud":"client"}"#);
         let signature = URL_SAFE_NO_PAD.encode(b"");
         let jwt = format!("{header}.{payload}.{signature}");
-        assert!(id_token_issuer(&jwt).is_none());
+        assert!(id_token_claims(&jwt).is_none());
+        // Missing both aud and azp
+        let payload2 = URL_SAFE_NO_PAD.encode(br#"{"sub":"abc","iss":"https://kc/r"}"#);
+        let jwt2 = format!("{header}.{payload2}.{signature}");
+        assert!(id_token_claims(&jwt2).is_none());
     }
 
     #[tokio::test]

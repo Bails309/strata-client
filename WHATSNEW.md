@@ -1,3 +1,179 @@
+# What's New in v1.12.7
+
+> **Patch release — Security: per-handler RBAC on `/api/admin/*`.**
+> A penetration test against v1.12.6 found that the router-level
+> `require_admin` middleware guarding `/api/admin/*` is intentionally
+> a coarse gate — it accepts any user holding *any* of the nine admin
+> permission flags. The granular access decision is supposed to live
+> in each handler via a `check_*_permission(&user)` call. **Seventeen
+> handlers were missing that per-handler check**, so a delegated user
+> holding only `can_view_audit_logs=true` (for example) could read
+> every system setting, watch any user's recorded session, list every
+> connection target, fingerprint internal service health, or bounce
+> production DMZ links. v1.12.7 adds the missing per-handler check
+> to every affected endpoint; users without the required flag now
+> see `403 Forbidden`. CSRF and authentication were never affected —
+> this is strictly an authorization-gap fix. No DB migrations, no new
+> environment variables, no new dependencies.
+
+## Theme 1 — Pentest finding: missing per-handler RBAC on `/api/admin/*`
+
+### 1.1 Symptom
+
+A pentester audited the `/api/admin/*` surface of a v1.12.6
+deployment under a custom delegated role that held a single admin
+flag — `can_view_audit_logs=true`, with every other admin flag
+(`can_manage_system`, `can_manage_users`, `can_manage_connections`,
+`can_view_sessions`, …) explicitly off. The intent of that role was
+"a SOC analyst account that can read the audit log and nothing
+else". The pentester observed that the same account could call:
+
+- `GET /api/admin/settings` — full system settings table including
+  SMTP server, AD bind DN, Vault address, DNS zones, auth method
+  toggles.
+- `GET /api/admin/recordings` and
+  `GET /api/admin/recordings/{id}/stream` — list and play back any
+  user's recorded RDP/VNC/SSH session.
+- `GET /api/admin/health` — internal DB / guacd / Vault reachability,
+  ClamAV engine version, signature freshness.
+- `GET /api/admin/connections`, `GET /api/admin/connection-folders`,
+  `GET /api/admin/tags`, `GET /api/admin/connection-tags` — every
+  connection target the deployment manages.
+- `GET /api/admin/roles`, `GET /api/admin/roles/{id}/mappings` —
+  full RBAC matrix.
+- `GET /api/admin/certs` — TLS/mTLS certificate inventory with
+  fingerprints and expiry windows.
+- `POST /api/admin/dmz-links/reconnect` — bounce production DMZ
+  links.
+- `PUT /api/admin/safeguard/config`, `POST /api/admin/safeguard/test`
+   — modify the Safeguard JIT integration's API key, or probe
+   arbitrary Safeguard appliances with a body-supplied secret.
+- `GET /api/admin/metrics` — host CPU, memory, capacity estimates.
+- `PUT /api/admin/connection-folders/{id}` — rename folders.
+- `DELETE /api/admin/tags/{id}` — delete tags.
+
+The CSRF token and JWT requirement were intact in every case —
+this was strictly an authorization-gap finding, not an
+authentication or CSRF bypass.
+
+### 1.2 Root cause
+
+`/api/admin/*` is layered with three middlewares in `routes/mod.rs`:
+
+1. `require_csrf` — verifies the CSRF double-submit cookie.
+2. `require_auth` — verifies the JWT and injects `AuthUser` via
+   `Extension`.
+3. `require_admin` — confirms the user holds **any** of the nine
+   admin permission flags (`AuthUser::has_any_admin_permission()`).
+
+`require_admin` is by design a coarse gate — it answers "is this
+user an admin surface user at all?" so a custom role with a single
+admin flag can still reach the subset of pages that flag covers.
+The granular access decision is then the responsibility of each
+handler, which must call one of the helpers in
+`services::middleware`:
+
+- `check_system_permission(&user)?` — accepts `can_manage_system`.
+- `check_user_management_permission(&user)?` — accepts
+  `can_manage_system` or `can_manage_users`.
+- `check_connection_management_permission(&user)?` — accepts
+  `can_manage_system` or `can_manage_connections`.
+- `check_audit_permission(&user)?` — accepts `can_manage_system`
+  or `can_view_audit_logs`.
+- `check_session_permission(&user)?` — accepts `can_manage_system`
+  or `can_view_sessions`.
+
+(`can_manage_system` is the super-admin flag and short-circuits
+every check above.)
+
+About fifty-three of the ~70 admin handlers do call one of these
+helpers as their first statement. The seventeen identified by the
+pentest do not. Some never took `Extension(user)` at all (e.g.
+`list_recordings`); others took it for use in audit-log fields but
+never gated on a permission flag.
+
+### 1.3 Fix
+
+v1.12.7 adds the missing per-handler check to all seventeen
+handlers, mapping each to the permission flag that matches the
+existing pattern used by its sibling handlers in the same file:
+
+| Endpoint | Required permission |
+| --- | --- |
+| `GET /api/admin/settings` | `can_manage_system` |
+| `POST /api/admin/settings/sso/test` | `can_manage_system` |
+| `GET /api/admin/roles` | `can_manage_system` |
+| `GET /api/admin/roles/{id}/mappings` | `can_manage_system` |
+| `GET /api/admin/metrics` | `can_manage_system` |
+| `PUT /api/admin/safeguard/config` | `can_manage_system` |
+| `POST /api/admin/safeguard/test` | `can_manage_system` |
+| `GET /api/admin/health` | `can_manage_system` |
+| `GET /api/admin/certs` | `can_manage_system` |
+| `POST /api/admin/dmz-links/reconnect` | `can_manage_system` |
+| `GET /api/admin/connections` | `can_manage_connections` |
+| `GET /api/admin/connection-folders` | `can_manage_connections` |
+| `PUT /api/admin/connection-folders/{id}` | `can_manage_connections` |
+| `GET /api/admin/tags` | `can_manage_connections` |
+| `DELETE /api/admin/tags/{id}` | `can_manage_connections` |
+| `GET /api/admin/connection-tags` | `can_manage_connections` |
+| `GET /api/admin/recordings` | `can_view_sessions` |
+| `GET /api/admin/recordings/{id}/stream` | `can_view_sessions` |
+
+Each affected handler now starts with the appropriate
+`crate::services::middleware::check_*_permission(&user)?;` call,
+matching the pattern already used by its sibling create / update /
+delete handlers. The `require_admin` middleware itself is
+**unchanged** because it correctly models the "is this an admin
+surface?" question; tightening it would break legitimate delegated
+roles that should still see the subset of pages their single flag
+covers.
+
+### 1.4 Operator action
+
+If you only use the default `admin` role (which holds every flag),
+no action is required — your admin users see no behaviour change.
+
+If you maintain any custom delegated admin roles, audit them under
+**Settings → Roles**:
+
+1. For each role, confirm that the holder needs the flag matching
+   each endpoint they were previously able to reach (the table
+   above is the authoritative mapping).
+2. Grant the missing flag if the access is legitimate; remove the
+   flag the role previously over-relied on if the access was
+   accidental.
+3. Roles holding only `can_view_audit_logs` continue to access the
+   audit log surface (`GET /api/admin/audit-logs`,
+   `GET /api/admin/audit-logs/export`, etc.) exactly as before.
+
+### 1.5 Acceptance test
+
+1. Create a delegated role with **only** `can_view_audit_logs`
+   enabled. Assign it to a test user.
+2. Have the test user sign in. Call:
+   - `GET /api/admin/audit-logs` — must return `200 OK`.
+   - `GET /api/admin/settings` — must return `403 Forbidden` on
+     v1.12.7 (returned `200 OK` on v1.12.6).
+   - `GET /api/admin/recordings` — must return `403 Forbidden` on
+     v1.12.7.
+   - `GET /api/admin/health` — must return `403 Forbidden` on
+     v1.12.7.
+3. Add `can_manage_system=true` to the same role and have the user
+   sign out and back in. All endpoints above must now return
+   `200 OK`.
+
+### 1.6 Migration notes
+
+- No database migrations, no schema changes.
+- No new environment variables.
+- No new Cargo or npm dependencies.
+- The HTTP response body for `403 Forbidden` is the standard
+  `AppError::Forbidden` shape — `{ "error": "Forbidden" }` with
+  status `403`. The frontend admin pages already render a sensible
+  "you don't have permission" state from that response.
+
+---
+
 # What's New in v1.12.6
 
 > **Patch release — Security: OIDC RP-Initiated Logout.** A

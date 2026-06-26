@@ -325,7 +325,9 @@ fn validate_no_restricted_keys(settings: &[SettingKV]) -> Result<(), AppError> {
 
 pub async fn get_settings(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
     let all = settings::get_all(&db.pool).await?;
     let redacted = redact_settings(all);
@@ -597,8 +599,10 @@ pub struct SsoTestRequest {
 
 pub async fn test_sso_connection(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<SsoTestRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     // Validate issuer URL uses HTTPS
     if !body.issuer_url.starts_with("https://") {
         return Err(AppError::Validation("SSO issuer URL must use HTTPS".into()));
@@ -1355,7 +1359,11 @@ pub async fn update_recordings(
 
 use crate::services::roles::{self, CreateRoleRequest, RoleRow, UpdateRoleRequest};
 
-pub async fn list_roles(State(state): State<SharedState>) -> Result<Json<Vec<RoleRow>>, AppError> {
+pub async fn list_roles(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<Vec<RoleRow>>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
     let rows = roles::list_all(&db.pool).await?;
     Ok(Json(rows))
@@ -1446,7 +1454,9 @@ use crate::services::connections::{self, ConnectionRow, CreateConnectionRequest}
 
 pub async fn list_connections(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<ConnectionRow>>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     let rows = connections::list_all(&db.pool).await?;
     Ok(Json(rows))
@@ -1561,8 +1571,10 @@ pub use crate::services::roles::{RoleMappingUpdate, RoleMappings};
 
 pub async fn get_role_mappings(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     axum::extract::Path(role_id): axum::extract::Path<Uuid>,
 ) -> Result<Json<RoleMappings>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
     let mappings = roles::get_mappings(&db.pool, role_id).await?;
     Ok(Json(mappings))
@@ -1948,7 +1960,9 @@ pub type UpdateFolderRequest = FolderRequest;
 
 pub async fn list_connection_folders(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<ConnectionFolderRow>>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     let rows = connections::list_folders(&db.pool).await?;
     Ok(Json(rows))
@@ -1975,9 +1989,11 @@ pub async fn create_connection_folder(
 
 pub async fn update_connection_folder(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
     Json(body): Json<UpdateFolderRequest>,
 ) -> Result<Json<ConnectionFolderRow>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     let row = connections::update_folder(&db.pool, id, &body)
         .await?
@@ -2421,7 +2437,9 @@ pub async fn observe_session_ws(
 
 pub async fn get_metrics(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<crate::services::session_registry::MetricsSummary>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let _db = require_running(&state).await?;
     let (registry, pool_size) = {
         let s = state.read().await;
@@ -3195,7 +3213,9 @@ pub struct SetAdminConnectionTagsReq {
 
 pub async fn list_admin_tags(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<AdminTag>>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     let rows = crate::services::admin_tags::list_tags(&db.pool).await?;
     Ok(Json(rows))
@@ -3259,8 +3279,10 @@ pub async fn update_admin_tag(
 
 pub async fn delete_admin_tag(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Path(tag_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     crate::services::admin_tags::delete_tag(&db.pool, tag_id).await?;
     Ok(Json(json!({ "ok": true })))
@@ -3268,7 +3290,9 @@ pub async fn delete_admin_tag(
 
 pub async fn list_admin_connection_tags(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     let rows = crate::services::admin_tags::list_all_connection_tag_pairs(&db.pool).await?;
 

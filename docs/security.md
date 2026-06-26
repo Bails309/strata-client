@@ -119,6 +119,25 @@ The OIDC callback handler is hardened against replay attacks, provider mismatch 
 - **Global Cache-Control**: Prior to v1.8.2, `no-store` was applied specifically to SSO redirects. It is now part of the global middleware policy, ensuring the OIDC `code` and `state` transition never enters the browser's navigation history cache.
 - **Diagnostic timing trace.** Every successful SSO callback emits an info-level tracing line on the `strata::auth::sso` target with `discovery_ms`, `token_exchange_ms`, `token_validate_ms`, and `total_so_far_ms`.
 
+#### OIDC RP-Initiated Logout (v1.12.6)
+
+Prior to v1.12.6, `POST /api/auth/logout` cleared Strata's own session cookies and revoked the local JWT but **never contacted the IdP**. The browser kept the upstream Keycloak SSO cookie, so the next click of **Sign in** silently re-authenticated against the surviving Keycloak session without prompting for a password or MFA challenge — a pentester confirmed the workstation-walk-away threat model collapsed to two clicks.
+
+v1.12.6 wires up [OpenID Connect RP-Initiated Logout 1.0](https://openid.net/specs/openid-connect-rpinitiated-1_0.html):
+
+- **`GET /api/auth/sso/callback`** now persists the raw `id_token` in a `HttpOnly; Secure; SameSite=Strict; Path=/api` cookie alongside the existing access / refresh / csrf / session_expires set. Lifetime matches the refresh token so the hint survives access-token rotation. The cookie is HttpOnly so SPA JavaScript can never read it; Path=/api so it is only sent on backend calls; SameSite=Strict so a third-party site cannot exfiltrate it via a cross-site request.
+- **`POST /api/auth/logout`** now reads the `id_token` cookie, decodes the unverified `iss` claim (safe because the token was cryptographically verified at SSO callback time and the cookie is locked behind HttpOnly + Secure + SameSite=Strict + Path=/api), looks up the matching `sso_providers` row by `issuer_url`, fetches the IdP's OIDC discovery document (cached in `services::auth`), and — if the IdP advertises `end_session_endpoint` — returns the fully-formed RP-initiated logout URL in a new `post_logout_url` field on the JSON response:
+
+  ```
+  {end_session_endpoint}?id_token_hint=<id_token>&post_logout_redirect_uri=<base_url>/login&client_id=<client_id>
+  ```
+
+- The SPA's `handleLogout` navigates the browser to `post_logout_url` via `window.location.assign(...)` after tearing down local state. Keycloak terminates its own session and bounces the browser back to `/login` via the registered `post_logout_redirect_uri`.
+- The new `id_token` cookie is **tombstoned (`Max-Age=0`) on every logout** — including local-account logouts where no id_token was ever set — so a stale value never leaks across sessions on a shared workstation.
+- `OidcDiscovery.end_session_endpoint` deserialises with `serde(default)`. Legacy IdPs that omit the field continue to parse, and the backend falls back to the pre-fix local-only logout path (logged at `warn` level the first time it can't build the URL).
+
+**Operator requirement.** Keycloak ≥ 25.0 validates **Valid Redirect URIs** and **Valid Post Logout Redirect URIs** separately. Operators must register `https://<your-strata-fqdn>/login` under the post-logout field, otherwise Keycloak rejects the redirect with `Invalid redirect uri` and the user lands on a Keycloak error page instead of `/login`. The user IS still logged out of both Strata AND Keycloak at that point (the redirect rejection happens AFTER the session is destroyed) — they just see a confusing error page. See [`docs/deployment.md`](deployment.md) §5 OIDC / SSO for the configuration steps.
+
 ### WebSocket-tunnel auth watchdog (v1.3.2; revised v1.4.1)
 
 A WebSocket tunnel that has already passed the upgrade-time `require_auth` check is, in HTTP terms, a single very long-lived request. Without further checks, an access token that is _revoked_ during that request stays in force for the lifetime of the tunnel — typically until the operator's tab closes. On hosts where browser tabs were terminated without a graceful close (OS task-killer, kernel OOM, network drop, force-quit), the tunnel could continue proxying frames into a recording for hours.

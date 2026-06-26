@@ -614,9 +614,11 @@ pub async fn logout(
     // spamming `POST /api/auth/logout` with junk strings to bloat the
     // in-memory + DB revocation list (DoS via revocation-table growth).
     //
-    // OIDC tokens are not revoked here — they should be ended at the IdP via
-    // the configured end-session endpoint. The cookie clear below is still
-    // best-effort for the browser side.
+    // OIDC tokens are not revoked in our table because they are validated
+    // statelessly against the IdP's JWKS — instead, the IdP-side session
+    // is terminated by the RP-Initiated Logout redirect built below in
+    // `build_rp_initiated_logout_url`. The id_token cookie is tombstoned
+    // alongside the access / refresh cookies regardless.
     use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 
     #[derive(serde::Deserialize, Clone)]
@@ -677,6 +679,18 @@ pub async fn logout(
         }
     }
 
+    // Optional OIDC RP-Initiated Logout: if the user originally signed in
+    // via SSO we still hold their raw id_token in an HttpOnly cookie. We
+    // hand it back to the SPA as `post_logout_url`, which the browser then
+    // navigates to so the IdP terminates its own SSO session. Without this
+    // step the IdP cookie survives, and the next click of "Sign in"
+    // silently re-authenticates against Keycloak without prompting for
+    // credentials / MFA — exactly the pentest finding this fix closes.
+    //
+    // All failure paths return None so logout still succeeds; the browser
+    // simply falls back to the existing local-redirect behaviour.
+    let post_logout_url = build_rp_initiated_logout_url(&headers, db_pool.as_ref()).await;
+
     // Clear all session cookies. The Set-Cookie expiry pattern (Max-Age=0)
     // tombstones each cookie. Path and SameSite must match the cookies we
     // originally set or the browser will keep the live cookie alive.
@@ -692,6 +706,12 @@ pub async fn logout(
             "access_token=; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=0",
         )
         .header(
+            // Tombstone id_token cookie set by sso_callback. Path must match
+            // the original (/api) or the browser keeps the live cookie.
+            "Set-Cookie",
+            "id_token=; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=0",
+        )
+        .header(
             "Set-Cookie",
             "csrf_token=; Secure; SameSite=Strict; Path=/; Max-Age=0",
         )
@@ -700,12 +720,109 @@ pub async fn logout(
             "session_expires=; Secure; SameSite=Strict; Path=/; Max-Age=0",
         )
         .body(axum::body::Body::from(
-            serde_json::to_string(&json!({ "status": "logged_out" }))
-                .map_err(|e| AppError::Internal(format!("JSON serialization error: {e}")))?,
+            serde_json::to_string(&json!({
+                "status": "logged_out",
+                "post_logout_url": post_logout_url,
+            }))
+            .map_err(|e| AppError::Internal(format!("JSON serialization error: {e}")))?,
         ))
         .map_err(|e| AppError::Internal(format!("Response build error: {e}")))?;
 
     Ok(response)
+}
+
+/// Decode the unverified `iss` claim from a JWT id_token.
+///
+/// The id_token in our cookie was cryptographically verified at SSO callback
+/// time (see `services::auth::validate_token`), so trusting its `iss` claim
+/// for the *sole* purpose of looking up the SSO provider in our own table
+/// is safe — an attacker who could forge the cookie would already be inside
+/// the HttpOnly + Secure + SameSite=Strict envelope.
+fn id_token_issuer(id_token: &str) -> Option<String> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let payload_b64 = id_token.split('.').nth(1)?;
+    let payload_bytes = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
+    let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).ok()?;
+    payload.get("iss")?.as_str().map(str::to_string)
+}
+
+/// Build the IdP-side end-session URL for RP-Initiated Logout, if applicable.
+///
+/// Returns `None` (and never errors) when:
+///   * the user has no id_token cookie (local-account logout),
+///   * the database is unavailable,
+///   * the issuer claim cannot be parsed,
+///   * no SSO provider row matches the issuer,
+///   * OIDC discovery fails, or
+///   * the IdP's discovery document omits `end_session_endpoint`.
+///
+/// All None paths fall back to the legacy local-only logout — the browser
+/// stays signed-in to the IdP, but Strata's cookies and JWT are still
+/// revoked, matching the pre-fix behaviour for unaffected configurations.
+async fn build_rp_initiated_logout_url(
+    headers: &HeaderMap,
+    db_pool: Option<&sqlx::PgPool>,
+) -> Option<String> {
+    let id_token = extract_cookie(headers, "id_token")?;
+    let pool = db_pool?;
+
+    let iss = match id_token_issuer(id_token) {
+        Some(i) => i,
+        None => {
+            tracing::warn!("logout: id_token cookie present but iss claim missing");
+            return None;
+        }
+    };
+
+    // Look up the SSO provider row by its issuer_url. Matching on the
+    // cryptographically-verified `iss` claim (verified at SSO callback
+    // time) prevents a malicious cookie from steering the logout
+    // redirect at an arbitrary URL.
+    let provider_row: Option<(String, String)> =
+        sqlx::query_as("SELECT issuer_url, client_id FROM sso_providers WHERE issuer_url = $1")
+            .bind(&iss)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+    let (issuer_url, client_id) = match provider_row {
+        Some(r) => r,
+        None => {
+            tracing::warn!(iss = %iss, "logout: no SSO provider matches id_token issuer");
+            return None;
+        }
+    };
+
+    let discovery = match fetch_oidc_discovery(&issuer_url).await {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(error = %e, "logout: OIDC discovery failed; skipping RP-initiated logout");
+            return None;
+        }
+    };
+
+    let end_session_endpoint = match discovery.end_session_endpoint {
+        Some(e) => e,
+        None => {
+            tracing::warn!(
+                iss = %iss,
+                "logout: IdP discovery document omits end_session_endpoint; \
+                 RP-Initiated Logout is unavailable for this provider"
+            );
+            return None;
+        }
+    };
+
+    let base_url = get_base_url(headers);
+    let post_logout_redirect_uri = format!("{}/login", base_url);
+
+    Some(format!(
+        "{}?id_token_hint={}&post_logout_redirect_uri={}&client_id={}",
+        end_session_endpoint,
+        urlencoding::encode(id_token),
+        urlencoding::encode(&post_logout_redirect_uri),
+        urlencoding::encode(&client_id),
+    ))
 }
 
 // ── Password Change ────────────────────────────────────────────────────
@@ -1515,6 +1632,19 @@ pub async fn sso_callback(
             ),
         )
         .header(
+            // Persist the raw id_token so /api/auth/logout can use it as the
+            // `id_token_hint` for OIDC RP-Initiated Logout. Lifetime matches
+            // the refresh cookie so the hint is still available after the
+            // access_token has been silently refreshed. HttpOnly + Path=/api
+            // means the SPA can never read it and CSRF risk is bounded to
+            // the same surface as the other auth cookies.
+            "Set-Cookie",
+            format!(
+                "id_token={}; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age={}",
+                id_token, REFRESH_TOKEN_TTL
+            ),
+        )
+        .header(
             "Set-Cookie",
             format!(
                 "csrf_token={}; Secure; SameSite=Strict; Path=/; Max-Age={}",
@@ -1818,6 +1948,101 @@ mod tests {
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn logout_response_tombstones_id_token_cookie() {
+        // The id_token cookie is set by sso_callback and read by logout to
+        // build the RP-initiated logout URL. logout MUST tombstone it on
+        // every call — even for local logins — so a stale value never
+        // leaks across sessions on a shared workstation.
+        let state = test_state().await;
+        let headers = HeaderMap::new();
+        let response = logout(State(state), headers).await.unwrap();
+        let mut tombstone_present = false;
+        for value in response.headers().get_all("Set-Cookie").iter() {
+            let s = value.to_str().unwrap_or("");
+            if s.starts_with("id_token=;") && s.contains("Max-Age=0") {
+                assert!(s.contains("HttpOnly"));
+                assert!(s.contains("Secure"));
+                assert!(s.contains("SameSite=Strict"));
+                assert!(s.contains("Path=/api"));
+                tombstone_present = true;
+            }
+        }
+        assert!(
+            tombstone_present,
+            "logout response must include an id_token=; Max-Age=0 tombstone"
+        );
+    }
+
+    #[tokio::test]
+    async fn logout_response_includes_post_logout_url_field() {
+        // Even when null (local logins, no id_token cookie), the response
+        // JSON must surface the `post_logout_url` field so the SPA's
+        // type-narrowing branches deterministically.
+        use axum::body::to_bytes;
+        let state = test_state().await;
+        let headers = HeaderMap::new();
+        let response = logout(State(state), headers).await.unwrap();
+        let body_bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["status"], "logged_out");
+        assert!(body.get("post_logout_url").is_some());
+        assert!(body["post_logout_url"].is_null());
+    }
+
+    #[test]
+    fn id_token_issuer_extracts_iss_from_jwt() {
+        // Build a JWT-shaped string by hand. id_token_issuer must NOT
+        // verify the signature; it only base64-decodes the payload to
+        // pull the `iss` claim for SSO-provider lookup.
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(
+            br#"{"sub":"abc","iss":"https://kc.example.com/realms/r","aud":"client","exp":9999999999}"#,
+        );
+        let signature = URL_SAFE_NO_PAD.encode(b"sig");
+        let jwt = format!("{header}.{payload}.{signature}");
+        assert_eq!(
+            id_token_issuer(&jwt).as_deref(),
+            Some("https://kc.example.com/realms/r")
+        );
+    }
+
+    #[test]
+    fn id_token_issuer_returns_none_for_malformed_input() {
+        assert!(id_token_issuer("").is_none());
+        assert!(id_token_issuer("not-a-jwt").is_none());
+        assert!(id_token_issuer("only.two.").is_none()); // empty payload segment after dot
+        assert!(id_token_issuer("a.b").is_none()); // missing third segment & invalid base64 payload
+    }
+
+    #[test]
+    fn id_token_issuer_returns_none_when_iss_claim_missing() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"abc"}"#);
+        let signature = URL_SAFE_NO_PAD.encode(b"");
+        let jwt = format!("{header}.{payload}.{signature}");
+        assert!(id_token_issuer(&jwt).is_none());
+    }
+
+    #[tokio::test]
+    async fn build_rp_initiated_logout_url_returns_none_without_id_token_cookie() {
+        // No id_token cookie → local login → no RP-initiated logout
+        // → caller falls back to the SPA's local /login redirect.
+        let headers = HeaderMap::new();
+        assert!(build_rp_initiated_logout_url(&headers, None).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn build_rp_initiated_logout_url_returns_none_without_db() {
+        // id_token present but no DB pool → can't look up the provider →
+        // safe fallback to None.
+        let mut headers = HeaderMap::new();
+        headers.insert("cookie", "id_token=fake.value.here".parse().unwrap());
+        assert!(build_rp_initiated_logout_url(&headers, None).await.is_none());
     }
 
     // ── get_base_url additional cases ──────────────────────────────

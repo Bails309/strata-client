@@ -24,6 +24,23 @@ pub struct OidcDiscovery {
     pub issuer: String,
     pub authorization_endpoint: String,
     pub token_endpoint: String,
+    /// RP-Initiated Logout 1.0 end-session endpoint.
+    ///
+    /// `Option` because:
+    ///   * Some legacy IdPs (and some Auth0 / Cognito configurations)
+    ///     don't advertise it in their discovery document.
+    ///   * It only exists in the OIDC discovery spec under the
+    ///     "OpenID Connect Session Management" / "RP-Initiated Logout"
+    ///     extensions, which are not mandatory.
+    ///
+    /// When present, [`crate::routes::auth::logout`] builds an
+    /// `id_token_hint`-signed redirect to it so the user's IdP session
+    /// is actually destroyed (W4-? pentest finding — pressing Logout
+    /// previously cleared only Strata's cookies, so the next "Sign in"
+    /// silently re-authenticated against the surviving Keycloak SSO
+    /// cookie without prompting for credentials).
+    #[serde(default)]
+    pub end_session_endpoint: Option<String>,
 }
 
 /// JSON Web Key Set.
@@ -277,6 +294,38 @@ mod tests {
     }
 
     #[test]
+    fn oidc_discovery_deserializes_with_end_session_endpoint() {
+        // Keycloak-style discovery document includes end_session_endpoint;
+        // the field must round-trip into the optional struct field.
+        let json = r#"{
+            "jwks_uri": "https://kc.example.com/realms/r/protocol/openid-connect/certs",
+            "issuer": "https://kc.example.com/realms/r",
+            "authorization_endpoint": "https://kc.example.com/realms/r/protocol/openid-connect/auth",
+            "token_endpoint": "https://kc.example.com/realms/r/protocol/openid-connect/token",
+            "end_session_endpoint": "https://kc.example.com/realms/r/protocol/openid-connect/logout"
+        }"#;
+        let disc: OidcDiscovery = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            disc.end_session_endpoint.as_deref(),
+            Some("https://kc.example.com/realms/r/protocol/openid-connect/logout")
+        );
+    }
+
+    #[test]
+    fn oidc_discovery_deserializes_without_end_session_endpoint() {
+        // Legacy IdPs may omit end_session_endpoint. The field must
+        // default to None rather than failing the whole parse.
+        let json = r#"{
+            "jwks_uri": "https://idp.example.com/.well-known/jwks.json",
+            "issuer": "https://idp.example.com",
+            "authorization_endpoint": "https://idp.example.com/authorize",
+            "token_endpoint": "https://idp.example.com/token"
+        }"#;
+        let disc: OidcDiscovery = serde_json::from_str(json).unwrap();
+        assert!(disc.end_session_endpoint.is_none());
+    }
+
+    #[test]
     fn claims_clone() {
         let claims = Claims {
             sub: "user1".into(),
@@ -316,10 +365,12 @@ mod tests {
             issuer: "https://example.com".into(),
             authorization_endpoint: "https://example.com/auth".into(),
             token_endpoint: "https://example.com/token".into(),
+            end_session_endpoint: Some("https://example.com/logout".into()),
         };
         let cloned = disc.clone();
         assert_eq!(cloned.issuer, disc.issuer);
         assert_eq!(cloned.jwks_uri, disc.jwks_uri);
+        assert_eq!(cloned.end_session_endpoint, disc.end_session_endpoint);
     }
 
     // ── W4-8 negative / misuse tests ───────────────────────────────

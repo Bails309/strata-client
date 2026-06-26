@@ -411,7 +411,9 @@ mod tests {
             can_use_quick_share: false,
             can_use_quick_share_outbound: false,
         };
-        let axum::Json(resp) = list_certs(axum::Extension(admin)).await.expect("list_certs");
+        let axum::Json(resp) = list_certs(axum::Extension(admin))
+            .await
+            .expect("list_certs");
         assert!(resp.certificates.is_empty());
     }
 }

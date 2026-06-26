@@ -329,17 +329,36 @@ export const login = async (data: LoginRequest): Promise<LoginResponse> => {
   return res.json();
 };
 
-export async function logout() {
+export interface LogoutResponse {
+  status: string;
+  /**
+   * OIDC RP-Initiated Logout URL. Present only when the user signed in via
+   * SSO AND their IdP advertises an end_session_endpoint in its discovery
+   * document. When set, the caller should navigate the browser to this URL
+   * so the IdP terminates its own SSO session — otherwise the next click
+   * of "Sign in" silently re-authenticates against the surviving Keycloak
+   * cookie without prompting for credentials (pentest finding closed in
+   * v1.12.6).
+   */
+  post_logout_url?: string | null;
+}
+
+export async function logout(): Promise<LogoutResponse | null> {
   try {
-    await fetch(`${API_BASE}/auth/logout`, {
+    const res = await fetch(`${API_BASE}/auth/logout`, {
       method: "POST",
       headers: buildHeaders("POST"),
       credentials: "include",
     });
+    // Best-effort body parse — older backends (≤ v1.12.5) returned only
+    // `{ "status": "logged_out" }` and never the post_logout_url field.
+    // A missing or unparseable body must not break logout.
+    return (await res.json().catch(() => null)) as LogoutResponse | null;
   } catch {
     // Best-effort — server-side cookies might not get cleared if this
     // throws, but the cookies are short-lived and SameSite=Strict so the
     // failure mode is acceptable.
+    return null;
   }
 }
 

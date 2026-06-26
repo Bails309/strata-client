@@ -176,6 +176,39 @@ describe("logout", () => {
 
     expect(calls.some((u) => u.includes("/api/auth/logout"))).toBe(true);
   });
+
+  it("returns parsed body including post_logout_url when backend supplies it", async () => {
+    // v1.12.6+: SSO logouts return an RP-initiated logout URL so the SPA
+    // can drive the browser to the IdP's end_session_endpoint. The handler
+    // in App.tsx branches on this field.
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "logged_out",
+            post_logout_url:
+              "https://kc.example.com/realms/r/protocol/openid-connect/logout?id_token_hint=abc",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+    ) as unknown as typeof fetch;
+
+    const res = await logout();
+    expect(res?.status).toBe("logged_out");
+    expect(res?.post_logout_url).toContain("openid-connect/logout");
+    expect(res?.post_logout_url).toContain("id_token_hint=abc");
+  });
+
+  it("returns null when the response body cannot be parsed (back-compat with ≤1.12.5)", async () => {
+    // Older backends returned plain status text or an empty body. The
+    // .json().catch(() => null) defence must surface as null so the SPA
+    // falls back to its local /login redirect.
+    globalThis.fetch = vi.fn(
+      async () => new Response("", { status: 200 })
+    ) as unknown as typeof fetch;
+    const res = await logout();
+    expect(res).toBeNull();
+  });
 });
 
 // ── Helper to mock fetch and capture calls ──────────────────────────────

@@ -131,19 +131,30 @@ export default function SsoTab({
   }
 
   const callbackUrl = `${window.location.origin}/api/auth/sso/callback`;
+  const postLogoutRedirectUri = `${window.location.origin}/login`;
 
   if (showForm) {
     return (
       <div className="card animate-fade-in">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-start justify-between mb-4 gap-4">
           <h2 className="!mb-0">{editingId ? "Edit SSO Provider" : "Add SSO Provider"}</h2>
-          <div className="flex flex-col items-end">
-            <span className="text-[10px] uppercase tracking-wider text-txt-tertiary font-bold mb-1">
-              Callback URL
-            </span>
-            <code className="text-[11px] bg-surface-tertiary px-2 py-1 rounded border border-border font-mono text-accent select-all">
-              {callbackUrl}
-            </code>
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex flex-col items-end">
+              <span className="text-[10px] uppercase tracking-wider text-txt-tertiary font-bold mb-1">
+                Callback URL
+              </span>
+              <code className="text-[11px] bg-surface-tertiary px-2 py-1 rounded border border-border font-mono text-accent select-all">
+                {callbackUrl}
+              </code>
+            </div>
+            <div className="flex flex-col items-end">
+              <span className="text-[10px] uppercase tracking-wider text-txt-tertiary font-bold mb-1">
+                Post-Logout Redirect URI
+              </span>
+              <code className="text-[11px] bg-surface-tertiary px-2 py-1 rounded border border-border font-mono text-accent select-all">
+                {postLogoutRedirectUri}
+              </code>
+            </div>
           </div>
         </div>
 

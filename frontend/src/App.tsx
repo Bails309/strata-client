@@ -76,10 +76,26 @@ export default function App() {
     // logout, so without this its in-memory sessions would keep
     // streaming until the browser tab closes.
     closeAllSessionsExternal();
-    // Best-effort backend logout — invalidates the refresh token and
-    // clears the auth cookies. Fire-and-forget; we don't block the UI
-    // on it (cookies are SameSite=Strict + short-lived).
-    void apiLogout();
+    // Backend logout — invalidates the refresh token, clears the auth
+    // cookies, and (for SSO users) returns an OIDC end-session URL we
+    // must navigate to so the IdP terminates its own session. Without
+    // the redirect the Keycloak SSO cookie survives and the next "Sign
+    // in" silently re-authenticates without prompting for credentials.
+    //
+    // We do NOT await this in the non-SSO path so the UI snaps back to
+    // /login immediately. For SSO users the IdP navigation requires the
+    // post_logout_url from the response body, so we branch on the result.
+    void apiLogout().then((res) => {
+      const postLogoutUrl = res?.post_logout_url;
+      if (postLogoutUrl) {
+        // Full page navigation — leaves the SPA so the IdP can clear
+        // its session cookies and bounce back to /login. The auth
+        // state has already been wiped below; the post-redirect SPA
+        // load will see no cookies and render the Login screen.
+        window.location.assign(postLogoutUrl);
+        return;
+      }
+    });
     setAuthenticated(false);
     setUser(null);
     navigate("/login");

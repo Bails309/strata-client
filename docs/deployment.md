@@ -441,7 +441,8 @@ You can switch between Bundled and External vault modes at any time via **Admin 
 1. Create a Keycloak realm and client for Strata
 2. Set the client access type to **Confidential**
 3. Add `http://strata.example.com/*` to the redirect URIs
-4. Navigate to **Admin → SSO / OIDC** and enter:
+4. **Add `https://strata.example.com/login` to _Valid Post Logout Redirect URIs_** (Keycloak ≥ 25.0; required for the RP-Initiated Logout flow introduced in v1.12.6 — without this entry, **Log out** ends the user's IdP session correctly but the post-logout redirect lands them on a Keycloak error page instead of the Strata Login screen). Auth0, Okta, and Entra ID have equivalent fields under different names (Auth0: **Allowed Logout URLs**; Okta: **Sign-out redirect URIs**; Entra ID: register the URL under **Redirect URIs** so `post_logout_redirect_uri` validation succeeds).
+5. Navigate to **Admin → SSO / OIDC** and enter:
    - Issuer URL: `https://keycloak.example.com/realms/strata`
    - Client ID: from Keycloak
    - Client Secret: from Keycloak

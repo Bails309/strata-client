@@ -5,6 +5,130 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.12.6] — 2026-06-26
+
+### Patch Release — `POST /api/auth/logout` performs OIDC RP-Initiated Logout
+
+A penetration test against a v1.12.5 deployment identified that clicking
+**Log out** in the Strata SPA cleared Strata's own session cookies and
+revoked its local JWT, but **never contacted the IdP**. The browser kept
+the upstream Keycloak SSO cookie, so the very next click of **Sign in**
+silently re-authenticated against the surviving Keycloak session without
+prompting for a password or MFA challenge. The acceptance test was the
+classic "log out, then immediately log back in without typing anything"
+sequence — on v1.12.5 it succeeded. The user experience matches "the
+logout button does nothing for SSO users", and the security impact is
+that a workstation walked away from after a manual logout is no harder
+for the next person to weaponise than a workstation locked with the
+session still open.
+
+The fix wires up the standard [OpenID Connect RP-Initiated Logout 1.0]
+flow. The SSO callback now persists the raw `id_token` in a
+`HttpOnly; Secure; SameSite=Strict; Path=/api` cookie (TTL matches the
+refresh token so the hint survives access-token rotation). On logout
+the backend extracts the cookie, decodes the unverified `iss` claim
+to look up the matching `sso_providers` row, fetches the IdP's
+discovery document (cached in `services::auth`), and — if the IdP
+advertises an `end_session_endpoint` — returns the fully-formed
+RP-initiated logout URL in a new `post_logout_url` field on the JSON
+response. The SPA navigates the browser to that URL after tearing down
+local state; Keycloak terminates its own session and bounces the
+browser back to `/login` via the registered
+`post_logout_redirect_uri`. Local-account logouts and IdPs that omit
+`end_session_endpoint` fall back transparently to the pre-fix
+behaviour.
+
+[OpenID Connect RP-Initiated Logout 1.0]: https://openid.net/specs/openid-connect-rpinitiated-1_0.html
+
+### Security
+
+- `POST /api/auth/logout` now returns `post_logout_url` when the user
+  signed in via SSO AND the IdP advertises `end_session_endpoint` in
+  its OIDC discovery document. The SPA navigates the browser there so
+  the IdP destroys its own session. Without this navigation the IdP
+  SSO cookie survives and the next "Sign in" silently re-authenticates
+  the same browser without prompting for credentials.
+- `OidcDiscovery` now carries `end_session_endpoint: Option<String>`
+  (deserialised from `serde(default)` so legacy IdPs that omit the
+  field continue to work).
+- `GET /api/auth/sso/callback` sets a new `id_token` cookie
+  (`HttpOnly; Secure; SameSite=Strict; Path=/api`; lifetime matches
+  the refresh token) so it is available as the `id_token_hint`
+  parameter on the logout redirect. SPA JavaScript can never read
+  this cookie.
+- `POST /api/auth/logout` tombstones the new `id_token` cookie
+  (`Max-Age=0`) alongside the existing access / refresh / csrf /
+  session_expires cookies on every call — including local-account
+  logouts — so a stale value never leaks across sessions on a shared
+  workstation.
+
+### Changed
+
+- The frontend `apiLogout()` (`frontend/src/api.ts`) now resolves to
+  the parsed response body (`LogoutResponse`) instead of `void`. A
+  missing or unparseable body returns `null` so callers downgrade
+  gracefully when talking to a v1.12.5 or older backend.
+- `App.tsx` `handleLogout` awaits the apiLogout result; when a
+  `post_logout_url` is present it issues `window.location.assign(...)`
+  instead of the local `/login` SPA navigation.
+
+### Tests
+
+- Three new unit tests in `backend/src/services/auth.rs`:
+  - `oidc_discovery_deserializes_with_end_session_endpoint`
+    (Keycloak-shaped document round-trips correctly).
+  - `oidc_discovery_deserializes_without_end_session_endpoint`
+    (legacy IdPs without the field default to `None` rather than
+    failing the whole parse).
+  - Existing `oidc_discovery_clone` extended with the new field.
+- Six new unit tests in `backend/src/routes/auth.rs`:
+  - `logout_response_tombstones_id_token_cookie`
+    (every logout response carries `id_token=; Max-Age=0`).
+  - `logout_response_includes_post_logout_url_field` (the JSON
+    response always surfaces the field, set to `null` for local
+    logouts, so the SPA's type-narrowing branches deterministically).
+  - `id_token_issuer_extracts_iss_from_jwt`,
+    `id_token_issuer_returns_none_for_malformed_input`,
+    `id_token_issuer_returns_none_when_iss_claim_missing`
+    (defensive parsing of the unverified `iss` claim).
+  - `build_rp_initiated_logout_url_returns_none_without_id_token_cookie`
+    and `build_rp_initiated_logout_url_returns_none_without_db`
+    (the helper short-circuits to `None` on every defensive branch
+    rather than erroring).
+- Two new vitest cases in `frontend/src/__tests__/api.test.ts`:
+  - `returns parsed body including post_logout_url when backend
+    supplies it`.
+  - `returns null when the response body cannot be parsed
+    (back-compat with ≤ 1.12.5)`.
+
+### Operator impact
+
+- **One IdP-side configuration step is required** for the
+  RP-initiated logout to succeed. In Keycloak (and equivalent IdPs):
+  open the Strata client → **Settings** → add
+  `https://<your-strata-fqdn>/login` to **Valid Post Logout Redirect
+  URIs** (Keycloak ≥ 25.0; older versions accepted the existing
+  **Valid Redirect URIs** value, but Keycloak now validates the two
+  fields separately). Without this entry the IdP rejects the logout
+  redirect with `Invalid redirect uri` and the user lands on a
+  Keycloak error page instead of `/login`. Local-account-only
+  deployments are unaffected.
+- No migrations. No new environment variables. No new Cargo or npm
+  dependencies. Drop-in upgrade from v1.12.5: `docker compose pull &&
+docker compose up -d --build` (or the ghcr / k8s equivalent).
+- IdPs that do not advertise `end_session_endpoint` in their OIDC
+  discovery document (some legacy installations) automatically fall
+  back to the pre-fix behaviour — the backend logs a warning at boot
+  and omits the `post_logout_url` field; the SPA navigates locally to
+  `/login` exactly as before. The IdP session in that case still
+  cannot be terminated automatically (this is a property of the IdP,
+  not Strata).
+- The new `id_token` cookie is approximately 1–2 KB on a typical
+  Keycloak deployment — well inside the 4 KB per-cookie browser limit.
+  Operators with unusually large id_tokens (custom claims pushing
+  past 4 KB) should review their realm's client-scope mappers; nothing
+  in Strata caps the size.
+
 ## [1.12.5] — 2026-06-25
 
 ### Patch Release — `GET /api/admin/settings` masks Vault-sealed values

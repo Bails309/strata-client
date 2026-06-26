@@ -2033,7 +2033,9 @@ mod tests {
         // No id_token cookie → local login → no RP-initiated logout
         // → caller falls back to the SPA's local /login redirect.
         let headers = HeaderMap::new();
-        assert!(build_rp_initiated_logout_url(&headers, None).await.is_none());
+        assert!(build_rp_initiated_logout_url(&headers, None)
+            .await
+            .is_none());
     }
 
     #[tokio::test]
@@ -2042,7 +2044,9 @@ mod tests {
         // safe fallback to None.
         let mut headers = HeaderMap::new();
         headers.insert("cookie", "id_token=fake.value.here".parse().unwrap());
-        assert!(build_rp_initiated_logout_url(&headers, None).await.is_none());
+        assert!(build_rp_initiated_logout_url(&headers, None)
+            .await
+            .is_none());
     }
 
     // ── get_base_url additional cases ──────────────────────────────

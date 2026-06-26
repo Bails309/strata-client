@@ -177,17 +177,50 @@ export default function SafeguardSigninCard({
     const idp = status.idp_alias || "<idp-alias>";
     const code = enrolment?.code ?? "<click Sign in to get a code>";
     // Backticks here are PowerShell line continuations, not JS template marks.
+    // The auth + POST flow is wrapped in `& { ... }` (a scoped script-block)
+    // so that `return` inside a catch actually halts the rest of the snippet
+    // when pasted interactively, and so $ErrorActionPreference = 'Stop'
+    // applies only to that block (not to Set-ExecutionPolicy / Install-Module).
     return [
       "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser",
       "if (-not (Get-Module -ListAvailable -Name Safeguard-PS)) {",
       "  Install-Module -Name Safeguard-PS -Scope CurrentUser -Force -AllowClobber",
       "}",
-      `$SGToken = Connect-Safeguard ${fqdn} -Browser -IdentityProvider ${idp} -NoSessionVariable -NoWindowTitle`,
-      "Invoke-RestMethod -Method POST `",
-      `  -Uri '${enrolEndpoint}' \``,
-      "  -ContentType 'application/json' `",
-      `  -Body (@{ code = '${code}'; token = $SGToken } | ConvertTo-Json) | Out-Null`,
-      "Write-Host '[OK] Strata sign-in complete. You can close this window.'",
+      "",
+      "& {",
+      "  $ErrorActionPreference = 'Stop'",
+      "",
+      "  try {",
+      `    $SGToken = Connect-Safeguard ${fqdn} -Browser -IdentityProvider ${idp} -NoSessionVariable -NoWindowTitle`,
+      "  } catch {",
+      '    Write-Host "[ERROR] Connect-Safeguard failed: $($_.Exception.Message)" -ForegroundColor Red',
+      "    if ($_.Exception.Message -match 'Only one usage of each socket') {",
+      "      Write-Host '        A previous sign-in attempt left a loopback listener bound to the OAuth callback port.' -ForegroundColor Yellow",
+      "      Write-Host '        Close this PowerShell window, open a fresh one, and re-run the snippet.' -ForegroundColor Yellow",
+      "    }",
+      "    return",
+      "  }",
+      "",
+      "  if (-not $SGToken) {",
+      "    Write-Host '[ERROR] Connect-Safeguard returned no token (sign-in cancelled or browser closed before federation completed).' -ForegroundColor Red",
+      "    Write-Host '        Re-run the snippet and complete the browser sign-in.' -ForegroundColor Yellow",
+      "    return",
+      "  }",
+      "",
+      "  try {",
+      "    Invoke-RestMethod -Method POST `",
+      `      -Uri '${enrolEndpoint}' \``,
+      "      -ContentType 'application/json' `",
+      `      -Body (@{ code = '${code}'; token = $SGToken } | ConvertTo-Json) | Out-Null`,
+      "  } catch {",
+      '    Write-Host "[ERROR] Strata rejected the submission: $($_.Exception.Message)" -ForegroundColor Red',
+      "    Write-Host '        The enrolment code may have expired (5-minute TTL) or already been used.' -ForegroundColor Yellow",
+      "    Write-Host \"        Click 'Get a new code' in the Strata sign-in modal and re-run the snippet.\" -ForegroundColor Yellow",
+      "    return",
+      "  }",
+      "",
+      "  Write-Host '[OK] Strata sign-in complete. You can close this window.' -ForegroundColor Green",
+      "}",
     ].join("\n");
   }, [status, enrolment, enrolEndpoint]);
 

@@ -536,6 +536,18 @@ describe("SsoTab", () => {
     expect(await screen.findByText(/\/api\/auth\/sso\/callback/)).toBeInTheDocument();
   });
 
+  it("renders post-logout redirect URI", async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText("SSO / OIDC"));
+
+    const editBtn = await screen.findByRole("button", { name: "Edit" });
+    await user.click(editBtn);
+
+    expect(await screen.findByText("Post-Logout Redirect URI")).toBeInTheDocument();
+    expect(await screen.findByText(`${window.location.origin}/login`)).toBeInTheDocument();
+  });
+
   it("handles non-Error exception in test connection", async () => {
     vi.mocked(testSsoConnection).mockRejectedValue("string error");
     const user = userEvent.setup();

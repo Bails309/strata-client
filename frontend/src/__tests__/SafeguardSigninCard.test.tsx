@@ -136,6 +136,36 @@ describe("SafeguardSigninCard", () => {
     );
   });
 
+  it("rendered PowerShell snippet contains guards and diagnostic messages", async () => {
+    (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
+    (startSafeguardSignin as any).mockResolvedValue({
+      code: "GUARD-ON1",
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
+    render(<SafeguardSigninCard />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Copy snippet" }));
+    // The full snippet is whatever was passed to clipboard.writeText.
+    const snippet = (navigator.clipboard.writeText as any).mock.calls[0][0] as string;
+    // 1. The auth + POST flow is wrapped in a scoped script-block so `return`
+    //    actually halts execution when pasted interactively.
+    expect(snippet).toContain("& {");
+    expect(snippet).toContain("$ErrorActionPreference = 'Stop'");
+    // 2. Connect-Safeguard is wrapped in try/catch with a specific hint for
+    //    the WSAEADDRINUSE socket-collision case.
+    expect(snippet).toMatch(/try \{[\s\S]+?Connect-Safeguard/);
+    expect(snippet).toContain("Only one usage of each socket");
+    // 3. There's a null-token guard so the backend never sees `"token": null`.
+    expect(snippet).toContain("if (-not $SGToken)");
+    // 4. Invoke-RestMethod is wrapped in try/catch with an enrolment-code hint.
+    expect(snippet).toMatch(/try \{[\s\S]+?Invoke-RestMethod/);
+    expect(snippet).toContain("Get a new code");
+    // 5. The [OK] line is only reached when both calls succeed.
+    expect(snippet).toContain("[OK] Strata sign-in complete");
+  });
+
   it("flips Copy snippet button to 'Copied!' on success then reverts after 2s", async () => {
     (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
     (startSafeguardSignin as any).mockResolvedValue({

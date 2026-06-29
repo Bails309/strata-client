@@ -5,6 +5,95 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.12.8] — 2026-06-29
+
+### Patch Release — UI hotfix for v1.12.7 RBAC fallout: delegated users now see the connection name on session tiles
+
+The v1.12.7 patch tightened `GET /api/admin/connections` to require
+`can_manage_connections` (one of the seventeen handlers that previously
+missed its per-handler permission check). That was the right fix on
+the backend, but it surfaced an unrelated and previously-silent bug
+in the frontend: `frontend/src/pages/SessionClient.tsx` was using the
+admin endpoint to translate a URL-supplied `connectionId` (e.g.
+`/session/{uuid}`) into a human-readable name for the session tile
+in the sidebar. Pre-v1.12.7 the admin endpoint happened to be
+reachable by anyone with any admin flag (because of the coarse
+`require_admin` gate) so the bug went unnoticed; post-v1.12.7 a
+delegated user without `can_manage_connections` started getting
+`403 Forbidden` on the lookup, the `.catch(() => undefined)` in the
+component silently swallowed the error, the falsy fallback fired,
+and the tile rendered the protocol (`RDP`) instead of the connection
+name (e.g. `cicsazt1mgt-t`).
+
+The bug was entirely cosmetic — sessions still connected, file
+transfer still worked, multi-monitor still tiled, the audit log still
+recorded the correct connection ID. Only the visual label was wrong,
+and only for operators in a custom delegated role. The visual
+regression mattered most for users who keep several sessions open at
+once and rely on the tile label to tell tiles apart at a glance: a
+sidebar of three tiles all labelled `RDP` defeats the purpose of the
+multi-session bar.
+
+### Fix
+
+[`frontend/src/pages/SessionClient.tsx`](frontend/src/pages/SessionClient.tsx)
+swaps the call from `getConnections()` (→ `GET /api/admin/connections`)
+to `getMyConnections()` (→ `GET /api/user/connections`). The
+user-scoped endpoint returns the same `Connection[]` shape, is
+filtered to the connections the user is actually allowed to reach
+(connection-to-user / connection-to-group mappings honoured by the
+backend), and requires no admin permission flag. Admins continue to
+see the right tile label because `/api/user/connections` includes
+every connection their assignments grant them. The only change is
+two lines in the import block plus the function call, plus a comment
+documenting the v1.12.7 interaction so future readers don't recreate
+the bug.
+
+The other call site of `getConnections()` —
+`frontend/src/pages/AdminSettings.tsx` — is correct to use the admin
+endpoint (the page is admin-only and renders connection management
+UI), and is unchanged.
+
+### Compatibility
+
+- **Backend**: no changes. `GET /api/admin/connections` retains its
+  v1.12.7 `can_manage_connections` requirement; `GET /api/user/connections`
+  retains its pre-existing user-scoped behaviour.
+- **Frontend**: no visible change for users with `can_manage_system`
+  or `can_manage_connections` (they continue to see the correct
+  connection name on tiles). Delegated users in custom roles that
+  lack both flags but still have access to the connection (via
+  user-to-connection or group-to-connection mapping) now also see
+  the correct name on their session tiles.
+- **API contract**: no changes. Both `Connection[]` endpoints return
+  the same TypeScript-side `Connection` interface — `getMyConnections`
+  has existed since v0.x and is the standard way for non-admin code
+  paths to enumerate accessible connections.
+- **Tests**: no test changes were required. The full vitest suite
+  (~1,600 cases across 47 files) continues to pass. `SessionClient`
+  is not directly tested at the component level — `App.test.tsx`
+  mocks the page entirely — and the `api.test.ts` cases for
+  `getConnections` / `getMyConnections` continue to verify the
+  underlying HTTP requests.
+
+### Acceptance test
+
+1. In a fresh v1.12.7 deployment, create a delegated role with **only**
+   `can_create_connections` enabled (no `can_manage_system`, no
+   `can_manage_connections`) and assign it to a test user along with
+   access to at least one RDP connection.
+2. Sign in as the test user, open the connection from the dashboard,
+   and observe the session tile in the **Active Sessions** sidebar
+   on the right. On v1.12.7 the tile reads `RDP`; on v1.12.8 it
+   reads the actual connection name (e.g. `cicsazt1mgt-t`).
+3. Open the browser devtools network panel — the page should issue
+   `GET /api/user/connections` (200) instead of
+   `GET /api/admin/connections` (403).
+4. Sign in as a full admin (`can_manage_system=true`) — the tile
+   label is unchanged from v1.12.7 because the admin's
+   `/api/user/connections` response already includes every
+   connection in the system.
+
 ## [1.12.7] — 2026-06-26
 
 ### Patch Release — `/api/admin/*` now enforces per-handler RBAC
@@ -12,7 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 A penetration test against v1.12.6 identified a privilege-escalation
 gap in the admin API. The router-level `require_admin` middleware
 guarding `/api/admin/*` is intentionally a coarse gate — it accepts
-any user holding *any* of the nine admin permission flags (e.g.
+any user holding _any_ of the nine admin permission flags (e.g.
 `can_view_audit_logs`, `can_create_users`, `can_view_sessions`, …).
 The granular access decision is the responsibility of each handler,
 which is expected to call one of the `check_*_permission(&user)`
@@ -33,26 +122,26 @@ affected endpoint and tightens the response to `403 Forbidden` when a
 user is missing the required flag. The required flag per endpoint
 matches the existing pattern used by other handlers in the same file:
 
-| Endpoint | Required permission |
-| --- | --- |
-| `GET /api/admin/settings` | `can_manage_system` |
-| `POST /api/admin/settings/sso/test` | `can_manage_system` |
-| `GET /api/admin/roles` | `can_manage_system` |
-| `GET /api/admin/roles/{id}/mappings` | `can_manage_system` |
-| `GET /api/admin/metrics` | `can_manage_system` |
-| `PUT /api/admin/safeguard/config` | `can_manage_system` |
-| `POST /api/admin/safeguard/test` | `can_manage_system` |
-| `GET /api/admin/health` | `can_manage_system` |
-| `GET /api/admin/certs` | `can_manage_system` |
-| `POST /api/admin/dmz-links/reconnect` | `can_manage_system` |
-| `GET /api/admin/connections` | `can_manage_connections` |
-| `GET /api/admin/connection-folders` | `can_manage_connections` |
+| Endpoint                                 | Required permission      |
+| ---------------------------------------- | ------------------------ |
+| `GET /api/admin/settings`                | `can_manage_system`      |
+| `POST /api/admin/settings/sso/test`      | `can_manage_system`      |
+| `GET /api/admin/roles`                   | `can_manage_system`      |
+| `GET /api/admin/roles/{id}/mappings`     | `can_manage_system`      |
+| `GET /api/admin/metrics`                 | `can_manage_system`      |
+| `PUT /api/admin/safeguard/config`        | `can_manage_system`      |
+| `POST /api/admin/safeguard/test`         | `can_manage_system`      |
+| `GET /api/admin/health`                  | `can_manage_system`      |
+| `GET /api/admin/certs`                   | `can_manage_system`      |
+| `POST /api/admin/dmz-links/reconnect`    | `can_manage_system`      |
+| `GET /api/admin/connections`             | `can_manage_connections` |
+| `GET /api/admin/connection-folders`      | `can_manage_connections` |
 | `PUT /api/admin/connection-folders/{id}` | `can_manage_connections` |
-| `GET /api/admin/tags` | `can_manage_connections` |
-| `DELETE /api/admin/tags/{id}` | `can_manage_connections` |
-| `GET /api/admin/connection-tags` | `can_manage_connections` |
-| `GET /api/admin/recordings` | `can_view_sessions` |
-| `GET /api/admin/recordings/{id}/stream` | `can_view_sessions` |
+| `GET /api/admin/tags`                    | `can_manage_connections` |
+| `DELETE /api/admin/tags/{id}`            | `can_manage_connections` |
+| `GET /api/admin/connection-tags`         | `can_manage_connections` |
+| `GET /api/admin/recordings`              | `can_view_sessions`      |
+| `GET /api/admin/recordings/{id}/stream`  | `can_view_sessions`      |
 
 (`can_manage_system` is the super-admin flag and continues to imply
 access to every check above; users who already had it before v1.12.7
@@ -182,9 +271,9 @@ behaviour.
     rather than erroring).
 - Two new vitest cases in `frontend/src/__tests__/api.test.ts`:
   - `returns parsed body including post_logout_url when backend
-    supplies it`.
+supplies it`.
   - `returns null when the response body cannot be parsed
-    (back-compat with ≤ 1.12.5)`.
+(back-compat with ≤ 1.12.5)`.
 
 ### Operator impact
 
@@ -6105,9 +6194,7 @@ No `/api/*` breaking changes; one additive route
   {
     "trigger": ":reload", // :?[a-z0-9_-]{1,64}
     "action": "reload", // server allow-list
-    "args": {
-      /* opaque, action-specific */
-    },
+    "args": {/* opaque, action-specific */},
     "target_id": "<uuid> | null", // resolved target where applicable
   }
   ```

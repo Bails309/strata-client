@@ -241,30 +241,34 @@ A penetration test against v1.12.6 found that **seventeen handlers were missing 
 
 v1.12.7 adds the appropriate `check_*_permission(&user)?` call as the first statement of every affected handler. The required flag per endpoint:
 
-| Endpoint | Required permission |
-| --- | --- |
-| `GET /api/admin/settings` | `can_manage_system` |
-| `POST /api/admin/settings/sso/test` | `can_manage_system` |
-| `GET /api/admin/roles` | `can_manage_system` |
-| `GET /api/admin/roles/{id}/mappings` | `can_manage_system` |
-| `GET /api/admin/metrics` | `can_manage_system` |
-| `PUT /api/admin/safeguard/config` | `can_manage_system` |
-| `POST /api/admin/safeguard/test` | `can_manage_system` |
-| `GET /api/admin/health` | `can_manage_system` |
-| `GET /api/admin/certs` | `can_manage_system` |
-| `POST /api/admin/dmz-links/reconnect` | `can_manage_system` |
-| `GET /api/admin/connections` | `can_manage_connections` |
-| `GET /api/admin/connection-folders` | `can_manage_connections` |
+| Endpoint                                 | Required permission      |
+| ---------------------------------------- | ------------------------ |
+| `GET /api/admin/settings`                | `can_manage_system`      |
+| `POST /api/admin/settings/sso/test`      | `can_manage_system`      |
+| `GET /api/admin/roles`                   | `can_manage_system`      |
+| `GET /api/admin/roles/{id}/mappings`     | `can_manage_system`      |
+| `GET /api/admin/metrics`                 | `can_manage_system`      |
+| `PUT /api/admin/safeguard/config`        | `can_manage_system`      |
+| `POST /api/admin/safeguard/test`         | `can_manage_system`      |
+| `GET /api/admin/health`                  | `can_manage_system`      |
+| `GET /api/admin/certs`                   | `can_manage_system`      |
+| `POST /api/admin/dmz-links/reconnect`    | `can_manage_system`      |
+| `GET /api/admin/connections`             | `can_manage_connections` |
+| `GET /api/admin/connection-folders`      | `can_manage_connections` |
 | `PUT /api/admin/connection-folders/{id}` | `can_manage_connections` |
-| `GET /api/admin/tags` | `can_manage_connections` |
-| `DELETE /api/admin/tags/{id}` | `can_manage_connections` |
-| `GET /api/admin/connection-tags` | `can_manage_connections` |
-| `GET /api/admin/recordings` | `can_view_sessions` |
-| `GET /api/admin/recordings/{id}/stream` | `can_view_sessions` |
+| `GET /api/admin/tags`                    | `can_manage_connections` |
+| `DELETE /api/admin/tags/{id}`            | `can_manage_connections` |
+| `GET /api/admin/connection-tags`         | `can_manage_connections` |
+| `GET /api/admin/recordings`              | `can_view_sessions`      |
+| `GET /api/admin/recordings/{id}/stream`  | `can_view_sessions`      |
 
 `can_manage_system` is the super-admin flag and short-circuits every check above; users with the default `admin` role see no behaviour change. The `require_admin` middleware itself is **unchanged** because it correctly models the coarse "is this an admin surface?" question; tightening it would break legitimate delegated roles that should still see the subset of pages their single flag covers.
 
 **Operator action:** if you maintain any custom delegated admin roles, audit them under **Settings → Roles**. Confirm that each role has the flag matching the endpoints its holders need to access. Roles holding only `can_view_audit_logs` continue to access the audit log surface (`GET /api/admin/audit-logs`, `GET /api/admin/audit-logs/export`, etc.) exactly as before — those handlers always had the correct per-handler check.
+
+#### Frontend follow-up: session-tile name lookup (v1.12.8)
+
+The v1.12.7 lockdown of `GET /api/admin/connections` revealed a long-standing frontend bug in [`frontend/src/pages/SessionClient.tsx`](../frontend/src/pages/SessionClient.tsx) — the page used the admin endpoint to translate the URL-supplied `connectionId` into a human-readable name for the session tile in the **Active Sessions** sidebar. Pre-v1.12.7 every admin-flag holder could reach the admin endpoint via the coarse `require_admin` gate, so the bug went unnoticed; post-v1.12.7 a delegated user without `can_manage_connections` got `403 Forbidden`, the defensive `.catch(() => undefined)` swallowed the error, and the tile rendered the protocol (`RDP`) instead of the actual connection name (e.g. `cicsazt1mgt-t`). The bug was purely cosmetic — sessions still connected, audit logs still recorded the correct connection ID, file transfer still worked — and was strictly a frontend display problem, not a permission bypass: the user was already authorised to launch the session via `GET /api/user/connections/{id}/info`. v1.12.8 swaps the lookup to `getMyConnections()` (the user-scoped `/api/user/connections` endpoint), which returns the same `Connection[]` shape, is filtered server-side to exactly the connections the user is allowed to launch, and requires no admin permission flag. The v1.12.7 RBAC tightening on `GET /api/admin/connections` is preserved.
 
 ---
 

@@ -1,9 +1,211 @@
+# What's New in v1.12.8
+
+> **Patch release — UI hotfix: delegated users now see the
+> connection name on session tiles.** v1.12.7's tightening of
+> `GET /api/admin/connections` (now requires `can_manage_connections`)
+> surfaced an unrelated and previously-silent bug in
+> `frontend/src/pages/SessionClient.tsx` — the page was using the
+> admin endpoint to translate the URL-supplied `connectionId` into a
+> human-readable name for the session tile in the sidebar. Pre-v1.12.7
+> the admin endpoint happened to be reachable by anyone with any
+> admin flag, so the bug went unnoticed; post-v1.12.7 a delegated
+> user without `can_manage_connections` started getting `403 Forbidden`
+> on the lookup, the `.catch(() => undefined)` swallowed the error,
+> and the tile rendered the protocol (`RDP`) instead of the actual
+> connection name (`cicsazt1mgt-t`). The bug was entirely cosmetic —
+> sessions still connected, audit logs still recorded the correct
+> connection ID, file transfer still worked — only the visual label
+> on the tile was wrong, and only for users in custom delegated roles.
+> v1.12.8 swaps the call to `getMyConnections()` (the user-scoped
+> `/api/user/connections` endpoint), which returns the same
+> `Connection[]` shape, is filtered to the connections the user is
+> actually allowed to reach, and requires no admin permission flag.
+> No backend changes, no migrations, no new environment variables,
+> no new dependencies — two lines in one frontend file plus an
+> explanatory comment.
+
+## Theme 1 — Delegated-user connection-name regression from v1.12.7
+
+### 1.1 Symptom
+
+A customer running v1.12.7 with a custom delegated role — call it
+`session-operator`, with `can_create_connections=true` so the user
+can create personal connections, but with `can_manage_connections=false`
+and `can_manage_system=false` so they cannot administer other users'
+connections or change global settings — reported that the session
+tile in the **Active Sessions** sidebar on the right of the
+`/session/{uuid}` page was showing the protocol (`RDP`) instead of
+the server name (`cicsazt1mgt-t`) they had configured. Two
+screenshots told the whole story: on a `can_manage_system=true`
+account the tile correctly read `cicsazt1mgt-t` with `RDP` as a
+subdued sub-label; on the `session-operator` account the same
+connection rendered as a tile labelled `RDP` with no name visible
+anywhere. The session itself worked perfectly — keyboard, mouse,
+clipboard, audio, recording, audit, idle timeout, the lot. Opening
+a second session in a different tab produced a second `RDP` tile,
+then a third `RDP` tile, with no way to tell which tile belonged
+to which server.
+
+The customer noticed the regression specifically because the
+`session-operator` role had three sessions open simultaneously
+(jump-host RDP, target database RDP, target appliance SSH) and
+needed to switch between them quickly during an incident — the
+sidebar labels were the primary way they kept the tiles straight.
+
+### 1.2 Root cause
+
+`SessionClient.tsx` runs a one-shot "Phase 1" effect when the route
+mounts that resolves the `connectionId` URL parameter into a display
+name for the tile. The effect issued two parallel HTTP requests:
+
+1. `getConnectionInfo(connectionId)` — `GET /api/user/connections/{id}/info`
+   to fetch session-establishment metadata (protocol, hostname,
+   port, recording policy). This endpoint returns the
+   `ConnectionInfo` interface, which deliberately does **not**
+   include the `name` field (the name is treated as metadata for
+   display rather than a session-establishment parameter).
+2. `getConnections()` — `GET /api/admin/connections` — to fetch
+   the full `Connection[]` and pluck the matching row's `name`
+   field.
+
+Pre-v1.12.7 step 2 worked for every user with any admin flag
+because the `require_admin` middleware was the only check on the
+endpoint and it admits any user holding `has_any_admin_permission()`.
+Even users with only `can_create_connections=true` (an admin flag)
+got the full admin connection list. That was itself the v1.12.7
+finding — see [WHATSNEW v1.12.7](#whats-new-in-v1127) — and v1.12.7
+correctly tightened the endpoint with a per-handler
+`check_connection_management_permission(&user)?` call.
+
+Post-tightening, the `session-operator` role lost access to step 2.
+The frontend's `.catch(() => undefined)` (added defensively to keep
+the page rendering even if the lookup fails) silently turned the
+`403` into a `connection === undefined` value, the
+`connection?.name` chain produced `undefined`, the
+`name: connectionName || protocol.toUpperCase()` fallback in the
+three `createSession({...})` call sites fired, and the tile
+rendered with `name = "RDP"`. There was no console error, no toast,
+no audit-log entry — exactly the silent-fallback pattern the
+defensive `.catch` had been written to provide, except now it was
+firing on the happy path for an entire class of users.
+
+This was a pure frontend bug that v1.12.7's backend fix only
+revealed; the underlying API mismatch (using an admin endpoint to
+look up data also reachable via a user endpoint) had been in
+`SessionClient.tsx` for a long time. Audit confirms no other
+frontend file makes the same mistake — `getConnections()` is also
+called from `AdminSettings.tsx`, which is correctly admin-only.
+
+### 1.3 Fix
+
+[`frontend/src/pages/SessionClient.tsx`](frontend/src/pages/SessionClient.tsx)
+swaps the import and the call from `getConnections` to
+`getMyConnections`:
+
+```typescript
+// before
+import {
+  /* ... */,
+  getConnections,
+  /* ... */
+} from "../api";
+
+const [info, conns] = await Promise.all([
+  getConnectionInfo(connectionId),
+  getConnections().catch(() => []),
+]);
+const connection = conns.find((c) => c.id === connectionId);
+
+// after
+import {
+  /* ... */,
+  getMyConnections,
+  /* ... */
+} from "../api";
+
+const [info, connection] = await Promise.all([
+  getConnectionInfo(connectionId),
+  // Use the user-scoped endpoint here: /admin/connections requires
+  // can_manage_connections (v1.12.7), so delegated users without that
+  // flag would 403 and fall through to the protocol name. /user/connections
+  // is filtered to what the user can actually reach.
+  getMyConnections()
+    .then((conns) => conns.find((c) => c.id === connectionId))
+    .catch(() => undefined),
+]);
+```
+
+`getMyConnections()` calls `GET /api/user/connections`, returns the
+same `Connection[]` shape, and is filtered server-side to exactly
+the connections the user is allowed to launch. For a full admin
+the response is identical in content to `/admin/connections`; for a
+delegated user it is a subset, but always a subset that **includes**
+the `connectionId` the user is mid-launch on — if it didn't, the
+preceding `getConnectionInfo(connectionId)` call would itself have
+returned `403` and the launch would have been blocked higher up in
+the flow. So `conns.find(...)` always resolves on the happy path,
+and the `name` field is always present.
+
+The three downstream `createSession({...})` calls (lines 508, 710,
+801 of the same file) are unchanged — they continue to use
+`name: connectionName || protocol.toUpperCase()` as the defensive
+fallback for the genuinely-degenerate case where neither endpoint
+returned a name (e.g. a connection was deleted between the URL
+being shared and the page mounting). That fallback now only fires
+in genuine error paths instead of for an entire user class.
+
+### 1.4 Acceptance test
+
+1. Apply v1.12.8 to a deployment that already has v1.12.7 running.
+2. Under **Settings → Roles**, create a delegated role called
+   `session-operator` with **only** `can_create_connections=true`
+   (no `can_manage_system`, no `can_manage_connections`, no
+   `can_view_audit_logs`, no `can_view_sessions`).
+3. Create a test user, assign them the `session-operator` role,
+   and grant them access to at least one RDP connection (either
+   directly via user-to-connection mapping or via a group they
+   belong to).
+4. Sign in as the test user, click the RDP connection from the
+   dashboard, and wait for the session to establish.
+5. Observe the session tile in the **Active Sessions** sidebar on
+   the right. **Expected on v1.12.8**: the tile shows the
+   connection's configured name (e.g. `cicsazt1mgt-t`) with the
+   protocol (`RDP`) as a subdued sub-label. **Was on v1.12.7**:
+   the tile shows only `RDP`.
+6. Open the browser devtools network panel and reload the page —
+   the page should issue a `GET /api/user/connections` (200)
+   request and **no** `GET /api/admin/connections` request.
+7. Sign in as a full admin (`can_manage_system=true`) and repeat
+   step 5 — the tile label is unchanged from v1.12.7 because the
+   admin's `/api/user/connections` response already includes every
+   connection in the system.
+8. Open three different connections in three browser tabs as the
+   `session-operator` user — the sidebar should now show three
+   distinct names, one per tile, instead of three identical `RDP`
+   labels.
+
+### 1.5 Migration notes
+
+- No database migrations, no schema changes.
+- No new environment variables.
+- No new Cargo or npm dependencies.
+- No backend code changes.
+- The v1.12.7 RBAC tightening on `GET /api/admin/connections` is
+  **preserved**; this release does not relax it. The frontend now
+  uses the correct user-scoped endpoint for this lookup.
+- No customer action is required beyond updating to v1.12.8. The
+  custom delegated roles you may have created in response to
+  v1.12.7's "audit your delegated roles" operator action remain
+  correct and unchanged.
+
+---
+
 # What's New in v1.12.7
 
 > **Patch release — Security: per-handler RBAC on `/api/admin/*`.**
 > A penetration test against v1.12.6 found that the router-level
 > `require_admin` middleware guarding `/api/admin/*` is intentionally
-> a coarse gate — it accepts any user holding *any* of the nine admin
+> a coarse gate — it accepts any user holding _any_ of the nine admin
 > permission flags. The granular access decision is supposed to live
 > in each handler via a `check_*_permission(&user)` call. **Seventeen
 > handlers were missing that per-handler check**, so a delegated user
@@ -46,8 +248,8 @@ else". The pentester observed that the same account could call:
 - `POST /api/admin/dmz-links/reconnect` — bounce production DMZ
   links.
 - `PUT /api/admin/safeguard/config`, `POST /api/admin/safeguard/test`
-   — modify the Safeguard JIT integration's API key, or probe
-   arbitrary Safeguard appliances with a body-supplied secret.
+  — modify the Safeguard JIT integration's API key, or probe
+  arbitrary Safeguard appliances with a body-supplied secret.
 - `GET /api/admin/metrics` — host CPU, memory, capacity estimates.
 - `PUT /api/admin/connection-folders/{id}` — rename folders.
 - `DELETE /api/admin/tags/{id}` — delete tags.
@@ -98,26 +300,26 @@ v1.12.7 adds the missing per-handler check to all seventeen
 handlers, mapping each to the permission flag that matches the
 existing pattern used by its sibling handlers in the same file:
 
-| Endpoint | Required permission |
-| --- | --- |
-| `GET /api/admin/settings` | `can_manage_system` |
-| `POST /api/admin/settings/sso/test` | `can_manage_system` |
-| `GET /api/admin/roles` | `can_manage_system` |
-| `GET /api/admin/roles/{id}/mappings` | `can_manage_system` |
-| `GET /api/admin/metrics` | `can_manage_system` |
-| `PUT /api/admin/safeguard/config` | `can_manage_system` |
-| `POST /api/admin/safeguard/test` | `can_manage_system` |
-| `GET /api/admin/health` | `can_manage_system` |
-| `GET /api/admin/certs` | `can_manage_system` |
-| `POST /api/admin/dmz-links/reconnect` | `can_manage_system` |
-| `GET /api/admin/connections` | `can_manage_connections` |
-| `GET /api/admin/connection-folders` | `can_manage_connections` |
+| Endpoint                                 | Required permission      |
+| ---------------------------------------- | ------------------------ |
+| `GET /api/admin/settings`                | `can_manage_system`      |
+| `POST /api/admin/settings/sso/test`      | `can_manage_system`      |
+| `GET /api/admin/roles`                   | `can_manage_system`      |
+| `GET /api/admin/roles/{id}/mappings`     | `can_manage_system`      |
+| `GET /api/admin/metrics`                 | `can_manage_system`      |
+| `PUT /api/admin/safeguard/config`        | `can_manage_system`      |
+| `POST /api/admin/safeguard/test`         | `can_manage_system`      |
+| `GET /api/admin/health`                  | `can_manage_system`      |
+| `GET /api/admin/certs`                   | `can_manage_system`      |
+| `POST /api/admin/dmz-links/reconnect`    | `can_manage_system`      |
+| `GET /api/admin/connections`             | `can_manage_connections` |
+| `GET /api/admin/connection-folders`      | `can_manage_connections` |
 | `PUT /api/admin/connection-folders/{id}` | `can_manage_connections` |
-| `GET /api/admin/tags` | `can_manage_connections` |
-| `DELETE /api/admin/tags/{id}` | `can_manage_connections` |
-| `GET /api/admin/connection-tags` | `can_manage_connections` |
-| `GET /api/admin/recordings` | `can_view_sessions` |
-| `GET /api/admin/recordings/{id}/stream` | `can_view_sessions` |
+| `GET /api/admin/tags`                    | `can_manage_connections` |
+| `DELETE /api/admin/tags/{id}`            | `can_manage_connections` |
+| `GET /api/admin/connection-tags`         | `can_manage_connections` |
+| `GET /api/admin/recordings`              | `can_view_sessions`      |
+| `GET /api/admin/recordings/{id}/stream`  | `can_view_sessions`      |
 
 Each affected handler now starts with the appropriate
 `crate::services::middleware::check_*_permission(&user)?;` call,
@@ -408,8 +610,8 @@ Twelve new test cases pin the fix:
   than erroring).
 - **`frontend/src/__tests__/api.test.ts`** (2 cases):
   `returns parsed body including post_logout_url when backend
-  supplies it` and `returns null when the response body cannot be
-  parsed (back-compat with ≤ 1.12.5)`.
+supplies it` and `returns null when the response body cannot be
+parsed (back-compat with ≤ 1.12.5)`.
 
 Every pre-existing logout, SSO callback, and OIDC discovery test
 continues to pass without modification.
@@ -1813,11 +2015,11 @@ day is Sunday.
 
 Migration `078_av_scanning.sql` adds:
 
-| Column               | Type          | Notes                                            |
+| Column | Type | Notes |
 | -------------------- | ------------- | ------------------------------------------------ | -------- | ------- | ------ |
-| `av_scan_status`     | `TEXT` (NULL) | One of `clean                                    | infected | skipped | error` |
-| `av_signature`       | `TEXT` (NULL) | Engine-reported signature for `infected` rows    |
-| `av_scanned_at`      | `TIMESTAMPTZ` | When the verdict was issued                      |
+| `av_scan_status` | `TEXT` (NULL) | One of `clean                                    | infected | skipped | error` |
+| `av_signature` | `TEXT` (NULL) | Engine-reported signature for `infected` rows |
+| `av_scanned_at` | `TIMESTAMPTZ` | When the verdict was issued |
 | `av_scanner_backend` | `TEXT` (NULL) | Which backend spoke (`off`, `clamav`, `command`) |
 
 Plus a partial index:

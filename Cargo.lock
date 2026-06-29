@@ -86,9 +86,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "argon2"
@@ -3331,7 +3331,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "strata-backend"
-version = "1.12.7"
+version = "1.12.8"
 dependencies = [
  "aes 0.9.0",
  "aes-gcm",
@@ -3398,7 +3398,7 @@ dependencies = [
 
 [[package]]
 name = "strata-dmz"
-version = "1.12.7"
+version = "1.12.8"
 dependencies = [
  "anyhow",
  "axum",
@@ -3435,7 +3435,7 @@ dependencies = [
 
 [[package]]
 name = "strata-protocol"
-version = "1.12.7"
+version = "1.12.8"
 dependencies = [
  "base64",
  "bytes",

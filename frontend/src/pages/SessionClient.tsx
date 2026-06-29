@@ -8,7 +8,7 @@ import { useParams, useNavigate, useLocation } from "react-router-dom";
 import Guacamole from "guacamole-common-js";
 import {
   getConnectionInfo,
-  getConnections,
+  getMyConnections,
   createTunnelTicket,
   getCredentialProfiles,
   updateCredentialProfile,
@@ -335,7 +335,11 @@ export default function SessionClient() {
     let cancelled = false;
     Promise.all([
       getConnectionInfo(connectionId),
-      getConnections()
+      // Use the user-scoped endpoint here: /admin/connections requires
+      // can_manage_connections (v1.12.7), so delegated users without that
+      // flag would 403 and fall through to the protocol name. /user/connections
+      // is filtered to what the user can actually reach.
+      getMyConnections()
         .then((conns) => conns.find((c) => c.id === connectionId))
         .catch(() => undefined),
     ])

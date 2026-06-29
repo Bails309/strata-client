@@ -1972,9 +1972,7 @@ export const getSmtpConfig = () => request<SmtpConfig>("/admin/notifications/smt
  * forget-to-send-to-keep?" bugs.
  */
 export type SmtpPasswordUpdate =
-  | { action: "keep" }
-  | { action: "clear" }
-  | { action: "set"; value: string };
+  { action: "keep" } | { action: "clear" } | { action: "set"; value: string };
 
 export interface SmtpConfigUpdate {
   enabled: boolean;

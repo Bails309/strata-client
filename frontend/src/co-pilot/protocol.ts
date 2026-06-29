@@ -66,5 +66,5 @@ export type CoPilotMsg =
 
 /** Cheap discriminator-free check used to differentiate envelopes from Guacamole frames. */
 export function looksLikeEnvelope(frame: string): boolean {
-  return frame.length > 0 && frame.charCodeAt(0) === 123 /* '{' */;
+  return frame.length > 0 && frame.charCodeAt(0) === 123; /* '{' */
 }

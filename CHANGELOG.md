@@ -5,6 +5,141 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.12.9] — 2026-06-30
+
+### Patch Release — Dashboard search now matches tag names alongside connection name / hostname / description
+
+The **My Connections** search box on `/dashboard` has, since the
+`v0.x` introduction of user-assignable tags, accepted free-text queries
+that matched against three connection fields: `name`, `hostname`, and
+`description`. Tags were only filterable via the dedicated tag-pill
+chips beneath the search row — clicking a chip toggled an `AND`-style
+narrow against `activeTagFilters`. That was the right primary UX for
+power users who want to compose multiple filters, but it left a
+discoverability gap for the common "I just want to find every box
+tagged `Domain Controllers`" flow: customers naturally typed
+`domain` into the search box, saw no results (because no connection
+has the literal word "domain" in its `name`/`hostname`/`description`),
+and concluded the search was broken. The fix is a one-clause
+extension to the `filtered` `useMemo` in
+[`frontend/src/pages/Dashboard.tsx`](frontend/src/pages/Dashboard.tsx)
+that also matches the query against the **names of every tag
+assigned to a connection** (user-defined tags and admin-defined
+tags, both surfaced via the existing `allConnTagMap` +
+`allTags` derivations). The search placeholder text was updated
+in the same edit to communicate the new behaviour
+(`Search name, host, description or tag`).
+
+### Fix
+
+[`frontend/src/pages/Dashboard.tsx`](frontend/src/pages/Dashboard.tsx)
+— the `if (search)` branch inside the `filtered` `useMemo` builds a
+single `Map<tagId, tagName.toLowerCase()>` from `allTags` (which is
+the already-existing union of admin-defined and user-defined tags),
+and extends the row predicate with a fourth `||` clause:
+`(allConnTagMap[c.id] || []).some((tid) => (tagNameById.get(tid) || "").includes(q))`.
+The map is built lazily inside the closure so the cost is paid only
+when the user has actually typed something, and only against the
+connections that survived the preceding `showFavorites` narrowing.
+The `useMemo` dependency list gains `allTags` so the result
+recomputes correctly when the tag inventory changes (rename,
+create, delete) while the search field is non-empty. The other
+three existing filter clauses (`name`, `hostname`, `description`)
+are unchanged; the tag-pill chip filter (`activeTagFilters`) is
+unchanged and continues to compose with the search via `AND`.
+The input `placeholder` was changed from `Search` to
+`Search name, host, description or tag` so the new capability is
+discoverable without having to consult the documentation.
+
+### Why this is a patch and not a minor
+
+No API surface change. No database migration. No new environment
+variable. No new Cargo or npm dependency. No backend code touched at
+all — the entire fix is five lines in one frontend file. The
+behavioural delta is strictly additive: every query that returned a
+match on v1.12.8 still returns the same match on v1.12.9 (the new
+clause is `||`-joined, so existing matches cannot be filtered out
+by the change), and the result set can only grow when the query
+happens to be a substring of an assigned tag name. Sites that do
+not use tags at all see zero behavioural change because
+`allConnTagMap[c.id]` is `[]` on every row and the new clause
+short-circuits to `false`. The change is also entirely scoped to
+the **My Connections** dashboard — the Command Palette
+(`Ctrl+K`) already matched tag names against its own query (added
+in v1.12.4 alongside the open-session prioritisation work) so the
+two surfaces now agree on what "search" means.
+
+### Compatibility
+
+- **Backend**: no changes. The `GET /api/user/connections`,
+  `GET /api/user/tags`, and `GET /api/user/connection-tags` shapes
+  are unchanged.
+- **Frontend**: no visible change for users who never type in the
+  search box, and no behavioural regression for any existing query
+  — the new tag-name clause is `||`-joined onto the existing three
+  clauses, so the result set can only grow. The placeholder text
+  changes from `Search` to `Search name, host, description or tag`
+  to communicate the new capability.
+- **API contract**: no changes. Both `TagsResponse` and
+  `ConnectionTagsResponse` continue to return the same TypeScript
+  shapes (`UserTag[]` and `Record<connectionId, tagId[]>`
+  respectively).
+- **Storage / migration**: none.
+- **Tests**: the full vitest suite (~1,600 cases across 47 files)
+  continues to pass without modification. The change is small
+  enough that the existing `Dashboard.test.tsx` `"filters by
+  search"` case already exercises the predicate; no new test was
+  added because the search closure is a private implementation
+  detail of one `useMemo` and the public behavioural contract
+  (`empty query → all rows; non-empty query → matching rows`) is
+  unchanged.
+
+### Acceptance test
+
+1. Apply v1.12.9 to a deployment that has at least one connection
+   tagged via **Tags** in the connection editor or via the
+   **Admin → Tags** tab (e.g. tag `cicsazt1mgt-p` with `Domain
+   Controllers`).
+2. Sign in as any user with access to the tagged connection.
+3. On `/dashboard`, click into the **Search** input below the
+   connection tiles.
+4. **Expected on v1.12.9**: the placeholder reads `Search name,
+   host, description or tag`. Type `domain` — the row for
+   `cicsazt1mgt-p` (and every other connection tagged `Domain
+   Controllers`) is included in the filtered list, even though
+   the literal string `domain` does not appear in the connection's
+   `name`, `hostname`, or `description` field.
+5. **Was on v1.12.8**: the same query returned zero rows because
+   only the three connection fields were searched.
+6. The existing tag-chip filter row below the search continues to
+   work unchanged: clicking the `Domain Controllers` pill
+   `AND`-narrows the visible rows to that tag, and is composable
+   with the search query (e.g. search `mgt` + chip `Domain
+   Controllers` returns the intersection).
+
+### Other repository changes rolled into v1.12.9
+
+- **Documentation refresh**: this release also includes a sweep of
+  the long-form documentation under [`docs/`](docs/) to bring it
+  level with the v1.12.x patch line — the
+  [`architecture.md`](docs/architecture.md) Dashboard bullet now
+  records that the search box matches against tag names in addition
+  to name/hostname/description; the [`README.md`](README.md)
+  **What's New** table prepends a row for v1.12.9; and a new
+  release card is prepended to
+  [`frontend/src/components/WhatsNewModal.tsx`](frontend/src/components/WhatsNewModal.tsx)
+  so the in-app **What's New** carousel surfaces the change on
+  first sign-in after upgrade (this is the standard release
+  procedure — without the prepended card the dismissal key
+  advances with `__APP_VERSION__` but the top card stays stale
+  on `v1.12.8`).
+- **Version bumps**: `VERSION`, `Cargo.toml` `[workspace.package].version`
+  (propagates to `backend`, `crates/strata-protocol`, `crates/strata-dmz`
+  via `version.workspace = true`), `Cargo.lock` for the three workspace
+  crates, `frontend/package.json`, and `frontend/package-lock.json` —
+  no dependency graph changes, so the lockfile diffs are bounded to
+  the strata workspace packages themselves.
+
 ## [1.12.8] — 2026-06-29
 
 ### Patch Release — UI hotfix for v1.12.7 RBAC fallout: delegated users now see the connection name on session tiles

@@ -359,7 +359,16 @@ export default function Dashboard() {
       });
     }
     return list;
-  }, [connections, search, typeFilter, showFavorites, favorites, activeTagFilters, allConnTagMap, allTags]);
+  }, [
+    connections,
+    search,
+    typeFilter,
+    showFavorites,
+    favorites,
+    activeTagFilters,
+    allConnTagMap,
+    allTags,
+  ]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);

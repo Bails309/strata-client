@@ -3331,7 +3331,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "strata-backend"
-version = "1.12.8"
+version = "1.12.9"
 dependencies = [
  "aes 0.9.0",
  "aes-gcm",
@@ -3398,7 +3398,7 @@ dependencies = [
 
 [[package]]
 name = "strata-dmz"
-version = "1.12.8"
+version = "1.12.9"
 dependencies = [
  "anyhow",
  "axum",
@@ -3435,7 +3435,7 @@ dependencies = [
 
 [[package]]
 name = "strata-protocol"
-version = "1.12.8"
+version = "1.12.9"
 dependencies = [
  "base64",
  "bytes",

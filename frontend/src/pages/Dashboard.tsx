@@ -340,11 +340,13 @@ export default function Dashboard() {
     }
     if (search) {
       const q = search.toLowerCase();
+      const tagNameById = new Map(allTags.map((t) => [t.id, t.name.toLowerCase()]));
       list = list.filter(
         (c) =>
           c.name.toLowerCase().includes(q) ||
           c.hostname.toLowerCase().includes(q) ||
-          (c.description || "").toLowerCase().includes(q)
+          (c.description || "").toLowerCase().includes(q) ||
+          (allConnTagMap[c.id] || []).some((tid) => (tagNameById.get(tid) || "").includes(q))
       );
     }
     if (typeFilter) {
@@ -357,7 +359,7 @@ export default function Dashboard() {
       });
     }
     return list;
-  }, [connections, search, typeFilter, showFavorites, favorites, activeTagFilters, allConnTagMap]);
+  }, [connections, search, typeFilter, showFavorites, favorites, activeTagFilters, allConnTagMap, allTags]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -902,7 +904,7 @@ export default function Dashboard() {
           </svg>
           <input
             type="text"
-            placeholder="Search"
+            placeholder="Search name, host, description or tag"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="!border-none !bg-transparent !shadow-none py-2 text-[0.8125rem] w-full focus:!shadow-none"

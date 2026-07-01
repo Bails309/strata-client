@@ -1,3 +1,241 @@
+# What's New in v1.12.10
+
+> **Patch release — the Safeguard bulk-checkout card no longer
+> loses `pending` (approval-required) rows when a subsequent
+> checkout runs for a different profile.** A customer reported
+> that on the **Credentials → Request Checkout** tab, checking
+> out an ad-hoc privileged profile (approval-required) followed
+> by a plain test profile (no approval) silently wiped the
+> ad-hoc row's yellow **Awaiting approval** badge, dropped the
+> manual **Refresh** button from the DOM, and stopped the
+> background poll `useEffect` from ever noticing the approver's
+> decision — the only recovery was to press **Check in all**
+> and restart the whole request from scratch. Root cause: both
+> `handleCheckout` and `handleCheckin` in
+> [`frontend/src/pages/credentials/SafeguardBulkCheckoutCard.tsx`](frontend/src/pages/credentials/SafeguardBulkCheckoutCard.tsx)
+> opened with `setResults([])` — wiping the entire per-profile
+> results array — and then re-set `results` to only the rows
+> for the profiles included in the current operation, so
+> `pending` rows for unrelated profiles fell out of state
+> entirely. Backend `password_cache` state was correct
+> throughout; the bug was purely frontend state management.
+> v1.12.10 merges results by `profile_id` on checkout and
+> prunes by `profile_id` on check-in, preserving `pending` rows
+> so the background poll continues to watch them through the
+> standard 30-minute window. No backend changes, no API surface
+> changes, no migrations, no new environment variables, no new
+> Cargo or npm dependencies — strictly frontend.
+
+## Theme 1 — Safeguard bulk-checkout preserves pending rows
+
+### 1.1 Symptom (verbatim from the bug report)
+
+1. Sign in to Strata and open **Credentials → Request
+   Checkout**. Sign in to Safeguard (per-user browser flow or
+   hybrid).
+2. In the **Safeguard bulk checkout** card, select an ad-hoc
+   privileged profile whose account is under an approval role
+   — the appliance requires an approver to release the
+   password. Type a justification and click
+   **Checkout selected**.
+3. Observe the ad-hoc row flip to the yellow
+   **Awaiting approval** badge with a **Refresh** button and
+   the "we re-check every 15 s for up to 30 minutes" hint text
+   below. This is the correct v1.12.9 behaviour and continues
+   unchanged on v1.12.10.
+4. Now select a second profile — a plain test account that
+   does **not** require approval — and click
+   **Checkout selected** again.
+5. **Was on v1.12.9**: the moment the second bulk-checkout
+   dispatches, the ad-hoc row's **Awaiting approval** badge
+   silently disappears. The test row shows **Checked out** (or
+   the cached-password green badge once the sibling refresh
+   runs) as expected, but the ad-hoc row has no badge at all
+   and no **Refresh** button. When the approver clicks
+   **Approve** in the Safeguard console the SPA never notices
+   — the background poll has stopped watching. The only
+   recovery was to press **Check in all** and restart the
+   entire request from scratch.
+6. **Now on v1.12.10**: the ad-hoc row's yellow badge and
+   Refresh button persist across the second checkout; the
+   background poll loop continues to re-poll it every 15 s for
+   the standard 30-minute window; the approver's decision is
+   observed on the very next tick after they act; the row
+   flips to **Checked out**; and the newly-cached password
+   appears in the green **Cached · Nh left** badge exactly as
+   it would if the ad-hoc had been the only profile checked
+   out. The equivalent path via **Check in** (single row) or
+   **Check in all (N)** on the header also no longer wipes
+   the ad-hoc pending row.
+
+### 1.2 Root cause
+
+[`frontend/src/pages/credentials/SafeguardBulkCheckoutCard.tsx`](frontend/src/pages/credentials/SafeguardBulkCheckoutCard.tsx)
+tracks per-profile checkout results in a single `results`
+`useState` array keyed conceptually by `profile_id`. Both
+`handleCheckout` and `handleCheckin` opened with
+`setResults([])` and then re-set `results` to only the rows
+for the profiles included in the current operation. When a
+subsequent `handleCheckout` ran for a different subset (e.g.
+just the test profile), the ad-hoc profile's
+`state === "pending"` row was collateral damage: it was in
+`prev` but not in `res`, so it fell out of state entirely.
+
+The background poll `useEffect` (declared further down in the
+same component) filters
+`results.filter((r) => r.state === "pending" && !!r.request_id)`
+to decide which appliance request-ids to keep re-polling.
+With the ad-hoc row gone from `results`, the effect's
+`pending` array narrowed to zero (the newly-checked-out test
+row is `ok`, not `pending`), the cleanup ran, and the
+`setInterval` was cleared. The manual **Refresh** button on
+the ad-hoc row also disappeared because it is conditionally
+rendered only when
+`result?.state === "pending" && result.request_id` is truthy
+for that row — with `results` no longer containing the row,
+the JSX short-circuits to nothing.
+
+The `pollStartedAt` map still held the ad-hoc profile's start
+timestamp (that map is additive-only across checkouts), but
+nothing was reading it in a "still pending" capacity anymore.
+The `password_cache` row on the backend was correctly
+persisted in the `pending` state throughout — the bug was
+purely a frontend state-management regression, no data was
+lost.
+
+### 1.3 Fix
+
+Merge new results into the existing `results` array keyed by
+`profile_id`, rather than replacing the array wholesale. Both
+mutation paths now preserve unrelated rows.
+
+`handleCheckout` no longer calls `setResults([])` on entry;
+when the appliance response `res` returns, it does:
+
+```ts
+setResults((prev) => {
+  const byId = new Map(prev.map((r) => [r.profile_id, r]));
+  for (const r of res) byId.set(r.profile_id, r);
+  return Array.from(byId.values());
+});
+```
+
+Rows for profiles that were part of the new checkout are
+replaced (so re-running a stale `failed` row picks up the new
+`ok`/`pending` state); rows for profiles that weren't part of
+the new checkout survive untouched.
+
+`handleCheckin` no longer calls `setResults([])` on entry;
+after `safeguardCheckin` returns, it prunes only the
+checked-in rows from `results` (so the now-stale
+"Checked out" badge on the row disappears alongside its
+cached badge from `refresh()`), never touching `pending` rows
+for other profiles. For the **Check in all** button
+(`profileId === null`, appliance decides the set) the prune
+targets every currently-`cached` profile's row while
+explicitly preserving `pending` rows:
+
+```ts
+setResults((prev) => {
+  if (profileId) return prev.filter((r) => r.profile_id !== profileId);
+  const cachedIds = new Set(cached.map((c) => c.profile_id));
+  return prev.filter((r) => r.state === "pending" || !cachedIds.has(r.profile_id));
+});
+```
+
+Explanatory comments above each block reference the
+v1.12.10 rationale so future readers don't reintroduce the
+`setResults([])` reset.
+
+### 1.4 Regression test
+
+[`frontend/src/__tests__/SafeguardBulkCheckoutCard.test.tsx`](frontend/src/__tests__/SafeguardBulkCheckoutCard.test.tsx)
+adds a new case titled `"preserves a pending row from an
+earlier checkout when a second checkout runs for a different
+profile (v1.12.10 regression)"`. The test scaffolds two
+Safeguard profiles (`adhoc-priv` and `test-svc`), mocks
+`bulkSafeguardCheckout` to return `state: "pending"` for
+`adhoc-priv` on the first call and `state: "ok"` for
+`test-svc` on the second call, drives the component through
+the exact click sequence from the bug report, and asserts
+that after the second checkout the **Awaiting approval**
+badge and **Refresh** button both remain on the ad-hoc row
+while the **Checked out** badge appears on the test row. All
+18 pre-existing cases in the same file continue to pass
+unchanged (18 → 19 passing).
+
+### 1.5 Compatibility
+
+- **Backend**: no changes. The
+  `POST /api/user/safeguard/bulk-checkout`,
+  `POST /api/user/safeguard/checkin`, and
+  `POST /api/user/safeguard/release` endpoints, their request
+  bodies, and their response shapes are all unchanged.
+- **Frontend**: no visible change for users who never mix
+  approval-required and no-approval profiles in the same
+  session. Users who did hit the bug regain the ability to
+  keep the pending row visible across subsequent checkouts
+  and check-ins, and their in-app view now stays in sync with
+  the appliance's own `AccessRequests` state.
+- **API contract**: none.
+- **Storage / migration**: none. Backend `password_cache` and
+  `safeguard_access_requests` rows have always tracked the
+  pending state correctly; the bug never lost server-side
+  state, only the SPA's in-memory view of it.
+- **Tests**: 18 → 19 cases in the component's test file (+1
+  regression test); all pass.
+
+### 1.6 Acceptance test
+
+1. Apply v1.12.10 to a deployment where at least one
+   Safeguard profile targets an account that requires
+   approver action, and at least one other Safeguard profile
+   targets an account that auto-releases (either self-approved
+   or no approval policy at all).
+2. Sign in as any user with both profiles assigned.
+3. On **Credentials → Request Checkout**, sign in to
+   Safeguard. In the **Safeguard bulk checkout** card enter a
+   justification, select the approval-required profile only,
+   and click **Checkout selected**. Observe the
+   **Awaiting approval** badge and **Refresh** button appear
+   on that row.
+4. Without checking anything in, select the auto-release
+   profile only and click **Checkout selected** again. On
+   v1.12.10 the ad-hoc row's yellow badge and Refresh button
+   **must remain** and the auto-release row **must show**
+   **Checked out** (green badge appears after the sibling
+   `refresh()` completes).
+5. Have the approver approve the ad-hoc request in the
+   Safeguard console. Within one poll tick (15 s) the ad-hoc
+   row **must flip** to **Checked out** and the green
+   **Cached · Nh left** badge **must appear** alongside it.
+6. Press **Check in** on the auto-release row. Confirm the
+   ad-hoc row is unaffected (still cached, badge intact).
+7. Press **Check in all (N)**. Confirm every currently-cached
+   row is released — but any row still in the **Awaiting
+   approval** state (start a fresh one for this step)
+   **must survive** the bulk check-in.
+
+## Notes
+
+- v1.12.10 is a strict follow-up to v1.12.9 with a single
+  frontend-only bug fix. No customer action is required
+  beyond updating to v1.12.10. The standard deploy is
+  `docker compose pull && docker compose up -d --build frontend`
+  (frontend-only — the backend and `strata-dmz` container
+  images are byte-identical to v1.12.9 in everything except
+  the `[workspace.package].version` field embedded in the
+  binary, and there is no reason to redeploy them solely for
+  this change unless your operational policy requires version
+  parity across every container in the stack). The
+  `strata-dmz` relay binary cosmetically bumps version
+  (shared workspace `[workspace.package].version`) but its
+  wire protocol is byte-identical, so the
+  **Admin → DMZ Links** tab will show a **Mixed** indicator
+  until every relay is upgraded.
+
+---
+
 # What's New in v1.12.9
 
 > **Patch release — the Dashboard search box now matches tag

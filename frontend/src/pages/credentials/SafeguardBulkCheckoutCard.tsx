@@ -228,11 +228,23 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
     }
     setBusy(true);
     setError("");
-    setResults([]);
+    // NOTE: do NOT clear `results` here. A prior checkout in the same
+    // session may have produced a `state === "pending"` row (Safeguard
+    // account that requires approver action) that the background poll
+    // is still watching. Wiping the array cost us the pending row — the
+    // poll loop filters by `results.filter(r => r.state === "pending")`
+    // so the row disappearing from state stopped every subsequent
+    // approver-side approval from ever being noticed by the SPA. Merge
+    // by profile_id instead so old pending rows survive across
+    // subsequent checkouts (v1.12.10 bug fix).
     try {
       const ids = Array.from(selected);
       const res = await bulkSafeguardCheckout(ids, trimmed);
-      setResults(res);
+      setResults((prev) => {
+        const byId = new Map(prev.map((r) => [r.profile_id, r]));
+        for (const r of res) byId.set(r.profile_id, r);
+        return Array.from(byId.values());
+      });
       // Stamp the pending rows so the poll loop can cap them at
       // POLL_MAX_MS from their first sighting.
       const now = Date.now();
@@ -279,7 +291,14 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
   const handleCheckin = async (profileId: string | null) => {
     setBusy(true);
     setError("");
-    setResults([]);
+    // NOTE: do NOT clear `results` here — the same reasoning as
+    // handleCheckout applies. A check-in of a *cached* row must not
+    // silently drop an unrelated `state === "pending"` row for a
+    // different profile from the results state, or the poll loop
+    // stops watching for the approver's decision (v1.12.10 bug fix).
+    // After a successful check-in we prune only the checked-in rows
+    // from `results` so their now-stale "Checked out" badge disappears
+    // once `refresh()` also drops their cached badge.
     try {
       const ids = profileId ? [profileId] : [];
       const res = await safeguardCheckin(ids);
@@ -287,6 +306,16 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
       if (failed.length > 0) {
         setError(failed.map((r) => r.error ?? `profile ${r.profile_id} failed`).join("; "));
       }
+      // Drop only checked-in rows from `results`. Pending rows for
+      // other profiles are untouched. When profileId is null (Check in
+      // all) the appliance decides the set — mirror that by dropping
+      // every currently-cached-and-successful (`ok`) row, but again
+      // never touch pending rows.
+      setResults((prev) => {
+        if (profileId) return prev.filter((r) => r.profile_id !== profileId);
+        const cachedIds = new Set(cached.map((c) => c.profile_id));
+        return prev.filter((r) => r.state === "pending" || !cachedIds.has(r.profile_id));
+      });
       await refresh();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Check-in failed");

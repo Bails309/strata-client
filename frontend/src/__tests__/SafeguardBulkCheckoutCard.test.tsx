@@ -380,4 +380,47 @@ describe("SafeguardBulkCheckoutCard", () => {
     // p1 (ok) removed, p2 (pending) retained → "1 selected".
     expect(screen.getByText("1 selected")).toBeInTheDocument();
   });
+
+  it("preserves a pending row from an earlier checkout when a second checkout runs for a different profile (v1.12.10 regression)", async () => {
+    // Repro of the bug report: user checks out an Adhoc (approval-required) profile,
+    // sees "Awaiting approval", then checks out a different Test (no-approval) profile.
+    // The Adhoc pending row MUST survive the second checkout so the poll loop keeps
+    // watching for the approver, and the Refresh button stays on the row so the user
+    // can chase the approval manually.
+    const adhoc = sgProfile({ id: "adhoc", label: "adhoc-priv" });
+    const test = sgProfile({ id: "test", label: "test-svc" });
+    // First checkout: only adhoc, returns pending.
+    (bulkSafeguardCheckout as any).mockResolvedValueOnce([
+      {
+        profile_id: "adhoc",
+        label: "adhoc-priv",
+        ok: false,
+        state: "pending",
+        request_id: "AR-42",
+      },
+    ]);
+    render(<SafeguardBulkCheckoutCard profiles={[adhoc, test]} safeguardEnabled />);
+    await flush();
+    fireEvent.click(screen.getByLabelText("Select adhoc-priv"));
+    fireEvent.change(screen.getByLabelText(/Justification/i), { target: { value: "audit" } });
+    fireEvent.click(screen.getByRole("button", { name: /Checkout selected/ }));
+    await flush();
+    expect(screen.getByText("Awaiting approval")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Refresh/ })).toBeInTheDocument();
+
+    // Second checkout: only test, returns ok.
+    (bulkSafeguardCheckout as any).mockResolvedValueOnce([
+      { profile_id: "test", label: "test-svc", ok: true, state: "ok" },
+    ]);
+    // Clear adhoc selection first so the second checkout targets only `test`.
+    fireEvent.click(screen.getByLabelText("Select adhoc-priv"));
+    fireEvent.click(screen.getByLabelText("Select test-svc"));
+    fireEvent.click(screen.getByRole("button", { name: /Checkout selected/ }));
+    await flush();
+    // Adhoc's pending row MUST still be present — this was the bug.
+    expect(screen.getByText("Awaiting approval")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Refresh/ })).toBeInTheDocument();
+    // And the new test row should show the successful badge alongside it.
+    expect(screen.getByText("Checked out")).toBeInTheDocument();
+  });
 });

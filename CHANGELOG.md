@@ -5,6 +5,181 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.12.10] — 2026-06-30
+
+### Patch Release — Safeguard bulk-checkout preserves `pending` (approval-required) rows across subsequent checkouts and check-ins
+
+The **Safeguard bulk checkout** card on
+**Credentials → Request Checkout** kept a single `results`
+`useState` array keyed by `profile_id`, and both `handleCheckout`
+and `handleCheckin` opened with `setResults([])` — wiping the
+entire array — before re-setting `results` to only the rows for
+the profiles included in the current operation. That was fine
+when every operation covered the same set of profiles, but the
+moment a user started a second bulk-checkout for a **different**
+profile, the first operation's `state === "pending"` rows (the
+yellow **Awaiting approval** badge that a Safeguard approval
+role requires) fell out of state entirely — the background poll
+`useEffect` (whose deps filter narrows to
+`results.filter((r) => r.state === "pending" && !!r.request_id)`)
+saw an empty list, cleared its `setInterval`, and never noticed
+the approver's decision. The manual **Refresh** button on the
+row also vanished because it renders only when
+`result?.state === "pending" && result.request_id` holds. Backend
+`password_cache` state was correct throughout — this was purely
+a frontend state-management regression, no data was lost — but
+the SPA's view of the appliance drifted silently and the only
+recovery was to press **Check in all** and restart the entire
+request from scratch. v1.12.10 rewrites both mutation paths to
+merge/prune by `profile_id` instead of wiping the array, so
+`pending` rows for unrelated profiles survive across subsequent
+operations and the background poll continues to watch them
+through the standard 30-minute window.
+
+#### Symptom (verbatim from the bug report)
+
+1. Sign in to Strata; open **Credentials → Request Checkout**;
+   sign in to Safeguard.
+2. In the **Safeguard bulk checkout** card, select an ad-hoc
+   privileged profile whose account is under an approval role,
+   enter a justification, and click **Checkout selected**.
+3. Observe the row flip to the yellow **Awaiting approval**
+   badge with a **Refresh** button and the "we re-check every
+   15 s for up to 30 minutes" hint text below. Correct.
+4. Now select a **different** profile — one whose account does
+   not require approval — and click **Checkout selected**.
+5. **Was on v1.12.9**: the ad-hoc row's **Awaiting approval**
+   badge and Refresh button silently disappear. The auto-release
+   row shows **Checked out** (green cached badge after refresh).
+   The background poll is dead. When the approver later clicks
+   **Approve** in the Safeguard console the SPA never notices
+   — the only recovery is **Check in all** and restart.
+6. **Now on v1.12.10**: the yellow badge and Refresh button on
+   the ad-hoc row persist across the second checkout; the poll
+   loop keeps polling; on the very next tick (≤ 15 s) after the
+   approver approves, the row flips to **Checked out** with
+   the green **Cached · Nh left** badge. The equivalent path
+   via **Check in** on a single row or **Check in all (N)** on
+   the header also no longer wipes the pending row.
+
+#### Root cause
+
+`frontend/src/pages/credentials/SafeguardBulkCheckoutCard.tsx`:
+
+- `handleCheckout` called `setResults([])` on entry, then
+  after `bulkSafeguardCheckout` returned `res` it did
+  `setResults(res)` — replacing the array wholesale. Rows in
+  `prev` whose `profile_id` was **not** in the current
+  operation's payload were lost.
+- `handleCheckin` did the same on entry and after the appliance
+  round-trip. The **Check in all** branch (no `profileId`
+  argument, appliance decides which rows to release) was
+  equally destructive.
+
+The background poll `useEffect` (declared further down in the
+same component) is stateless and correct — it looks at
+`results` on every render and (re)creates a `setInterval` for
+the pending subset. Once `results` was clobbered, the effect's
+dependency list re-evaluated with an empty pending list and
+the cleanup ran. Nothing else in the component was aware of
+the request-id from the wiped row, so no code could bring it
+back short of a full page reload.
+
+#### Fix
+
+Both mutation paths now merge/prune by `profile_id`, so rows
+for unrelated profiles survive untouched.
+
+`handleCheckout` — merge new rows into `prev`:
+
+```ts
+setResults((prev) => {
+  const byId = new Map(prev.map((r) => [r.profile_id, r]));
+  for (const r of res) byId.set(r.profile_id, r);
+  return Array.from(byId.values());
+});
+```
+
+Rows for profiles that were part of the new checkout are
+replaced (so re-running a stale `failed` row picks up the new
+`ok`/`pending` state); rows for profiles that weren't part of
+the new checkout survive unchanged, including their
+`pending` state and their `request_id`.
+
+`handleCheckin` — prune only what was checked in, keep
+`pending` rows for other profiles:
+
+```ts
+setResults((prev) => {
+  if (profileId) return prev.filter((r) => r.profile_id !== profileId);
+  const cachedIds = new Set(cached.map((c) => c.profile_id));
+  return prev.filter((r) => r.state === "pending" || !cachedIds.has(r.profile_id));
+});
+```
+
+For a single-row **Check in** the prune targets exactly that
+`profile_id`. For **Check in all (N)** the appliance decides
+which rows are actually released (only currently-cached rows),
+so the prune targets every currently-cached `profile_id` while
+explicitly preserving `state === "pending"` rows — those
+represent requests the appliance is still holding for
+approver action and must not be dropped from view.
+
+Explanatory comments above each block reference the
+v1.12.10 rationale so future readers don't reintroduce the
+`setResults([])` reset.
+
+#### Regression test
+
+[`frontend/src/__tests__/SafeguardBulkCheckoutCard.test.tsx`](frontend/src/__tests__/SafeguardBulkCheckoutCard.test.tsx)
+gains one new case:
+`"preserves a pending row from an earlier checkout when a
+second checkout runs for a different profile (v1.12.10
+regression)"`. The test scaffolds two Safeguard profiles
+(`adhoc-priv` and `test-svc`), mocks `bulkSafeguardCheckout`
+to return `state: "pending"` for `adhoc-priv` on the first
+call and `state: "ok"` for `test-svc` on the second call,
+drives the component through the exact click sequence from
+the bug report, and asserts that after the second checkout
+the **Awaiting approval** badge and **Refresh** button both
+remain on the ad-hoc row while the **Checked out** badge
+appears on the test row. The 18 pre-existing cases in the
+same file continue to pass unchanged (18 → 19 passing).
+
+#### Compatibility
+
+- **Backend**: no changes. `POST /api/user/safeguard/bulk-checkout`,
+  `POST /api/user/safeguard/checkin`, and
+  `POST /api/user/safeguard/release` — request bodies, response
+  shapes, and behaviours all unchanged.
+- **Frontend**: no visible change for users who never mix
+  approval-required and no-approval profiles in the same
+  session. Users who did hit the bug regain the ability to
+  keep the pending row visible across subsequent operations,
+  and their in-app view now stays in sync with the appliance's
+  own `AccessRequests` state.
+- **API contract**: none.
+- **Storage / migration**: none. The
+  `password_cache` and `safeguard_access_requests` tables have
+  always tracked pending state correctly; the bug never lost
+  server-side state, only the SPA's in-memory view of it.
+- **Environment variables**: none.
+- **Dependencies**: no new Cargo or npm dependencies.
+- **Tests**: 18 → 19 cases in the component's test file (+1
+  regression test); all pass.
+
+#### Version bumps
+
+- `VERSION` → `1.12.10`
+- `Cargo.toml` `[workspace.package].version` → `1.12.10`
+  (propagates to `strata-backend`, `strata-protocol`,
+  `strata-dmz`)
+- `Cargo.lock` — three `[[package]]` `version` bumps for
+  the three workspace crates
+- `frontend/package.json` `"version"` → `1.12.10`
+- `frontend/package-lock.json` — two `"version"` bumps
+  (root + `packages[""]`)
+
 ## [1.12.9] — 2026-06-30
 
 ### Patch Release — Dashboard search now matches tag names alongside connection name / hostname / description

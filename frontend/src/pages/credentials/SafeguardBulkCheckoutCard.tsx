@@ -5,11 +5,13 @@ import {
   bulkSafeguardCheckout,
   getSafeguardSigninStatus,
   listSafeguardCached,
+  listSafeguardPending,
   releaseSafeguardPending,
   safeguardCheckin,
   type BulkSafeguardCheckoutResult,
   type CredentialProfile,
   type SafeguardCachedStatus,
+  type SafeguardPendingStatus,
   type SafeguardSigninStatus,
 } from "../../api";
 import { useSettings } from "../../contexts/SettingsContext";
@@ -72,12 +74,59 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
 
   const refresh = async () => {
     try {
-      const [c, s] = await Promise.all([
+      const [c, s, pending] = await Promise.all([
         listSafeguardCached(),
         getSafeguardSigninStatus().catch(() => null),
+        listSafeguardPending().catch(() => [] as SafeguardPendingStatus[]),
       ]);
       setCached(c);
       setStatus(s);
+      // Hydrate any pending rows we don't already have in `results`.
+      // This is how the card learns about pending requests that were
+      // created by the auto-request path (`routes::tunnel::open`) or
+      // by a previous browser session — the request was persisted
+      // server-side into `safeguard_pending_requests`, and without
+      // this hydration the user never saw a yellow "Awaiting approval"
+      // badge and kept re-requesting the same account (v1.12.11 bug
+      // fix). Rows already in `results` are left alone so we never
+      // overwrite a fresh "ok" or "failed" outcome with a stale
+      // "pending" record.
+      if (pending.length > 0) {
+        setResults((prev) => {
+          const existing = new Set(prev.map((r) => r.profile_id));
+          const additions: BulkSafeguardCheckoutResult[] = [];
+          for (const row of pending) {
+            if (existing.has(row.profile_id)) continue;
+            const profile = sgProfiles.find((p) => p.id === row.profile_id);
+            if (!profile) continue;
+            additions.push({
+              profile_id: row.profile_id,
+              label: profile.label,
+              ok: false,
+              state: "pending",
+              request_id: row.request_id,
+              account_id: row.account_id,
+              asset: row.asset,
+              error: "Awaiting approver action",
+            });
+          }
+          if (additions.length === 0) return prev;
+          return [...prev, ...additions];
+        });
+        // Seed the poll clock from `created_at` so the 30-minute cap
+        // is measured from when the request was originally created,
+        // not from the moment the SPA happened to mount.
+        setPollStartedAt((prev) => {
+          const next = new Map(prev);
+          for (const row of pending) {
+            if (next.has(row.profile_id)) continue;
+            const created = new Date(row.created_at).getTime();
+            if (!Number.isFinite(created)) continue;
+            next.set(row.profile_id, created);
+          }
+          return next;
+        });
+      }
     } catch {
       // best-effort
     }

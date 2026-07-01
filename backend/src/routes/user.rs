@@ -1298,6 +1298,25 @@ pub async fn bulk_safeguard_checkout(
                     "bulk-checkout: profile {pid} ({}) pending approval — request_id={request_id} state={appliance_state:?}",
                     profile.label
                 );
+                // Persist the pending row so the Credentials tab
+                // shows the "Awaiting approval" badge even after a
+                // browser reload (v1.12.11 fix). Best-effort — a
+                // failure to persist must not swallow the row from
+                // the immediate HTTP response.
+                if let Err(e) = crate::services::safeguard::pending_requests::store(
+                    &db.pool,
+                    user.id,
+                    pid,
+                    &request_id,
+                    &account_id,
+                    &asset,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        "safeguard pending_requests store failed (profile={pid}, request_id={request_id}): {e}"
+                    );
+                }
                 out.push(BulkSafeguardCheckoutResult {
                     profile_id: pid,
                     label: profile.label.clone(),
@@ -1352,6 +1371,12 @@ pub async fn bulk_safeguard_checkout(
         // checked-out window (the column is otherwise frozen at the
         // last profile edit). On checkin we slam it back to `now()`.
         let _ = cp_svc::set_expires_at(&db.pool, pid, expires_at).await;
+        // The password is now cached — any lingering pending row for
+        // this profile is stale (e.g. a prior direct-connect
+        // auto-request created it and the appliance has since
+        // auto-released without approver action). Clear it so the
+        // Credentials tab doesn't double-render the row (v1.12.11).
+        let _ = crate::services::safeguard::pending_requests::clear(&db.pool, user.id, pid).await;
 
         out.push(BulkSafeguardCheckoutResult {
             profile_id: pid,
@@ -1464,6 +1489,16 @@ pub async fn release_safeguard_pending(
             )
             .await?;
             let _ = cp_svc::set_expires_at(&db.pool, body.profile_id, expires_at).await;
+            // Approver acted and the password is now cached — the
+            // pending marker is redundant. Idempotent, so safe if
+            // the release happened via a fresh checkout that didn't
+            // originate from a persisted pending row (v1.12.11).
+            let _ = crate::services::safeguard::pending_requests::clear(
+                &db.pool,
+                user.id,
+                body.profile_id,
+            )
+            .await;
 
             Ok(Json(BulkSafeguardCheckoutResult {
                 profile_id: body.profile_id,
@@ -1483,25 +1518,45 @@ pub async fn release_safeguard_pending(
             request_id: rid,
             appliance_state,
             ..
-        } => Ok(Json(BulkSafeguardCheckoutResult {
-            profile_id: body.profile_id,
-            label: profile.label.clone(),
-            ok: false,
-            error: Some(format!(
-                "Awaiting approver — request {rid} is queued in Safeguard{}.",
-                appliance_state
-                    .as_deref()
-                    .map(|s| format!(" (state: {s})"))
-                    .unwrap_or_default()
-            )),
-            expires_at: None,
-            username: None,
-            replaced_existing: false,
-            state: BulkCheckoutState::Pending,
-            request_id: Some(rid),
-            account_id: Some(account_id),
-            asset: Some(asset),
-        })),
+        } => {
+            // Still awaiting approver. Keep the persistent pending
+            // marker fresh so a subsequent page reload can still
+            // hydrate the "Awaiting approval" badge (v1.12.11).
+            if let Err(e) = crate::services::safeguard::pending_requests::store(
+                &db.pool,
+                user.id,
+                body.profile_id,
+                &rid,
+                &account_id,
+                &asset,
+            )
+            .await
+            {
+                tracing::warn!(
+                    "safeguard pending_requests store failed (profile={}, request_id={rid}): {e}",
+                    body.profile_id
+                );
+            }
+            Ok(Json(BulkSafeguardCheckoutResult {
+                profile_id: body.profile_id,
+                label: profile.label.clone(),
+                ok: false,
+                error: Some(format!(
+                    "Awaiting approver — request {rid} is queued in Safeguard{}.",
+                    appliance_state
+                        .as_deref()
+                        .map(|s| format!(" (state: {s})"))
+                        .unwrap_or_default()
+                )),
+                expires_at: None,
+                username: None,
+                replaced_existing: false,
+                state: BulkCheckoutState::Pending,
+                request_id: Some(rid),
+                account_id: Some(account_id),
+                asset: Some(asset),
+            }))
+        }
     }
 }
 
@@ -1516,6 +1571,24 @@ pub async fn list_safeguard_cached(
     let db = require_running(&state).await?;
     let rows =
         crate::services::safeguard::password_cache::status_for_user(&db.pool, user.id).await?;
+    Ok(Json(rows))
+}
+
+/// `GET /api/user/safeguard/pending` — every Safeguard access
+/// request the user has waiting for approver action. Populated by
+/// both the direct-connect JIT auto-request path (`routes::tunnel`)
+/// and the bulk-checkout endpoint. The Credentials → Request
+/// Checkout tab consumes this on mount so the yellow "Awaiting
+/// approval" badge, per-row Refresh button and background poll
+/// hydrate correctly even when the pending request originated on a
+/// different tab or a previous browser session (v1.12.11 fix).
+pub async fn list_safeguard_pending(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<Vec<crate::services::safeguard::pending_requests::PendingStatus>>, AppError> {
+    let db = require_running(&state).await?;
+    let rows =
+        crate::services::safeguard::pending_requests::status_for_user(&db.pool, user.id).await?;
     Ok(Json(rows))
 }
 
@@ -1700,6 +1773,11 @@ pub async fn bulk_safeguard_checkin(
         }
 
         let _ = crate::services::safeguard::password_cache::clear(&db.pool, user.id, pid).await;
+        // Defensive: any pending marker for this profile is also
+        // stale after a check-in (v1.12.11). The successful-release
+        // paths already clear it, but a manual checkin after a
+        // partial failure could otherwise leave the marker behind.
+        let _ = crate::services::safeguard::pending_requests::clear(&db.pool, user.id, pid).await;
 
         // Mark the profile expired immediately so the Profiles list
         // doesn't keep showing a "valid until ..." timestamp on a

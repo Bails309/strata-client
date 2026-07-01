@@ -2179,6 +2179,26 @@ export interface BulkSafeguardCheckoutResult {
 
 export const listSafeguardCached = () => request<SafeguardCachedStatus[]>("/user/safeguard/cached");
 
+/**
+ * A Safeguard access request that is still queued waiting for an
+ * approver. Persisted server-side so the Credentials page can hydrate
+ * the pending badge on mount — including for requests that were
+ * created by the "auto-request on direct-connect" path (i.e. the user
+ * launched a session and the tunnel handler requested a JIT password
+ * on their behalf) rather than by the Request Checkout button.
+ */
+export interface SafeguardPendingStatus {
+  profile_id: string;
+  request_id: string;
+  account_id: string;
+  asset: string;
+  /** RFC3339. Timestamp of the most recent request creation. */
+  created_at: string;
+}
+
+export const listSafeguardPending = () =>
+  request<SafeguardPendingStatus[]>("/user/safeguard/pending");
+
 export const bulkSafeguardCheckout = (profile_ids: string[], comment: string) =>
   request<BulkSafeguardCheckoutResult[]>("/user/safeguard/bulk-checkout", {
     method: "POST",

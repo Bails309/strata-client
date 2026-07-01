@@ -5,6 +5,78 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.12.11] — 2026-07-01
+
+### Patch Release — Safeguard auto-request pending state now visible on Credentials → Request Checkout
+
+**The bug.** When a user launched a direct connection whose credential
+profile was mapped to a Safeguard account that requires approver
+action (`kind='safeguard'`, `require_approval=true` on the appliance
+side), the tunnel WebSocket handler transparently issued the JIT
+password checkout on the user's behalf. If Safeguard came back with
+`PendingApproval`, the handler correctly returned a 400 to abort the
+WebSocket upgrade — but the pending `request_id` lived only in the
+handler's stack frame. Nothing was written anywhere the SPA could
+read back. The Credentials → Request Checkout tab had no idea the
+appliance was already holding an open access request for the user,
+so the yellow **Awaiting approval** badge, the manual **Refresh**
+button, and the 15-second background poll all stayed silent.
+
+**The user impact.** Every subsequent connect attempt behaved as if
+it were the first: another JIT checkout call, another appliance-side
+`list_my_active_requests_for` preflight, another `reuse_pending`.
+The backend deduplication logic (added in v1.12.6) kept us from
+actually creating duplicate requests, but the user's browser never
+learned there was anything to wait on and reported it as
+*"the auto-request feature keeps re-requesting because the
+credentials page never shows Pending Approval"*.
+
+**The fix.** A new `safeguard_pending_requests` table gives every
+`JitOutcome::PendingApproval` a persistent home:
+
+- **Migration 079** adds `safeguard_pending_requests(user_id,
+  profile_id, request_id, account_id, asset, created_at)` with the
+  same `(user_id, profile_id)` composite primary key and FK cascade
+  semantics as `safeguard_cached_passwords`.
+- **`services::safeguard::pending_requests`** — a new module with
+  `store` / `clear` / `status_for_user` helpers. `store` is
+  idempotent (`ON CONFLICT ... DO UPDATE`) so a reused request-id
+  overwrites the row instead of erroring; `clear` is best-effort so
+  release / check-in paths can call it unconditionally.
+- **`routes::tunnel::ws_tunnel`** persists the pending row on the
+  auto-request path (`JitOutcome::PendingApproval` branch) before
+  returning the validation error.
+- **`routes::user::bulk_safeguard_checkout`** persists the pending
+  row on the manual `Request Checkout` path so a page reload or
+  cross-browser handoff reconstitutes the badge.
+- **`routes::user::release_safeguard_pending`** clears the row on
+  the `Released` branch (approver acted) and refreshes the
+  `created_at` timestamp on the `PendingApproval` branch (poll clock
+  starts over) so the 30-minute cap tracks the appliance's view.
+- **`routes::user::bulk_safeguard_checkin`** clears the row alongside
+  the cached-password wipe so a re-request after check-in starts
+  fresh.
+- **New endpoint** `GET /api/user/safeguard/pending` returns every
+  pending row for the calling user, newest-first, so the SPA can
+  hydrate on mount.
+- **`SafeguardBulkCheckoutCard.refresh()`** now fetches
+  `/user/safeguard/pending` in parallel with the cached-status
+  query and merges pending rows into `results` for any
+  `profile_id` not already tracked. The merge is additive only —
+  it never overwrites a fresher `ok` or `failed` outcome — and the
+  poll clock is seeded from `created_at` so the 30-minute cap is
+  measured from when the request was originally made, not from the
+  moment the SPA happened to mount.
+
+After v1.12.11 the user's first auto-request attempt still fails the
+WebSocket upgrade (nothing we can do — the browser hides HTTP 400
+bodies from failed WebSocket handshakes) but the Credentials page
+now surfaces the pending badge on the very next mount, complete with
+the appliance request-id and asset, so the user can either wait for
+the background poll or press Refresh to release once the approver
+acts. Two new frontend regression tests pin the hydration path and
+the anti-clobber rule.
+
 ## [1.12.10] — 2026-06-30
 
 ### Patch Release — Safeguard bulk-checkout preserves `pending` (approval-required) rows across subsequent checkouts and check-ins

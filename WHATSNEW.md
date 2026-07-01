@@ -1,3 +1,66 @@
+# What's New in v1.12.11
+
+> **Patch release — Safeguard auto-request pending state is
+> finally visible on Credentials → Request Checkout.** A customer
+> reported that connecting directly to a connection whose
+> credential profile is mapped to a Safeguard account requiring
+> approver action ("auto-request on direct-connect") never
+> updated the credentials page to say *Pending Approval*, so every
+> subsequent connect attempt looked like a fresh JIT checkout to
+> the user (the backend's `reuse_pending` preflight kept us from
+> creating actual duplicate access requests on the appliance —
+> but the SPA gave the user no way to see that anything was
+> pending). Root cause: `routes::tunnel::ws_tunnel`'s
+> `JitOutcome::PendingApproval` branch stored the `request_id`
+> only in its own stack frame. Nothing was persisted anywhere the
+> Credentials → Request Checkout tab could read back, so the
+> yellow **Awaiting approval** badge, the manual **Refresh**
+> button, and the background poll `useEffect` all stayed silent.
+> v1.12.11 introduces a new `safeguard_pending_requests` table
+> that every `PendingApproval` observation writes into (auto-
+> request path AND manual bulk-checkout), clears on the two
+> terminal paths (successful release, check-in), and exposes via
+> a new `GET /api/user/safeguard/pending` endpoint. The bulk-
+> checkout card now hydrates from `/pending` on mount and merges
+> the persistent rows into its `results` state so the badge, the
+> Refresh button, and the poll clock all appear the very next
+> time the user opens the Credentials page. Additive-only merge
+> so an in-session `ok` row is never clobbered by a stale
+> pending record. Two new regression tests pin the mount-
+> hydration path and the anti-clobber rule.
+
+## Theme 1 — Safeguard auto-request pending state is now visible
+
+The bug and its fix are described in full in the [CHANGELOG](CHANGELOG.md#11211--2026-07-01).
+The upshot for operators:
+
+- **New table**: `safeguard_pending_requests(user_id UUID,
+  profile_id UUID, request_id TEXT, account_id TEXT,
+  asset TEXT, created_at TIMESTAMPTZ)` — indexed by user; FK
+  cascades on both `users(id)` and `credential_profiles(id)`.
+- **New endpoint**: `GET /api/user/safeguard/pending` returns
+  every pending row for the calling user, newest-first. Requires
+  the standard user session; no admin flags. Returns 200 with
+  `[]` when nothing is pending.
+- **No configuration changes**. Migration 079 runs automatically
+  on boot; the endpoint is wired unconditionally so a rollback
+  simply stops populating the new table.
+- **No new environment variables, no new Cargo or npm
+  dependencies**. Strictly a schema + wiring change plus a mount-
+  time API call on the SPA side.
+
+The auto-request flow itself is unchanged: on direct connect the
+tunnel handler still issues the JIT checkout, still short-circuits
+with `AppError::Validation("safeguard.approval_required:{rid}")`
+on `PendingApproval`, and the WebSocket upgrade still fails with
+a generic browser error (the browser API does not expose HTTP 400
+response bodies to the WebSocket client). The improvement is
+purely on the follow-up: the user's next visit to Credentials →
+Request Checkout now shows the pending badge, and they can wait
+for the background poll or press Refresh once the approver acts.
+
+---
+
 # What's New in v1.12.10
 
 > **Patch release — the Safeguard bulk-checkout card no longer

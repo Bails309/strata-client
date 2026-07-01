@@ -429,11 +429,33 @@ pub async fn ws_tunnel(
                         request_id, ..
                     } => {
                         // Approval-gated profile: the user can't
-                        // connect until an approver acts. Surface a
-                        // stable validation code so the frontend can
-                        // render a friendly modal pointing at the
-                        // bulk-checkout / Request Checkout tab where
-                        // the request can be tracked + released.
+                        // connect until an approver acts. Persist the
+                        // pending request so the Credentials →
+                        // Request Checkout tab can hydrate its
+                        // "Awaiting approval" badge, Refresh button
+                        // and background poll on next mount (v1.12.11
+                        // fix). Best-effort — a persist failure
+                        // must not swallow the validation error the
+                        // user needs to see.
+                        if let Err(e) = crate::services::safeguard::pending_requests::store(
+                            &db.pool,
+                            user.id,
+                            profile_id,
+                            &request_id,
+                            &account_id,
+                            &asset,
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                "safeguard pending_requests store failed (profile={profile_id}, request_id={request_id}): {e}"
+                            );
+                        }
+                        // Surface a stable validation code so the
+                        // frontend can render a friendly modal
+                        // pointing at the bulk-checkout / Request
+                        // Checkout tab where the request can be
+                        // tracked + released.
                         return Err(AppError::Validation(format!(
                             "safeguard.approval_required:{request_id}"
                         )));

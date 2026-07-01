@@ -380,6 +380,10 @@ pub fn build_router(state: SharedState) -> Router {
             get(user::list_safeguard_cached),
         )
         .route(
+            "/api/user/safeguard/pending",
+            get(user::list_safeguard_pending),
+        )
+        .route(
             "/api/user/safeguard/accounts",
             get(user::list_safeguard_accounts),
         )

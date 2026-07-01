@@ -17,6 +17,7 @@ pub mod client;
 pub mod config;
 pub mod enrolment;
 pub mod password_cache;
+pub mod pending_requests;
 pub mod user_token;
 
 #[allow(unused_imports)]

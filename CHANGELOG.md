@@ -5,6 +5,127 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.12.12] — 2026-07-09
+
+### Patch Release — Safeguard Refresh no longer returns "Internal server error" for terminal / expired access requests
+
+**The bug.** A user with a `safeguard_pending_requests` row for a
+long-expired access request opened Credentials → Request Checkout,
+saw the yellow **Awaiting approval** badge (correctly hydrated from
+[v1.12.11](#11211--2026-07-01)'s new `/user/safeguard/pending`
+endpoint), and pressed the row's **Refresh** button. The SPA fired
+`POST /api/user/safeguard/release` — and the backend returned
+`HTTP 500 "Internal server error"`. The badge stayed pinned to
+**Awaiting approval**. Reloading the page re-hydrated the same
+stuck row. The user was locked in a loop with no way to make the
+appliance side of the mess visible or actionable.
+
+**Root cause.** `services::safeguard::client::checkout_password` only
+recognises Safeguard error code `90117` ("Awaiting approval") as a
+non-fatal poll state. Every other error code — including the codes
+Safeguard returns when the request has already been released and the
+release TTL has since expired (`Code 60635`), when the password has
+been checked back in (`Code 90105` and its cousins), and when the
+request is in any other terminal state (cancelled, denied, revoked,
+complete) — was bubbled up as `AppError::Internal`. `AppError::Internal`
+maps to `HTTP 500 { "error": "Internal server error" }` in
+`backend/src/error.rs` (the real message is only written to the
+server log so we don't leak appliance internals to end users).
+Meanwhile `services::safeguard::release_pending`'s `Err` arm did
+audit the failure but never cleared the stale
+`safeguard_pending_requests` row, so the next page mount
+re-hydrated the badge and the loop began again.
+
+Common trigger: the approver acted while the SPA wasn't polling
+(user closed the tab, machine went to sleep, or the browser was
+suspended for longer than the 30-minute poll cap), the password was
+released successfully in the background, the appliance's release TTL
+then expired, and the row's `request_id` was left pointing at what
+is now a fully-terminated appliance record.
+
+**The fix.** `services::safeguard::release_pending` now consults the
+appliance for the current AccessRequest state on the CheckoutPassword
+error path, using the existing
+`client::get_access_request_status(request_id)` helper (which
+already returns `Ok(None)` on 404). Three outcomes:
+
+- **Terminal state** (Expired / Cancelled / Denied / Revoked /
+  Complete / PasswordCheckedIn) — audit with the state hint, best-
+  effort DELETE the `safeguard_pending_requests` row so the SPA
+  doesn't re-hydrate the stuck badge on the next mount, and return
+  `AppError::Validation(format!("Safeguard access request {id} is
+  no longer releasable (appliance state: {state}). Please submit a
+  new checkout request."))`. Validation errors map to `HTTP 400`
+  with the message body exposed, so the SPA's inline error row
+  shows the actionable text instead of the pre-v1.12.12 generic
+  "Internal server error".
+
+- **404 on the appliance** (returned as `Ok(None)` by
+  `get_access_request_status`) — same treatment: audit, clear the
+  stale row, return `AppError::Validation(format!("Safeguard access
+  request {id} no longer exists on the appliance. Please submit a
+  new checkout request."))`.
+
+- **Still `PendingApproval` on the appliance** — the original
+  `CheckoutPassword` error was a transient hiccup (network blip,
+  token race). Return the normal `JitOutcome::PendingApproval` so
+  the SPA row stays yellow and continues polling.
+
+Any other appliance state (or a failure to refetch the state at
+all) falls through to the original `Err(e)` behaviour so operators
+still see the raw appliance response in the server log — but now
+the audit row records the state hint, and the pending row is left
+alone (it might still be valid).
+
+**Why patch, not minor.** Zero API changes. No new endpoints, no
+new tables, no new columns, no new env vars, no new dependencies.
+The Safeguard state names are read via the pre-existing
+`AccessRequestStatus` DTO. Behaviour change is strictly narrower:
+we now translate a subset of previously-500 responses into
+actionable 400s and clean up the corresponding SPA state. Rollback
+simply restores the pre-v1.12.12 500 behaviour without any
+migration work.
+
+### Changed
+
+- **`backend/src/services/safeguard/mod.rs`** — `release_pending`
+  now recovers gracefully when `CheckoutPassword` fails because the
+  Safeguard AccessRequest has moved past the releasable window. See
+  root cause discussion above.
+- **New helpers** — `is_terminal_release_state(state: &str) -> bool`
+  (case-insensitive substring match on the Safeguard state
+  vocabulary) and `clear_pending_best_effort(pool, user_id,
+  profile_id)` (silences DB errors from the cleanup path so they
+  can never mask the validation error the caller is about to
+  return).
+
+### Tests
+
+- Two new unit tests in `backend/src/services/safeguard/mod.rs`:
+  - `terminal_release_state_matches_common_terminal_states`
+    exercises every state name we care about (`Expired`,
+    `PasswordExpired`, `Denied`, `Cancelled`, `Canceled`, `Revoked`,
+    `Complete`, `Completed`, `PasswordCheckedIn`, plus lowercase
+    variants).
+  - `terminal_release_state_rejects_non_terminal_states` pins the
+    disambiguation — critically `PasswordCheckedOut` (live) must
+    NOT be treated as terminal, and neither should `PendingApproval`,
+    `RequestAvailable`, `Approved`, `New`, `PendingReviewer`,
+    `PendingAcknowledgment`, `Unknown`, or the empty string.
+
+### Migration and Deployment
+
+- **No database migration.** Uses the existing
+  `safeguard_pending_requests` table added in v1.12.11.
+- **No configuration changes.** No new env vars, no new Cargo or
+  npm dependencies.
+- **Rolling upgrade safe.** Backends running v1.12.11 and v1.12.12
+  side-by-side both continue to serve `/user/safeguard/release`;
+  the older ones just keep returning 500 for the edge case the
+  newer ones now handle.
+- **Docker deploy**: `docker compose pull && docker compose up -d
+  --build backend`.
+
 ## [1.12.11] — 2026-07-01
 
 ### Patch Release — Safeguard auto-request pending state now visible on Credentials → Request Checkout

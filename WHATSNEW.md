@@ -1,3 +1,90 @@
+# What's New in v1.12.12
+
+> **Patch release — Safeguard Refresh no longer returns "Internal
+> server error" for terminal / expired access requests.** A user
+> with a `safeguard_pending_requests` row for a long-expired
+> access request (introduced in
+> [v1.12.11](CHANGELOG.md#11211--2026-07-01)) opened Credentials
+> → Request Checkout, saw the yellow **Awaiting approval** badge
+> (correctly hydrated from `/user/safeguard/pending`), and
+> pressed the row's **Refresh** button. The SPA fired
+> `POST /api/user/safeguard/release` and the backend returned
+> `HTTP 500 "Internal server error"`. The badge stayed pinned to
+> **Awaiting approval**. Reloading the page re-hydrated the same
+> stuck row. The user was locked in a loop with no way to make
+> the appliance side of the mess visible or actionable. Root
+> cause: `services::safeguard::client::checkout_password` only
+> recognises Safeguard error code `90117` ("Awaiting approval")
+> as a non-fatal poll state. Every other error code — including
+> the codes Safeguard returns when the request has already been
+> released and the release TTL has since expired (`Code 60635`),
+> when the password has been checked back in (`Code 90105` and
+> friends), and when the request is in any other terminal state
+> (cancelled, denied, revoked, complete) — bubbled up as
+> `AppError::Internal`, which maps to `HTTP 500 { "error":
+> "Internal server error" }` (real message goes to the log so we
+> don't leak appliance internals). Meanwhile
+> `release_pending`'s `Err` arm did audit the failure but never
+> cleared the stale `safeguard_pending_requests` row, so the
+> next page mount re-hydrated the badge and the loop began
+> again. v1.12.12 teaches `release_pending` to consult the
+> appliance for the current AccessRequest state on the
+> CheckoutPassword error path — Terminal states (Expired /
+> Cancelled / Denied / Revoked / Complete / PasswordCheckedIn)
+> and 404s translate to a clear `HTTP 400 "Safeguard access
+> request X is no longer releasable (appliance state: Y). Please
+> submit a new checkout request."` AND best-effort DELETE the
+> stale pending row so the badge doesn't re-hydrate; still-
+> pending states return the normal `JitOutcome::PendingApproval`
+> so the row keeps polling. Any other unexpected state (or a
+> refetch failure) falls through to the pre-v1.12.12 behaviour
+> so operators still see the raw appliance response in the
+> server log. Two new unit tests pin the state classifier — one
+> exercises every terminal name we care about, the other pins
+> the disambiguation of `PasswordCheckedOut` (still live) from
+> `PasswordCheckedIn` (terminal).
+
+## Theme 1 — Safeguard Refresh translates terminal appliance states
+
+The bug and its fix are described in full in the [CHANGELOG](CHANGELOG.md#11212--2026-07-09).
+The upshot for operators:
+
+- **No new tables, no new endpoints, no new columns, no new env
+  vars, no new Cargo or npm dependencies.** Strictly a
+  behaviour change in one existing service function
+  (`release_pending`), gated behind the existing
+  `client::get_access_request_status` helper that the release
+  code path was already calling on the happy path.
+- **Two new module-private helpers** in
+  `services::safeguard::mod`: `is_terminal_release_state(state:
+  &str) -> bool` (case-insensitive substring match on the
+  Safeguard state vocabulary) and
+  `clear_pending_best_effort(pool, user_id, profile_id)`
+  (silences DB errors from the cleanup path so they can never
+  mask the validation error the caller is about to return).
+- **Zero rollback surprises.** Reverting to v1.12.11 simply
+  restores the pre-v1.12.12 500 behaviour without any migration
+  work; no schema changed.
+- **Rolling upgrade safe.** Backends running v1.12.11 and
+  v1.12.12 side-by-side both continue to serve
+  `/user/safeguard/release`; the older ones just keep returning
+  500 for the edge case the newer ones now handle.
+
+### Symptom to watch for after upgrade
+
+If a user still sees the yellow **Awaiting approval** badge stuck
+after pressing Refresh, the row's error text now tells you which
+appliance state was reported (e.g. *"appliance state: Expired.
+Please submit a new checkout request."*). That gives support a
+one-line diagnosis instead of the pre-v1.12.12 "Internal server
+error" black-box. The stale pending row is also deleted server-
+side, so re-opening the page will no longer re-hydrate the stuck
+badge — the user just needs to press **Request checkout** again.
+
+Docker deploy: `docker compose pull && docker compose up -d --build backend`.
+
+---
+
 # What's New in v1.12.11
 
 > **Patch release — Safeguard auto-request pending state is

@@ -480,6 +480,60 @@ pub async fn jit_checkout(
     }))
 }
 
+/// Best-effort delete of the `safeguard_pending_requests` row for
+/// this (user, profile) pair. Used from the release-pending recovery
+/// path when the appliance reports a terminal state so the SPA's
+/// "Awaiting approval" badge doesn't re-hydrate on the next mount.
+/// Silences DB errors — a failure to clean up must never mask the
+/// user-facing validation error the caller is about to return.
+async fn clear_pending_best_effort(
+    pool: &PgPool,
+    user_id: Option<uuid::Uuid>,
+    profile_id: Option<uuid::Uuid>,
+) {
+    if let (Some(uid), Some(pid)) = (user_id, profile_id) {
+        if let Err(e) = pending_requests::clear(pool, uid, pid).await {
+            tracing::warn!(
+                "safeguard pending_requests::clear best-effort failed (user={uid}, profile={pid}): {e}"
+            );
+        }
+    }
+}
+
+/// Return `true` when the appliance-reported AccessRequest state
+/// means CheckoutPassword can never succeed against this request id
+/// again — i.e. the caller should be told to submit a new request
+/// rather than keep polling. Substring-based to stay tolerant of
+/// appliance-specific decorations and future state additions.
+///
+/// Terminal states matched:
+///   - `Expired` / `PasswordExpired`
+///   - `Denied`
+///   - `Cancelled` / `Canceled`
+///   - `Revoked`
+///   - `Complete` / `Completed`
+///   - `PasswordCheckedIn` (already returned to Safeguard)
+///
+/// Explicitly NOT terminal (returns `false`):
+///   - `PendingApproval` — caller handles as still-pending
+///   - `RequestAvailable` — CheckoutPassword should succeed
+///   - `PasswordCheckedOut` — password is live; failure here is a
+///     token/network issue, not a terminal state
+fn is_terminal_release_state(state: &str) -> bool {
+    let s = state.to_ascii_lowercase();
+    if s.contains("expired")
+        || s.contains("denied")
+        || s.contains("cancel")
+        || s.contains("revoke")
+        || s.contains("complete")
+    {
+        return true;
+    }
+    // Match `PasswordCheckedIn` (terminal) without also matching
+    // `PasswordCheckedOut` (still live).
+    s == "passwordcheckedin" || s == "checkedin"
+}
+
 /// Attempt to release the password for an *already-issued* access
 /// request. Used to resolve a [`JitOutcome::PendingApproval`] without
 /// creating a new request: the caller hands back the same
@@ -492,8 +546,10 @@ pub async fn jit_checkout(
 ///
 /// Returns [`JitOutcome::Released`] when the appliance hands over the
 /// password (caller should cache it), [`JitOutcome::PendingApproval`]
-/// when still queued, or `Err` for anything else (cancelled, denied,
-/// expired, network).
+/// when still queued, or `Err(AppError::Validation)` when the request
+/// is in a terminal state (expired / cancelled / denied / already
+/// checked in) so the SPA surfaces a clear "please submit a new
+/// request" message instead of the pre-v1.12.12 generic HTTP 500.
 #[allow(clippy::too_many_arguments)]
 pub async fn release_pending(
     pool: &PgPool,
@@ -565,19 +621,115 @@ pub async fn release_pending(
     let outcome = match checkout_password_with_retry(&http, &base, &bearer, request_id).await {
         Ok(o) => o,
         Err(e) => {
-            insert_audit(
-                pool,
-                user_id,
-                connection_id,
-                profile_id,
-                Some(request_id),
-                account_id,
-                asset_id,
-                "failed",
-                Some(&e.to_string()),
-            )
-            .await;
-            return Err(e);
+            // Before surfacing this as a raw internal error, ask the
+            // appliance what state the request is actually in. If
+            // it's terminal (expired, cancelled, denied, revoked,
+            // already checked in, or 404) we translate to a
+            // user-actionable 400 and clear the persistent pending
+            // marker so the SPA badge doesn't re-hydrate the stuck
+            // "Awaiting approval" state on the next page load.
+            //
+            // Common scenario (v1.12.12): approver acted while the
+            // SPA wasn't polling → password was released → release
+            // TTL expired on the appliance → subsequent
+            // CheckoutPassword returns Code 60635/90105/similar,
+            // none of which parse as 90117 (awaiting-approval), so
+            // pre-v1.12.12 they bubbled up as `AppError::Internal`
+            // (HTTP 500 → SPA shows "Internal server error" when
+            // the user clicks Refresh) with the pending row still
+            // in the DB, leaving the row permanently stuck.
+            let refetched =
+                client::get_access_request_status(&http, &base, &bearer, request_id).await;
+            match refetched {
+                Ok(None) => {
+                    insert_audit(
+                        pool,
+                        user_id,
+                        connection_id,
+                        profile_id,
+                        Some(request_id),
+                        account_id,
+                        asset_id,
+                        "failed",
+                        Some("appliance returned 404 on refetch after CheckoutPassword failed"),
+                    )
+                    .await;
+                    clear_pending_best_effort(pool, user_id, profile_id).await;
+                    return Err(AppError::Validation(format!(
+                        "Safeguard access request {request_id} no longer exists on the appliance. \
+                         Please submit a new checkout request."
+                    )));
+                }
+                Ok(Some(status)) => {
+                    let state = status.state.as_deref().unwrap_or("Unknown").to_string();
+                    if state.eq_ignore_ascii_case("PendingApproval") {
+                        // Still pending — treat as such. No audit
+                        // row (would flood the table during a long
+                        // approval queue).
+                        return Ok(JitOutcome::PendingApproval {
+                            request_id: request_id.to_string(),
+                            username: None,
+                            appliance_state: Some(state),
+                        });
+                    }
+                    if is_terminal_release_state(&state) {
+                        insert_audit(
+                            pool,
+                            user_id,
+                            connection_id,
+                            profile_id,
+                            Some(request_id),
+                            account_id,
+                            asset_id,
+                            "failed",
+                            Some(&format!(
+                                "appliance state {state} after CheckoutPassword failed"
+                            )),
+                        )
+                        .await;
+                        clear_pending_best_effort(pool, user_id, profile_id).await;
+                        return Err(AppError::Validation(format!(
+                            "Safeguard access request {request_id} is no longer releasable \
+                             (appliance state: {state}). Please submit a new checkout request."
+                        )));
+                    }
+                    // Unexpected non-terminal state — audit with the
+                    // extra hint and fall through with the original
+                    // error so operators still see the raw appliance
+                    // response in the server logs.
+                    insert_audit(
+                        pool,
+                        user_id,
+                        connection_id,
+                        profile_id,
+                        Some(request_id),
+                        account_id,
+                        asset_id,
+                        "failed",
+                        Some(&format!("CheckoutPassword failed (state {state}): {e}")),
+                    )
+                    .await;
+                    return Err(e);
+                }
+                Err(status_err) => {
+                    tracing::warn!(
+                        "Safeguard AccessRequest refetch failed for {request_id} after CheckoutPassword error: {status_err}"
+                    );
+                    insert_audit(
+                        pool,
+                        user_id,
+                        connection_id,
+                        profile_id,
+                        Some(request_id),
+                        account_id,
+                        asset_id,
+                        "failed",
+                        Some(&e.to_string()),
+                    )
+                    .await;
+                    return Err(e);
+                }
+            }
         }
     };
 
@@ -884,5 +1036,54 @@ mod tests {
     fn render_reason_handles_duplicates() {
         let r = render_reason("{user} {user}", "x", "bob");
         assert_eq!(r, "bob bob");
+    }
+
+    #[test]
+    fn terminal_release_state_matches_common_terminal_states() {
+        // Explicit substring matches — case-insensitive.
+        for s in [
+            "Expired",
+            "PasswordExpired",
+            "expired",
+            "Denied",
+            "Cancelled",
+            "Canceled",
+            "canceled",
+            "Revoked",
+            "Complete",
+            "Completed",
+            "PasswordCheckedIn",
+            "passwordcheckedin",
+            "CheckedIn",
+        ] {
+            assert!(
+                is_terminal_release_state(s),
+                "expected `{s}` to be terminal"
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_release_state_rejects_non_terminal_states() {
+        // States that are legitimately still in play must NOT be
+        // treated as terminal — otherwise release_pending would
+        // wipe the pending row while the appliance is still
+        // holding the request open for the approver.
+        for s in [
+            "PendingApproval",
+            "RequestAvailable",
+            "PasswordCheckedOut", // live checkout — token/network issue, not terminal
+            "Approved",
+            "New",
+            "PendingReviewer",
+            "PendingAcknowledgment",
+            "Unknown",
+            "",
+        ] {
+            assert!(
+                !is_terminal_release_state(s),
+                "expected `{s}` to be non-terminal"
+            );
+        }
     }
 }

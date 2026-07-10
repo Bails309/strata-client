@@ -15,8 +15,10 @@ import {
   requestCheckout,
   linkCheckoutToProfile,
   forceGrantInput,
+  getDisplayTags,
   CredentialProfile,
   ConnectionInfo,
+  UserTag,
 } from "../api";
 import { useSessionManager, GuacSession } from "../components/SessionManager";
 import { notifySessionActivity } from "../components/sessionActivity";
@@ -76,6 +78,11 @@ export default function SessionClient() {
   const [phase, setPhase] = useState<Phase>("loading");
   const [protocol, setProtocol] = useState("");
   const [connectionName, setConnectionName] = useState("");
+  // Display-tag (user-assigned per-connection label pinned in the session
+  // sidebar) — shown in the browser tab title so operators with many open
+  // tabs can tell which target they're looking at. Lookup key is
+  // `connectionId`; fetched on mount and whenever `connectionId` changes.
+  const [displayTag, setDisplayTag] = useState<UserTag | null>(null);
   const [credForm, setCredForm] = useState<Record<string, string>>({
     username: "",
     password: "",
@@ -302,16 +309,41 @@ export default function SessionClient() {
     }
   }, [connectionId]);
 
-  // ── Update browser tab title with connection name ──
+  // ── Update browser tab title with connection name (and display tag) ──
   useEffect(() => {
     const name = currentSession?.name || connectionName;
     if (name) {
-      document.title = `${name} — Strata`;
+      // Include the user-assigned display tag if the operator has
+      // pinned one via the session sidebar, so many identical-looking
+      // browser tabs stay distinguishable at a glance. Falls back to
+      // just the connection name when no tag is set.
+      document.title = displayTag?.name
+        ? `${name} — ${displayTag.name} — Strata`
+        : `${name} — Strata`;
     }
     return () => {
       document.title = "Strata Client";
     };
-  }, [currentSession?.name, connectionName]);
+  }, [currentSession?.name, connectionName, displayTag?.name]);
+
+  // ── Fetch the pinned display tag (if any) for this connection ──
+  // Kept independent of the title effect so a slow /user/display-tags
+  // response never delays showing the connection name in the tab.
+  useEffect(() => {
+    if (!connectionId) return;
+    let cancelled = false;
+    getDisplayTags()
+      .then((map) => {
+        if (cancelled) return;
+        setDisplayTag(map[connectionId] ?? null);
+      })
+      .catch(() => {
+        /* silent — tab title just falls back to the no-tag format */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionId]);
 
   // ── Phase 1: Check for existing session or fetch connection info ──
   useEffect(() => {

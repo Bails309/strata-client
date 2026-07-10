@@ -1312,6 +1312,12 @@ export interface CredentialProfile {
   expires_at: string;
   expired: boolean;
   ttl_hours: number;
+  /**
+   * Sub-hour component of the profile's lifetime (0–59). Combined with
+   * `ttl_hours`, the effective TTL in minutes is `ttl_hours * 60 + ttl_minutes`.
+   * Defaults to 0 for profiles created before v1.12.14.
+   */
+  ttl_minutes: number;
   /** When true, the profile may set ttl_hours up to 2160 (90 days). */
   extended_expiry: boolean;
   checkout_id?: string;
@@ -1339,6 +1345,8 @@ export interface CreateCredentialProfileBody {
   /** Required when kind === "local". */
   password?: string;
   ttl_hours?: number;
+  /** Sub-hour component of the requested lifetime (0–59). */
+  ttl_minutes?: number;
   extended_expiry?: boolean;
   /** Defaults to "local" on the backend. */
   kind?: "local" | "safeguard";
@@ -1371,6 +1379,8 @@ export const updateCredentialProfile = (
     username?: string;
     password?: string;
     ttl_hours?: number;
+    /** Sub-hour component of the requested lifetime (0–59). */
+    ttl_minutes?: number;
     extended_expiry?: boolean;
     kind?: "local" | "safeguard";
     safeguard_account_id?: string;
@@ -1415,6 +1425,8 @@ export interface ConnectionInfo {
     id: string;
     label: string;
     ttl_hours: number;
+    /** Sub-hour component of the profile's TTL (0–59). */
+    ttl_minutes?: number;
     managed_ad_dn?: string;
     ad_sync_config_id?: string;
     can_self_approve: boolean;

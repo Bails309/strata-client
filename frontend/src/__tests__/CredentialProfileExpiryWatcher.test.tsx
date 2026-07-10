@@ -21,6 +21,7 @@ function profile(overrides: Partial<CredentialProfile> = {}): CredentialProfile 
     expires_at: new Date(now + 25 * 3600 * 1000).toISOString(),
     expired: false,
     ttl_hours: 12,
+    ttl_minutes: 0,
     extended_expiry: false,
     ...overrides,
   };

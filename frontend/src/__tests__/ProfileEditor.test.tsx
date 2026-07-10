@@ -17,6 +17,7 @@ const baseEditing: EditingProfile = {
   username: "",
   password: "",
   ttl_hours: 4,
+  ttl_minutes: 0,
   extended_expiry: false,
 };
 
@@ -43,6 +44,7 @@ function makeProfile(overrides: Partial<CredentialProfile> = {}): CredentialProf
     expires_at: "2099-01-01T00:00:00Z",
     expired: false,
     ttl_hours: 4,
+    ttl_minutes: 0,
     extended_expiry: false,
     ...overrides,
   };
@@ -136,11 +138,32 @@ describe("ProfileEditor", () => {
     expect(setEditing).toHaveBeenCalledWith(expect.objectContaining({ password: "secret" }));
   });
 
-  it("updates ttl_hours via range slider", () => {
+  it("updates ttl_hours via Hours number input", () => {
     const setEditing = vi.fn();
     renderEditor({ setEditing });
-    fireEvent.change(screen.getByLabelText("Password Expiry"), { target: { value: "8" } });
+    // The Hours input keeps the id `prof-ttl` (labelled "Password Expiry")
+    // so we look it up by its own sub-label. See ProfileEditor.tsx.
+    fireEvent.change(screen.getByLabelText("Hours"), { target: { value: "8" } });
     expect(setEditing).toHaveBeenCalledWith(expect.objectContaining({ ttl_hours: 8 }));
+  });
+
+  it("updates ttl_minutes via Minutes number input", () => {
+    const setEditing = vi.fn();
+    renderEditor({ setEditing });
+    fireEvent.change(screen.getByLabelText("Minutes"), { target: { value: "30" } });
+    expect(setEditing).toHaveBeenCalledWith(expect.objectContaining({ ttl_minutes: 30 }));
+  });
+
+  it("clamps a sub-15-minute total up to the 15-minute floor", () => {
+    // Enforce the minimum lifetime — the 15-minute floor comes from
+    // backend service-layer validation, so the UI must not let users
+    // dip below it on the client.
+    const setEditing = vi.fn();
+    renderEditor({ setEditing, editing: { ...baseEditing, ttl_hours: 0, ttl_minutes: 0 } });
+    fireEvent.change(screen.getByLabelText("Minutes"), { target: { value: "5" } });
+    expect(setEditing).toHaveBeenCalledWith(
+      expect.objectContaining({ ttl_hours: 0, ttl_minutes: 15 })
+    );
   });
 
   it("displays singular 'hour' when ttl_hours is 1", () => {

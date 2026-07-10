@@ -108,6 +108,7 @@ const profiles = [
     expires_at: "2024-12-31T00:00:00Z",
     expired: false,
     ttl_hours: 12,
+    ttl_minutes: 0,
     extended_expiry: false,
   },
   {
@@ -118,6 +119,7 @@ const profiles = [
     expires_at: "2023-01-01T00:00:00Z",
     expired: true,
     ttl_hours: 12,
+    ttl_minutes: 0,
     extended_expiry: false,
   },
 ];

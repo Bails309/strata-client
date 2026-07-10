@@ -328,7 +328,9 @@ pub async fn ws_tunnel(
             .await?
         };
 
-        if let Some((profile_id, account_id, asset, profile_ttl_hours)) = safeguard_target {
+        if let Some((profile_id, account_id, asset, profile_ttl_hours, profile_ttl_minutes)) =
+            safeguard_target
+        {
             let sg_cfg = crate::services::safeguard::config::load(&db.pool).await?;
 
             // 1. Try the cache first when admin-enabled. A live cache
@@ -420,7 +422,17 @@ pub async fn ws_tunnel(
                     Some(user.id),
                     Some(connection_id),
                     Some(profile_id),
-                    Some(profile_ttl_hours.max(1) as u32),
+                    // Safeguard's RequestedDurationHours only takes
+                    // whole hours — ceil the profile's total lifetime
+                    // so a 90-minute profile still books a 2-hour
+                    // appliance window instead of 1.
+                    Some({
+                        let total = crate::services::credential_profiles::ttl_total_minutes(
+                            profile_ttl_hours,
+                            profile_ttl_minutes,
+                        );
+                        (total.div_euclid(60) + i64::from(total.rem_euclid(60) != 0)).max(1) as u32
+                    }),
                 )
                 .await?;
                 let outcome = match jit {
@@ -476,8 +488,12 @@ pub async fn ws_tunnel(
                     // live for the same window. Best-effort: cache
                     // write failure must not break the user's
                     // connection.
-                    let ttl_hours = profile_ttl_hours.max(1) as i64;
-                    let expires_at = chrono::Utc::now() + chrono::Duration::hours(ttl_hours);
+                    let ttl_minutes = crate::services::credential_profiles::ttl_total_minutes(
+                        profile_ttl_hours,
+                        profile_ttl_minutes,
+                    )
+                    .max(1);
+                    let expires_at = chrono::Utc::now() + chrono::Duration::minutes(ttl_minutes);
                     if let Err(e) = crate::services::safeguard::password_cache::store(
                         &db.pool,
                         vault_cfg,

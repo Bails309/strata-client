@@ -36,6 +36,7 @@ const sgProfile = (over: Partial<CredentialProfile> = {}): CredentialProfile => 
   expires_at: "2027-01-01T00:00:00Z",
   expired: false,
   ttl_hours: 4,
+  ttl_minutes: 0,
   extended_expiry: false,
   kind: "safeguard",
   safeguard_account_id: "42",

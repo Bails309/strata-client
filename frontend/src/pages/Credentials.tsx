@@ -191,6 +191,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
           username: editing.username || undefined,
           password: editing.password || undefined,
           ttl_hours: editing.ttl_hours,
+          ttl_minutes: editing.ttl_minutes,
           extended_expiry: editing.extended_expiry,
           kind: editing.kind,
           safeguard_account_id: editing.safeguard_account_id,
@@ -205,6 +206,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
         await createCredentialProfile({
           label: editing.label,
           ttl_hours: editing.ttl_hours,
+          ttl_minutes: editing.ttl_minutes,
           extended_expiry: editing.extended_expiry,
           kind: "safeguard",
           safeguard_account_id: editing.safeguard_account_id,
@@ -216,13 +218,14 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
           setSaving(false);
           return;
         }
-        await createCredentialProfile(
-          editing.label,
-          editing.username,
-          editing.password,
-          editing.ttl_hours,
-          editing.extended_expiry
-        );
+        await createCredentialProfile({
+          label: editing.label,
+          username: editing.username,
+          password: editing.password,
+          ttl_hours: editing.ttl_hours,
+          ttl_minutes: editing.ttl_minutes,
+          extended_expiry: editing.extended_expiry,
+        });
       }
       setEditing(null);
       await load();
@@ -527,6 +530,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                 username: "",
                 password: "",
                 ttl_hours: 12,
+                ttl_minutes: 0,
                 extended_expiry: false,
               })
             }
@@ -988,6 +992,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                                 username: "",
                                 password: "",
                                 ttl_hours: profile.ttl_hours,
+                                ttl_minutes: profile.ttl_minutes ?? 0,
                                 extended_expiry: profile.extended_expiry,
                                 kind: profile.kind ?? "local",
                                 original_kind: profile.kind ?? "local",

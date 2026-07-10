@@ -34,6 +34,10 @@ vi.mock("../api", () => ({
   getTags: vi.fn().mockResolvedValue([]),
   getConnectionTags: vi.fn().mockResolvedValue([]),
   getConnectionFolders: vi.fn().mockResolvedValue([]),
+  // v1.12.13 added a per-connection display-tag lookup in the
+  // browser-tab-title effect. Default to an empty map so the title
+  // effect falls back to the pre-v1.12.13 `${name} — Strata` format.
+  getDisplayTags: vi.fn().mockResolvedValue({}),
   postCommandAudit: vi.fn().mockResolvedValue(undefined),
   BUILTIN_COMMANDS: ["reload", "disconnect", "fullscreen", "commands", "close", "explorer"],
   MAX_OPEN_PATH_LEN: 1024,

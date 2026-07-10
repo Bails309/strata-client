@@ -404,10 +404,7 @@ pub async fn update_metadata(
     ttl_minutes: Option<i32>,
     extended_expiry: Option<bool>,
 ) -> Result<(), AppError> {
-    if label.is_none()
-        && ttl_hours.is_none()
-        && ttl_minutes.is_none()
-        && extended_expiry.is_none()
+    if label.is_none() && ttl_hours.is_none() && ttl_minutes.is_none() && extended_expiry.is_none()
     {
         return Ok(());
     }
@@ -626,15 +623,7 @@ pub async fn insert_mapping(
 /// Metadata about an expired or stale profile mapped to a connection.
 /// Fields: (profile_id_text, label, ttl_hours, ttl_minutes, managed_ad_dn,
 /// ad_sync_config_id, can_self_approve)
-pub type ExpiredProfileInfo = (
-    String,
-    String,
-    i32,
-    i32,
-    Option<String>,
-    Option<Uuid>,
-    bool,
-);
+pub type ExpiredProfileInfo = (String, String, i32, i32, Option<String>, Option<Uuid>, bool);
 
 /// Does the user have live (non-expired, non-stale) credentials mapped to
 /// this connection? A profile is "live" when its TTL has not expired and —

@@ -1383,11 +1383,10 @@ pub async fn bulk_safeguard_checkout(
             }
         };
 
-        let expires_at =
-            chrono::Utc::now()
-                + chrono::Duration::minutes(
-                    cp_svc::ttl_total_minutes(profile.ttl_hours, profile.ttl_minutes).max(1),
-                );
+        let expires_at = chrono::Utc::now()
+            + chrono::Duration::minutes(
+                cp_svc::ttl_total_minutes(profile.ttl_hours, profile.ttl_minutes).max(1),
+            );
         if let Err(e) = crate::services::safeguard::password_cache::store(
             &db.pool,
             &vault_cfg,
@@ -1516,11 +1515,10 @@ pub async fn release_safeguard_pending(
 
     match jit {
         crate::services::safeguard::JitOutcome::Released(outcome) => {
-            let expires_at =
-                chrono::Utc::now()
-                    + chrono::Duration::minutes(
-                        cp_svc::ttl_total_minutes(profile.ttl_hours, profile.ttl_minutes).max(1),
-                    );
+            let expires_at = chrono::Utc::now()
+                + chrono::Duration::minutes(
+                    cp_svc::ttl_total_minutes(profile.ttl_hours, profile.ttl_minutes).max(1),
+                );
             // `outcome.username` carries the appliance's
             // `AccountName`, refetched inside `release_pending` via
             // `GET /service/core/v4/AccessRequests/{id}` after the
@@ -2154,8 +2152,12 @@ pub async fn update_credential_profile(
                 nonce: sealed_raw.nonce,
             };
 
-            let (ttl_hours, ttl_minutes) =
-                resolve_profile_ttl_hm(body.ttl_hours, body.ttl_minutes, admin_max, extended_expiry);
+            let (ttl_hours, ttl_minutes) = resolve_profile_ttl_hm(
+                body.ttl_hours,
+                body.ttl_minutes,
+                admin_max,
+                extended_expiry,
+            );
             cp_svc::update_sealed(
                 &db.pool,
                 profile_id,
@@ -3954,9 +3956,15 @@ mod tests {
     #[test]
     fn resolve_hm_combined_within_cap() {
         // 1h 30m stays as (1, 30) when the cap is 12h.
-        assert_eq!(resolve_profile_ttl_hm(Some(1), Some(30), 12, false), (1, 30));
+        assert_eq!(
+            resolve_profile_ttl_hm(Some(1), Some(30), 12, false),
+            (1, 30)
+        );
         // 90 minutes provided as (0, 90) is normalised to (1, 30).
-        assert_eq!(resolve_profile_ttl_hm(Some(0), Some(90), 12, false), (1, 30));
+        assert_eq!(
+            resolve_profile_ttl_hm(Some(0), Some(90), 12, false),
+            (1, 30)
+        );
     }
 
     #[test]

@@ -493,8 +493,7 @@ pub async fn ws_tunnel(
                         profile_ttl_minutes,
                     )
                     .max(1);
-                    let expires_at =
-                        chrono::Utc::now() + chrono::Duration::minutes(ttl_minutes);
+                    let expires_at = chrono::Utc::now() + chrono::Duration::minutes(ttl_minutes);
                     if let Err(e) = crate::services::safeguard::password_cache::store(
                         &db.pool,
                         vault_cfg,

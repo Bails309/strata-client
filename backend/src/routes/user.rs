@@ -13,14 +13,47 @@ use crate::services::{settings, vault};
 /// Resolve TTL for a credential profile, picking the effective upper
 /// bound based on whether the profile opts in to extended expiry.
 /// Falls back to `admin_max` (i.e. the existing 12 h cap) when not extended.
+///
+/// Legacy signature — kept for callers (and tests) that only care about
+/// whole-hour TTLs. Internally delegates to `resolve_profile_ttl_hm`
+/// with `user_minutes = None` and discards the resolved minute
+/// component.
 pub fn resolve_profile_ttl(user_pref: Option<i32>, admin_max: i64, extended: bool) -> i32 {
-    let cap = crate::services::credential_profiles::effective_ttl_max(admin_max, extended);
-    let default = if extended {
-        cap as i32
-    } else {
-        admin_max as i32
-    };
-    (user_pref.unwrap_or(default) as i64).clamp(1, cap) as i32
+    resolve_profile_ttl_hm(user_pref, None, admin_max, extended).0
+}
+
+/// Same as [`resolve_profile_ttl`] but honours a sub-hour `user_minutes`
+/// component and returns the clamped `(ttl_hours, ttl_minutes)` pair
+/// normalised so that `0 <= ttl_minutes < 60`.
+///
+/// The minimum effective lifetime is enforced at
+/// [`crate::services::credential_profiles::MIN_TTL_MINUTES`] (15 min) so
+/// operators cannot accidentally set a duration that expires before
+/// the tunnel finishes negotiating. The upper bound is
+/// `admin_max * 60` when not extended and 90 days when extended.
+pub fn resolve_profile_ttl_hm(
+    user_hours: Option<i32>,
+    user_minutes: Option<i32>,
+    admin_max: i64,
+    extended: bool,
+) -> (i32, i32) {
+    use crate::services::credential_profiles::{effective_ttl_max, MIN_TTL_MINUTES};
+
+    let cap_hours = effective_ttl_max(admin_max, extended);
+    let cap_minutes = cap_hours.saturating_mul(60);
+
+    let default_hours: i64 = if extended { cap_hours } else { admin_max };
+    let requested_hours = user_hours.map(i64::from).unwrap_or(default_hours);
+    let requested_minutes = user_minutes.map(i64::from).unwrap_or(0);
+
+    let requested_total = requested_hours
+        .saturating_mul(60)
+        .saturating_add(requested_minutes);
+    let clamped_total = requested_total.clamp(MIN_TTL_MINUTES, cap_minutes);
+
+    let h = (clamped_total / 60) as i32;
+    let m = (clamped_total % 60) as i32;
+    (h, m)
 }
 
 /// Validate a hex color string (e.g. "#ff00aa" or "#abc").
@@ -623,6 +656,13 @@ pub struct CreateCredentialProfileRequest {
     #[serde(default)]
     pub password: Option<String>,
     pub ttl_hours: Option<i32>,
+    /// Sub-hour component of the requested lifetime. Combined with
+    /// `ttl_hours` and clamped to the admin/extended-expiry ceiling.
+    /// Omitted (or 0) means "whole-hour TTL", preserving pre-v1.12.14
+    /// wire-format compatibility for callers that predate minute
+    /// precision.
+    #[serde(default)]
+    pub ttl_minutes: Option<i32>,
     #[serde(default)]
     pub extended_expiry: Option<bool>,
     /// 'local' (default) or 'safeguard'. When `safeguard`, the
@@ -1258,7 +1298,14 @@ pub async fn bulk_safeguard_checkout(
             Some(user.id),
             None,
             Some(pid),
-            Some(profile.ttl_hours.max(1) as u32),
+            // Safeguard's `RequestedDurationHours` only accepts whole hours; ceil
+            // the profile's total (hours+minutes) so a 90-minute profile still
+            // asks for a 2-hour appliance window rather than a 1-hour one that
+            // expires before our own cache row.
+            Some({
+                let total = cp_svc::ttl_total_minutes(profile.ttl_hours, profile.ttl_minutes);
+                (total.div_euclid(60) + i64::from(total.rem_euclid(60) != 0)).max(1) as u32
+            }),
         )
         .await
         {
@@ -1337,7 +1384,10 @@ pub async fn bulk_safeguard_checkout(
         };
 
         let expires_at =
-            chrono::Utc::now() + chrono::Duration::hours(profile.ttl_hours.max(1) as i64);
+            chrono::Utc::now()
+                + chrono::Duration::minutes(
+                    cp_svc::ttl_total_minutes(profile.ttl_hours, profile.ttl_minutes).max(1),
+                );
         if let Err(e) = crate::services::safeguard::password_cache::store(
             &db.pool,
             &vault_cfg,
@@ -1467,7 +1517,10 @@ pub async fn release_safeguard_pending(
     match jit {
         crate::services::safeguard::JitOutcome::Released(outcome) => {
             let expires_at =
-                chrono::Utc::now() + chrono::Duration::hours(profile.ttl_hours.max(1) as i64);
+                chrono::Utc::now()
+                    + chrono::Duration::minutes(
+                        cp_svc::ttl_total_minutes(profile.ttl_hours, profile.ttl_minutes).max(1),
+                    );
             // `outcome.username` carries the appliance's
             // `AccountName`, refetched inside `release_pending` via
             // `GET /service/core/v4/AccessRequests/{id}` after the
@@ -1805,7 +1858,8 @@ pub async fn create_credential_profile(
 
     let admin_max = cp_svc::admin_max_ttl_hours(&db.pool).await;
     let extended_expiry = body.extended_expiry.unwrap_or(false);
-    let ttl_hours = resolve_profile_ttl(body.ttl_hours, admin_max, extended_expiry);
+    let (ttl_hours, ttl_minutes) =
+        resolve_profile_ttl_hm(body.ttl_hours, body.ttl_minutes, admin_max, extended_expiry);
 
     // ── Safeguard JIT branch ────────────────────────────────────────
     // No envelope payload is stored — the password is checked out from
@@ -1850,6 +1904,7 @@ pub async fn create_credential_profile(
             account_id,
             asset,
             ttl_hours,
+            ttl_minutes,
             extended_expiry,
         )
         .await?;
@@ -1865,6 +1920,7 @@ pub async fn create_credential_profile(
                 "safeguard_account_id": account_id,
                 "safeguard_asset": asset,
                 "ttl_hours": ttl_hours,
+                "ttl_minutes": ttl_minutes,
             }),
         )
         .await?;
@@ -1916,6 +1972,7 @@ pub async fn create_credential_profile(
         &body.label,
         &sealed,
         ttl_hours,
+        ttl_minutes,
         extended_expiry,
     )
     .await?;
@@ -1929,6 +1986,7 @@ pub async fn create_credential_profile(
             "label": body.label,
             "extended_expiry": extended_expiry,
             "ttl_hours": ttl_hours,
+            "ttl_minutes": ttl_minutes,
         }),
     )
     .await?;
@@ -1942,6 +2000,10 @@ pub struct UpdateCredentialProfileRequest {
     pub username: Option<String>,
     pub password: Option<String>,
     pub ttl_hours: Option<i32>,
+    /// Sub-hour component of the requested lifetime. See
+    /// [`CreateCredentialProfileRequest::ttl_minutes`].
+    #[serde(default)]
+    pub ttl_minutes: Option<i32>,
     #[serde(default)]
     pub extended_expiry: Option<bool>,
     #[serde(default)]
@@ -1997,14 +2059,21 @@ pub async fn update_credential_profile(
             })?;
 
         // Safeguard TTL is always clamped against non-extended policy.
-        let ttl_hours = body
-            .ttl_hours
-            .map(|h| resolve_profile_ttl(Some(h), admin_max, false));
+        // When either component is provided we resolve the pair; when
+        // neither is provided we pass None through to update_metadata
+        // so `expires_at` is not touched.
+        let (ttl_hours, ttl_minutes) = if body.ttl_hours.is_some() || body.ttl_minutes.is_some() {
+            let (h, m) = resolve_profile_ttl_hm(body.ttl_hours, body.ttl_minutes, admin_max, false);
+            (Some(h), Some(m))
+        } else {
+            (None, None)
+        };
         cp_svc::update_metadata(
             &db.pool,
             profile_id,
             body.label.as_deref(),
             ttl_hours,
+            ttl_minutes,
             Some(false),
         )
         .await?;
@@ -2085,26 +2154,38 @@ pub async fn update_credential_profile(
                 nonce: sealed_raw.nonce,
             };
 
-            let ttl_hours = resolve_profile_ttl(body.ttl_hours, admin_max, extended_expiry);
+            let (ttl_hours, ttl_minutes) =
+                resolve_profile_ttl_hm(body.ttl_hours, body.ttl_minutes, admin_max, extended_expiry);
             cp_svc::update_sealed(
                 &db.pool,
                 profile_id,
                 &sealed,
                 ttl_hours,
+                ttl_minutes,
                 extended_expiry,
                 body.label.as_deref(),
             )
             .await?;
         } else {
             // No credential change — update label and/or TTL and/or extended flag.
-            let ttl_hours = body
-                .ttl_hours
-                .map(|h| resolve_profile_ttl(Some(h), admin_max, extended_expiry));
+            let (ttl_hours, ttl_minutes) = if body.ttl_hours.is_some() || body.ttl_minutes.is_some()
+            {
+                let (h, m) = resolve_profile_ttl_hm(
+                    body.ttl_hours,
+                    body.ttl_minutes,
+                    admin_max,
+                    extended_expiry,
+                );
+                (Some(h), Some(m))
+            } else {
+                (None, None)
+            };
             cp_svc::update_metadata(
                 &db.pool,
                 profile_id,
                 body.label.as_deref(),
                 ttl_hours,
+                ttl_minutes,
                 body.extended_expiry,
             )
             .await?;
@@ -2395,11 +2476,14 @@ pub async fn connection_info(
         "file_transfer_enabled": file_transfer_enabled,
     });
 
-    if let Some((ep_id, ep_label, ep_ttl, ep_dn, ep_cfg_id, ep_self_approve)) = expired_profile {
+    if let Some((ep_id, ep_label, ep_ttl_h, ep_ttl_m, ep_dn, ep_cfg_id, ep_self_approve)) =
+        expired_profile
+    {
         resp["expired_profile"] = json!({
             "id": ep_id,
             "label": ep_label,
-            "ttl_hours": ep_ttl,
+            "ttl_hours": ep_ttl_h,
+            "ttl_minutes": ep_ttl_m,
             "managed_ad_dn": ep_dn,
             "ad_sync_config_id": ep_cfg_id,
             "can_self_approve": ep_self_approve,
@@ -3531,6 +3615,7 @@ mod tests {
             expires_at: chrono::Utc::now(),
             expired: false,
             ttl_hours: 8,
+            ttl_minutes: 0,
             extended_expiry: false,
             checkout_id: None,
             kind: "local".into(),
@@ -3541,6 +3626,7 @@ mod tests {
         assert_eq!(v["label"], "Work");
         assert_eq!(v["expired"], false);
         assert_eq!(v["ttl_hours"], 8);
+        assert_eq!(v["ttl_minutes"], 0);
         assert_eq!(v["extended_expiry"], false);
     }
 
@@ -3712,6 +3798,7 @@ mod tests {
             expires_at: now,
             expired: true,
             ttl_hours: 4,
+            ttl_minutes: 0,
             extended_expiry: false,
             checkout_id: None,
             kind: "local".into(),
@@ -3722,6 +3809,7 @@ mod tests {
         assert_eq!(v["label"], "Expired Profile");
         assert_eq!(v["expired"], true);
         assert_eq!(v["ttl_hours"], 4);
+        assert_eq!(v["ttl_minutes"], 0);
     }
 
     // ── UserConnectionRow serialization ────────────────────────────
@@ -3819,6 +3907,13 @@ mod tests {
     }
 
     // ── resolve_profile_ttl (extended-expiry aware) ────────────────────
+    //
+    // Note: the minimum lifetime is enforced in minutes
+    // (`MIN_TTL_MINUTES = 15`) as of migration 080. The legacy
+    // hours-only helper therefore reports `0` when the requested
+    // total is under one hour but at least 15 minutes; the effective
+    // duration is still ≥ 15 min because `resolve_profile_ttl_hm`
+    // returns the resolved minutes component.
 
     #[test]
     fn resolve_profile_ttl_non_extended_uses_admin_max() {
@@ -3847,9 +3942,64 @@ mod tests {
     }
 
     #[test]
-    fn resolve_profile_ttl_clamps_below_one() {
-        assert_eq!(resolve_profile_ttl(Some(0), 12, false), 1);
-        assert_eq!(resolve_profile_ttl(Some(-5), 12, true), 1);
+    fn resolve_profile_ttl_clamps_below_min() {
+        // Under-minimum requests now floor at 15 min = (0, 15).
+        // The legacy hours-only helper reports the hours component (0).
+        assert_eq!(resolve_profile_ttl(Some(0), 12, false), 0);
+        assert_eq!(resolve_profile_ttl(Some(-5), 12, true), 0);
+    }
+
+    // ── resolve_profile_ttl_hm (minute-precision) ──────────────────────
+
+    #[test]
+    fn resolve_hm_combined_within_cap() {
+        // 1h 30m stays as (1, 30) when the cap is 12h.
+        assert_eq!(resolve_profile_ttl_hm(Some(1), Some(30), 12, false), (1, 30));
+        // 90 minutes provided as (0, 90) is normalised to (1, 30).
+        assert_eq!(resolve_profile_ttl_hm(Some(0), Some(90), 12, false), (1, 30));
+    }
+
+    #[test]
+    fn resolve_hm_clamps_to_admin_cap() {
+        // Requesting 20h from a 12h admin ceiling collapses to 12h.
+        assert_eq!(
+            resolve_profile_ttl_hm(Some(20), Some(30), 12, false),
+            (12, 0)
+        );
+    }
+
+    #[test]
+    fn resolve_hm_enforces_min_15_minutes() {
+        // 5 minutes floors up to 15.
+        assert_eq!(resolve_profile_ttl_hm(Some(0), Some(5), 12, false), (0, 15));
+        // Zero everything also floors up to 15 minutes.
+        assert_eq!(resolve_profile_ttl_hm(Some(0), Some(0), 12, false), (0, 15));
+        // Negative components floor up to 15 as well.
+        assert_eq!(
+            resolve_profile_ttl_hm(Some(-5), Some(-10), 12, true),
+            (0, 15)
+        );
+    }
+
+    #[test]
+    fn resolve_hm_extended_allows_full_90_days() {
+        // 2160h + 0m = 90d.
+        assert_eq!(
+            resolve_profile_ttl_hm(Some(2160), Some(0), 12, true),
+            (2160, 0)
+        );
+        // 2160h + 30m clamps back to the 90-day ceiling.
+        assert_eq!(
+            resolve_profile_ttl_hm(Some(2160), Some(30), 12, true),
+            (2160, 0)
+        );
+    }
+
+    #[test]
+    fn resolve_hm_default_when_neither_component_supplied() {
+        // No preferences → admin cap in the non-extended branch, extended cap in the extended branch.
+        assert_eq!(resolve_profile_ttl_hm(None, None, 12, false), (12, 0));
+        assert_eq!(resolve_profile_ttl_hm(None, None, 12, true), (2160, 0));
     }
 
     // ── is_valid_hex_color ─────────────────────────────────────────────

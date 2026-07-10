@@ -13,6 +13,13 @@ export interface EditingProfile {
   username: string;
   password: string;
   ttl_hours: number;
+  /**
+   * Sub-hour component of the requested lifetime (0-59). Only applies
+   * to the non-extended branch; the extended-expiry (days) branch
+   * ignores this and stays days-only. Defaults to 0 for profiles
+   * created before v1.12.14.
+   */
+  ttl_minutes: number;
   extended_expiry: boolean;
   managed_ad_dn?: string;
   friendly_name?: string;
@@ -186,13 +193,19 @@ export default function ProfileEditor(props: ProfileEditorProps) {
               const nextKind = val === "safeguard" ? "safeguard" : "local";
               // Safeguard appliance policy caps checkout duration at 12h, so
               // clamp ttl_hours and force-disable extended_expiry when
-              // switching to the safeguard kind.
+              // switching to the safeguard kind. Minute precision stays
+              // available in both branches.
               const clamp = nextKind === "safeguard";
               setEditing({
                 ...editing,
                 kind: nextKind,
                 extended_expiry: clamp ? false : editing.extended_expiry,
                 ttl_hours: clamp ? Math.min(editing.ttl_hours, 12) : editing.ttl_hours,
+                ttl_minutes: clamp
+                  ? editing.ttl_hours >= 12
+                    ? 0
+                    : (editing.ttl_minutes ?? 0)
+                  : (editing.ttl_minutes ?? 0),
               });
             }}
             options={[
@@ -407,47 +420,165 @@ export default function ProfileEditor(props: ProfileEditorProps) {
           )}
           <div className="form-group">
             <label htmlFor="prof-ttl">Password Expiry</label>
-            <div className="flex items-center gap-3">
-              {(() => {
-                const extended = editing.extended_expiry && !isSafeguard;
-                const max = extended ? 90 : 12;
-                const val = extended
-                  ? Math.max(1, Math.round(editing.ttl_hours / 24))
-                  : editing.ttl_hours;
-                const pct = max > 1 ? ((val - 1) / (max - 1)) * 100 : 0;
+            {editing.extended_expiry && !isSafeguard ? (
+              // Extended (up-to-90-days) branch stays days-only — the
+              // wide range makes minute precision meaningless.
+              <div className="flex items-center gap-3">
+                {(() => {
+                  const val = Math.max(1, Math.round(editing.ttl_hours / 24));
+                  const pct = ((val - 1) / (90 - 1)) * 100;
+                  return (
+                    <input
+                      id="prof-ttl"
+                      type="range"
+                      min={1}
+                      max={90}
+                      step={1}
+                      value={val}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        setEditing({
+                          ...editing,
+                          ttl_hours: n * 24,
+                          ttl_minutes: 0,
+                        });
+                      }}
+                      className="range-slider flex-1"
+                      style={
+                        {
+                          "--range-pct": `${pct}%`,
+                        } as React.CSSProperties
+                      }
+                    />
+                  );
+                })()}
+                <span className="text-txt-primary font-semibold tabular-nums w-16 text-right">
+                  {(() => {
+                    const days = Math.max(1, Math.round(editing.ttl_hours / 24));
+                    return `${days} ${days === 1 ? "day" : "days"}`;
+                  })()}
+                </span>
+              </div>
+            ) : (
+              // Standard (≤12h) branch — two number inputs so operators
+              // can pin a precise value like "1h 30m" or "45m" that a
+              // long slider would make hard to hit.
+              (() => {
+                const hoursCap = isSafeguard ? 12 : 12;
+                const totalMin = editing.ttl_hours * 60 + (editing.ttl_minutes ?? 0);
+                const clampTotal = (h: number, m: number): { h: number; m: number } => {
+                  // Normalise to [15 min, hoursCap * 60].
+                  const raw = Math.max(0, h) * 60 + Math.max(0, m);
+                  const capped = Math.min(hoursCap * 60, Math.max(15, raw));
+                  return { h: Math.floor(capped / 60), m: capped % 60 };
+                };
                 return (
-                  <input
-                    id="prof-ttl"
-                    type="range"
-                    min={1}
-                    max={max}
-                    step={1}
-                    value={val}
-                    onChange={(e) => {
-                      const n = Number(e.target.value);
-                      setEditing({
-                        ...editing,
-                        ttl_hours: extended ? n * 24 : n,
-                      });
-                    }}
-                    className="range-slider flex-1"
-                    style={
-                      {
-                        "--range-pct": `${pct}%`,
-                      } as React.CSSProperties
-                    }
-                  />
+                  <>
+                    <div className="flex items-end gap-3 flex-wrap">
+                      <div>
+                        <label htmlFor="prof-ttl" className="block text-xs text-txt-secondary mb-1">
+                          Hours
+                        </label>
+                        <input
+                          id="prof-ttl"
+                          type="number"
+                          inputMode="numeric"
+                          min={0}
+                          max={hoursCap}
+                          step={1}
+                          value={editing.ttl_hours}
+                          onChange={(e) => {
+                            const raw = Number(e.target.value);
+                            const h = Number.isFinite(raw) ? raw : 0;
+                            const { h: nh, m: nm } = clampTotal(h, editing.ttl_minutes ?? 0);
+                            setEditing({ ...editing, ttl_hours: nh, ttl_minutes: nm });
+                          }}
+                          className="input w-24 tabular-nums"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          htmlFor="prof-ttl-min"
+                          className="block text-xs text-txt-secondary mb-1"
+                        >
+                          Minutes
+                        </label>
+                        <input
+                          id="prof-ttl-min"
+                          type="number"
+                          inputMode="numeric"
+                          min={0}
+                          max={59}
+                          step={5}
+                          value={editing.ttl_minutes ?? 0}
+                          onChange={(e) => {
+                            const raw = Number(e.target.value);
+                            const m = Number.isFinite(raw) ? raw : 0;
+                            const { h: nh, m: nm } = clampTotal(editing.ttl_hours, m);
+                            setEditing({ ...editing, ttl_hours: nh, ttl_minutes: nm });
+                          }}
+                          className="input w-24 tabular-nums"
+                        />
+                      </div>
+                      <div className="ml-auto text-right">
+                        <div className="text-xs text-txt-tertiary">Total</div>
+                        <div className="text-txt-primary font-semibold tabular-nums">
+                          {(() => {
+                            const h = editing.ttl_hours;
+                            const m = editing.ttl_minutes ?? 0;
+                            const parts: string[] = [];
+                            if (h > 0) parts.push(`${h} ${h === 1 ? "hour" : "hours"}`);
+                            if (m > 0 || h === 0)
+                              parts.push(`${m} ${m === 1 ? "minute" : "minutes"}`);
+                            return parts.join(" ");
+                          })()}
+                        </div>
+                      </div>
+                    </div>
+                    {/* Quick-pick chips so common durations are one click away. */}
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {[
+                        { label: "15 min", h: 0, m: 15 },
+                        { label: "30 min", h: 0, m: 30 },
+                        { label: "1 h", h: 1, m: 0 },
+                        { label: "2 h", h: 2, m: 0 },
+                        { label: "4 h", h: 4, m: 0 },
+                        { label: "8 h", h: 8, m: 0 },
+                        { label: "12 h", h: 12, m: 0 },
+                      ].map((preset) => {
+                        const active =
+                          editing.ttl_hours === preset.h && (editing.ttl_minutes ?? 0) === preset.m;
+                        return (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            className={`px-2 py-1 rounded text-xs border transition-colors ${
+                              active
+                                ? "bg-accent text-white border-accent"
+                                : "border-border-subtle text-txt-secondary hover:text-txt-primary hover:border-border-strong"
+                            }`}
+                            onClick={() =>
+                              setEditing({
+                                ...editing,
+                                ttl_hours: preset.h,
+                                ttl_minutes: preset.m,
+                              })
+                            }
+                          >
+                            {preset.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {totalMin < 15 && (
+                      <p className="text-warning text-xs mt-1">
+                        Minimum lifetime is 15 minutes — the value will be rounded up on save.
+                      </p>
+                    )}
+                  </>
                 );
-              })()}
-              <span className="text-txt-primary font-semibold tabular-nums w-16 text-right">
-                {editing.extended_expiry && !isSafeguard
-                  ? (() => {
-                      const days = Math.max(1, Math.round(editing.ttl_hours / 24));
-                      return `${days} ${days === 1 ? "day" : "days"}`;
-                    })()
-                  : `${editing.ttl_hours} ${editing.ttl_hours === 1 ? "hour" : "hours"}`}
-              </span>
-            </div>
+              })()
+            )}
             {!isSafeguard && (
               <label
                 className="flex items-center gap-2 mt-2 text-xs text-txt-secondary cursor-pointer select-none"
@@ -465,7 +596,10 @@ export default function ProfileEditor(props: ProfileEditorProps) {
                       extended_expiry: next,
                       // Snap to a sensible default for the new mode: 12h when
                       // turning extended off, 30d (720h) when turning it on.
+                      // Also zero the sub-hour component since extended is
+                      // days-only and the standard default is a whole hour.
                       ttl_hours: next ? 720 : 12,
+                      ttl_minutes: 0,
                     });
                   }}
                 />
@@ -476,10 +610,10 @@ export default function ProfileEditor(props: ProfileEditorProps) {
             <p className="text-txt-tertiary text-xs mt-1">
               Credentials expire after this duration and must be updated.{" "}
               {isSafeguard
-                ? "Maximum 12 hours (capped by Safeguard appliance policy)."
+                ? "Minimum 15 minutes; maximum 12 hours (capped by Safeguard appliance policy)."
                 : editing.extended_expiry
                   ? "Extended expiry enabled — maximum 90 days."
-                  : "Maximum 12 hours."}
+                  : "Minimum 15 minutes; maximum 12 hours."}
             </p>
           </div>
         </>

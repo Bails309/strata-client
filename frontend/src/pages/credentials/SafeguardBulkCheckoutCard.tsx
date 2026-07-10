@@ -497,7 +497,14 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
                       <div className="text-sm font-medium truncate">{p.label}</div>
                       <div className="text-xs text-txt-tertiary truncate">
                         Account {p.safeguard_account_id ?? "?"} · {p.safeguard_asset ?? "?"} ·
-                        request {p.ttl_hours}h
+                        request{" "}
+                        {(() => {
+                          const h = p.ttl_hours;
+                          const m = p.ttl_minutes ?? 0;
+                          if (h > 0 && m > 0) return `${h}h ${m}m`;
+                          if (h > 0) return `${h}h`;
+                          return `${m}m`;
+                        })()}
                       </div>
                     </div>
                   </label>

@@ -5,6 +5,78 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.13.0] — 2026-07-10
+
+### Minor Release — Minute-precision password-expiry TTLs
+
+**The ask.** A user requested that the credential-profile password-
+expiry lifetime be settable in **minutes as well as hours**, and
+called out that a slider counting in hours was too coarse for the
+short-lived cases they cared about. They also noted a slider that
+counts in minutes over a 12-hour range would be even harder to
+pinpoint — so the UI needed to change shape, not just resolution.
+
+**Root cause.** `credential_profiles.ttl_hours` (`INTEGER`) was the
+only lifetime column since [v1.0.0](CHANGELOG.md). Every downstream
+site — Safeguard checkout requested-duration, cache `expires_at`,
+pre-expiry watcher thresholds, audit logs — read whole hours. Any
+attempt to hit "1 h 30 m" rounded down to 1 h. The single
+`<input type="range" max="12">` slider in the Profile editor
+exposed exactly the resolution the schema could store, so the
+minute-precision gap was end-to-end.
+
+**Fix.**
+
+- **Schema (additive)** — new column
+  `credential_profiles.ttl_minutes INTEGER NOT NULL DEFAULT 0`,
+  with the `chk_ttl_hours` CHECK replaced by a
+  `total = ttl_hours * 60 + ttl_minutes` guard requiring
+  `15 <= total` and `total <= 720` (standard) or
+  `total <= 129600` (extended, up to 90 days). Existing rows keep
+  `ttl_minutes = 0`, so the effective lifetime is unchanged.
+  Migration
+  [`080_credential_profile_ttl_minutes.sql`](backend/migrations/080_credential_profile_ttl_minutes.sql).
+- **Backend** — `services::credential_profiles` grows a
+  `MIN_TTL_MINUTES = 15` constant and a `ttl_total_minutes(h, m)`
+  helper; all inserts and updates use
+  `make_interval(hours => $, mins => $)` when computing
+  `expires_at`; every tuple returned to route handlers now carries
+  `ttl_minutes` alongside `ttl_hours`.
+- **Safeguard bridge** — Safeguard's `RequestedDurationHours` still
+  accepts only whole hours, so we ceil the requested lifetime:
+  `(total_min + 59) / 60` (implemented as
+  `div_euclid(60) + i64::from(rem_euclid(60) != 0)`) so a request
+  for "45 min" becomes a 1-hour Safeguard checkout, and the
+  effective expiry is clamped to the shorter of the two on the
+  cache side. A 15-minute floor prevents zero-hour rounding.
+- **Wire format** — `CreateCredentialProfileRequest` and
+  `UpdateCredentialProfileRequest` gain an optional
+  `ttl_minutes: Option<i32>` field. Existing clients that omit it
+  keep the historical whole-hour behaviour (serde default = 0).
+- **UI** — the slider is replaced with two number inputs (Hours
+  0–12 or 0–90 days for extended stays; Minutes 0–59 with step 5)
+  plus quick-pick chips for the common values (15 m, 30 m, 1 h,
+  2 h, 4 h, 8 h, 12 h) and a live text summary. Extended-expiry
+  stays days-only — minute precision over 90 days would be noise.
+  Switching to a Safeguard-kind profile clamps the total lifetime
+  to ≤ 12 h and zeroes the sub-hour component if the pre-clamp
+  hours were already at the 12 h cap.
+
+**Acceptance test.** Open Credentials → New Profile → set
+Hours = 1, Minutes = 30. Save. Reopen the profile — the fields
+still show `1 h 30 m` and the profile's `expires_at` is
+`now + 90 minutes` (± clock skew). Set Hours = 0, Minutes = 5 —
+the UI clamps to `Minutes = 15` on change. Toggle Allow extended
+expiry — the days-only slider appears and Minutes returns to 0.
+
+**Known limitations.** Old clients that still POST the whole-hour
+`ttl_hours` field keep working, but their audit-log entries will
+read `ttl_minutes=0` — that's correct, not a regression. Safeguard
+checkouts still round up to the next whole hour on the appliance
+side; the effective lifetime is the min of the two, so the
+appliance-side coarseness cannot extend a profile past its
+requested minute-level TTL.
+
 ## [1.12.12] — 2026-07-09
 
 ### Patch Release — Safeguard Refresh no longer returns "Internal server error" for terminal / expired access requests

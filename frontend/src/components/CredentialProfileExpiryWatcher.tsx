@@ -141,7 +141,7 @@ export default function CredentialProfileExpiryWatcher({
         // warning. e.g. a freshly-created 12-hour standard profile must
         // not get a 1-day toast on first poll; the 1-hour and 10-minute
         // warnings still fire as the deadline approaches.
-        const ttlSecs = profile.ttl_hours * 3600;
+        const ttlSecs = (profile.ttl_hours * 60 + (profile.ttl_minutes ?? 0)) * 60;
         const thresholds = allThresholds.filter((t) => t.secs < ttlSecs);
 
         // Re-arm: if the profile's expires_at has shifted (TTL re-issued,

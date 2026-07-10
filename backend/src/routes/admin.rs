@@ -5185,6 +5185,7 @@ mod tests {
             expires_at: now,
             expired: false,
             ttl_hours: 8,
+            ttl_minutes: 0,
             extended_expiry: false,
             checkout_id: None,
             kind: "local".into(),
@@ -5195,6 +5196,7 @@ mod tests {
         assert_eq!(v["label"], "Work");
         assert_eq!(v["expired"], false);
         assert_eq!(v["ttl_hours"], 8);
+        assert_eq!(v["ttl_minutes"], 0);
     }
 
     // ── validate_ldap_url ──────────────────────────────────────────

@@ -1,3 +1,31 @@
+# What's New in v1.13.0
+
+> **Minor release — Minute-precision password-expiry TTLs.** A user
+> asked for credential-profile expiry times to be settable in
+> minutes as well as hours, and pointed out that a slider counting
+> in minutes over a 12-hour range would be even harder to pinpoint
+> than the old hours-only slider. Root cause:
+> `credential_profiles.ttl_hours` was the only lifetime column
+> since v1.0.0, and every downstream site (Safeguard requested
+> duration, cache `expires_at`, pre-expiry watcher thresholds,
+> audit logs) read whole hours. Fix: additive schema migration
+> [`080_credential_profile_ttl_minutes.sql`](backend/migrations/080_credential_profile_ttl_minutes.sql)
+> adds a `ttl_minutes INTEGER NOT NULL DEFAULT 0` column and
+> replaces the `chk_ttl_hours` CHECK with one that guards
+> `total = h*60 + m` against a 15-minute floor and the existing
+> 12-hour / 90-day caps. The service layer grows a
+> `ttl_total_minutes(h, m)` helper and uses
+> `make_interval(hours => $, mins => $)` when computing
+> `expires_at`. The Safeguard bridge ceils the requested minute
+> total to whole hours (`RequestedDurationHours` on the appliance
+> accepts only whole hours) and clamps the effective expiry on
+> the cache side. The Profile editor replaces the slider with two
+> number inputs (Hours + Minutes) plus quick-pick chips (15 m,
+> 30 m, 1 h, 2 h, 4 h, 8 h, 12 h) and a live text summary;
+> extended-expiry stays days-only. Old clients that omit
+> `ttl_minutes` keep their whole-hour behaviour, so the wire
+> format is backward-compatible.
+
 # What's New in v1.12.12
 
 > **Patch release — Safeguard Refresh no longer returns "Internal

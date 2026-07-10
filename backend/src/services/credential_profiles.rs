@@ -21,6 +21,11 @@ pub struct CredentialProfileRow {
     pub expires_at: DateTime<Utc>,
     pub expired: bool,
     pub ttl_hours: i32,
+    /// Sub-hour component of the profile's lifetime. Total effective
+    /// TTL in minutes is `ttl_hours * 60 + ttl_minutes` (introduced in
+    /// migration 080_credential_profile_ttl_minutes.sql).
+    #[serde(default)]
+    pub ttl_minutes: i32,
     pub extended_expiry: bool,
     pub checkout_id: Option<Uuid>,
     /// 'local' (envelope-encrypted username+password) or 'safeguard'
@@ -38,6 +43,17 @@ pub struct CredentialProfileRow {
 /// 2160 = 90 days, matched in DB by `chk_ttl_hours`
 /// (migration 061_credential_profile_extended_expiry.sql).
 pub const EXTENDED_TTL_MAX_HOURS: i64 = 2160;
+
+/// Minimum credential lifetime in minutes. Guards against operators
+/// setting a duration so short the checkout has expired before the
+/// tunnel finishes negotiating (allows for clock skew / slow logins).
+/// Matches the DB CHECK in migration 080_credential_profile_ttl_minutes.sql.
+pub const MIN_TTL_MINUTES: i64 = 15;
+
+/// Total effective TTL in minutes for a profile.
+pub fn ttl_total_minutes(ttl_hours: i32, ttl_minutes: i32) -> i64 {
+    ttl_hours as i64 * 60 + ttl_minutes as i64
+}
 
 #[derive(Serialize, sqlx::FromRow)]
 pub struct MappingRow {
@@ -83,7 +99,8 @@ pub async fn list_for_user(
 ) -> Result<Vec<CredentialProfileRow>, AppError> {
     let rows = sqlx::query_as(
         "SELECT id, label, created_at, updated_at, expires_at,
-                (expires_at < now()) AS expired, ttl_hours, extended_expiry, checkout_id,
+                (expires_at < now()) AS expired, ttl_hours, ttl_minutes,
+                extended_expiry, checkout_id,
                 kind, safeguard_account_id, safeguard_asset
          FROM credential_profiles WHERE user_id = $1 ORDER BY label",
     )
@@ -93,17 +110,18 @@ pub async fn list_for_user(
     Ok(rows)
 }
 
-/// Lightweight (kind, account_id, asset) lookup. Used by tunnel JIT to
-/// decide whether a connection's mapped profile is a Safeguard
-/// reference before touching the encrypted-payload path. Returns None
-/// when there is no profile mapped for `(connection_id, user_id)`.
+/// Lightweight (kind, account_id, asset, ttl_hours, ttl_minutes) lookup.
+/// Used by tunnel JIT to decide whether a connection's mapped profile
+/// is a Safeguard reference before touching the encrypted-payload
+/// path. Returns None when there is no profile mapped for
+/// `(connection_id, user_id)`.
 pub async fn safeguard_target_for_connection(
     pool: &PgPool,
     connection_id: Uuid,
     user_id: Uuid,
-) -> Result<Option<(Uuid, String, String, i32)>, AppError> {
-    let row: Option<(Uuid, Option<String>, Option<String>, i32)> = sqlx::query_as(
-        "SELECT cp.id, cp.safeguard_account_id, cp.safeguard_asset, cp.ttl_hours
+) -> Result<Option<(Uuid, String, String, i32, i32)>, AppError> {
+    let row: Option<(Uuid, Option<String>, Option<String>, i32, i32)> = sqlx::query_as(
+        "SELECT cp.id, cp.safeguard_account_id, cp.safeguard_asset, cp.ttl_hours, cp.ttl_minutes
            FROM credential_mappings cm
            JOIN credential_profiles cp ON cp.id = cm.credential_id
           WHERE cm.connection_id = $1 AND cp.user_id = $2
@@ -114,8 +132,15 @@ pub async fn safeguard_target_for_connection(
     .bind(user_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row
-        .map(|(id, acc, asset, ttl)| (id, acc.unwrap_or_default(), asset.unwrap_or_default(), ttl)))
+    Ok(row.map(|(id, acc, asset, ttl_h, ttl_m)| {
+        (
+            id,
+            acc.unwrap_or_default(),
+            asset.unwrap_or_default(),
+            ttl_h,
+            ttl_m,
+        )
+    }))
 }
 
 /// Variant for the one-off ticket path: look up safeguard target by
@@ -124,9 +149,9 @@ pub async fn safeguard_target_for_profile(
     pool: &PgPool,
     profile_id: Uuid,
     user_id: Uuid,
-) -> Result<Option<(Uuid, String, String, i32)>, AppError> {
-    let row: Option<(Uuid, Option<String>, Option<String>, i32)> = sqlx::query_as(
-        "SELECT cp.id, cp.safeguard_account_id, cp.safeguard_asset, cp.ttl_hours
+) -> Result<Option<(Uuid, String, String, i32, i32)>, AppError> {
+    let row: Option<(Uuid, Option<String>, Option<String>, i32, i32)> = sqlx::query_as(
+        "SELECT cp.id, cp.safeguard_account_id, cp.safeguard_asset, cp.ttl_hours, cp.ttl_minutes
            FROM credential_profiles cp
           WHERE cp.id = $1 AND cp.user_id = $2 AND cp.kind = 'safeguard'
             AND cp.expires_at > now()",
@@ -135,8 +160,15 @@ pub async fn safeguard_target_for_profile(
     .bind(user_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row
-        .map(|(id, acc, asset, ttl)| (id, acc.unwrap_or_default(), asset.unwrap_or_default(), ttl)))
+    Ok(row.map(|(id, acc, asset, ttl_h, ttl_m)| {
+        (
+            id,
+            acc.unwrap_or_default(),
+            asset.unwrap_or_default(),
+            ttl_h,
+            ttl_m,
+        )
+    }))
 }
 
 /// Insert a `kind='safeguard'` profile. No envelope payload is
@@ -148,22 +180,24 @@ pub async fn insert_safeguard(
     account_id: &str,
     asset: &str,
     ttl_hours: i32,
+    ttl_minutes: i32,
     extended_expiry: bool,
 ) -> Result<Uuid, AppError> {
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO credential_profiles
            (user_id, label, encrypted_username, encrypted_password, encrypted_dek, nonce,
-            ttl_hours, extended_expiry, expires_at,
+            ttl_hours, ttl_minutes, extended_expiry, expires_at,
             kind, safeguard_account_id, safeguard_asset)
-         VALUES ($1, $2, $3, $3, $3, $3, $4, $5,
-                 now() + make_interval(hours => $4),
-                 'safeguard', $6, $7)
+         VALUES ($1, $2, $3, $3, $3, $3, $4, $5, $6,
+                 now() + make_interval(hours => $4, mins => $5),
+                 'safeguard', $7, $8)
          RETURNING id",
     )
     .bind(user_id)
     .bind(label)
     .bind(&[] as &[u8])
     .bind(ttl_hours)
+    .bind(ttl_minutes)
     .bind(extended_expiry)
     .bind(account_id)
     .bind(asset)
@@ -290,11 +324,12 @@ pub async fn insert(
     label: &str,
     sealed: &SealedPayload,
     ttl_hours: i32,
+    ttl_minutes: i32,
     extended_expiry: bool,
 ) -> Result<Uuid, AppError> {
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO credential_profiles (user_id, label, encrypted_username, encrypted_password, encrypted_dek, nonce, ttl_hours, extended_expiry, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(hours => $7))
+        "INSERT INTO credential_profiles (user_id, label, encrypted_username, encrypted_password, encrypted_dek, nonce, ttl_hours, ttl_minutes, extended_expiry, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now() + make_interval(hours => $7, mins => $8))
          RETURNING id",
     )
     .bind(user_id)
@@ -304,6 +339,7 @@ pub async fn insert(
     .bind(&sealed.encrypted_dek)
     .bind(&sealed.nonce)
     .bind(ttl_hours)
+    .bind(ttl_minutes)
     .bind(extended_expiry)
     .fetch_one(pool)
     .await?;
@@ -333,14 +369,15 @@ pub async fn update_sealed(
     profile_id: Uuid,
     sealed: &SealedPayload,
     ttl_hours: i32,
+    ttl_minutes: i32,
     extended_expiry: bool,
     label: Option<&str>,
 ) -> Result<(), AppError> {
     sqlx::query(
         "UPDATE credential_profiles
          SET encrypted_username = $1, encrypted_password = $2, encrypted_dek = $3, nonce = $4,
-             ttl_hours = $5, extended_expiry = $8, updated_at = now(),
-             expires_at = now() + make_interval(hours => $5),
+             ttl_hours = $5, ttl_minutes = $9, extended_expiry = $8, updated_at = now(),
+             expires_at = now() + make_interval(hours => $5, mins => $9),
              label = COALESCE($7, label)
          WHERE id = $6",
     )
@@ -352,6 +389,7 @@ pub async fn update_sealed(
     .bind(profile_id)
     .bind(label)
     .bind(extended_expiry)
+    .bind(ttl_minutes)
     .execute(pool)
     .await?;
     Ok(())
@@ -363,17 +401,35 @@ pub async fn update_metadata(
     profile_id: Uuid,
     label: Option<&str>,
     ttl_hours: Option<i32>,
+    ttl_minutes: Option<i32>,
     extended_expiry: Option<bool>,
 ) -> Result<(), AppError> {
-    if label.is_none() && ttl_hours.is_none() && extended_expiry.is_none() {
+    if label.is_none()
+        && ttl_hours.is_none()
+        && ttl_minutes.is_none()
+        && extended_expiry.is_none()
+    {
         return Ok(());
     }
+    // If either TTL component is being updated, the effective expiry
+    // must be recomputed from the resolved (incoming OR persisted)
+    // pair. COALESCE both sides so a partial update (say, only
+    // ttl_minutes) still snaps `expires_at` off the current
+    // `ttl_hours` in the row.
     sqlx::query(
         "UPDATE credential_profiles SET
             label = COALESCE($2, label),
             ttl_hours = COALESCE($3, ttl_hours),
+            ttl_minutes = COALESCE($5, ttl_minutes),
             extended_expiry = COALESCE($4, extended_expiry),
-            expires_at = CASE WHEN $3 IS NOT NULL THEN now() + make_interval(hours => $3) ELSE expires_at END,
+            expires_at = CASE
+                WHEN $3 IS NOT NULL OR $5 IS NOT NULL THEN
+                    now() + make_interval(
+                        hours => COALESCE($3, ttl_hours),
+                        mins  => COALESCE($5, ttl_minutes)
+                    )
+                ELSE expires_at
+            END,
             updated_at = now()
          WHERE id = $1",
     )
@@ -381,6 +437,7 @@ pub async fn update_metadata(
     .bind(label)
     .bind(ttl_hours)
     .bind(extended_expiry)
+    .bind(ttl_minutes)
     .execute(pool)
     .await?;
     Ok(())
@@ -567,8 +624,17 @@ pub async fn insert_mapping(
 // ── Connection-info helpers ───────────────────────────────────────────
 
 /// Metadata about an expired or stale profile mapped to a connection.
-/// Fields: (profile_id_text, label, ttl_hours, managed_ad_dn, ad_sync_config_id, can_self_approve)
-pub type ExpiredProfileInfo = (String, String, i32, Option<String>, Option<Uuid>, bool);
+/// Fields: (profile_id_text, label, ttl_hours, ttl_minutes, managed_ad_dn,
+/// ad_sync_config_id, can_self_approve)
+pub type ExpiredProfileInfo = (
+    String,
+    String,
+    i32,
+    i32,
+    Option<String>,
+    Option<Uuid>,
+    bool,
+);
 
 /// Does the user have live (non-expired, non-stale) credentials mapped to
 /// this connection? A profile is "live" when its TTL has not expired and —
@@ -610,6 +676,7 @@ pub async fn expired_profile_for_connection(
             cp.id::text,
             cp.label,
             cp.ttl_hours,
+            cp.ttl_minutes,
             pcr.managed_ad_dn,
             pcr.ad_sync_config_id,
             COALESCE(uam.can_self_approve, false) as can_self_approve

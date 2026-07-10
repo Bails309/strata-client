@@ -77,6 +77,72 @@ side; the effective lifetime is the min of the two, so the
 appliance-side coarseness cannot extend a profile past its
 requested minute-level TTL.
 
+## [1.12.13] — 2026-07-10
+
+### Patch Release — Browser tab title now includes the user-assigned display tag
+
+**The ask.** A customer reported that with several remote-session
+tabs open in the same browser window, every tab title collapsed to
+the connection hostname followed by the product name — e.g.
+`cicsazvm082 — Strata` — with nothing to distinguish `cicsazvm082`
+open under three different roles / purposes. Their exact request:
+*"Could you add the tag name to the browser tab title bar? For
+example, when connected to a connection it currently displays
+'cicsazvm082 - strata'. It would be helpful if it could display
+'cicsazvm082 - Adhoc2 - strata' (where Adhoc2 is the server tag
+assigned by me in the active connections window). This would make
+it much easier to identify which server we are connected to."*
+
+**The fix.** `SessionClient` (the page that owns the browser tab
+for an active session) now fetches the user's pinned display-tag
+map via the existing `GET /user/display-tags` endpoint on mount
+and whenever `connectionId` changes, and includes the tag name in
+the `document.title` string:
+
+- With a display tag pinned: `${connectionName} — ${tag.name} — Strata`
+- Without a display tag: `${connectionName} — Strata` (unchanged
+  from v1.12.12)
+
+The tag lookup is decoupled from the connection-name lookup so a
+slow `/user/display-tags` response never delays showing the base
+title — the tag simply appears once the fetch resolves. Fetch
+failures are silent (falls back to the no-tag format).
+
+**Why patch, not minor.** Zero API changes. No new endpoints, no
+new tables, no new columns, no new env vars, no new dependencies.
+Uses the same
+[`getDisplayTags`](frontend/src/api.ts) helper the `SessionBar`
+component has been calling since v1.11.0 to render the sidebar
+tag chip. Behaviour change is strictly additive — the fallback
+title format is byte-for-byte identical to v1.12.12.
+
+### Changed
+
+- **`frontend/src/pages/SessionClient.tsx`** — new `displayTag`
+  state, new effect that fetches `getDisplayTags()` keyed on
+  `connectionId` (cancels cleanly on unmount), title effect now
+  emits the 3-segment format when a tag is pinned.
+
+### Migration and Deployment
+
+- **No database migration.** No schema changes.
+- **No configuration changes.** No new env vars, no new Cargo or
+  npm dependencies.
+- **Rolling upgrade safe.** Backends running v1.12.12 and v1.12.13
+  side-by-side both continue to serve `/user/display-tags`; older
+  frontends just render the pre-v1.12.13 title format.
+- **Docker deploy**: `docker compose pull && docker compose up -d
+  --build frontend`.
+
+### Known limitations
+
+- Display tag lookup runs once per `connectionId` change. If the
+  user pins or unpins a tag via the session sidebar AFTER the tab
+  is already open, the title won't refresh until the tab is
+  reopened or the browser is refreshed. A follow-up could listen
+  for a `display-tag-changed` DOM event dispatched by
+  `SessionBar`; scope kept small for this patch.
+
 ## [1.12.12] — 2026-07-09
 
 ### Patch Release — Safeguard Refresh no longer returns "Internal server error" for terminal / expired access requests

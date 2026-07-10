@@ -26,6 +26,67 @@
 > `ttl_minutes` keep their whole-hour behaviour, so the wire
 > format is backward-compatible.
 
+# What's New in v1.12.13
+
+> **Patch release — browser tab title now includes the user-
+> assigned display tag.** A customer with several remote-session
+> tabs open in the same browser window reported that every tab
+> collapsed to the connection hostname followed by the product
+> name — e.g. `cicsazvm082 — Strata` — with nothing to
+> distinguish `cicsazvm082` open under three different roles /
+> purposes. Their exact ask: "Could you add the tag name to the
+> browser tab title bar? For example, when connected to a
+> connection it currently displays 'cicsazvm082 - strata'. It
+> would be helpful if it could display 'cicsazvm082 - Adhoc2 -
+> strata' (where Adhoc2 is the server tag assigned by me in the
+> active connections window). This would make it much easier to
+> identify which server we are connected to." v1.12.13 wires the
+> existing `GET /user/display-tags` endpoint (already used by
+> `SessionBar` to render the sidebar tag chip) into the
+> `SessionClient` page's browser-tab-title effect: with a display
+> tag pinned the title now reads `${name} — ${tagName} — Strata`,
+> without one it stays `${name} — Strata` (byte-for-byte
+> identical to v1.12.12). The tag fetch is decoupled from the
+> connection-name lookup so a slow /user/display-tags response
+> never delays showing the base title — the tag simply appears
+> once the fetch resolves. Fetch failures are silent. Zero schema
+> changes, zero new endpoints, zero new env vars, zero new Cargo
+> or npm dependencies.
+
+## Theme 1 — Browser tab title includes the user-assigned display tag
+
+The bug and its fix are described in full in the [CHANGELOG](CHANGELOG.md#11213--2026-07-10).
+The upshot for operators:
+
+- **No new tables, no new endpoints, no new columns, no new env
+  vars, no new Cargo or npm dependencies.** Strictly a wiring
+  change in one page component
+  ([`frontend/src/pages/SessionClient.tsx`](frontend/src/pages/SessionClient.tsx)).
+- **Fallback preserved.** Tabs without a pinned display tag show
+  the exact same title string as v1.12.12.
+- **Known limitation**: the tag lookup runs once per
+  `connectionId` change. If the user pins or unpins a tag via
+  the session sidebar AFTER the tab is already open, the title
+  won't refresh until the tab is reopened or the browser is
+  refreshed. Follow-up work could listen for a
+  `display-tag-changed` DOM event dispatched by `SessionBar`;
+  scope kept small for this patch.
+
+### Acceptance test
+
+Apply v1.12.13 to a deployment where at least one user has pinned
+a display tag against at least one connection via the session
+sidebar's tag chip. Sign in as that user and open Dashboard →
+click Connect on the tagged connection. The browser tab title MUST
+read `${hostname} — ${tagName} — Strata` within a few
+milliseconds of the session bar rendering (the tag typically
+resolves before the WebSocket tunnel opens). Open a second
+connection that has NO display tag pinned. Its tab MUST read
+`${hostname} — Strata` — unchanged from v1.12.12. Docker deploy:
+`docker compose pull && docker compose up -d --build frontend`.
+
+---
+
 # What's New in v1.12.12
 
 > **Patch release — Safeguard Refresh no longer returns "Internal

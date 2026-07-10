@@ -18,6 +18,7 @@ use crate::services::{settings, vault};
 /// whole-hour TTLs. Internally delegates to `resolve_profile_ttl_hm`
 /// with `user_minutes = None` and discards the resolved minute
 /// component.
+#[allow(dead_code)] // kept for parity with older call sites and covered by dedicated tests
 pub fn resolve_profile_ttl(user_pref: Option<i32>, admin_max: i64, extended: bool) -> i32 {
     resolve_profile_ttl_hm(user_pref, None, admin_max, extended).0
 }

@@ -110,6 +110,11 @@ pub async fn list_for_user(
     Ok(rows)
 }
 
+/// Row shape returned by the two `safeguard_target_for_*` SELECTs
+/// before the `unwrap_or_default()` cleanup. Aliased so the sqlx
+/// `query_as` return type isn't flagged by `clippy::type_complexity`.
+type SafeguardTargetRow = (Uuid, Option<String>, Option<String>, i32, i32);
+
 /// Lightweight (kind, account_id, asset, ttl_hours, ttl_minutes) lookup.
 /// Used by tunnel JIT to decide whether a connection's mapped profile
 /// is a Safeguard reference before touching the encrypted-payload
@@ -120,7 +125,7 @@ pub async fn safeguard_target_for_connection(
     connection_id: Uuid,
     user_id: Uuid,
 ) -> Result<Option<(Uuid, String, String, i32, i32)>, AppError> {
-    let row: Option<(Uuid, Option<String>, Option<String>, i32, i32)> = sqlx::query_as(
+    let row: Option<SafeguardTargetRow> = sqlx::query_as(
         "SELECT cp.id, cp.safeguard_account_id, cp.safeguard_asset, cp.ttl_hours, cp.ttl_minutes
            FROM credential_mappings cm
            JOIN credential_profiles cp ON cp.id = cm.credential_id
@@ -150,7 +155,7 @@ pub async fn safeguard_target_for_profile(
     profile_id: Uuid,
     user_id: Uuid,
 ) -> Result<Option<(Uuid, String, String, i32, i32)>, AppError> {
-    let row: Option<(Uuid, Option<String>, Option<String>, i32, i32)> = sqlx::query_as(
+    let row: Option<SafeguardTargetRow> = sqlx::query_as(
         "SELECT cp.id, cp.safeguard_account_id, cp.safeguard_asset, cp.ttl_hours, cp.ttl_minutes
            FROM credential_profiles cp
           WHERE cp.id = $1 AND cp.user_id = $2 AND cp.kind = 'safeguard'
@@ -173,6 +178,7 @@ pub async fn safeguard_target_for_profile(
 
 /// Insert a `kind='safeguard'` profile. No envelope payload is
 /// stored — the password is fetched JIT at tunnel open.
+#[allow(clippy::too_many_arguments)] // insert_safeguard mirrors the row shape
 pub async fn insert_safeguard(
     pool: &PgPool,
     user_id: Uuid,

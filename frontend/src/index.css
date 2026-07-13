@@ -472,6 +472,19 @@ html.light .recent-card-btn:hover {
 
 /* ── Component Layer ───────────────────────────────────────── */
 @layer components {
+  /* Horizontal-scroll wrapper for admin tables. Without this the
+     table just clips against the parent when the columns overflow
+     (Users tab: Actions column got hidden past ~1400px wide). */
+  .table-responsive {
+    @apply w-full overflow-x-auto;
+    /* Keep the vertical hover / border chrome flush with the row. */
+    -webkit-overflow-scrolling: touch;
+  }
+  .table-responsive > table {
+    min-width: 100%;
+    width: max-content;
+  }
+
   /* Buttons — solid fills, no bounce */
   .btn {
     @apply cursor-pointer rounded-sm text-[0.8125rem] font-medium relative overflow-hidden transition-all duration-150;

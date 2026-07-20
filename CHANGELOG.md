@@ -5,6 +5,101 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.13.1] — 2026-07-20
+
+### Patch Release — Safeguard cache expiry honours the appliance's `ExpiresOn`; draggable edge handles
+
+Two user reports, one backend correctness fix and one UX fix.
+
+#### Theme 1 — Password-cache countdown now agrees with Safeguard
+
+**The ask.** "I just noticed Strata says I have 4.4 hours left for
+my password. Safeguard says 2 hours 7 minutes. Not sure why/what
+has caused this difference. My test one seems fine."
+
+**Root cause.** Strata never read the appliance's authoritative
+expiry. All three password-cache store paths — direct connect
+([`routes/tunnel.rs`](backend/src/routes/tunnel.rs)), bulk checkout
+and release-after-approval (both in
+[`routes/user.rs`](backend/src/routes/user.rs)) — stamped the cache
+row with `expires_at = now() + profile TTL`, assuming the appliance
+honoured the requested duration. Two mechanisms make the clocks
+diverge, both in the over-report direction:
+
+1. **Approval delay** (matches the report; the approval-free "test
+   one" was fine). Safeguard's duration window runs from request
+   **creation**. When a request sits in `PendingApproval` for hours
+   before an approver acts, `release_safeguard_pending` stamped
+   `approval_time + full profile TTL` — so Strata showed the full
+   window while the appliance's clock was already part-spent. The
+   `reuse_pending` preflight path in `jit_checkout` had the same
+   flaw: it reuses a request created on an earlier call but cached
+   with a fresh full TTL.
+2. **Policy maximum-duration clamp.** The appliance silently caps
+   `RequestedDurationHours` at the access policy's maximum; Strata
+   assumed it got what it asked for.
+
+Not cosmetic: Safeguard auto-checks-in and **rotates the password**
+at its own `ExpiresOn`, so for the over-reported tail the green
+"Cached · Nh left" badge advertised a credential that was already
+dead — connecting would fail with "invalid credentials" while the
+UI said Cached.
+
+**Fix.**
+
+- [`services/safeguard/client.rs`](backend/src/services/safeguard/client.rs)
+  parses `ExpiresOn` from both the `POST /AccessRequests` create
+  response and the `GET /AccessRequests/{id}` status refetch, via a
+  lenient `parse_appliance_ts` helper (RFC 3339 first, naive
+  timestamp treated as UTC second, `None` + warn on anything else
+  so a format drift can never fail a checkout).
+- `CheckoutResult` gains `expires_on: Option<DateTime<Utc>>`,
+  populated on every release path: the create response on the
+  fresh-checkout path, the existing post-release refetch on the
+  `release_pending` path, and a **new** detail refetch on the
+  reused-`PendingApproval` path (which also recovers the username
+  there — previously always `None`).
+- All three cache stores now write
+  `expires_at = min(now() + profile TTL, appliance ExpiresOn)`.
+  The clamped value flows through to
+  `credential_profiles.set_expires_at` and the
+  `BulkSafeguardCheckoutResult.expires_at` API field, so the badge,
+  the Profiles list, and the appliance all agree.
+
+#### Theme 2 — Sidebar/session edge handles are draggable and visually consistent
+
+**The ask.** The floating sidebar toggle chevron sits at the
+vertical centre of the viewport and "can block content behind it"
+(screenshot showed it covering a file-picker). Requested: make it
+vertically draggable. A follow-up asked for the left chevron to
+match the right session tab's translucent surface — it rendered as
+an opaque black pill.
+
+**Fix.**
+
+- [`components/Layout.tsx`](frontend/src/components/Layout.tsx) —
+  both left-edge chevrons ("show menu" when hidden, "hide menu"
+  pill when shown) are now vertically draggable with a **shared**
+  offset, so the handle stays where the user put it across
+  show/hide toggles. Clamped to the viewport; a <4 px gesture still
+  counts as a click; the toggle stays on `onClick` with a
+  drag-guard ref so keyboard activation (Enter/Space) is unaffected.
+  Offset is session-scoped (resets to centre on next visit),
+  matching the right-side tab's behaviour.
+- [`components/SessionBar.tsx`](frontend/src/components/SessionBar.tsx)
+  — the right-edge session tab was draggable only when collapsed;
+  now draggable in both states, with the tooltip updated to
+  advertise it ("Drag to reposition · Click to collapse").
+- The left "show menu" chevron now uses the identical surface as
+  the right tab: `rgba(15, 15, 20, 0.75)` + 16 px backdrop blur
+  (dark) / `rgba(255, 255, 255, 0.75)` (light) with the matching
+  hairline border, replacing the opaque `--color-nav-bg` fill.
+
+**Compatibility.** Zero schema changes, zero new endpoints, zero
+new env vars, zero new Cargo or npm dependencies. The `ExpiresOn`
+clamp only ever *shortens* a cache row, and only when the appliance
+reports an earlier authoritative expiry.
+
 ## [1.13.0] — 2026-07-10
 
 ### Minor Release — Minute-precision password-expiry TTLs

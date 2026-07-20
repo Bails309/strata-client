@@ -482,18 +482,25 @@ pub async fn ws_tunnel(
 
                 if sg_cfg.password_cache_enabled {
                     // Cache the freshly-issued password for the
-                    // profile's own lifetime (matches the Safeguard
-                    // RequestedDurationHours we just sent). Skip
-                    // auto-checkin so Safeguard keeps the request
-                    // live for the same window. Best-effort: cache
-                    // write failure must not break the user's
+                    // profile's own lifetime, clamped to the
+                    // appliance's authoritative ExpiresOn — the
+                    // access policy may have granted less than we
+                    // asked for, and Safeguard rotates the password
+                    // at ITS expiry regardless of what we cached.
+                    // Skip auto-checkin so Safeguard keeps the
+                    // request live for the same window. Best-effort:
+                    // cache write failure must not break the user's
                     // connection.
                     let ttl_minutes = crate::services::credential_profiles::ttl_total_minutes(
                         profile_ttl_hours,
                         profile_ttl_minutes,
                     )
                     .max(1);
-                    let expires_at = chrono::Utc::now() + chrono::Duration::minutes(ttl_minutes);
+                    let local = chrono::Utc::now() + chrono::Duration::minutes(ttl_minutes);
+                    let expires_at = match outcome.expires_on {
+                        Some(appliance) => local.min(appliance),
+                        None => local,
+                    };
                     if let Err(e) = crate::services::safeguard::password_cache::store(
                         &db.pool,
                         vault_cfg,

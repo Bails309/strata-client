@@ -2,7 +2,7 @@
    react-hooks v7 compiler-strict suppressions: legitimate prop->state sync, session
    decoration, or render-time time/derivation patterns. See
    eslint.config.js W4-1 commentary. */
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { useTheme } from "./ThemeProvider";
 import { MeResponse } from "../api";
@@ -171,6 +171,52 @@ export default function Layout({
     if (inSession) setSessionHidden(true);
   }, [inSession, location.pathname]);
   const hidden = inSession && sessionHidden;
+
+  // ── Draggable chevron position ──
+  // The floating show/hide chevrons sit at the vertical centre of the
+  // viewport by default, which can cover content in the remote session
+  // (e.g. a file-picker's scrollbar). Let the user drag them up/down;
+  // the offset is shared between the two chevrons so the handle stays
+  // where the user put it across show/hide toggles. Session-scoped
+  // state only — it resets to centre on the next visit, mirroring the
+  // right-side SessionBar tab.
+  const [chevronOffsetY, setChevronOffsetY] = useState(0);
+  const [chevronDragging, setChevronDragging] = useState(false);
+  const chevronDragRef = useRef<{ startY: number; startOffset: number } | null>(null);
+  // Set on pointer-up when the gesture moved far enough to count as a
+  // drag; the subsequent synthetic click consumes it and skips the
+  // toggle. Keyboard activation (Enter/Space) never sets it, so the
+  // buttons stay fully keyboard-accessible.
+  const chevronWasDragRef = useRef(false);
+
+  const onChevronPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (e.button !== 0) return;
+    chevronDragRef.current = { startY: e.clientY, startOffset: chevronOffsetY };
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+  const onChevronPointerMove = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!chevronDragRef.current) return;
+    if (!chevronDragging) setChevronDragging(true);
+    const delta = e.clientY - chevronDragRef.current.startY;
+    const maxOffset = window.innerHeight / 2 - 48; // keep within viewport
+    setChevronOffsetY(
+      Math.max(-maxOffset, Math.min(maxOffset, chevronDragRef.current.startOffset + delta))
+    );
+  };
+  const onChevronPointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!chevronDragRef.current) return;
+    chevronWasDragRef.current = Math.abs(e.clientY - chevronDragRef.current.startY) >= 4;
+    chevronDragRef.current = null;
+    setChevronDragging(false);
+  };
+  const chevronClickGuard = (action: () => void) => () => {
+    if (chevronWasDragRef.current) {
+      chevronWasDragRef.current = false;
+      return;
+    }
+    action();
+  };
+
   // Width of the actual sidebar element. When the sidebar is hidden it
   // collapses to 0; otherwise it expands to its normal width.
   const sidebarWidth = hidden ? 0 : collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
@@ -199,16 +245,33 @@ export default function Layout({
 
         {/* ── Floating "show sidebar" chevron — only visible while in a
              session AND the sidebar is hidden. Mirrors the right-side
-             SessionBar collapse handle. ── */}
+             SessionBar collapse handle. Draggable vertically so it can be
+             moved off content it would otherwise cover. ── */}
         {hidden && (
           <button
-            onClick={() => setSessionHidden(false)}
-            title="Show menu"
+            onClick={chevronClickGuard(() => setSessionHidden(false))}
+            onPointerDown={onChevronPointerDown}
+            onPointerMove={onChevronPointerMove}
+            onPointerUp={onChevronPointerUp}
+            title="Drag to reposition · Click to show menu"
             aria-label="Show menu"
-            className="fixed top-1/2 left-0 z-[60] -translate-y-1/2 flex items-center justify-center w-6 h-16 rounded-r-md border border-l-0 text-txt-secondary hover:text-txt-primary hover:bg-[var(--color-btn-hover-bg)] shadow-lg transition-all duration-150"
+            className={`fixed left-0 z-[60] flex items-center justify-center w-6 h-16 rounded-r-md text-txt-secondary hover:text-txt-primary shadow-lg ${chevronDragging ? "" : "transition-all duration-150"}`}
             style={{
-              background: "var(--color-nav-bg)",
-              borderColor: "var(--color-nav-border)",
+              top: `calc(50% + ${chevronOffsetY}px)`,
+              transform: "translateY(-50%)",
+              cursor: "grab",
+              touchAction: "none",
+              // Same translucent + blurred surface as the right-side
+              // SessionBar toggle tab so the two edge handles read as a
+              // matching pair.
+              background: theme === "dark" ? "rgba(15, 15, 20, 0.75)" : "rgba(255, 255, 255, 0.75)",
+              backdropFilter: "blur(16px)",
+              WebkitBackdropFilter: "blur(16px)",
+              border:
+                theme === "dark"
+                  ? "1px solid rgba(255, 255, 255, 0.08)"
+                  : "1px solid rgba(0, 0, 0, 0.08)",
+              borderLeft: "none",
             }}
           >
             <svg
@@ -231,15 +294,23 @@ export default function Layout({
              SessionBar collapse handle: a pill protruding from the outer
              edge of the panel. Rendered as a sibling of the <aside> so it
              stays visible when the sidebar collapses to a narrow rail and
-             can be positioned independently. ── */}
+             can be positioned independently. Shares the drag offset with
+             the "show" chevron so the handle stays where the user put it. ── */}
         {inSession && !hidden && (
           <button
-            onClick={() => setSessionHidden(true)}
-            title="Hide menu"
+            onClick={chevronClickGuard(() => setSessionHidden(true))}
+            onPointerDown={onChevronPointerDown}
+            onPointerMove={onChevronPointerMove}
+            onPointerUp={onChevronPointerUp}
+            title="Drag to reposition · Click to hide menu"
             aria-label="Hide menu"
-            className="fixed top-1/2 z-[60] -translate-y-1/2 w-8 h-24 flex items-center justify-center rounded-r-xl text-txt-secondary hover:text-txt-primary transition-all duration-200"
+            className={`fixed z-[60] w-8 h-24 flex items-center justify-center rounded-r-xl text-txt-secondary hover:text-txt-primary ${chevronDragging ? "" : "transition-all duration-200"}`}
             style={{
               left: sidebarWidth,
+              top: `calc(50% + ${chevronOffsetY}px)`,
+              transform: "translateY(-50%)",
+              cursor: "grab",
+              touchAction: "none",
               background: theme === "dark" ? "rgba(15, 15, 20, 0.75)" : "rgba(255, 255, 255, 0.75)",
               backdropFilter: "blur(16px)",
               WebkitBackdropFilter: "blur(16px)",

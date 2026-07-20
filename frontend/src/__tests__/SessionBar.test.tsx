@@ -158,7 +158,7 @@ describe("SessionBar", () => {
     const sessions = [makeMockSession("s1", "A")];
     renderSessionBar("/", false, sessions, { setSessionBarCollapsed });
 
-    const toggle = screen.getByTitle("Collapse sessions");
+    const toggle = screen.getByTitle("Drag to reposition · Click to collapse");
     expect(toggle).toBeInTheDocument();
 
     await userEvent.click(toggle);

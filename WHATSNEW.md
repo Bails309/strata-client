@@ -1,3 +1,35 @@
+# What's New in v1.13.2
+
+> **Patch release — AD Sync service-account auto-rotation no
+> longer loses the rotated password.** Enabling **Auto-rotate
+> service account password** on an AD Sync config bricked the
+> integration: within a minute the rotation worker reset the
+> account's password on AD, then errored **before persisting it**,
+> leaving Strata holding the dead old password — every subsequent
+> Test connection, object sync, and password-management operation
+> failed with `rc=49 (invalidCredentials) … data 52e`. The failure
+> was deterministic: when no separate PM bind user is configured,
+> the rotation binds and modifies **its own** account, and the
+> shared `ldap_reset_password` helper's post-modify re-bind (used
+> to read back `sAMAccountName`) still used the just-invalidated
+> old password — rc=49, error out, new password never sealed, and
+> `pm_last_rotated_at` never stamped so the daily worker retried
+> with the dead password forever. Two secondary loss windows are
+> also closed: the post-rotation verification connection ignored
+> `ca_cert_pem` (custom-CA LDAPS deployments failed TLS there,
+> after the reset / before the persist), and Vault sealing ran
+> after the AD reset (a Vault hiccup at that moment lost the
+> password too). v1.13.2 re-binds with the **new** password on
+> self-rotation, seals **before** touching AD, persists
+> immediately after the reset succeeds, demotes verification to a
+> non-fatal post-persist health check (now honouring the custom
+> CA), and refreshes `pm_bind_password` when it names the same
+> account. **Recovery:** the currently-stored password is dead —
+> reset it once in AD, re-enter it in Admin → AD Sync, and
+> re-enable auto-rotation; rotations under v1.13.2 are safe.
+> Backend-only patch: no schema, API, env-var, or dependency
+> changes.
+
 # What's New in v1.13.1
 
 > **Patch release — Safeguard cache expiry honours the appliance's

@@ -5,6 +5,87 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.13.2] — 2026-07-20
+
+### Patch Release — AD Sync service-account auto-rotation no longer loses the rotated password
+
+**The ask.** "There seems to be a bug in the AD Sync Service
+Account auto rotation for password because when I enable that
+option and I then try to test a connection or use any of the
+features that require the AD service account (password management
+or object sync) it fails and says `LDAP bind failed: LDAP
+operation result: rc=49 (invalidCredentials) … data 52e`. The
+account password that it seems to hold is valid and then when the
+auto rotation is turned on the password is reset and then lost to
+Strata."
+
+**Root cause — deterministic, not a race.**
+[`auto_rotate_service_account`](backend/src/services/checkouts.rs)
+rotates the sync service account (`bind_dn`) by calling the shared
+`ldap_reset_password` helper with **binder == target** whenever no
+separate PM bind user is configured. Inside that helper the
+sequence was:
+
+1. Bind as the service account with the **old** password — OK.
+2. `unicodePwd` modify — **AD now holds the new password.**
+3. Verification bind as the target with the new password — OK.
+4. Re-bind as the service account **with the old password** (to
+   read back `sAMAccountName`) — **rc=49**, because the binder IS
+   the target and its password was just changed two steps ago.
+
+The rc=49 propagated out of the helper as an error **before the
+new password was ever Vault-sealed or persisted** — so AD held the
+new password while `ad_sync_configs.bind_password` still held the
+dead old one. Every consumer of the service account (object sync,
+password management, Test connection) then failed with exactly the
+reported `rc=49 … data 52e`. And because `pm_last_rotated_at` was
+never stamped, the daily rotation worker retried with the dead
+password forever — the account was unrecoverable without a manual
+AD-side reset.
+
+Two secondary loss windows in the same function, both landing in
+the reset-applied-but-not-persisted gap:
+
+- The post-rotation "verify the new password works" block built a
+  bare `LdapConnSettings` that ignored `ca_cert_pem` — on
+  custom-CA LDAPS deployments the TLS handshake failed there every
+  time, after the AD reset and before the DB persist: guaranteed
+  loss even with a separate PM bind user.
+- `vault::seal_setting` ran **after** the AD reset, so a transient
+  Vault outage at that moment also changed the password on AD and
+  then lost it.
+
+**Fix** (all in
+[`backend/src/services/checkouts.rs`](backend/src/services/checkouts.rs)):
+
+- **Self-rotation re-bind** — `ldap_reset_password`'s post-modify
+  re-bind now uses the **new** password when
+  `bind_dn.eq_ignore_ascii_case(target_dn)`; managed-account
+  resets (binder ≠ target) are unchanged.
+- **Loss-proof ordering** in `auto_rotate_service_account` — the
+  new password is Vault-sealed **before** touching AD (a Vault
+  outage now aborts with zero appliance-side damage), and the DB
+  persist (`bind_password` + `pm_last_rotated_at`) happens
+  **immediately** after the AD reset succeeds. The
+  fresh-connection verification bind moved after the persist and
+  is now a non-fatal health check (logged at `error` with a
+  replication hint on failure) — it can never strand the password
+  again. It also now honours `ca_cert_pem` via the same
+  `build_tls_config_with_ca` path the reset itself uses.
+- **Stale copy refresh** — when `pm_bind_user` names the same
+  account that was rotated, `pm_bind_password` is refreshed in the
+  same UPDATE so the PM paths don't keep a dead sealed copy.
+
+**Recovery for affected deployments.** The password Strata
+currently holds for the sync account is already dead (AD was
+rotated out from under it). Reset the service account's password
+in AD once, re-enter it in **Admin → AD Sync → edit config**, and
+re-enable auto-rotation — rotations under v1.13.2 are safe,
+including self-rotation with no separate PM bind user.
+
+**Compatibility.** No schema changes, no API changes, no new env
+vars, no new dependencies. Backend-only patch.
+
 ## [1.13.1] — 2026-07-20
 
 ### Patch Release — Safeguard cache expiry honours the appliance's `ExpiresOn`; draggable edge handles

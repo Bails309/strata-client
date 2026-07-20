@@ -957,8 +957,20 @@ pub async fn ldap_reset_password(
 
     // Query the actual sAMAccountName so callers can use the real login name
     // (the CN from the DN may be a display name like "Doe, John (Support)")
-    // Re-bind as the service account since we just bound as the target user
-    ldap.simple_bind(bind_dn, bind_password)
+    // Re-bind as the service account since we just bound as the target user.
+    //
+    // Self-rotation (v1.13.2): when the binder IS the target — the AD-sync
+    // service account rotating its own password with no separate PM bind
+    // user — the supplied `bind_password` died at the modify above, so
+    // re-binding with it fails rc=49 and the whole reset errors AFTER the
+    // password was already changed on the appliance. Re-bind with the NEW
+    // password in that case.
+    let rebind_password = if bind_dn.eq_ignore_ascii_case(target_dn) {
+        new_password
+    } else {
+        bind_password
+    };
+    ldap.simple_bind(bind_dn, rebind_password)
         .await
         .map_err(|e| AppError::Internal(format!("LDAP re-bind: {e}")))?
         .success()
@@ -1040,6 +1052,14 @@ pub async fn auto_rotate_service_account(
     // Decrypt vault-encrypted bind password
     let bind_pw = crate::services::vault::unseal_setting(vault_cfg, raw_pw).await?;
 
+    // Seal the new password BEFORE touching AD (v1.13.2). Sealing has no
+    // side effects, so a Vault outage aborts the rotation with zero
+    // appliance-side damage. Pre-v1.13.2 the seal ran AFTER the AD reset —
+    // a Vault hiccup at that point changed the password on AD and then
+    // lost it, bricking the sync/PM bind until an admin re-keyed the
+    // account manually.
+    let sealed = vault::seal_setting(vault_cfg, &new_password).await?;
+
     // Reset the service account's own password
     let _ = ldap_reset_password(
         &config.ldap_url,
@@ -1053,42 +1073,87 @@ pub async fn auto_rotate_service_account(
     )
     .await?;
 
-    // Verify the new password works by binding with it
+    // Persist the new password IMMEDIATELY after the AD reset succeeds
+    // (v1.13.2). From this point on, AD holds the new password — anything
+    // that stops us recording it (verification hiccup, process crash)
+    // strands Strata with a dead credential. Persistence must therefore
+    // precede the courtesy verification below, not follow it.
+    //
+    // When pm_bind_user names the SAME account we just rotated (bind_dn),
+    // its pm_bind_password copy is now stale too — refresh both columns.
+    let pm_is_same_account = config
+        .pm_bind_user
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .is_some_and(|pm| pm.eq_ignore_ascii_case(&config.bind_dn));
+    if pm_is_same_account {
+        sqlx::query(
+            "UPDATE ad_sync_configs SET bind_password = $1, pm_bind_password = $1, pm_last_rotated_at = now(), updated_at = now() WHERE id = $2",
+        )
+        .bind(&sealed)
+        .bind(config_id)
+        .execute(pool)
+        .await?;
+    } else {
+        sqlx::query(
+            "UPDATE ad_sync_configs SET bind_password = $1, pm_last_rotated_at = now(), updated_at = now() WHERE id = $2",
+        )
+        .bind(&sealed)
+        .bind(config_id)
+        .execute(pool)
+        .await?;
+    }
+
+    // Courtesy verification on a fresh connection — non-fatal (v1.13.2).
+    // The password is already changed on AD and persisted above, so a
+    // failure here (DNS round-robin to a not-yet-replicated DC, transient
+    // network) is logged loudly but must NOT fail the rotation. This block
+    // also now honours ca_cert_pem — pre-v1.13.2 it built a bare TLS
+    // config, so custom-CA LDAPS deployments failed the handshake here
+    // every time (after the reset, before the persist: guaranteed loss).
     {
         use ldap3::{LdapConnAsync, LdapConnSettings};
         use std::time::Duration;
 
-        let settings = LdapConnSettings::new()
+        let mut settings = LdapConnSettings::new()
             .set_conn_timeout(Duration::from_secs(15))
             .set_no_tls_verify(config.tls_skip_verify);
 
-        let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &config.ldap_url)
-            .await
-            .map_err(|e| AppError::Internal(format!("Verify connect: {e}")))?;
-        ldap3::drive!(conn);
+        if let Some(pem) = config.ca_cert_pem.as_deref() {
+            if !pem.is_empty() && !config.tls_skip_verify {
+                match crate::services::ad_sync::build_tls_config_with_ca(pem) {
+                    Ok(tls_config) => settings = settings.set_config(tls_config),
+                    Err(e) => tracing::warn!("Rotation verify: TLS config from CA failed: {e}"),
+                }
+            }
+        }
 
-        ldap.simple_bind(&config.bind_dn, &new_password)
-            .await
-            .map_err(|e| AppError::Internal(format!("Verify bind: {e}")))?
-            .success()
-            .map_err(|e| {
-                AppError::Internal(format!(
-                    "New password verification failed — AD may be out of sync: {e}"
-                ))
-            })?;
-
-        let _ = ldap.unbind().await;
+        let verify = async {
+            let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &config.ldap_url)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
+            ldap3::drive!(conn);
+            ldap.simple_bind(&config.bind_dn, &new_password)
+                .await
+                .map_err(|e| format!("bind: {e}"))?
+                .success()
+                .map_err(|e| format!("bind failed: {e}"))?;
+            let _ = ldap.unbind().await;
+            Ok::<(), String>(())
+        };
+        match verify.await {
+            Ok(()) => tracing::info!(
+                "Rotation verify: new password for '{}' confirmed on a fresh connection",
+                config.bind_dn
+            ),
+            Err(e) => tracing::error!(
+                "Rotation verify for '{}' failed ({e}) — the new password IS persisted; \
+                 if binds keep failing, check DC replication for config '{}'",
+                config.bind_dn,
+                config.label
+            ),
+        }
     }
-
-    // Seal the new password and update the config's bind_password
-    let sealed = vault::seal_setting(vault_cfg, &new_password).await?;
-    sqlx::query(
-        "UPDATE ad_sync_configs SET bind_password = $1, pm_last_rotated_at = now(), updated_at = now() WHERE id = $2",
-    )
-    .bind(&sealed)
-    .bind(config_id)
-    .execute(pool)
-    .await?;
 
     tracing::info!(
         "Auto-rotated service account password for AD sync config '{}'",

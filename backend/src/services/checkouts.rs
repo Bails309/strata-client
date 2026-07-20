@@ -1129,10 +1129,13 @@ pub async fn auto_rotate_service_account(
         }
 
         let verify = async {
-            let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &config.ldap_url)
+            // `_conn` is consumed by `ldap3::drive!` (spawns the connection
+            // driver task); the underscore prefix placates CodeQL's
+            // rust/unused-variable, which can't see through the macro here.
+            let (_conn, mut ldap) = LdapConnAsync::with_settings(settings, &config.ldap_url)
                 .await
                 .map_err(|e| format!("connect: {e}"))?;
-            ldap3::drive!(conn);
+            ldap3::drive!(_conn);
             ldap.simple_bind(&config.bind_dn, &new_password)
                 .await
                 .map_err(|e| format!("bind: {e}"))?

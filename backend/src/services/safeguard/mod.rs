@@ -114,6 +114,15 @@ pub struct CheckoutResult {
     /// remote host sees the correct logon name, not the numeric id.
     /// Empty/None means the caller should let the protocol prompt.
     pub username: Option<String>,
+    /// Appliance-computed `ExpiresOn` for the access request — the
+    /// authoritative moment Safeguard auto-checks-in and rotates the
+    /// password. The access policy may clamp our requested duration
+    /// (and for reused/approved requests the window started at
+    /// request CREATION, not release), so this can be well before
+    /// `now + profile TTL`. Callers MUST clamp any password-cache
+    /// expiry to this value; `None` means unknown (fall back to the
+    /// local TTL estimate).
+    pub expires_on: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Outcome of [`jit_checkout`].
@@ -380,12 +389,15 @@ pub async fn jit_checkout(
 
     // If preflight found a PendingApproval request for this same
     // account/asset, reuse its id and skip the create. We have no
-    // AccountName from the list response, so the username will be
-    // None until either Released succeeds (we'll cache the cred
-    // without a username — the user's profile keeps the canonical
-    // name) or the caller refetches the request details.
-    let (request_id, username): (String, Option<String>) = if let Some((rid, _)) = &reuse_pending {
-        (rid.clone(), None)
+    // AccountName (or ExpiresOn) from the list response, so both stay
+    // None until either Released succeeds (we refetch the request
+    // details below) or the caller refetches them itself.
+    let (request_id, username, expires_on): (
+        String,
+        Option<String>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    ) = if let Some((rid, _)) = &reuse_pending {
+        (rid.clone(), None, None)
     } else {
         let params = client::CreateAccessRequestParams {
             account_id,
@@ -415,7 +427,7 @@ pub async fn jit_checkout(
             None,
         )
         .await;
-        (created.request_id, username)
+        (created.request_id, username, created.expires_on)
     };
 
     let outcome = match checkout_password_with_retry(&http, &base, &bearer, &request_id).await {
@@ -473,10 +485,33 @@ pub async fn jit_checkout(
     )
     .await;
 
+    // Reused-pending path: the create response (with AccountName and
+    // ExpiresOn) belongs to a request minted on an EARLIER call, so
+    // we have neither. Refetch the request details — the appliance's
+    // ExpiresOn clock started at request creation, so without it the
+    // caller would cache the password for a full fresh TTL that the
+    // appliance will cut short. Best-effort: on failure we hand back
+    // what we have (None/None), matching pre-fix behaviour.
+    let (username, expires_on) = if reuse_pending.is_some() {
+        match client::get_access_request_status(&http, &base, &bearer, &request_id).await {
+            Ok(Some(status)) => (username.or(status.account_name), status.expires_on),
+            Ok(None) => (username, expires_on),
+            Err(e) => {
+                tracing::warn!(
+                    "jit_checkout: detail refetch for reused request {request_id} failed: {e}"
+                );
+                (username, expires_on)
+            }
+        }
+    } else {
+        (username, expires_on)
+    };
+
     Ok(JitOutcome::Released(CheckoutResult {
         request_id,
         password,
         username,
+        expires_on,
     }))
 }
 
@@ -755,32 +790,38 @@ pub async fn release_pending(
             // username; otherwise downstream RDP/SSH NLA sees an
             // empty user and the target rejects with "invalid
             // credentials" even though the password is correct.
-            // Refetch failure is non-fatal: we still hand back the
-            // password and let the caller fall back to whatever it
-            // had before this fix landed.
-            let username = match client::get_access_request_status(
+            // The same refetch also recovers the appliance's
+            // authoritative `ExpiresOn` — crucial on this path,
+            // because the duration window started at request
+            // CREATION, and the approver may have sat on it for
+            // hours before this release. Refetch failure is
+            // non-fatal: we still hand back the password and let
+            // the caller fall back to whatever it had before this
+            // fix landed.
+            let (username, expires_on) = match client::get_access_request_status(
                 &http, &base, &bearer, request_id,
             )
             .await
             {
-                Ok(Some(status)) => status.account_name,
+                Ok(Some(status)) => (status.account_name, status.expires_on),
                 Ok(None) => {
                     tracing::warn!(
                         "Safeguard released request {request_id} returned 404 on AccountName refetch; cached username will be empty"
                     );
-                    None
+                    (None, None)
                 }
                 Err(e) => {
                     tracing::warn!(
                         "Safeguard AccountName refetch failed for released request {request_id}: {e}; cached username will be empty"
                     );
-                    None
+                    (None, None)
                 }
             };
             Ok(JitOutcome::Released(CheckoutResult {
                 request_id: request_id.to_string(),
                 password,
                 username,
+                expires_on,
             }))
         }
         client::CheckoutOutcome::PendingApproval { state } => {

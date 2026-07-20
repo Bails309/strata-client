@@ -28,6 +28,7 @@
 
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use reqwest::{Certificate, Client, Identity};
 use serde::Deserialize;
 
@@ -296,6 +297,29 @@ struct AccessRequestCreatedResponse {
     account_name: Option<String>,
     #[serde(rename = "AccountDomainName", default)]
     account_domain_name: Option<String>,
+    #[serde(rename = "ExpiresOn", default)]
+    expires_on: Option<String>,
+}
+
+/// Leniently parse a Safeguard appliance timestamp. The appliance
+/// emits RFC 3339 with 7-digit fractional seconds and a `Z` suffix
+/// (e.g. `2026-07-15T18:00:00.1234567Z`), but older builds have been
+/// seen without the zone designator — treat those as UTC. Returns
+/// `None` on anything unparseable so a format drift can never fail a
+/// checkout; callers fall back to their local TTL estimate.
+fn parse_appliance_ts(raw: Option<&str>) -> Option<DateTime<Utc>> {
+    let s = raw?.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
+        return Some(naive.and_utc());
+    }
+    tracing::warn!("safeguard: unparseable appliance timestamp {s:?}");
+    None
 }
 
 /// Returned from `create_access_request`. The account fields let the
@@ -310,6 +334,12 @@ pub struct CreatedAccessRequest {
     /// surfaced but not yet consumed.
     #[allow(dead_code)]
     pub account_domain_name: Option<String>,
+    /// Appliance-computed `ExpiresOn` for the access request. This is
+    /// the AUTHORITATIVE expiry — the access policy may clamp our
+    /// `RequestedDurationHours` to its own maximum, so this can be
+    /// earlier than what we asked for. `None` when missing or
+    /// unparseable.
+    pub expires_on: Option<DateTime<Utc>>,
 }
 
 /// Open a new password access request. Returns the request id plus
@@ -379,6 +409,7 @@ pub async fn create_access_request(
         request_id,
         account_name: created.account_name.filter(|s| !s.is_empty()),
         account_domain_name: created.account_domain_name.filter(|s| !s.is_empty()),
+        expires_on: parse_appliance_ts(created.expires_on.as_deref()),
     })
 }
 
@@ -490,6 +521,10 @@ pub async fn checkout_password(
 pub struct AccessRequestStatus {
     pub state: Option<String>,
     pub account_name: Option<String>,
+    /// Appliance-computed `ExpiresOn` — the authoritative moment the
+    /// request (and thus the released password) dies on the appliance
+    /// side. `None` when missing or unparseable.
+    pub expires_on: Option<DateTime<Utc>>,
 }
 
 /// GET `/AccessRequests/{id}` and return the appliance-reported
@@ -528,6 +563,8 @@ pub async fn get_access_request_status(
         state: Option<String>,
         #[serde(rename = "AccountName", default)]
         account_name: Option<String>,
+        #[serde(rename = "ExpiresOn", default)]
+        expires_on: Option<String>,
     }
     let parsed: AccessRequestStateDto = resp
         .json()
@@ -536,6 +573,7 @@ pub async fn get_access_request_status(
     Ok(Some(AccessRequestStatus {
         state: parsed.state,
         account_name: parsed.account_name.filter(|s| !s.is_empty()),
+        expires_on: parse_appliance_ts(parsed.expires_on.as_deref()),
     }))
 }
 

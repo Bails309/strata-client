@@ -130,7 +130,7 @@ export default function SessionBar() {
 
   const onTabPointerMove = useCallback(
     (e: React.PointerEvent) => {
-      if (!dragRef.current || !sessionBarCollapsed) return;
+      if (!dragRef.current) return;
       if (!isDragging) setIsDragging(true);
       const delta = e.clientY - dragRef.current.startY;
       const maxOffset = window.innerHeight / 2 - 48; // keep within viewport
@@ -140,13 +140,13 @@ export default function SessionBar() {
       );
       setTabOffsetY(newOffset);
     },
-    [sessionBarCollapsed, isDragging]
+    [isDragging]
   );
 
   const onTabPointerUp = useCallback(
     (e: React.PointerEvent) => {
       if (!dragRef.current) return;
-      const wasDrag = sessionBarCollapsed && Math.abs(e.clientY - dragRef.current.startY) >= 4;
+      const wasDrag = Math.abs(e.clientY - dragRef.current.startY) >= 4;
       dragRef.current = null;
       setIsDragging(false);
       // If it was a real drag, don't toggle — just reposition
@@ -324,20 +324,24 @@ export default function SessionBar() {
   return (
     <>
       <div className="session-bar" style={{ width: displayWidth }} data-testid="session-bar">
-        {/* Toggle Tab — draggable vertically when collapsed */}
+        {/* Toggle Tab — draggable vertically in both states */}
         <button
           ref={tabButtonRef}
           className={`session-bar-toggle absolute -left-8 w-8 h-24 flex flex-col items-center justify-center rounded-l-xl ${isDragging ? "" : "transition-all duration-200"}`}
           style={{
             top: `calc(50% + ${tabOffsetY}px)`,
             transform: "translateY(-50%)",
-            cursor: sessionBarCollapsed ? "grab" : "pointer",
+            cursor: "grab",
             touchAction: "none",
           }}
           onPointerDown={onTabPointerDown}
           onPointerMove={onTabPointerMove}
           onPointerUp={onTabPointerUp}
-          title={sessionBarCollapsed ? "Drag to reposition · Click to expand" : "Collapse sessions"}
+          title={
+            sessionBarCollapsed
+              ? "Drag to reposition · Click to expand"
+              : "Drag to reposition · Click to collapse"
+          }
         >
           <svg
             width="16"

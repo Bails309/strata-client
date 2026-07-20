@@ -2078,6 +2078,23 @@ When `state = "ok"`, the row writes the sealed plaintext into
 row for the same `(user, profile)` pair was checked back in
 before the new request was opened.
 
+> [!NOTE]
+> **v1.13.1 — `expires_at` is clamped to the appliance's
+> `ExpiresOn`.** The returned `expires_at` (and the cache row
+> and `credential_profiles.expires_at` it drives) is now
+> `min(now() + profile TTL, appliance ExpiresOn)`, where
+> `ExpiresOn` is parsed from the `POST /AccessRequests` create
+> response (or the status refetch on reused pending requests).
+> Before v1.13.1 it was always `now() + profile TTL`, which
+> over-reported whenever the access policy capped
+> `RequestedDurationHours` below the profile TTL or the request
+> had spent time in an approval queue — Safeguard's duration
+> window runs from request **creation**, and the appliance
+> rotates the password at *its* expiry, so the cached credential
+> could be dead while the badge still said Cached. When the
+> appliance timestamp is missing or unparseable the local term
+> is used alone (the pre-v1.13.1 behaviour).
+
 > **Note.** `password_cache_enabled = true` is a **prerequisite**
 > for bulk-checkout — the route returns `400 Validation` ("Bulk
 > checkout requires the admin to enable Safeguard password
@@ -2161,6 +2178,23 @@ Or, when the approver has not yet acted:
 > cached; only the `username` field falls back to `null`,
 > logged at `warn`. See [docs/safeguard.md →
 > Approval-required workflow (`release_pending`)](safeguard.md#approval-required-workflow-release_pending).
+
+> [!NOTE]
+> **v1.13.1 — the same refetch recovers `ExpiresOn`, and
+> `expires_at` is clamped to it.** The post-release
+> `GET /AccessRequests/{id}` refetch introduced in v1.12.3 now
+> also recovers the appliance's authoritative `ExpiresOn`, and
+> the response's `expires_at` becomes
+> `min(now() + profile TTL, appliance ExpiresOn)`. This is the
+> release path where the clamp matters most: Safeguard's
+> checkout window runs from request **creation**, so a request
+> that sat in the approval queue for two hours has two hours
+> less appliance-side lifetime than the profile TTL suggests —
+> pre-v1.13.1 this endpoint stamped approval-time + full TTL and
+> the SPA's "Cached · Nh left" badge over-reported by exactly
+> the queue time (the reported "Strata says 4.4 h, Safeguard
+> says 2 h 07 m" bug). Refetch failure remains non-fatal and
+> falls back to the local TTL alone.
 
 #### `GET /api/user/safeguard/cached`
 

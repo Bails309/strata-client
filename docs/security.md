@@ -1394,9 +1394,19 @@ expired sign-in code.`) for malformed, unknown, already-used, and
   PowerShell `-SkipCertificateCheck` are acceptable only for local/dev
   troubleshooting because they materially weaken MITM resistance and
   increase code/token interception risk.
-- **Cache TTL is per-profile, never per-server.** The cache row's
-  `expires_at` is set from `credential_profiles.ttl_hours` — there
-  is no global "cache for N hours" override. The
+- **Cache TTL is per-profile, never per-server — and clamped to
+  the appliance (v1.13.1+).** The cache row's `expires_at` is
+  `min(now() + profile TTL, appliance ExpiresOn)` — there is no
+  global "cache for N hours" override, and the local term can
+  never extend a row past the appliance's own authoritative expiry
+  for the underlying AccessRequest. The clamp closes an
+  over-report window: Safeguard's checkout duration runs from
+  request **creation** (so approval-queue time is already spent by
+  release time) and the access policy may cap
+  `RequestedDurationHours` below the profile TTL, yet pre-v1.13.1
+  Strata stamped `now() + full TTL` at store time — advertising a
+  live credential in the UI after the appliance had already
+  auto-checked-in and **rotated** the password. The
   `password_cache::load(...)` accessor eagerly **DELETEs** any row
   whose `expires_at` has passed before returning a hit, so a stale
   entry can never silently succeed even if a background sweep is

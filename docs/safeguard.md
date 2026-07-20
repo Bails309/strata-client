@@ -305,11 +305,11 @@ appliance_state }` and the route returns a `pending` row to
 
    | Appliance response                         | Mapping                                                                                            |
    | ------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-   | `200 OK` with the plaintext password       | `JitOutcome::Released(CheckoutResult { request_id, password, username })`                          |
+   | `200 OK` with the plaintext password       | `JitOutcome::Released(CheckoutResult { request_id, password, username, expires_on })`              |
    | `400 Bad Request` Code `90117` (still queued) | `JitOutcome::PendingApproval { request_id, username: None, appliance_state }`                   |
    | Any other non-2xx (denied, cancelled, etc.) | `Err(AppError::*)` and a `failed` row in `safeguard_checkout_audit`                                |
 
-### AccountName refetch on `Released` (v1.12.3)
+### AccountName refetch on `Released` (v1.12.3); `ExpiresOn` recovery (v1.13.1)
 
 `POST /AccessRequests/{id}/CheckoutPassword` returns **only** a
 JSON-encoded plaintext string — no `AccountName`, no
@@ -342,17 +342,18 @@ appliance after a successful release and threads the recovered
 // services/safeguard/mod.rs::release_pending — Released arm
 client::CheckoutOutcome::Released(password) => {
     insert_audit(...).await;
-    let username = match client::get_access_request_status(
+    let (username, expires_on) = match client::get_access_request_status(
         &http, &base, &bearer, request_id,
     ).await {
-        Ok(Some(status)) => status.account_name,
-        Ok(None)         => None,   // 404 — request purged
-        Err(_)           => None,   // logged at warn, non-fatal
+        Ok(Some(status)) => (status.account_name, status.expires_on),
+        Ok(None)         => (None, None), // 404 — request purged
+        Err(_)           => (None, None), // logged at warn, non-fatal
     };
     Ok(JitOutcome::Released(CheckoutResult {
         request_id: request_id.to_string(),
         password,
         username,
+        expires_on,
     }))
 }
 ```
@@ -364,6 +365,7 @@ client::CheckoutOutcome::Released(password) => {
 pub struct AccessRequestStatus {
     pub state:        Option<String>,
     pub account_name: Option<String>,
+    pub expires_on:   Option<DateTime<Utc>>, // v1.13.1
 }
 ```
 
@@ -395,6 +397,22 @@ The audit trail is unaffected by refetch outcome: the
 `safeguard_checkout_audit` row records `success` against the
 `CheckoutPassword` call, not against the `GET /AccessRequests/{id}`
 refetch.
+
+Since **v1.13.1** the same refetch also recovers the appliance's
+authoritative `ExpiresOn` timestamp into
+`CheckoutResult.expires_on` (see
+[Password cache lifecycle](#password-cache-lifecycle) for how the
+cache clamps to it), and the **reused-`PendingApproval`** preflight
+path in `jit_checkout` — which reuses a request created on an
+earlier call rather than creating a new one — performs the same
+best-effort detail refetch, recovering both fields on a path where
+`username` was previously always `None`. `ExpiresOn` parsing is
+deliberately lenient (`parse_appliance_ts` in
+[`client.rs`](../backend/src/services/safeguard/client.rs)): RFC
+3339 is tried first, a zone-less naive timestamp is treated as
+UTC, and anything else logs a `warn` and yields `None` — so an
+appliance-side timestamp-format drift degrades to the pre-v1.13.1
+local-TTL behaviour instead of failing the checkout.
 
 ---
 
@@ -478,9 +496,28 @@ checkout_password: succeeded on retry N for request {rid}
 `safeguard_cached_passwords (user_id, profile_id)` is a composite-PK
 table written every time JIT checkout succeeds **and** the
 administrator has flipped `safeguard_config.password_cache_enabled =
-true`. The row's `expires_at` is set from the profile's own
-`ttl_hours` slider — not a global setting — so a long shift is
-honoured for the duration each profile allows.
+true`. Since **v1.13.1** the row's `expires_at` is the **minimum**
+of two clocks:
+
+```text
+expires_at = min(now() + profile TTL, appliance ExpiresOn)
+```
+
+where the profile TTL comes from the profile's own hours/minutes
+fields (not a global setting — so a long shift is honoured for the
+duration each profile allows) and `ExpiresOn` is the appliance's
+authoritative expiry for the underlying AccessRequest, parsed from
+the create response or the post-release status refetch. The clamp
+matters because the appliance's duration window runs from request
+**creation** (approval-queue time is already spent by release
+time) and because the access policy may cap
+`RequestedDurationHours` below the profile TTL — and Safeguard
+auto-checks-in and **rotates the password** at its own `ExpiresOn`,
+so a cache row that outlives it would advertise a dead credential.
+Pre-v1.13.1 releases used only the local `now() + TTL` term, which
+is exactly the reported "Strata says 4.4 h, Safeguard says 2 h 07 m"
+bug. When the appliance timestamp is missing or unparseable the
+local term is used alone (the historical behaviour).
 
 - **Eager purge on read.** `password_cache::load(...)` deletes any
   row whose `expires_at` has passed before returning a hit, so a

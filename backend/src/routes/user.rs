@@ -1384,10 +1384,19 @@ pub async fn bulk_safeguard_checkout(
             }
         };
 
-        let expires_at = chrono::Utc::now()
+        // Cache for the profile TTL, clamped to the appliance's
+        // authoritative ExpiresOn — the access policy may grant less
+        // than requested, and Safeguard auto-checks-in (rotating the
+        // password) at ITS expiry, so a longer local TTL would show a
+        // "Cached" badge for a credential that is already dead.
+        let local = chrono::Utc::now()
             + chrono::Duration::minutes(
                 cp_svc::ttl_total_minutes(profile.ttl_hours, profile.ttl_minutes).max(1),
             );
+        let expires_at = match outcome.expires_on {
+            Some(appliance) => local.min(appliance),
+            None => local,
+        };
         if let Err(e) = crate::services::safeguard::password_cache::store(
             &db.pool,
             &vault_cfg,
@@ -1516,10 +1525,19 @@ pub async fn release_safeguard_pending(
 
     match jit {
         crate::services::safeguard::JitOutcome::Released(outcome) => {
-            let expires_at = chrono::Utc::now()
+            // Clamp to the appliance's ExpiresOn: the duration window
+            // started when the request was CREATED, so after a long
+            // approval queue `now + full TTL` can overshoot the real
+            // expiry by hours (the "Strata says 4.4h, Safeguard says
+            // 2h07m" bug).
+            let local = chrono::Utc::now()
                 + chrono::Duration::minutes(
                     cp_svc::ttl_total_minutes(profile.ttl_hours, profile.ttl_minutes).max(1),
                 );
+            let expires_at = match outcome.expires_on {
+                Some(appliance) => local.min(appliance),
+                None => local,
+            };
             // `outcome.username` carries the appliance's
             // `AccountName`, refetched inside `release_pending` via
             // `GET /service/core/v4/AccessRequests/{id}` after the

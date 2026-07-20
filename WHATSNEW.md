@@ -1,3 +1,54 @@
+# What's New in v1.13.1
+
+> **Patch release — Safeguard cache expiry honours the appliance's
+> `ExpiresOn`; draggable edge handles.** A user reported "Strata
+> says I have 4.4 hours left for my password. Safeguard says
+> 2 hours 7 minutes." Root cause: all three password-cache store
+> paths (direct connect, bulk checkout, release-after-approval)
+> stamped `expires_at = now() + profile TTL` and never read the
+> appliance's authoritative `ExpiresOn` — which diverges when a
+> request sat in `PendingApproval` before the approver acted
+> (Safeguard's window runs from request *creation*, and Strata
+> restarted the clock at approval time) or when the access policy
+> clamps `RequestedDurationHours` to its own maximum. Worse than
+> cosmetic: Safeguard rotates the password at *its* expiry, so the
+> green "Cached · Nh left" badge could advertise a dead credential
+> for the over-reported tail. v1.13.1 parses `ExpiresOn` from the
+> create response and the status refetch (lenient parser — format
+> drift can never fail a checkout), threads it through
+> `CheckoutResult.expires_on`, adds a detail refetch on the
+> reused-pending path (also recovering the previously-always-`None`
+> username there), and clamps every cache store to
+> `min(now + profile TTL, appliance ExpiresOn)` — flowing through
+> to `credential_profiles.expires_at` and the API response so the
+> badge, the Profiles list, and the appliance all agree. Also in
+> this patch: the floating sidebar chevrons (left edge) and the
+> session tab (right edge) are now vertically draggable so they can
+> be moved off content they would otherwise cover — shared offset
+> across show/hide toggles, viewport-clamped, click-vs-drag
+> threshold, keyboard activation preserved — and the left chevron
+> now uses the same translucent blurred surface as the right tab
+> instead of an opaque black pill. Zero schema changes, zero new
+> endpoints, zero new dependencies.
+
+## Theme 1 — Password-cache countdown now agrees with Safeguard
+
+Full detail in the [CHANGELOG](CHANGELOG.md#1131--2026-07-20). The
+upshot for operators: the "Cached · Nh left" badge on Credentials →
+Request Checkout is now clamped to the appliance's own
+`AccessRequest.ExpiresOn`, so it can no longer over-report after a
+slow approval or a policy-capped checkout window, and it can no
+longer show "Cached" for a password the appliance has already
+rotated.
+
+## Theme 2 — Draggable edge handles
+
+The left sidebar chevrons and the right session tab can be dragged
+up/down to any vertical position (they previously sat fixed at the
+viewport centre, covering whatever the remote session rendered
+there). Click still toggles; drag repositions; the position resets
+to centre on the next visit.
+
 # What's New in v1.13.0
 
 > **Minor release — Minute-precision password-expiry TTLs.** A user

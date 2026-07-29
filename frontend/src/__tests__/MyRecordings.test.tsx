@@ -10,6 +10,7 @@ vi.mock("../api", () => ({
   buildMyRecordingDownloadUrl: vi.fn(
     (id: string, format?: string) => `/api/user/recordings/${id}/download?format=${format || "mp4"}`
   ),
+  downloadRecordingFile: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("../components/HistoricalPlayer", () => ({
@@ -175,14 +176,16 @@ describe("MyRecordings", () => {
     expect(screen.getByText("Actions")).toBeInTheDocument();
   });
 
-  it("renders download MP4 link", async () => {
+  it("renders download MP4 button", async () => {
+    const { downloadRecordingFile } = await import("../api");
     await act(async () => {
       render(<MyRecordings />);
     });
-    const downloadLink = await screen.findByText("Download (MP4)");
-    expect(downloadLink).toBeInTheDocument();
-    expect(downloadLink.closest("a")).toHaveAttribute(
-      "href",
+    const downloadBtn = await screen.findByText("Download (MP4)");
+    expect(downloadBtn).toBeInTheDocument();
+    expect(downloadBtn.closest("button")).toBeTruthy();
+    await userEvent.click(downloadBtn);
+    expect(downloadRecordingFile).toHaveBeenCalledWith(
       "/api/user/recordings/r1/download?format=mp4"
     );
   });

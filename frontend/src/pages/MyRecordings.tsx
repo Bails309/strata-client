@@ -7,6 +7,7 @@ import {
   getMyRecordings,
   buildMyRecordingStreamUrl,
   buildMyRecordingDownloadUrl,
+  downloadRecordingFile,
   HistoricalRecording,
 } from "../api";
 import HistoricalPlayer from "../components/HistoricalPlayer";
@@ -137,9 +138,13 @@ export default function MyRecordings() {
                         </svg>
                         Play
                       </button>
-                      <a
-                        href={buildMyRecordingDownloadUrl(r.id, "mp4")}
-                        download
+                      <button
+                        type="button"
+                        onClick={() =>
+                          downloadRecordingFile(buildMyRecordingDownloadUrl(r.id, "mp4")).catch(
+                            console.error
+                          )
+                        }
                         className="btn-sm-secondary py-1 inline-flex items-center gap-1 text-xs"
                         title="Download as Windows-playable MP4 video"
                       >
@@ -157,7 +162,7 @@ export default function MyRecordings() {
                           />
                         </svg>
                         Download (MP4)
-                      </a>
+                      </button>
                     </div>
                   </td>
                 </tr>

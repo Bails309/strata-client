@@ -29,6 +29,7 @@ vi.mock("../api", () => ({
   buildMyRecordingDownloadUrl: vi.fn(
     (id: string, format = "mp4") => `/api/user/recordings/${id}/download?format=${format}`
   ),
+  downloadRecordingFile: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("../components/HistoricalPlayer", () => ({

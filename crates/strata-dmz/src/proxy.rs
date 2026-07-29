@@ -268,8 +268,10 @@ async fn proxy(state: ProxyState, req: AxumRequest) -> Result<Response, ProxyErr
     // — any subsequent failure is fatal to this request (the public
     // client must retry).
     let mut last_err: Option<ProxyError> = None;
-    let mut chosen: Option<(crate::link_server::LinkSessionInfo, h2::client::SendRequest<Bytes>)> =
-        None;
+    let mut chosen: Option<(
+        crate::link_server::LinkSessionInfo,
+        h2::client::SendRequest<Bytes>,
+    )> = None;
     for _ in 0..2 {
         let (info, sender) = match state.registry.pick_any() {
             Some(p) => p,
@@ -451,12 +453,10 @@ fn build_public_response_with_pump(
         recv,
         remaining: MAX_PROXY_BODY_BYTES,
     };
-    public
-        .body(Body::from_stream(stream_body))
-        .map_err(|e| {
-            tracing::warn!(error = %e, "failed to build public response");
-            ProxyError::UpstreamProtocol
-        })
+    public.body(Body::from_stream(stream_body)).map_err(|e| {
+        tracing::warn!(error = %e, "failed to build public response");
+        ProxyError::UpstreamProtocol
+    })
 }
 
 /// Pump failure modes reported back to the request task so it can
@@ -1187,13 +1187,10 @@ mod tests {
 
         // Hard timeout: if the pump/h2 plumbing wedges, fail fast
         // with a panic that names this test rather than hanging CI.
-        let resp = tokio::time::timeout(
-            std::time::Duration::from_secs(20),
-            proxy(state, req),
-        )
-        .await
-        .expect("proxy call timed out")
-        .expect("proxy ok");
+        let resp = tokio::time::timeout(std::time::Duration::from_secs(20), proxy(state, req))
+            .await
+            .expect("proxy call timed out")
+            .expect("proxy ok");
         assert_eq!(resp.status(), StatusCode::OK);
         // Drain the (empty) response body to let upstream finish.
         let _ = axum::body::to_bytes(resp.into_body(), MAX_PROXY_BODY_BYTES).await;
@@ -1285,8 +1282,9 @@ mod tests {
 
         // 9 MiB body (cap is 8 MiB), no Content-Length, in 9 chunks
         // of 1 MiB. Pre-flight cannot save us; the pump must.
-        let chunks: Vec<Result<Bytes, std::io::Error>> =
-            (0..9).map(|_| Ok(Bytes::from(vec![0u8; 1024 * 1024]))).collect();
+        let chunks: Vec<Result<Bytes, std::io::Error>> = (0..9)
+            .map(|_| Ok(Bytes::from(vec![0u8; 1024 * 1024])))
+            .collect();
         let body = Body::from_stream(futures_util::stream::iter(chunks));
 
         let req = http::Request::builder()
@@ -1301,12 +1299,9 @@ mod tests {
         // status — both are valid "request was killed mid-stream"
         // outcomes. The key property is that no 200 OK reaches the
         // public client because the upstream never produced one.
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(20),
-            proxy(state, req),
-        )
-        .await
-        .expect("proxy call timed out");
+        let result = tokio::time::timeout(std::time::Duration::from_secs(20), proxy(state, req))
+            .await
+            .expect("proxy call timed out");
         match result {
             Err(e) => {
                 assert!(

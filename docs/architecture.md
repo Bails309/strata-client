@@ -93,6 +93,9 @@ Volumes:
 
 **Recording write semantics (v1.1.0+):** guacd writes session recordings into the shared `guac-recordings` volume as `guacd:guacd` (uid/gid 100/101 inside the Alpine guacd container) at mode `0640` — group-only-read. The upstream `guacamole-server` `recording.c` `open()` hard-codes mode `0640`, so this is independent of the in-container `umask`. This gid is the integration point with the backend: the backend's `entrypoint.sh` reads the gid off the volume at startup and adds the `strata` user to a matching local group via `usermod -aG`, so historic playback works under standard POSIX group-read without requiring `DAC_OVERRIDE`. The fix is volume-agnostic — Docker named volumes, bind-mounts, NFSv3/v4 with preserved gids, and CIFS with `uid=,gid=` mount options all work transparently.
 
+**On-demand MP4 Video Conversion Pipeline (v1.14.0+):** Raw `.guac` session recordings store Guacamole instruction streams that are streamed to `guacamole-common-js` for playback. To support native playback and downloading on Windows OS, the backend service `convert_guac_to_mp4` (`backend/src/services/recordings.rs`) invokes Apache Guacamole's native `guacenc` encoding binary (compiled against `ffmpeg` in `backend/Dockerfile`) with the `-f` flag. `guacenc` renders the `.guac` stream frame-by-frame into an H.264 video container (`.mp4` / `.m4v`). Converted MP4 files are cached locally adjacent to the raw recording file for fast subsequent downloads. The `prepare_recording_for_download` function resolves local disk files as well as Azure Blob Storage objects, serving `video/mp4` downloads with sanitized filenames (`<connection_name>_<recording_id>.mp4`).
+
+
 ### 2. Rust Backend
 
 | Item      | Value               |

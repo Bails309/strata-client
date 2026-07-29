@@ -3533,7 +3533,51 @@ Delete a Kerberos realm. Triggers `krb5.conf` regeneration.
 
 ---
 
+### Session Recordings
+
+#### `GET /api/user/recordings/:id/download` (v1.14.0+)
+
+Download a session recording owned by the calling user. The response serves the recording either in raw `.guac` format or converted on demand to standard Windows-playable `.mp4` video format using `guacenc` (`ffmpeg`).
+
+**Path Parameter**: `id` (UUID) — session recording identifier.
+
+**Query Parameter**:
+
+| Param    | Type                | Required | Default | Description                                                            |
+| -------- | ------------------- | -------- | ------- | ---------------------------------------------------------------------- |
+| `format` | `"mp4"` \| `"guac"` | No       | `"mp4"` | File format for download. `"mp4"` triggers on-demand video conversion. |
+
+**Response** `200 OK` — binary stream with `Content-Type: video/mp4` (or `application/octet-stream` for raw `.guac`) and `Content-Disposition: attachment; filename="<connection_name>_<recording_id>.mp4"`.
+
+**Errors**:
+- `401 Unauthorized` — user is unauthenticated.
+- `403 Forbidden` / `404 Not Found` — recording does not exist or is not owned by the calling user.
+- `500 Internal Server Error` — video encoding conversion failed (`guacenc` execution error).
+
+#### `GET /api/admin/recordings/:id/download` (v1.14.0+)
+
+Download any session recording as an administrator. Requires `can_view_sessions` permission. Supports both local disk storage and Azure Blob Storage recordings.
+
+**Path Parameter**: `id` (UUID) — session recording identifier.
+
+**Query Parameter**:
+
+| Param    | Type                | Required | Default | Description                                                            |
+| -------- | ------------------- | -------- | ------- | ---------------------------------------------------------------------- |
+| `format` | `"mp4"` \| `"guac"` | No       | `"mp4"` | File format for download. `"mp4"` triggers on-demand video conversion. |
+
+**Response** `200 OK` — binary stream with `Content-Type: video/mp4` and `Content-Disposition: attachment; filename="<connection_name>_<recording_id>.mp4"`.
+
+**Errors**:
+- `401 Unauthorized` — user is unauthenticated.
+- `403 Forbidden` — user lacks `can_view_sessions` permission.
+- `404 Not Found` — recording file not found in local storage or Azure Blob Storage.
+- `500 Internal Server Error` — video encoding conversion failed.
+
+---
+
 ### Display Tags
+
 
 Users can pin a single tag per connection to display on session thumbnails in the Active Sessions sidebar.
 

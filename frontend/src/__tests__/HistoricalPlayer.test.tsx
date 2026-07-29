@@ -64,6 +64,12 @@ vi.mock("guacamole-common-js", () => ({
 
 vi.mock("../api", () => ({
   buildRecordingStreamUrl: vi.fn(() => "ws://localhost/recording"),
+  buildRecordingDownloadUrl: vi.fn(
+    (id: string) => `/api/admin/recordings/${id}/download?format=mp4`
+  ),
+  buildMyRecordingDownloadUrl: vi.fn(
+    (id: string) => `/api/user/recordings/${id}/download?format=mp4`
+  ),
 }));
 
 import HistoricalPlayer from "../components/HistoricalPlayer";
@@ -405,5 +411,15 @@ describe("HistoricalPlayer", () => {
       fireEvent.click(overlay);
     });
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("renders download button in player header", () => {
+    render(<HistoricalPlayer recording={mockRecording as any} onClose={onClose} />);
+    const downloadBtn = screen.getByTitle("Download MP4 Video (Windows Playable)");
+    expect(downloadBtn).toBeInTheDocument();
+    expect(downloadBtn).toHaveAttribute(
+      "href",
+      "/api/admin/recordings/rec-123/download?format=mp4"
+    );
   });
 });

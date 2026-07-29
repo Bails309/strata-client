@@ -1,4 +1,9 @@
+# What's New in v1.14.0
+
+> **Minor release — Download Session Recordings in Windows-Playable Format (.mp4).** A feature request to allow downloading session recordings in a format natively playable on Windows OS. Guacamole session recordings are natively stored as raw `.guac` instruction streams, which default Windows media players (Windows Media Player, Movies & TV, Edge, Chrome, VLC) cannot play directly. v1.14.0 introduces an on-demand video conversion service in the backend using Apache Guacamole's native `guacenc` utility and `ffmpeg`. When a user or administrator requests an `.mp4` download, Strata renders the `.guac` instruction stream into an H.264 video container (`.mp4`), setting proper `video/mp4` MIME headers and `<connection_name>_<recording_id>.mp4` download filenames. Download MP4 buttons are added to **My Recordings**, **Sessions** (admin view), and the **Historical Player** modal header. Container packaging in `backend/Dockerfile` updated to include `ffmpeg`.
+
 # What's New in v1.13.2
+
 
 > **Patch release — AD Sync service-account auto-rotation no
 > longer loses the rotated password.** Enabling **Auto-rotate

@@ -23,6 +23,12 @@ vi.mock("../api", () => ({
   buildMyRecordingStreamUrl: vi.fn(
     (id: string) => `wss://localhost/api/user/recordings/${id}/stream`
   ),
+  buildRecordingDownloadUrl: vi.fn(
+    (id: string, format = "mp4") => `/api/admin/recordings/${id}/download?format=${format}`
+  ),
+  buildMyRecordingDownloadUrl: vi.fn(
+    (id: string, format = "mp4") => `/api/user/recordings/${id}/download?format=${format}`
+  ),
 }));
 
 vi.mock("../components/HistoricalPlayer", () => ({

@@ -36,7 +36,7 @@
 #   rustguac's `useradd -m -d /home/rustguac` choice.
 
 # ── Build stage ────────────────────────────────────────────────────────
-FROM rust:1.97-slim-trixie@sha256:34fb2f168c432d421a09883c663b275b33cbb30f6b18642fbd09a684c6546d0e AS builder
+FROM rust:1.97-slim-trixie@sha256:5c6f46a6e4472ab1ca7ba7d494e6677f2f219ebc02f32025d3986f057635ec9c AS builder
 
 # Build deps. pkg-config + openssl-dev for native sqlx/openssl crates;
 # libsasl2-dev + libkrb5-dev because the backend's GSSAPI code links
@@ -117,7 +117,9 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
         x11-utils \
         libnss3-tools \
         curl \
+        ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+
 
 COPY --from=builder /app/target/release/strata-backend /usr/local/bin/strata-backend
 

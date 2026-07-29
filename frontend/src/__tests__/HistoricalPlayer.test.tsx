@@ -70,6 +70,7 @@ vi.mock("../api", () => ({
   buildMyRecordingDownloadUrl: vi.fn(
     (id: string) => `/api/user/recordings/${id}/download?format=mp4`
   ),
+  downloadRecordingFile: vi.fn(() => Promise.resolve()),
 }));
 
 import HistoricalPlayer from "../components/HistoricalPlayer";
@@ -413,12 +414,16 @@ describe("HistoricalPlayer", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("renders download button in player header", () => {
+  it("renders download button in player header", async () => {
+    const { downloadRecordingFile } = await import("../api");
     render(<HistoricalPlayer recording={mockRecording as any} onClose={onClose} />);
     const downloadBtn = screen.getByTitle("Download MP4 Video (Windows Playable)");
     expect(downloadBtn).toBeInTheDocument();
-    expect(downloadBtn).toHaveAttribute(
-      "href",
+    expect(downloadBtn.tagName).toBe("BUTTON");
+    act(() => {
+      fireEvent.click(downloadBtn);
+    });
+    expect(downloadRecordingFile).toHaveBeenCalledWith(
       "/api/admin/recordings/rec-123/download?format=mp4"
     );
   });

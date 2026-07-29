@@ -1715,6 +1715,56 @@ export function buildRecordingDownloadUrl(
   return `${API_BASE}/admin/recordings/${encodeURIComponent(recordingId)}/download?format=${format}`;
 }
 
+/**
+ * Programmatically download a recording file with proper authentication.
+ *
+ * Plain `<a href>` links cannot retry on 401 or inspect the response
+ * content-type, so when the server returns a JSON error the browser saves
+ * it as `download.json`. This helper uses `fetch()` with cookie auth,
+ * retries once on 401, verifies the response is a file (not JSON), and
+ * triggers a real download via a temporary blob URL.
+ */
+export async function downloadRecordingFile(
+  url: string,
+  fallbackFilename = "recording.mp4"
+): Promise<void> {
+  // Proactively refresh so the cookie is fresh for the download GET.
+  await refreshAccessToken();
+
+  let res = await fetch(url, { credentials: "include" });
+
+  // Retry once on 401 after refreshing.
+  if (res.status === 401) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      res = await fetch(url, { credentials: "include" });
+    }
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Download failed (${res.status}): ${body}`);
+  }
+
+  // Extract filename from Content-Disposition if present.
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const filenameMatch = disposition.match(/filename="?([^";\n]+)"?/);
+  const filename = filenameMatch ? filenameMatch[1] : fallbackFilename;
+
+  const blob = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = blobUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  // Clean up after a tick so the browser has time to start the download.
+  requestAnimationFrame(() => {
+    URL.revokeObjectURL(blobUrl);
+    anchor.remove();
+  });
+}
+
 // ── My Recordings (user-scoped) ─────────────────────────────────────
 
 export const getMyRecordings = (

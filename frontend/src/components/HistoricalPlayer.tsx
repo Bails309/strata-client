@@ -8,6 +8,7 @@ import {
   buildRecordingStreamUrl,
   buildRecordingDownloadUrl,
   buildMyRecordingDownloadUrl,
+  downloadRecordingFile,
   HistoricalRecording,
 } from "../api";
 
@@ -247,9 +248,9 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
             </span>
           </div>
           <div className="flex items-center gap-1">
-            <a
-              href={downloadUrl}
-              download
+            <button
+              type="button"
+              onClick={() => downloadRecordingFile(downloadUrl).catch(console.error)}
               className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-tertiary text-txt-tertiary hover:text-txt-primary transition-colors"
               title="Download MP4 Video (Windows Playable)"
             >
@@ -263,7 +264,7 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
               >
                 <path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
-            </a>
+            </button>
             <button
               onClick={toggleFullscreen}
               className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-tertiary text-txt-tertiary hover:text-txt-primary transition-colors"

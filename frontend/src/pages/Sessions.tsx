@@ -14,6 +14,7 @@ import {
   buildMyRecordingStreamUrl,
   buildRecordingDownloadUrl,
   buildMyRecordingDownloadUrl,
+  downloadRecordingFile,
   ActiveSession,
   HistoricalRecording,
   MeResponse,
@@ -628,13 +629,15 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                             </svg>
                             Play
                           </button>
-                          <a
-                            href={
-                              isAdmin
-                                ? buildRecordingDownloadUrl(r.id, "mp4")
-                                : buildMyRecordingDownloadUrl(r.id, "mp4")
+                          <button
+                            type="button"
+                            onClick={() =>
+                              downloadRecordingFile(
+                                isAdmin
+                                  ? buildRecordingDownloadUrl(r.id, "mp4")
+                                  : buildMyRecordingDownloadUrl(r.id, "mp4")
+                              ).catch(console.error)
                             }
-                            download
                             className="btn-sm-secondary py-1 inline-flex items-center gap-1 text-xs"
                             title="Download as Windows-playable MP4 video"
                           >
@@ -652,7 +655,7 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                               />
                             </svg>
                             Download (MP4)
-                          </a>
+                          </button>
                         </div>
                       </td>
                     </tr>

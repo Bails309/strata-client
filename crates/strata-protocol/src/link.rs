@@ -264,7 +264,7 @@ mod tests {
         // with no software_version field. The client must still accept
         // and report None for remote_software_version.
         use crate::frame::{read_frame, write_frame};
-        use crate::handshake::{AuthChallenge, AuthHello, AuthResponse, fresh_nonce_b64};
+        use crate::handshake::{fresh_nonce_b64, AuthChallenge, AuthHello, AuthResponse};
 
         let (mut a, mut b) = tokio::io::duplex(8192);
         let cc = client_cfg();

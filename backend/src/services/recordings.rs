@@ -1053,7 +1053,13 @@ pub async fn prepare_recording_for_download(
     let safe_conn_name: String = recording
         .connection_name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
 
     let ext = if format == "mp4" { "mp4" } else { "guac" };
@@ -1103,7 +1109,6 @@ pub async fn prepare_recording_for_download(
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1341,4 +1346,3 @@ mod tests {
         assert!(res.is_err());
     }
 }
-

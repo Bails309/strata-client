@@ -290,7 +290,6 @@ pub async fn download_recording(
         .unwrap())
 }
 
-
 /// Public wrapper so the user recording route can reuse the stream logic.
 pub async fn handle_user_recording_stream(
     socket: axum::extract::ws::WebSocket,

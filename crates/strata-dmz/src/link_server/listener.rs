@@ -136,7 +136,9 @@ async fn handle_connection(
     const TLS_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
     let tls = tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(tcp))
         .await
-        .with_context(|| format!("TLS handshake from {peer} timed out after {TLS_HANDSHAKE_TIMEOUT:?}"))?
+        .with_context(|| {
+            format!("TLS handshake from {peer} timed out after {TLS_HANDSHAKE_TIMEOUT:?}")
+        })?
         .context("TLS handshake with internal node")?;
     tracing::debug!(%peer, "DMZ link TLS handshake complete");
 

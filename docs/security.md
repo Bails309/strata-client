@@ -203,6 +203,9 @@ After token validation, the backend looks up the user in the local database by O
 | `/api/admin/outbound-share-approvers` (GET, POST, DELETE)                                                                           | `require_auth` + `can_manage_system`                                                                                                                           |
 | `/api/user/sessions`                                                                                                                | `require_auth` (filtered to own sessions)                                                                                                                      |
 | `/api/user/recordings`                                                                                                              | `require_auth` (filtered to own recordings)                                                                                                                    |
+| `/api/user/recordings/:id/download`                                                                                                 | `require_auth` (filtered to own recordings; format=mp4\|guac; filename sanitized)                                                                               |
+| `/api/admin/recordings/:id/download`                                                                                                | `require_auth` + `require_admin` + `can_view_sessions` (filename sanitized)                                                                                    |
+
 
 **Permission validation:** Both `/api/tunnel/:connection_id` (WebSocket upgrade) and `/api/tunnel/ticket` (ticket issuance) strictly validate that the authenticated user matches the ticket's `user_id` and that their role grants access to the target connection, including mappings via connection folders (`role_folders`).
 

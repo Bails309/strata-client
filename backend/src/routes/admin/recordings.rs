@@ -235,6 +235,62 @@ pub async fn stream_recording(
     }))
 }
 
+#[derive(Deserialize)]
+pub struct AdminRecordingDownloadQuery {
+    pub format: Option<String>,
+}
+
+/// GET /api/admin/recordings/:id/download — download a recording for admins.
+pub async fn download_recording(
+    State(state): State<SharedState>,
+    Extension(user): Extension<crate::services::middleware::AuthUser>,
+    Path(id): Path<uuid::Uuid>,
+    Query(query): Query<AdminRecordingDownloadQuery>,
+) -> Result<axum::response::Response, AppError> {
+    crate::services::middleware::check_session_permission(&user)?;
+    let (db, vault) = {
+        let s = state.read().await;
+        if s.phase != BootPhase::Running {
+            return Err(AppError::SetupRequired);
+        }
+        let db = s.db.clone().ok_or(AppError::SetupRequired)?;
+        let vault = s.config.as_ref().and_then(|c| c.vault.as_ref()).cloned();
+        (db, vault)
+    };
+
+    let recording: Recording = crate::services::recordings::get_by_id(&db.pool, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Recording not found".into()))?;
+
+    let format = query.format.as_deref().unwrap_or("mp4");
+    let (file_path, download_filename, content_type) =
+        crate::services::recordings::prepare_recording_for_download(
+            &recording,
+            format,
+            &db.pool,
+            vault.as_ref(),
+        )
+        .await?;
+
+    let file = tokio::fs::File::open(&file_path)
+        .await
+        .map_err(|e| AppError::NotFound(format!("File read error: {e}")))?;
+    let stream = tokio_util::io::ReaderStream::new(file);
+    let body = axum::body::Body::from_stream(stream);
+
+    let safe_filename = download_filename.replace('"', "");
+
+    Ok(axum::response::Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, content_type)
+        .header(
+            axum::http::header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{safe_filename}\""),
+        )
+        .body(body)
+        .unwrap())
+}
+
+
 /// Public wrapper so the user recording route can reuse the stream logic.
 pub async fn handle_user_recording_stream(
     socket: axum::extract::ws::WebSocket,

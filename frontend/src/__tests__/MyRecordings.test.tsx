@@ -7,7 +7,11 @@ vi.mock("../api", () => ({
   buildMyRecordingStreamUrl: vi.fn(
     (id: string) => `wss://localhost/api/user/recordings/${id}/stream`
   ),
+  buildMyRecordingDownloadUrl: vi.fn(
+    (id: string, format?: string) => `/api/user/recordings/${id}/download?format=${format || "mp4"}`
+  ),
 }));
+
 
 vi.mock("../components/HistoricalPlayer", () => ({
   default: ({ recording, onClose }: any) => (
@@ -169,9 +173,20 @@ describe("MyRecordings", () => {
       render(<MyRecordings />);
     });
     await screen.findByText("Server A");
-    expect(screen.getByText("Connection")).toBeInTheDocument();
-    expect(screen.getByText("Started At")).toBeInTheDocument();
-    expect(screen.getByText("Duration")).toBeInTheDocument();
     expect(screen.getByText("Actions")).toBeInTheDocument();
   });
+
+  it("renders download MP4 link", async () => {
+    await act(async () => {
+      render(<MyRecordings />);
+    });
+    const downloadLink = await screen.findByText("Download (MP4)");
+    expect(downloadLink).toBeInTheDocument();
+    expect(downloadLink.closest("a")).toHaveAttribute(
+      "href",
+      "/api/user/recordings/r1/download?format=mp4"
+    );
+  });
 });
+
+

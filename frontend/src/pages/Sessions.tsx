@@ -12,6 +12,8 @@ import {
   getMyRecordings,
   buildRecordingStreamUrl,
   buildMyRecordingStreamUrl,
+  buildRecordingDownloadUrl,
+  buildMyRecordingDownloadUrl,
   ActiveSession,
   HistoricalRecording,
   MeResponse,
@@ -615,17 +617,31 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                         </td>
                       )}
                       <td className="p-4 text-right">
-                        <button className="btn-sm-primary py-1" onClick={() => setSelectedRec(r)}>
-                          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-                            <path
-                              fillRule="evenodd"
-                              d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"
-                              clipRule="evenodd"
-                            />
-                          </svg>
-                          Play
-                        </button>
+                        <div className="flex items-center justify-end gap-2">
+                          <button className="btn-sm-primary py-1" onClick={() => setSelectedRec(r)}>
+                            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                              <path
+                                fillRule="evenodd"
+                                d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"
+                                clipRule="evenodd"
+                              />
+                            </svg>
+                            Play
+                          </button>
+                          <a
+                            href={isAdmin ? buildRecordingDownloadUrl(r.id, "mp4") : buildMyRecordingDownloadUrl(r.id, "mp4")}
+                            download
+                            className="btn-sm-secondary py-1 inline-flex items-center gap-1 text-xs"
+                            title="Download as Windows-playable MP4 video"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                            Download (MP4)
+                          </a>
+                        </div>
                       </td>
+
                     </tr>
                   ))}
                 </tbody>

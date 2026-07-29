@@ -986,6 +986,137 @@ pub async fn get_by_id(
     Ok(row)
 }
 
+// ── Session Recording Conversion & Download ────────────────────────────
+
+/// Helper to convert a local `.guac` recording file to an `.mp4` video file using `guacenc`.
+///
+/// `guacenc` is Apache Guacamole's session recording encoding utility.
+/// When given a `.guac` input file, it renders the instruction stream and outputs an H.264 video file.
+pub async fn convert_guac_to_mp4(
+    guac_path: &std::path::Path,
+) -> Result<std::path::PathBuf, crate::error::AppError> {
+    if !guac_path.exists() {
+        return Err(crate::error::AppError::NotFound(
+            "Recording file not found on disk".into(),
+        ));
+    }
+
+    // guacenc outputs input_path + ".m4v"
+    let m4v_path = std::path::PathBuf::from(format!("{}.m4v", guac_path.display()));
+
+    // If already converted recently, return existing m4v path
+    if m4v_path.exists() {
+        if let Ok(meta) = tokio::fs::metadata(&m4v_path).await {
+            if meta.len() > 0 {
+                return Ok(m4v_path);
+            }
+        }
+    }
+
+    // Run guacenc -f <guac_path>
+    let output = tokio::process::Command::new("guacenc")
+        .arg("-f")
+        .arg(guac_path)
+        .output()
+        .await
+        .map_err(|e| {
+            crate::error::AppError::Internal(format!(
+                "Failed to execute guacenc conversion utility. Make sure guacenc/ffmpeg is installed. Error: {e}"
+            ))
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::error!("guacenc conversion failed for {:?}: {}", guac_path, stderr);
+        return Err(crate::error::AppError::Internal(format!(
+            "Session recording conversion failed: {}",
+            stderr
+        )));
+    }
+
+    if m4v_path.exists() {
+        Ok(m4v_path)
+    } else {
+        Err(crate::error::AppError::Internal(
+            "guacenc completed but output video file was not found".into(),
+        ))
+    }
+}
+
+/// Prepare a recording file for download (either in `.mp4` format playable on Windows or raw `.guac` format).
+pub async fn prepare_recording_for_download(
+    recording: &crate::db::Recording,
+    format: &str, // "mp4" or "guac"
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    vault: Option<&crate::config::VaultConfig>,
+) -> Result<(std::path::PathBuf, String, String), crate::error::AppError> {
+    let safe_conn_name: String = recording
+        .connection_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
+    let ext = if format == "mp4" { "mp4" } else { "guac" };
+    let download_filename = format!("{}_{}.{}", safe_conn_name, recording.id, ext);
+    let content_type = if format == "mp4" {
+        "video/mp4".to_string()
+    } else {
+        "application/octet-stream".to_string()
+    };
+
+    let dir = "/var/lib/guacamole/recordings";
+    let guac_path = std::path::PathBuf::from(dir).join(&recording.storage_path);
+
+    if recording.storage_type == "local" {
+        if !guac_path.exists() {
+            return Err(crate::error::AppError::NotFound(
+                "Recording file not found on disk".into(),
+            ));
+        }
+
+        if format == "mp4" {
+            let video_path = convert_guac_to_mp4(&guac_path).await?;
+            Ok((video_path, download_filename, content_type))
+        } else {
+            Ok((guac_path, download_filename, content_type))
+        }
+    } else {
+        // Azure storage
+        let azure_cfg = get_azure_config(pool, vault)
+            .await?
+            .ok_or_else(|| crate::error::AppError::Config("Azure storage not configured".into()))?;
+
+        let temp_dir = std::env::temp_dir().join("strata-recordings-dl");
+        tokio::fs::create_dir_all(&temp_dir).await.ok();
+        let local_temp_guac = temp_dir.join(format!("{}.guac", recording.id));
+
+        if !local_temp_guac.exists() {
+            let data = download_from_azure(&azure_cfg, &recording.storage_path).await?;
+            tokio::fs::write(&local_temp_guac, data)
+                .await
+                .map_err(|e| {
+                    crate::error::AppError::Internal(format!(
+                        "Failed to write temp guac recording: {}",
+                        e
+                    ))
+                })?;
+        }
+
+        if format == "mp4" {
+            let video_path = convert_guac_to_mp4(&local_temp_guac).await?;
+            Ok((video_path, download_filename, content_type))
+        } else {
+            Ok((local_temp_guac, download_filename, content_type))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1213,5 +1344,12 @@ mod tests {
         assert!(!parse_recording_enabled("yes"));
         assert!(!parse_recording_enabled("1"));
         assert!(!parse_recording_enabled("TRUE"));
+    }
+
+    #[tokio::test]
+    async fn test_convert_guac_to_mp4_missing_file() {
+        let missing = std::path::Path::new("/non/existent/recording.guac");
+        let res = convert_guac_to_mp4(missing).await;
+        assert!(res.is_err());
     }
 }

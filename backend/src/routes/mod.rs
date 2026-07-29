@@ -205,6 +205,10 @@ pub fn build_router(state: SharedState) -> Router {
             get(admin::recordings::stream_recording),
         )
         .route(
+            "/api/admin/recordings/{id}/download",
+            get(admin::recordings::download_recording),
+        )
+        .route(
             "/api/admin/session-stats",
             get(admin::recordings::session_stats),
         )
@@ -465,6 +469,10 @@ pub fn build_router(state: SharedState) -> Router {
         .route(
             "/api/user/recordings/{id}/stream",
             get(user::my_recording_stream),
+        )
+        .route(
+            "/api/user/recordings/{id}/download",
+            get(user::my_recording_download),
         )
         .route("/api/user/sessions", get(user::my_active_sessions))
         .route(

@@ -1098,8 +1098,11 @@ pub async fn prepare_recording_for_download(
 
         if !local_temp_guac.exists() {
             let data = download_from_azure(&azure_cfg, &recording.storage_path).await?;
-            tokio::fs::write(&local_temp_guac, data).await?;
+            tokio::fs::write(&local_temp_guac, data)
+                .await
+                .map_err(|e| crate::error::AppError::Internal(format!("Failed to write temp guac recording: {}", e)))?;
         }
+
 
         if format == "mp4" {
             let video_path = convert_guac_to_mp4(&local_temp_guac).await?;

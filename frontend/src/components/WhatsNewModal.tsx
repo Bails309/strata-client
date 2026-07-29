@@ -29,7 +29,30 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.14.0",
+    subtitle:
+      "Minor release — Download Session Recordings in Windows-Playable Format (.mp4). Users and administrators can now download session recordings directly as Windows-playable MP4 video files. Guacamole session recordings are stored natively as raw .guac instruction streams which default Windows media players (Windows Media Player, Movies & TV, Edge, Chrome, VLC) cannot play. v1.14.0 introduces an on-demand video conversion service utilizing Apache Guacamole's native guacenc utility compiled with ffmpeg. When requesting an MP4 download, Strata renders the .guac instruction stream into an H.264 video container (.mp4) and serves it with proper MIME headers and sanitized filenames. Download buttons are available in My Recordings, Sessions (admin view), and the Historical Player modal header.",
+    sections: [
+      {
+        title: "Session Recording Video Conversion (guacenc / ffmpeg)",
+        description:
+          "Behind the scenes, backend service convert_guac_to_mp4 delegates to Apache Guacamole's guacenc binary with ffmpeg to transcode raw .guac session recordings into standard H.264 video files on demand. Converted MP4 files are cached locally for fast subsequent downloads.",
+      },
+      {
+        title: "User & Admin Download Endpoints",
+        description:
+          "Added GET /api/user/recordings/:id/download and GET /api/admin/recordings/:id/download. The endpoints support both local disk storage and Azure Blob Storage, enforcing ownership security and sanitizing download filenames.",
+      },
+      {
+        title: "UI Enhancements",
+        description:
+          "Added Download (MP4) action buttons to the My Recordings page and the Admin Sessions page recordings table, as well as a Download Video icon button in the Historical Player playback modal header.",
+      },
+    ],
+  },
+  {
     version: "1.13.2",
+
     subtitle:
       "Patch release — AD Sync service-account auto-rotation no longer loses the rotated password. A user reported: enabling the auto-rotation option and then testing the connection (or using any feature that needs the AD service account — password management or object sync) fails with 'LDAP bind failed: rc=49 (invalidCredentials) … data 52e', and 'the account password that it seems to hold is valid and then when the auto rotation is turned on the password is reset and then lost to Strata.' Root cause — deterministic, not a race: auto_rotate_service_account rotates the sync account (bind_dn) via the shared ldap_reset_password helper with binder == target whenever no separate PM bind user is configured. The helper bound with the OLD password, modified unicodePwd (AD now holds the NEW password), verified as the target with the new password — and then RE-BOUND as the service account with the OLD password to read back sAMAccountName. That re-bind is guaranteed rc=49 on self-rotation, the helper errored out, and the new password was never Vault-sealed or persisted: AD held the new password, Strata held the dead old one, and because pm_last_rotated_at was never stamped the daily worker retried with the dead password forever. Two secondary loss windows: the post-rotation verification connection ignored ca_cert_pem (custom-CA LDAPS deployments failed TLS after the reset but before the persist — guaranteed loss even with a separate PM bind user), and vault::seal_setting ran after the AD reset (a Vault outage at that moment also lost the password). v1.13.2 re-binds with the NEW password when bind_dn == target_dn, seals BEFORE touching AD, persists bind_password + pm_last_rotated_at immediately after the reset succeeds, demotes the fresh-connection verification to a non-fatal post-persist health check that honours the custom CA, and refreshes pm_bind_password in the same UPDATE when pm_bind_user names the rotated account. Recovery for affected deployments: the stored password is already dead — reset it once in AD, re-enter it in Admin → AD Sync, re-enable auto-rotation. Backend-only patch: no schema changes, no API changes, no new env vars, no new dependencies.",
     sections: [

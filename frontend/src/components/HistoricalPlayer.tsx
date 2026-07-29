@@ -4,7 +4,12 @@
    eslint.config.js W4-1 commentary. */
 import { useEffect, useRef, useState, useCallback } from "react";
 import Guacamole from "guacamole-common-js";
-import { buildRecordingStreamUrl, HistoricalRecording } from "../api";
+import {
+  buildRecordingStreamUrl,
+  buildRecordingDownloadUrl,
+  buildMyRecordingDownloadUrl,
+  HistoricalRecording,
+} from "../api";
 
 interface Props {
   recording: HistoricalRecording;
@@ -213,6 +218,10 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
 
   const progressPct = durationMs > 0 ? (progressMs / durationMs) * 100 : 0;
   const controlsDisabled = loading || recordingEndedRef.current;
+  const downloadUrl =
+    streamUrlBuilder && streamUrlBuilder.name.includes("My")
+      ? buildMyRecordingDownloadUrl(recording.id, "mp4")
+      : buildRecordingDownloadUrl(recording.id, "mp4");
 
   return (
     <div role="dialog" aria-modal="true" aria-label="Recording playback" className="player-overlay">
@@ -238,6 +247,23 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
             </span>
           </div>
           <div className="flex items-center gap-1">
+            <a
+              href={downloadUrl}
+              download
+              className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-tertiary text-txt-tertiary hover:text-txt-primary transition-colors"
+              title="Download MP4 Video (Windows Playable)"
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+            </a>
             <button
               onClick={toggleFullscreen}
               className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-tertiary text-txt-tertiary hover:text-txt-primary transition-colors"

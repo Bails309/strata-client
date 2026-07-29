@@ -2716,6 +2716,65 @@ pub async fn my_recording_stream(
     }))
 }
 
+#[derive(Deserialize)]
+pub struct RecordingDownloadQuery {
+    pub format: Option<String>,
+}
+
+/// GET /api/user/recordings/:id/download — download a recording owned by the authenticated user.
+pub async fn my_recording_download(
+    State(state): State<SharedState>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<RecordingDownloadQuery>,
+) -> Result<axum::response::Response, AppError> {
+    use axum::body::Body;
+    use axum::http::header;
+    use tokio::fs::File;
+    use tokio_util::io::ReaderStream;
+
+    let (db, vault) = {
+        let s = state.read().await;
+        if s.phase != crate::services::app_state::BootPhase::Running {
+            return Err(AppError::SetupRequired);
+        }
+        let db = s.db.clone().ok_or(AppError::SetupRequired)?;
+        let vault = s.config.as_ref().and_then(|c| c.vault.as_ref()).cloned();
+        (db, vault)
+    };
+
+    let recording = crate::services::recordings::get_owned_by_user(&db.pool, id, auth.id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Recording not found".into()))?;
+
+    let format = query.format.as_deref().unwrap_or("mp4");
+    let (file_path, download_filename, content_type) =
+        crate::services::recordings::prepare_recording_for_download(
+            &recording,
+            format,
+            &db.pool,
+            vault.as_ref(),
+        )
+        .await?;
+
+    let file = File::open(&file_path)
+        .await
+        .map_err(|e| AppError::NotFound(format!("File read error: {e}")))?;
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+
+    let safe_filename = download_filename.replace('"', "");
+
+    Ok(axum::response::Response::builder()
+        .header(header::CONTENT_TYPE, content_type)
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{safe_filename}\""),
+        )
+        .body(body)
+        .unwrap())
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // Password Checkout — user-facing endpoints
 // ════════════════════════════════════════════════════════════════════════

@@ -64,10 +64,13 @@ vi.mock("guacamole-common-js", () => ({
 
 vi.mock("../api", () => ({
   buildRecordingStreamUrl: vi.fn(() => "ws://localhost/recording"),
-  buildRecordingDownloadUrl: vi.fn((id: string) => `/api/admin/recordings/${id}/download?format=mp4`),
-  buildMyRecordingDownloadUrl: vi.fn((id: string) => `/api/user/recordings/${id}/download?format=mp4`),
+  buildRecordingDownloadUrl: vi.fn(
+    (id: string) => `/api/admin/recordings/${id}/download?format=mp4`
+  ),
+  buildMyRecordingDownloadUrl: vi.fn(
+    (id: string) => `/api/user/recordings/${id}/download?format=mp4`
+  ),
 }));
-
 
 import HistoricalPlayer from "../components/HistoricalPlayer";
 
@@ -420,5 +423,3 @@ describe("HistoricalPlayer", () => {
     );
   });
 });
-
-

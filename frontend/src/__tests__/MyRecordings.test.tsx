@@ -12,7 +12,6 @@ vi.mock("../api", () => ({
   ),
 }));
 
-
 vi.mock("../components/HistoricalPlayer", () => ({
   default: ({ recording, onClose }: any) => (
     <div data-testid="historical-player">
@@ -188,5 +187,3 @@ describe("MyRecordings", () => {
     );
   });
 });
-
-

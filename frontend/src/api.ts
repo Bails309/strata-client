@@ -1708,7 +1708,10 @@ export function buildRecordingStreamUrl(recordingId: string): string {
   return `${proto}//${window.location.host}/api/admin/recordings/${encodeURIComponent(recordingId)}/stream`;
 }
 
-export function buildRecordingDownloadUrl(recordingId: string, format: "mp4" | "guac" = "mp4"): string {
+export function buildRecordingDownloadUrl(
+  recordingId: string,
+  format: "mp4" | "guac" = "mp4"
+): string {
   return `${API_BASE}/admin/recordings/${encodeURIComponent(recordingId)}/download?format=${format}`;
 }
 
@@ -1730,10 +1733,12 @@ export function buildMyRecordingStreamUrl(recordingId: string): string {
   return `${proto}//${window.location.host}/api/user/recordings/${encodeURIComponent(recordingId)}/stream`;
 }
 
-export function buildMyRecordingDownloadUrl(recordingId: string, format: "mp4" | "guac" = "mp4"): string {
+export function buildMyRecordingDownloadUrl(
+  recordingId: string,
+  format: "mp4" | "guac" = "mp4"
+): string {
   return `${API_BASE}/user/recordings/${encodeURIComponent(recordingId)}/download?format=${format}`;
 }
-
 
 /**
  * Ensure the access token cookie is fresh by proactively calling refresh.

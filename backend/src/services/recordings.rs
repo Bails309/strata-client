@@ -1174,12 +1174,18 @@ fn parse_size_instruction_body(hay: &[u8], start: usize) -> Option<(u32, u32)> {
     if p >= hay.len() || hay[p] != b'.' {
         return None;
     }
-    let width_len: usize = std::str::from_utf8(&hay[width_num_start..p]).ok()?.parse().ok()?;
+    let width_len: usize = std::str::from_utf8(&hay[width_num_start..p])
+        .ok()?
+        .parse()
+        .ok()?;
     p += 1;
     if p + width_len > hay.len() {
         return None;
     }
-    let width: u32 = std::str::from_utf8(&hay[p..p + width_len]).ok()?.parse().ok()?;
+    let width: u32 = std::str::from_utf8(&hay[p..p + width_len])
+        .ok()?
+        .parse()
+        .ok()?;
     p += width_len;
     if p >= hay.len() || hay[p] != b',' {
         return None;
@@ -1194,12 +1200,18 @@ fn parse_size_instruction_body(hay: &[u8], start: usize) -> Option<(u32, u32)> {
     if p >= hay.len() || hay[p] != b'.' {
         return None;
     }
-    let height_len: usize = std::str::from_utf8(&hay[height_num_start..p]).ok()?.parse().ok()?;
+    let height_len: usize = std::str::from_utf8(&hay[height_num_start..p])
+        .ok()?
+        .parse()
+        .ok()?;
     p += 1;
     if p + height_len > hay.len() {
         return None;
     }
-    let height: u32 = std::str::from_utf8(&hay[p..p + height_len]).ok()?.parse().ok()?;
+    let height: u32 = std::str::from_utf8(&hay[p..p + height_len])
+        .ok()?
+        .parse()
+        .ok()?;
 
     // Clamp to sane bounds — reject garbage / accidental matches.
     if !(320..=7680).contains(&width) || !(240..=4320).contains(&height) {

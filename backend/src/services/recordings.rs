@@ -1115,10 +1115,109 @@ async fn extract_and_save_guac_frames(data: &[u8], work_dir: &std::path::Path) -
     count
 }
 
+/// Scan the first ~64 KiB of a `.guac` recording for the initial `size,0,W,H`
+/// instruction (the primary display's dimensions). Returns `None` if we can't
+/// find one, in which case callers should fall back to a sensible default.
+///
+/// Guacamole instructions are length-prefixed: `4.size,1.0,4.1920,4.1080;`.
+/// We iterate over every `4.size,` occurrence in the scan window and return
+/// the first one that targets layer 0 — this makes us robust against guacd
+/// emitting audio/overlay layer size instructions ahead of the primary display.
+fn read_recording_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+    let scan_len = data.len().min(65_536);
+    let hay = &data[..scan_len];
+    let needle = b"4.size,";
+    let mut search_from = 0;
+
+    while let Some(rel) = hay[search_from..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+    {
+        let start = search_from + rel + needle.len();
+        search_from = start; // advance past this needle so a bail-out doesn't loop forever
+
+        if let Some(dims) = parse_size_instruction_body(hay, start) {
+            return Some(dims);
+        }
+    }
+    None
+}
+
+/// Parse the body of a `size,<layer>,<width>,<height>;` instruction starting
+/// at the byte after `4.size,`. Returns `None` if the layer isn't 0, if any
+/// token is malformed, or if the parsed dimensions are outside sane bounds.
+fn parse_size_instruction_body(hay: &[u8], start: usize) -> Option<(u32, u32)> {
+    // Parse layer index token: <digits>.<value>,
+    let mut p = start;
+    while p < hay.len() && hay[p].is_ascii_digit() {
+        p += 1;
+    }
+    if p >= hay.len() || hay[p] != b'.' {
+        return None;
+    }
+    let layer_len: usize = std::str::from_utf8(&hay[start..p]).ok()?.parse().ok()?;
+    p += 1;
+    let layer_end = p + layer_len;
+    if layer_end >= hay.len() || hay[layer_end] != b',' {
+        return None;
+    }
+    if std::str::from_utf8(&hay[p..layer_end]).ok()? != "0" {
+        return None;
+    }
+    p = layer_end + 1;
+
+    // Parse width token: <digits>.<value>,
+    let width_num_start = p;
+    while p < hay.len() && hay[p].is_ascii_digit() {
+        p += 1;
+    }
+    if p >= hay.len() || hay[p] != b'.' {
+        return None;
+    }
+    let width_len: usize = std::str::from_utf8(&hay[width_num_start..p]).ok()?.parse().ok()?;
+    p += 1;
+    if p + width_len > hay.len() {
+        return None;
+    }
+    let width: u32 = std::str::from_utf8(&hay[p..p + width_len]).ok()?.parse().ok()?;
+    p += width_len;
+    if p >= hay.len() || hay[p] != b',' {
+        return None;
+    }
+    p += 1;
+
+    // Parse height token: <digits>.<value>;
+    let height_num_start = p;
+    while p < hay.len() && hay[p].is_ascii_digit() {
+        p += 1;
+    }
+    if p >= hay.len() || hay[p] != b'.' {
+        return None;
+    }
+    let height_len: usize = std::str::from_utf8(&hay[height_num_start..p]).ok()?.parse().ok()?;
+    p += 1;
+    if p + height_len > hay.len() {
+        return None;
+    }
+    let height: u32 = std::str::from_utf8(&hay[p..p + height_len]).ok()?.parse().ok()?;
+
+    // Clamp to sane bounds — reject garbage / accidental matches.
+    if !(320..=7680).contains(&width) || !(240..=4320).contains(&height) {
+        return None;
+    }
+    Some((width, height))
+}
+
 /// Helper to convert a local `.guac` recording file to an `.mp4` video file using `guacenc` (with `ffmpeg` fallback).
 ///
 /// `guacenc` is Apache Guacamole's session recording encoding utility.
 /// When given a `.guac` input file, it renders the instruction stream and outputs an H.264 video file.
+///
+/// Quality tuning: guacenc defaults to a 640×480 canvas at 2 Mbps, which crushes
+/// modern desktop recordings into unreadable VGA. We probe the recording for its
+/// actual display dimensions and pass them via `-s`, and force a much higher
+/// bitrate via `-r`. The work-dir prefix is versioned (`strata-mp4-v2-`) so
+/// low-quality MP4s cached under the pre-tuning defaults are ignored on upgrade.
 pub async fn convert_guac_to_mp4(
     guac_path: &std::path::Path,
 ) -> Result<std::path::PathBuf, crate::error::AppError> {
@@ -1137,12 +1236,13 @@ pub async fn convert_guac_to_mp4(
         "guacenc"
     };
 
-    // Use a writable temp directory so directory permissions on /var/lib/guacamole/recordings don't block guacenc
+    // Use a writable temp directory so directory permissions on /var/lib/guacamole/recordings don't block guacenc.
+    // The `-v2-` version tag invalidates the low-quality MP4 caches produced by v1.14.0's default settings.
     let file_stem = guac_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("recording");
-    let work_dir = std::env::temp_dir().join(format!("strata-mp4-{}", file_stem));
+    let work_dir = std::env::temp_dir().join(format!("strata-mp4-v2-{}", file_stem));
     tokio::fs::create_dir_all(&work_dir).await.ok();
 
     let temp_guac = work_dir.join("recording.guac");
@@ -1153,6 +1253,20 @@ pub async fn convert_guac_to_mp4(
             ))
         })?;
     }
+
+    // Probe the recording for its actual display dimensions. Fall back to 1920×1080
+    // (a common enterprise RDP size) if we can't find a size instruction — better to
+    // slightly upscale/letterbox than to downscale everything to VGA.
+    let (width, height) = match tokio::fs::read(&temp_guac).await {
+        Ok(bytes) => read_recording_dimensions(&bytes).unwrap_or((1920, 1080)),
+        Err(_) => (1920, 1080),
+    };
+    // libavcodec's H.264 encoder rejects odd dimensions with yuv420p; round up to even.
+    let width = width + (width & 1);
+    let height = height + (height & 1);
+    let size_arg = format!("{}x{}", width, height);
+    // 12 Mbps handles crisp text at up to 1440p; overkill for VGA but the file size penalty is small.
+    let bitrate_arg = "12000000";
 
     let possible_outputs = [
         work_dir.join("recording.guac.m4v"),
@@ -1176,8 +1290,12 @@ pub async fn convert_guac_to_mp4(
         }
     }
 
-    // Run guacenc -f <temp_guac>
+    // Run guacenc -s <WxH> -r <bitrate> -f <temp_guac>
     let output = tokio::process::Command::new(guacenc_bin)
+        .arg("-s")
+        .arg(&size_arg)
+        .arg("-r")
+        .arg(bitrate_arg)
         .arg("-f")
         .arg(&temp_guac)
         .output()
@@ -1446,6 +1564,39 @@ mod tests {
         };
         let result = cfg.sign("GET", 0, "", "", "/acct/rec/file.bin");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn read_recording_dimensions_parses_1080p() {
+        // Real-world opening of a guacd RDP recording: version handshake first,
+        // then size for layer 0.
+        let data = b"5.args,1.0;4.size,1.0,4.1920,4.1080;5.ready,4.$abc;";
+        assert_eq!(read_recording_dimensions(data), Some((1920, 1080)));
+    }
+
+    #[test]
+    fn read_recording_dimensions_parses_4k() {
+        let data = b"4.size,1.0,4.3840,4.2160;";
+        assert_eq!(read_recording_dimensions(data), Some((3840, 2160)));
+    }
+
+    #[test]
+    fn read_recording_dimensions_ignores_non_layer_zero() {
+        // Layer 1 is not the primary display; skip until we see layer 0.
+        let data = b"4.size,1.1,3.800,3.600;4.size,1.0,4.1024,3.768;";
+        assert_eq!(read_recording_dimensions(data), Some((1024, 768)));
+    }
+
+    #[test]
+    fn read_recording_dimensions_rejects_absurd() {
+        let data = b"4.size,1.0,2.10,2.10;";
+        assert_eq!(read_recording_dimensions(data), None);
+    }
+
+    #[test]
+    fn read_recording_dimensions_none_when_no_size() {
+        let data = b"5.hello,5.world;";
+        assert_eq!(read_recording_dimensions(data), None);
     }
 
     #[test]

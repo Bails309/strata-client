@@ -80,6 +80,44 @@ COPY crates/ crates/
 RUN touch backend/src/main.rs crates/strata-protocol/src/lib.rs crates/strata-dmz/src/main.rs \
     && cargo build --release -p strata-backend
 
+# ── guacenc builder stage ─────────────────────────────────────────────
+# Compiles Apache Guacamole's `guacenc` utility from source, pinned to
+# the same guacamole-server commit as `guacd/Dockerfile` so that .guac
+# recordings written by our patched guacd are readable by the same
+# instruction stream parser. `guacenc` renders a raw .guac session
+# recording into an H.264 .m4v/.mp4 video file — this is what the
+# `/api/{admin,user}/recordings/:id/download?format=mp4` endpoints in
+# `backend/src/services/recordings.rs::convert_guac_to_mp4` invoke.
+#
+# We deliberately do NOT install any protocol client dev libraries
+# (libfreerdp-dev, libssh2-dev, libvncserver-dev, libwebsockets-dev,
+# libtelnet-dev, libpulse-dev). guacamole-server's ./configure will
+# auto-skip building each libguac-client-*.so when its -dev package is
+# absent, and guacenc itself only needs libguac + the image/video libs
+# below. The guacd/patches are RDP-only and don't touch guacenc, so
+# they're intentionally not applied here.
+FROM debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b AS guacenc-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        autoconf automake libtool pkg-config \
+        gcc g++ make git ca-certificates \
+        libcairo2-dev libjpeg-dev libpng-dev \
+        libossp-uuid-dev libwebp-dev \
+        libpango1.0-dev libvorbis-dev \
+        libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone https://github.com/apache/guacamole-server.git /src \
+    && cd /src && git checkout 4163ead8be54baa35ef5f7ad8897a57497649112
+
+WORKDIR /src
+RUN autoreconf -fi \
+    && ./configure --prefix=/usr/local --enable-guacenc \
+    && make -j"$(nproc)" \
+    && make DESTDIR=/build install \
+    && test -x /build/usr/local/bin/guacenc \
+    && test -f /build/usr/local/lib/libguac.so
+
 # ── Runtime stage ─────────────────────────────────────────────────────
 FROM debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b
 
@@ -102,6 +140,17 @@ FROM debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e2982
 #   client tooling, parity with the Alpine image.
 # - gosu: privilege drop in entrypoint (replaces Alpine's su-exec).
 # - ca-certificates: TLS root store.
+# - ffmpeg: provides libavcodec/libavformat/libswscale used at runtime
+#   by `guacenc` (the H.264 muxer path in convert_guac_to_mp4). Also
+#   used directly by the tier-2 frame-extraction fallback in
+#   `services/recordings.rs`.
+# - libcairo2 / libpango-1.0-0 / libpangocairo-1.0-0 / libjpeg62-turbo /
+#   libpng16-16 / libwebp7 / libossp-uuid16 / libvorbisenc2 /
+#   libvorbis0a: runtime shared libs required by `guacenc` for image
+#   decoding and the .m4v/.mp4 encoder pipeline. The `guacenc` binary
+#   and `libguac.so*` themselves are copied in from the guacenc-builder
+#   stage below (Debian's own guacamole-server package is 1.5.5; we
+#   build against 1.6.1 to stay wire-compatible with our patched guacd).
 #
 # Chromium pulls fonts-liberation, libnss3, libnspr4, and libdbus-1-3
 # as transitive dependencies — they don't need explicit listing.
@@ -118,10 +167,28 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
         libnss3-tools \
         curl \
         ffmpeg \
+        libcairo2 \
+        libpango-1.0-0 \
+        libpangocairo-1.0-0 \
+        libjpeg62-turbo \
+        libpng16-16 \
+        libwebp7 \
+        libossp-uuid16 \
+        libvorbis0a \
+        libvorbisenc2 \
     && rm -rf /var/lib/apt/lists/*
 
 
 COPY --from=builder /app/target/release/strata-backend /usr/local/bin/strata-backend
+
+# guacenc + libguac (built against guacamole-server 1.6.1 in the
+# guacenc-builder stage above). `services/recordings.rs::convert_guac_to_mp4`
+# probes `/usr/local/bin/guacenc` first, so that's where we land it.
+# libguac.so must be discoverable by the dynamic loader; ldconfig picks
+# up /usr/local/lib because it's on the default search path in Debian.
+COPY --from=guacenc-builder /build/usr/local/bin/guacenc /usr/local/bin/guacenc
+COPY --from=guacenc-builder /build/usr/local/lib/ /usr/local/lib/
+RUN ldconfig
 
 # Managed Chromium policy (rustguac parity E2). Chromium reads every
 # *.json under /etc/chromium/policies/managed/ at process startup and

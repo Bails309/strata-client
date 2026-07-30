@@ -62,6 +62,7 @@ WORKDIR /src
 RUN autoreconf -fi && \
     ./configure \
         --prefix=/usr/local \
+        --enable-guacenc \
         --with-ssh \
         --with-vnc \
         --with-pulse \
@@ -70,6 +71,7 @@ RUN autoreconf -fi && \
         --with-websockets && \
     make -j"$(nproc)" && \
     make DESTDIR=/build install && \
+
     # Defence-in-depth: every protocol Strata exposes must end up as a built
     # libguac-client-*.so. Catch silent regressions where a missing -dev
     # package on the build host causes configure to skip a protocol without

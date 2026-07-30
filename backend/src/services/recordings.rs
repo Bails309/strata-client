@@ -988,6 +988,13 @@ pub async fn get_by_id(
 
 // ── Session Recording Conversion & Download ────────────────────────────
 
+fn is_valid_image(buf: &[u8]) -> bool {
+    buf.len() > 100
+        && (buf.starts_with(b"\x89PNG")
+            || buf.starts_with(b"\xFF\xD8\xFF")
+            || (buf.len() > 12 && &buf[0..4] == b"RIFF" && &buf[8..12] == b"WEBP"))
+}
+
 async fn extract_and_save_guac_frames(data: &[u8], work_dir: &std::path::Path) -> usize {
     use base64::Engine;
     use std::collections::HashMap;
@@ -1067,10 +1074,7 @@ async fn extract_and_save_guac_frames(data: &[u8], work_dir: &std::path::Path) -
                                     if let Ok(decoded) =
                                         base64::engine::general_purpose::STANDARD.decode(&b64_str)
                                     {
-                                        if (decoded.starts_with(b"\x89PNG")
-                                            || decoded.starts_with(b"\xFF\xD8\xFF"))
-                                            && decoded.len() > 100
-                                        {
+                                        if is_valid_image(&decoded) {
                                             count += 1;
                                             let frame_path =
                                                 work_dir.join(format!("frame_{:05}.png", count));
@@ -1088,12 +1092,10 @@ async fn extract_and_save_guac_frames(data: &[u8], work_dir: &std::path::Path) -
         }
     }
 
-    // Flush any remaining stream buffers containing valid PNG images
+    // Flush any remaining stream buffers containing valid PNG/JPEG/WEBP images
     for (_idx, b64_str) in streams {
         if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&b64_str) {
-            if (decoded.starts_with(b"\x89PNG") || decoded.starts_with(b"\xFF\xD8\xFF"))
-                && decoded.len() > 100
-            {
+            if is_valid_image(&decoded) {
                 count += 1;
                 let frame_path = work_dir.join(format!("frame_{:05}.png", count));
                 let _ = tokio::fs::write(frame_path, decoded).await;

@@ -1001,8 +1001,37 @@ pub async fn convert_guac_to_mp4(
         ));
     }
 
-    // guacenc may output <input>.m4v or <input>.mp4
+    // Locate guacenc binary across standard system paths
+    let guacenc_bin = if std::path::Path::new("/usr/local/bin/guacenc").exists() {
+        "/usr/local/bin/guacenc"
+    } else if std::path::Path::new("/usr/bin/guacenc").exists() {
+        "/usr/bin/guacenc"
+    } else {
+        "guacenc"
+    };
+
+    // Use a writable temp directory so directory permissions on /var/lib/guacamole/recordings don't block guacenc
+    let file_stem = guac_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("recording");
+    let work_dir = std::env::temp_dir().join(format!("strata-mp4-{}", file_stem));
+    tokio::fs::create_dir_all(&work_dir).await.ok();
+
+    let temp_guac = work_dir.join("recording.guac");
+    if !temp_guac.exists() {
+        tokio::fs::copy(guac_path, &temp_guac).await.map_err(|e| {
+            crate::error::AppError::Internal(format!(
+                "Failed to stage recording file for conversion: {e}"
+            ))
+        })?;
+    }
+
     let possible_outputs = [
+        work_dir.join("recording.guac.m4v"),
+        work_dir.join("recording.guac.mp4"),
+        work_dir.join("recording.m4v"),
+        work_dir.join("recording.mp4"),
         std::path::PathBuf::from(format!("{}.m4v", guac_path.display())),
         std::path::PathBuf::from(format!("{}.mp4", guac_path.display())),
         guac_path.with_extension("m4v"),
@@ -1020,15 +1049,15 @@ pub async fn convert_guac_to_mp4(
         }
     }
 
-    // Run guacenc -f <guac_path>
-    let output = tokio::process::Command::new("guacenc")
+    // Run guacenc -f <temp_guac>
+    let output = tokio::process::Command::new(guacenc_bin)
         .arg("-f")
-        .arg(guac_path)
+        .arg(&temp_guac)
         .output()
         .await
         .map_err(|e| {
             crate::error::AppError::Internal(format!(
-                "Failed to execute guacenc conversion utility. Make sure guacenc/ffmpeg is installed. Error: {e}"
+                "Failed to execute guacenc conversion utility ({guacenc_bin}). Error: {e}"
             ))
         })?;
 
@@ -1043,7 +1072,11 @@ pub async fn convert_guac_to_mp4(
 
     for path in &possible_outputs {
         if path.exists() {
-            return Ok(path.clone());
+            if let Ok(meta) = tokio::fs::metadata(path).await {
+                if meta.len() > 0 {
+                    return Ok(path.clone());
+                }
+            }
         }
     }
 

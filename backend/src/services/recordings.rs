@@ -999,23 +999,21 @@ async fn extract_and_save_guac_frames(data: &[u8], work_dir: &std::path::Path) -
     use base64::Engine;
     use std::collections::HashMap;
 
-    let text = String::from_utf8_lossy(data);
-    let mut streams: HashMap<String, String> = HashMap::new();
+    let mut streams: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
     let mut count = 0;
 
-    let bytes = text.as_bytes();
-    let len = bytes.len();
+    let len = data.len();
     let mut pos = 0;
-    let mut current_instruction: Vec<String> = Vec::new();
+    let mut current_instruction: Vec<&[u8]> = Vec::new();
 
     while pos < len {
         let mut num_end = pos;
-        while num_end < len && bytes[num_end].is_ascii_digit() {
+        while num_end < len && data[num_end].is_ascii_digit() {
             num_end += 1;
         }
 
-        if num_end == pos || num_end >= len || bytes[num_end] != b'.' {
-            while pos < len && bytes[pos] != b';' {
+        if num_end == pos || num_end >= len || data[num_end] != b'.' {
+            while pos < len && data[pos] != b';' {
                 pos += 1;
             }
             pos += 1;
@@ -1023,7 +1021,14 @@ async fn extract_and_save_guac_frames(data: &[u8], work_dir: &std::path::Path) -
             continue;
         }
 
-        let elem_len_str = &text[pos..num_end];
+        let elem_len_str = match std::str::from_utf8(&data[pos..num_end]) {
+            Ok(s) => s,
+            Err(_) => {
+                pos = num_end + 1;
+                continue;
+            }
+        };
+
         let elem_len: usize = match elem_len_str.parse() {
             Ok(n) => n,
             Err(_) => {
@@ -1038,36 +1043,41 @@ async fn extract_and_save_guac_frames(data: &[u8], work_dir: &std::path::Path) -
             break;
         }
 
-        let elem_val = &text[elem_start..elem_end];
-        current_instruction.push(elem_val.to_string());
+        let elem_val = &data[elem_start..elem_end];
+        current_instruction.push(elem_val);
 
         pos = elem_end;
         if pos < len {
-            let delimiter = bytes[pos];
+            let delimiter = data[pos];
             pos += 1;
 
             if delimiter == b';' {
                 if !current_instruction.is_empty() {
-                    let cmd = &current_instruction[0];
-                    match cmd.as_str() {
-                        "png" | "jpeg" | "webp" if current_instruction.len() >= 2 => {
-                            let stream_idx = current_instruction[1].clone();
-                            streams.insert(stream_idx, String::new());
+                    let cmd = current_instruction[0];
+                    match cmd {
+                        b"png" | b"jpeg" | b"webp" if current_instruction.len() >= 2 => {
+                            let stream_idx = current_instruction[1].to_vec();
+                            streams.insert(stream_idx, Vec::new());
                         }
-                        "blob" if current_instruction.len() >= 3 => {
-                            let stream_idx = &current_instruction[1];
-                            let chunk = &current_instruction[2];
+                        b"blob" if current_instruction.len() >= 3 => {
+                            let stream_idx = current_instruction[1];
+                            let chunk = current_instruction[2];
                             if let Some(buf) = streams.get_mut(stream_idx) {
-                                buf.push_str(chunk);
+                                buf.extend_from_slice(chunk);
                             } else {
-                                streams.insert(stream_idx.clone(), chunk.to_string());
+                                streams.insert(stream_idx.to_vec(), chunk.to_vec());
                             }
                         }
-                        "end" if current_instruction.len() >= 2 => {
-                            let stream_idx = &current_instruction[1];
-                            if let Some(b64_str) = streams.remove(stream_idx) {
+                        b"end" if current_instruction.len() >= 2 => {
+                            let stream_idx = current_instruction[1];
+                            if let Some(b64_bytes) = streams.remove(stream_idx) {
+                                let clean_b64: Vec<u8> = b64_bytes
+                                    .into_iter()
+                                    .filter(|&b| !b.is_ascii_whitespace())
+                                    .collect();
+
                                 if let Ok(decoded) =
-                                    base64::engine::general_purpose::STANDARD.decode(&b64_str)
+                                    base64::engine::general_purpose::STANDARD.decode(&clean_b64)
                                 {
                                     if is_valid_image(&decoded) {
                                         count += 1;
@@ -1087,8 +1097,13 @@ async fn extract_and_save_guac_frames(data: &[u8], work_dir: &std::path::Path) -
     }
 
     // Flush any remaining stream buffers containing valid PNG/JPEG/WEBP images
-    for (_idx, b64_str) in streams {
-        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&b64_str) {
+    for (_idx, b64_bytes) in streams {
+        let clean_b64: Vec<u8> = b64_bytes
+            .into_iter()
+            .filter(|&b| !b.is_ascii_whitespace())
+            .collect();
+
+        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&clean_b64) {
             if is_valid_image(&decoded) {
                 count += 1;
                 let frame_path = work_dir.join(format!("frame_{:05}.png", count));

@@ -988,6 +988,13 @@ pub async fn get_by_id(
 
 // ── Session Recording Conversion & Download ────────────────────────────
 
+fn is_valid_image(buf: &[u8]) -> bool {
+    buf.len() > 100
+        && (buf.starts_with(b"\x89PNG")
+            || buf.starts_with(b"\xFF\xD8\xFF")
+            || (buf.len() > 12 && &buf[0..4] == b"RIFF" && &buf[8..12] == b"WEBP"))
+}
+
 async fn extract_and_save_guac_frames(data: &[u8], work_dir: &std::path::Path) -> usize {
     use base64::Engine;
     use std::collections::HashMap;
@@ -1043,39 +1050,30 @@ async fn extract_and_save_guac_frames(data: &[u8], work_dir: &std::path::Path) -
                 if !current_instruction.is_empty() {
                     let cmd = &current_instruction[0];
                     match cmd.as_str() {
-                        "png" | "jpeg" | "webp" => {
-                            if current_instruction.len() >= 2 {
-                                let stream_idx = current_instruction[1].clone();
-                                streams.insert(stream_idx, String::new());
+                        "png" | "jpeg" | "webp" if current_instruction.len() >= 2 => {
+                            let stream_idx = current_instruction[1].clone();
+                            streams.insert(stream_idx, String::new());
+                        }
+                        "blob" if current_instruction.len() >= 3 => {
+                            let stream_idx = &current_instruction[1];
+                            let chunk = &current_instruction[2];
+                            if let Some(buf) = streams.get_mut(stream_idx) {
+                                buf.push_str(chunk);
+                            } else {
+                                streams.insert(stream_idx.clone(), chunk.to_string());
                             }
                         }
-                        "blob" => {
-                            if current_instruction.len() >= 3 {
-                                let stream_idx = &current_instruction[1];
-                                let chunk = &current_instruction[2];
-                                if let Some(buf) = streams.get_mut(stream_idx) {
-                                    buf.push_str(chunk);
-                                } else {
-                                    streams.insert(stream_idx.clone(), chunk.to_string());
-                                }
-                            }
-                        }
-                        "end" => {
-                            if current_instruction.len() >= 2 {
-                                let stream_idx = &current_instruction[1];
-                                if let Some(b64_str) = streams.remove(stream_idx) {
-                                    if let Ok(decoded) =
-                                        base64::engine::general_purpose::STANDARD.decode(&b64_str)
-                                    {
-                                        if (decoded.starts_with(b"\x89PNG")
-                                            || decoded.starts_with(b"\xFF\xD8\xFF"))
-                                            && decoded.len() > 100
-                                        {
-                                            count += 1;
-                                            let frame_path =
-                                                work_dir.join(format!("frame_{:05}.png", count));
-                                            let _ = tokio::fs::write(frame_path, decoded).await;
-                                        }
+                        "end" if current_instruction.len() >= 2 => {
+                            let stream_idx = &current_instruction[1];
+                            if let Some(b64_str) = streams.remove(stream_idx) {
+                                if let Ok(decoded) =
+                                    base64::engine::general_purpose::STANDARD.decode(&b64_str)
+                                {
+                                    if is_valid_image(&decoded) {
+                                        count += 1;
+                                        let frame_path =
+                                            work_dir.join(format!("frame_{:05}.png", count));
+                                        let _ = tokio::fs::write(frame_path, decoded).await;
                                     }
                                 }
                             }
@@ -1088,12 +1086,10 @@ async fn extract_and_save_guac_frames(data: &[u8], work_dir: &std::path::Path) -
         }
     }
 
-    // Flush any remaining stream buffers containing valid PNG images
+    // Flush any remaining stream buffers containing valid PNG/JPEG/WEBP images
     for (_idx, b64_str) in streams {
         if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&b64_str) {
-            if (decoded.starts_with(b"\x89PNG") || decoded.starts_with(b"\xFF\xD8\xFF"))
-                && decoded.len() > 100
-            {
+            if is_valid_image(&decoded) {
                 count += 1;
                 let frame_path = work_dir.join(format!("frame_{:05}.png", count));
                 let _ = tokio::fs::write(frame_path, decoded).await;

@@ -988,7 +988,35 @@ pub async fn get_by_id(
 
 // ── Session Recording Conversion & Download ────────────────────────────
 
-/// Helper to convert a local `.guac` recording file to an `.mp4` video file using `guacenc`.
+async fn extract_and_save_guac_frames(data: &[u8], work_dir: &std::path::Path) -> usize {
+    use base64::Engine;
+
+    let text = String::from_utf8_lossy(data);
+    let mut count = 0;
+    let target = "iVBORw0KGgo";
+
+    let mut start = 0;
+    while let Some(idx) = text[start..].find(target) {
+        let match_pos = start + idx;
+        let rest = &text[match_pos..];
+        let end_offset = rest
+            .find(|c: char| c == ',' || c == ';' || c == '"' || c == '\n' || c == '\r')
+            .unwrap_or(rest.len());
+        let b64_str = &rest[..end_offset];
+
+        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(b64_str) {
+            if decoded.starts_with(b"\x89PNG") && decoded.len() > 100 {
+                count += 1;
+                let frame_path = work_dir.join(format!("frame_{:05}.png", count));
+                let _ = tokio::fs::write(frame_path, decoded).await;
+            }
+        }
+        start = match_pos + target.len();
+    }
+    count
+}
+
+/// Helper to convert a local `.guac` recording file to an `.mp4` video file using `guacenc` (with `ffmpeg` fallback).
 ///
 /// `guacenc` is Apache Guacamole's session recording encoding utility.
 /// When given a `.guac` input file, it renders the instruction stream and outputs an H.264 video file.
@@ -1054,34 +1082,80 @@ pub async fn convert_guac_to_mp4(
         .arg("-f")
         .arg(&temp_guac)
         .output()
-        .await
-        .map_err(|e| {
-            crate::error::AppError::Internal(format!(
-                "Failed to execute guacenc conversion utility ({guacenc_bin}). Error: {e}"
-            ))
-        })?;
+        .await;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::error!("guacenc conversion failed for {:?}: {}", guac_path, stderr);
-        return Err(crate::error::AppError::Internal(format!(
-            "Session recording conversion failed: {}",
-            stderr
-        )));
+    if let Ok(ref res) = output {
+        if res.status.success() {
+            for path in &possible_outputs {
+                if path.exists() {
+                    if let Ok(meta) = tokio::fs::metadata(path).await {
+                        if meta.len() > 0 {
+                            return Ok(path.clone());
+                        }
+                    }
+                }
+            }
+        } else {
+            let stderr = String::from_utf8_lossy(&res.stderr);
+            tracing::warn!(
+                "guacenc conversion returned non-zero for {:?}: {}",
+                guac_path,
+                stderr
+            );
+        }
+    } else if let Err(ref e) = output {
+        tracing::warn!("guacenc execution failed for {:?}: {}", guac_path, e);
     }
 
-    for path in &possible_outputs {
-        if path.exists() {
-            if let Ok(meta) = tokio::fs::metadata(path).await {
-                if meta.len() > 0 {
-                    return Ok(path.clone());
+    // Tier 2 Fallback: ffmpeg + frame extraction
+    let ffmpeg_bin = if std::path::Path::new("/usr/local/bin/ffmpeg").exists() {
+        "/usr/local/bin/ffmpeg"
+    } else if std::path::Path::new("/usr/bin/ffmpeg").exists() {
+        "/usr/bin/ffmpeg"
+    } else {
+        "ffmpeg"
+    };
+
+    let ffmpeg_out = work_dir.join("recording_fallback.mp4");
+    if ffmpeg_out.exists() {
+        if let Ok(meta) = tokio::fs::metadata(&ffmpeg_out).await {
+            if meta.len() > 0 {
+                return Ok(ffmpeg_out);
+            }
+        }
+    }
+
+    if let Ok(guac_bytes) = tokio::fs::read(&temp_guac).await {
+        let frame_count = extract_and_save_guac_frames(&guac_bytes, &work_dir).await;
+        if frame_count > 0 {
+            let ff_cmd = tokio::process::Command::new(ffmpeg_bin)
+                .arg("-y")
+                .arg("-framerate")
+                .arg("5")
+                .arg("-i")
+                .arg(work_dir.join("frame_%05d.png"))
+                .arg("-c:v")
+                .arg("libx264")
+                .arg("-pix_fmt")
+                .arg("yuv420p")
+                .arg(&ffmpeg_out)
+                .output()
+                .await;
+
+            if let Ok(ff_res) = ff_cmd {
+                if ff_res.status.success() && ffmpeg_out.exists() {
+                    if let Ok(meta) = tokio::fs::metadata(&ffmpeg_out).await {
+                        if meta.len() > 0 {
+                            return Ok(ffmpeg_out);
+                        }
+                    }
                 }
             }
         }
     }
 
     Err(crate::error::AppError::Internal(
-        "guacenc completed but output video file was not found".into(),
+        "Neither guacenc nor ffmpeg could convert the recording to MP4".into(),
     ))
 }
 

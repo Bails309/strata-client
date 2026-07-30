@@ -1001,14 +1001,21 @@ pub async fn convert_guac_to_mp4(
         ));
     }
 
-    // guacenc outputs input_path + ".m4v"
-    let m4v_path = std::path::PathBuf::from(format!("{}.m4v", guac_path.display()));
+    // guacenc may output <input>.m4v or <input>.mp4
+    let possible_outputs = [
+        std::path::PathBuf::from(format!("{}.m4v", guac_path.display())),
+        std::path::PathBuf::from(format!("{}.mp4", guac_path.display())),
+        guac_path.with_extension("m4v"),
+        guac_path.with_extension("mp4"),
+    ];
 
-    // If already converted recently, return existing m4v path
-    if m4v_path.exists() {
-        if let Ok(meta) = tokio::fs::metadata(&m4v_path).await {
-            if meta.len() > 0 {
-                return Ok(m4v_path);
+    // If already converted recently, return existing video path
+    for path in &possible_outputs {
+        if path.exists() {
+            if let Ok(meta) = tokio::fs::metadata(path).await {
+                if meta.len() > 0 {
+                    return Ok(path.clone());
+                }
             }
         }
     }
@@ -1034,13 +1041,15 @@ pub async fn convert_guac_to_mp4(
         )));
     }
 
-    if m4v_path.exists() {
-        Ok(m4v_path)
-    } else {
-        Err(crate::error::AppError::Internal(
-            "guacenc completed but output video file was not found".into(),
-        ))
+    for path in &possible_outputs {
+        if path.exists() {
+            return Ok(path.clone());
+        }
     }
+
+    Err(crate::error::AppError::Internal(
+        "guacenc completed but output video file was not found".into(),
+    ))
 }
 
 /// Prepare a recording file for download (either in `.mp4` format playable on Windows or raw `.guac` format).
@@ -1071,7 +1080,11 @@ pub async fn prepare_recording_for_download(
     };
 
     let dir = "/var/lib/guacamole/recordings";
-    let guac_path = std::path::PathBuf::from(dir).join(&recording.storage_path);
+    let guac_path = if std::path::Path::new(&recording.storage_path).exists() {
+        std::path::PathBuf::from(&recording.storage_path)
+    } else {
+        std::path::PathBuf::from(dir).join(&recording.storage_path)
+    };
 
     if recording.storage_type == "local" {
         if !guac_path.exists() {
@@ -1081,8 +1094,20 @@ pub async fn prepare_recording_for_download(
         }
 
         if format == "mp4" {
-            let video_path = convert_guac_to_mp4(&guac_path).await?;
-            Ok((video_path, download_filename, content_type))
+            match convert_guac_to_mp4(&guac_path).await {
+                Ok(video_path) => Ok((video_path, download_filename, content_type)),
+                Err(e) => {
+                    tracing::warn!(
+                        "MP4 conversion failed ({e}); serving raw .guac recording file for download"
+                    );
+                    let guac_filename = format!("{}_{}.guac", safe_conn_name, recording.id);
+                    Ok((
+                        guac_path,
+                        guac_filename,
+                        "application/octet-stream".to_string(),
+                    ))
+                }
+            }
         } else {
             Ok((guac_path, download_filename, content_type))
         }
@@ -1109,8 +1134,20 @@ pub async fn prepare_recording_for_download(
         }
 
         if format == "mp4" {
-            let video_path = convert_guac_to_mp4(&local_temp_guac).await?;
-            Ok((video_path, download_filename, content_type))
+            match convert_guac_to_mp4(&local_temp_guac).await {
+                Ok(video_path) => Ok((video_path, download_filename, content_type)),
+                Err(e) => {
+                    tracing::warn!(
+                        "MP4 conversion failed ({e}); serving raw .guac recording file for download"
+                    );
+                    let guac_filename = format!("{}_{}.guac", safe_conn_name, recording.id);
+                    Ok((
+                        local_temp_guac,
+                        guac_filename,
+                        "application/octet-stream".to_string(),
+                    ))
+                }
+            }
         } else {
             Ok((local_temp_guac, download_filename, content_type))
         }

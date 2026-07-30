@@ -145,7 +145,8 @@ export default function MyRecordings() {
                             console.error
                           )
                         }
-                        className="btn-sm-secondary py-1 inline-flex items-center gap-1 text-xs"
+                        className="btn-sm py-1 text-xs"
+
                         title="Download as Windows-playable MP4 video"
                       >
                         <svg

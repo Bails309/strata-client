@@ -29,6 +29,33 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.14.1",
+    subtitle:
+      "Patch release — remote → local clipboard no longer silently stops working mid-session (RDP). A user reported that copying large amounts of text (12k lines) from a remote server stopped reaching the local clipboard 'at random points', and that only closing Strata and reconnecting to the same server fixed it. Root cause: the remote → local clipboard flow is a Guacamole stream (clipboard → one or more blob → end), and the frontend only writes to the local clipboard when the stream's terminating end instruction arrives. Under certain RDP CLIPRDR conditions — typically when the Windows clipboard owner is a delayed-rendering app (Chrome, Edge, VS Code, terminals) and a subsequent copy interrupts the format-data request, or when FreeRDP's clipboard channel becomes wedged after many transfers — guacd opens the stream, delivers zero or a partial set of blobs, and never sends end. The onend callback never fires, navigator.clipboard.writeText() is never called, and the local clipboard silently keeps its previous contents. No error surfaced, so it looked like copy 'just stopped working'; reconnecting reset the server-side clipboard channel, which is why a fresh session recovered it. The 12k-lines size is a correlation, not the cause — large multi-blob transfers keep the channel busy longer and are more likely to be interrupted, but the stall itself is size-independent. v1.14.1 adds a per-stream stall watchdog that force-flushes partial clipboard data if the stream never terminates, with a no-clobber guard so a zero-blob stall never wipes what you previously copied. Frontend-only change to the receive path; the paste (local → remote) path is untouched, and there are no schema, API, env-var, or dependency changes.",
+    sections: [
+      {
+        title: "Symptom — copy from a remote server stops updating the local clipboard",
+        description:
+          "During a long-lived RDP session, copying text inside the remote desktop would, at seemingly random points, stop updating your local clipboard entirely — pasting locally would yield whatever you had copied earlier. Nothing appeared in the browser console. Disconnecting the session tab and reconnecting to the same server was the only reliable fix, because a fresh connection spawns a new guacd process with a clean clipboard channel.",
+      },
+      {
+        title: "Root cause — an unterminated clipboard stream on the receive path",
+        description:
+          "The remote → local clipboard handler (client.onclipboard in frontend/src/components/SessionManager.tsx) accumulates blob text via a Guacamole.StringReader and only calls navigator.clipboard.writeText() inside the reader's onend callback. When RDP's CLIPRDR virtual channel stalls — commonly when the Windows clipboard owner is a delayed-rendering app (Chrome, Edge, VS Code, terminals) and a subsequent copy interrupts the pending format-data request, or when FreeRDP's clipboard state wedges after many transfers — guacd opens the stream and delivers zero or a partial set of blobs, but never emits the terminating end instruction. onend never fires, so writeText() is never called and the local clipboard silently keeps its old value. The failure is completely silent (no onerror, no console output).",
+      },
+      {
+        title: "Fix — a per-stream stall watchdog that flushes partial data",
+        description:
+          "client.onclipboard now arms a 2-second timer when the clipboard stream opens and re-arms it on every received blob. If end arrives first, behaviour is unchanged. If the timer fires first, the handler force-flushes whatever text it received to the local clipboard, updates the session's remote-clipboard mirror, acks the stalled stream so guacd can free the orphaned stream index, and logs a single diagnostic warning ('clipboard stream N stalled after M blob(s), K chars — flushing partial data') so future stalls are visible for correlation with server-side guacd logs. A no-clobber guard ensures a stall that received zero blobs does NOT overwrite the local clipboard — writing an empty string would wipe whatever you had copied previously and make the bug worse.",
+      },
+      {
+        title: "Scope & deploy",
+        description:
+          "Frontend-only change to the remote → local receive path; the paste (local → remote) path is untouched. No schema, API surface, environment variable, or dependency changes. This is a resilience/availability improvement, not a security-boundary change — the same authenticated WebSocket and tunnel ticket carry the same bytes. Two regression tests were added (partial-data flush after stall; zero-blob stall does not clobber). Deploy: docker compose pull && docker compose up -d --build frontend.",
+      },
+    ],
+  },
+  {
     version: "1.14.0",
     subtitle:
       "Minor release — Download Session Recordings in Windows-Playable Format (.mp4). Users and administrators can now download session recordings directly as Windows-playable MP4 video files. Guacamole session recordings are stored natively as raw .guac instruction streams which default Windows media players (Windows Media Player, Movies & TV, Edge, Chrome, VLC) cannot play. v1.14.0 introduces an on-demand video conversion service utilizing Apache Guacamole's native guacenc utility compiled with ffmpeg. When requesting an MP4 download, Strata renders the .guac instruction stream into an H.264 video container (.mp4) and serves it with proper MIME headers and sanitized filenames. Download buttons are available in My Recordings, Sessions (admin view), and the Historical Player modal header.",

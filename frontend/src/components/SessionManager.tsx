@@ -411,7 +411,7 @@ export function SessionManagerProvider({
           // hangs. Do NOT downgrade to console.debug; users pasting bug
           // reports need this visible without dev-tools filters.
           console.warn(
-            `[session] clipboard stream ${stream.index} stalled after ${blobCount} blob(s), ${data.length} chars — flushing partial data`,
+            `[session] clipboard stream ${stream.index} stalled after ${blobCount} blob(s), ${data.length} chars — flushing partial data`
           );
           // Force-close the stalled stream so guacd sees an ack for the
           // orphaned index instead of leaking it forever.

@@ -462,9 +462,7 @@ describe("SessionManager", () => {
       expect(session.remoteClipboard).toBe("partial line 1\npartial line 2\n");
       // Stalled stream should be ack-closed so guacd can free the index.
       expect(sendAck).toHaveBeenCalled();
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("clipboard stream 42 stalled"),
-      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("clipboard stream 42 stalled"));
     } finally {
       warnSpy.mockRestore();
       vi.useRealTimers();
@@ -517,9 +515,7 @@ describe("SessionManager", () => {
 
       // Stall fired but no data → do not touch local clipboard.
       expect(mockWriteText).not.toHaveBeenCalled();
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("clipboard stream 7 stalled"),
-      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("clipboard stream 7 stalled"));
     } finally {
       warnSpy.mockRestore();
       vi.useRealTimers();

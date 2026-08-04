@@ -357,31 +357,94 @@ export function SessionManagerProvider({
     };
 
     // ── Clipboard sync: remote → local ──
+    // guacd streams the clipboard as `clipboard,idx,mimetype;` followed by
+    // one or more `blob,idx,base64;` instructions and finally `end,idx;`.
+    // Under certain RDP CLIPRDR conditions (e.g. Windows returning delayed
+    // format data after another copy interrupted the previous request, or
+    // FreeRDP internal state getting wedged after N transfers), guacd can
+    // open the stream and deliver zero or a partial set of blobs and never
+    // emit `end`. The frontend's `StringReader.onend` then never fires, so
+    // `navigator.clipboard.writeText()` is never called and the local
+    // clipboard silently retains its previous value — visible to the user
+    // as "copy just stopped working, but reconnecting fixes it".
+    //
+    // Guard the receive path with a per-stream watchdog: if we don't see
+    // `end` within STALL_MS of the last blob (or of stream open when no
+    // blobs arrived), flush whatever we have to the local clipboard and
+    // log a diagnostic. Getting *some* new text is much better than silently
+    // leaving stale text sitting on the clipboard, and the console warning
+    // gives us evidence to correlate with server-side guacd logs.
+    const CLIPBOARD_STALL_MS = 2000;
     client.onclipboard = (stream: Guacamole.InputStream, mimetype: string) => {
       if (mimetype !== "text/plain") return;
       const reader = new Guacamole.StringReader(stream);
       let data = "";
-      reader.ontext = (text: string) => {
-        data += text;
-      };
-      reader.onend = () => {
-        session.remoteClipboard = data;
-        // Write to browser clipboard if permitted.
+      let blobCount = 0;
+      let flushed = false;
+      let stallTimer: ReturnType<typeof setTimeout> | undefined;
+
+      const writeToLocalClipboard = (text: string): void => {
         // When the session is in a pop-out window the main window lacks focus
-        // so navigator.clipboard.writeText() is denied by the browser.  Use
+        // so navigator.clipboard.writeText() is denied by the browser. Use
         // the popup window's clipboard API instead since it has focus.
         const clipNav =
           session._popout && !session._popout.window.closed
             ? session._popout.window.navigator
             : navigator;
-        clipNav.clipboard?.writeText(data).catch((err: unknown) => {
+        clipNav.clipboard?.writeText(text).catch((err: unknown) => {
           // Best-effort copy — don't surface this to users (it spams on
           // every keystroke in the iframe), but log so devs can spot a
           // Permissions-Policy or cross-origin clipboard denial.
           console.warn("[session] clipboard write failed:", err);
         });
+      };
+
+      const flush = (reason: "end" | "stall"): void => {
+        if (flushed) return;
+        flushed = true;
+        if (stallTimer !== undefined) {
+          clearTimeout(stallTimer);
+          stallTimer = undefined;
+        }
+        if (reason === "stall") {
+          // Diagnostic only — helps correlate with guacd/FreeRDP CLIPRDR
+          // hangs. Do NOT downgrade to console.debug; users pasting bug
+          // reports need this visible without dev-tools filters.
+          console.warn(
+            `[session] clipboard stream ${stream.index} stalled after ${blobCount} blob(s), ${data.length} chars — flushing partial data`
+          );
+          // Force-close the stalled stream so guacd sees an ack for the
+          // orphaned index instead of leaking it forever.
+          try {
+            stream.sendAck("Stream stalled — flushed by client watchdog", 0x0200);
+          } catch {
+            /* stream may already be closed */
+          }
+        }
+        // Only overwrite the local clipboard when we actually received
+        // something. An empty flush from a stall with zero blobs would
+        // wipe whatever the user had copied previously, making the bug
+        // worse. Still update session.remoteClipboard so the local→remote
+        // path doesn't echo an obsolete value.
+        session.remoteClipboard = data;
+        if (data.length > 0) {
+          writeToLocalClipboard(data);
+        }
         setSessions((prev) => [...prev]); // trigger re-render
       };
+
+      const armStallTimer = (): void => {
+        if (stallTimer !== undefined) clearTimeout(stallTimer);
+        stallTimer = setTimeout(() => flush("stall"), CLIPBOARD_STALL_MS);
+      };
+
+      reader.ontext = (text: string) => {
+        data += text;
+        blobCount++;
+        armStallTimer();
+      };
+      reader.onend = () => flush("end");
+      armStallTimer();
     };
 
     // ── Clipboard sync: local → remote (on focus) ──

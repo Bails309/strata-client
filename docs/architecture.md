@@ -1576,6 +1576,66 @@ Seven unit tests in
 [`__tests__/pastePayload.test.ts`](../frontend/src/__tests__/pastePayload.test.ts)
 pin the boundary conditions.
 
+## Remote → local clipboard stall watchdog (v1.14.1)
+
+The remote → local clipboard path is a Guacamole **stream**, not a
+single instruction. When text is copied inside the remote desktop,
+`guacd` emits `clipboard,<idx>,text/plain;`, then one or more
+`blob,<idx>,<base64>;` instructions carrying the UTF-8 payload in
+chunks, and finally `end,<idx>;` to close the stream. The frontend
+handler `client.onclipboard` in
+[`SessionManager.tsx`](../frontend/src/components/SessionManager.tsx)
+attaches a `Guacamole.StringReader` to the stream, accumulates the
+decoded text across every `blob`, and — historically — only wrote the
+result to the browser via `navigator.clipboard.writeText()` inside the
+reader's `onend` callback.
+
+That single-point-of-flush design has a failure mode on RDP. The
+Windows clipboard is exposed through the **CLIPRDR** virtual channel,
+which is a *delayed-rendering* protocol: when an application copies,
+Windows advertises the available formats but does not produce the
+actual bytes until a consumer requests a specific format. If the
+clipboard owner is an app that renders lazily (Chrome, Edge, VS Code,
+most terminals) and a *subsequent* copy interrupts the in-flight
+format-data request, or if FreeRDP's CLIPRDR state machine becomes
+wedged after many transfers, `guacd` can open the stream and deliver
+zero or a partial set of `blob`s and then **never emit `end`**. The
+reader's `onend` never fires, `writeText()` is never called, and the
+local clipboard silently retains its previous contents. Nothing is
+logged, no `onerror` fires, and the only recovery is a full reconnect
+(which spawns a fresh `guacd` process with a clean CLIPRDR channel).
+Large multi-blob transfers are statistically more exposed to this —
+they keep the channel busy longer and are more likely to be
+interrupted — but the stall itself is size-independent.
+
+v1.14.1 wraps the receive path in a **per-stream stall watchdog**:
+
+- A 2-second timer (`CLIPBOARD_STALL_MS`) is armed when the stream
+  opens and re-armed on every received `blob`. Continuous delivery
+  therefore never trips it; only a gap of ≥ 2 s with no `end` does.
+- If `end` arrives first, the flush is normal and unchanged.
+- If the timer fires first, the handler flushes whatever text it has
+  accumulated to the local clipboard, mirrors it into
+  `session.remoteClipboard`, acks the stalled stream via
+  `stream.sendAck(...)` with a non-fatal status code so `guacd` can
+  release the orphaned stream index, and logs a single diagnostic
+  `console.warn` (`clipboard stream N stalled after M blob(s), K
+  chars — flushing partial data`) for correlation with server-side
+  `guacd` logs.
+- A **no-clobber guard** ensures a stall that received *zero* blobs
+  never overwrites the local clipboard — an empty flush would wipe
+  whatever the user had copied previously and make the defect worse.
+
+The watchdog is a resilience layer over the receive path only; the
+local → remote (paste) path, the pop-out clipboard path, and the
+CLIPRDR channel on the server side are unchanged. It cannot un-wedge
+`guacd`'s clipboard state — that remains a server-side concern — but
+it guarantees the user receives whatever text did arrive instead of
+silently stale content, and it makes every future occurrence visible.
+Two regression tests in
+[`__tests__/SessionManager.test.tsx`](../frontend/src/__tests__/SessionManager.test.tsx)
+pin the flush-on-stall and zero-blob-no-clobber behaviours.
+
 ## OIDC discovery and JWKS cache consolidation (v1.6.1)
 
 The OIDC SSO callback handler used to perform up to four upstream

@@ -398,6 +398,130 @@ describe("SessionManager", () => {
     expect(mockWriteText).toHaveBeenCalledWith("hello from remote");
   });
 
+  it("flushes partial clipboard data when remote stream stalls (never sends end)", async () => {
+    // Regression guard: RDP CLIPRDR occasionally opens a clipboard stream
+    // and delivers some blobs but never fires `end`, leaving the local
+    // clipboard silently stuck on the previous value. The watchdog inside
+    // `client.onclipboard` should flush accumulated data after a stall
+    // timeout so the user gets *something* new instead of stale content.
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { result } = renderHook(() => useSessionManager(), { wrapper });
+
+      const mockWriteText = vi.fn().mockResolvedValue(undefined);
+      Object.assign(navigator, {
+        clipboard: { writeText: mockWriteText },
+      });
+
+      let session: any;
+      rtlAct(() => {
+        session = result.current.createSession({
+          connectionId: "c1",
+          name: "A",
+          protocol: "rdp",
+          containerEl: document.createElement("div"),
+          connectParams: new URLSearchParams(),
+        });
+      });
+
+      let ontext: (t: string) => void = () => {};
+      // Note: onend is intentionally never invoked in this test to simulate
+      // the stall condition.
+      vi.mocked(Guacamole.StringReader).mockImplementation(function () {
+        return {
+          set ontext(fn: any) {
+            ontext = fn;
+          },
+          set onend(_fn: any) {
+            /* stalled — never called */
+          },
+        } as any;
+      });
+
+      const sendAck = vi.fn();
+      const mockStream = { index: 42, sendAck } as any;
+
+      rtlAct(() => {
+        session.client.onclipboard(mockStream, "text/plain");
+      });
+      rtlAct(() => {
+        ontext("partial line 1\n");
+        ontext("partial line 2\n");
+      });
+
+      // Before the stall timer fires, nothing should have been written.
+      expect(mockWriteText).not.toHaveBeenCalled();
+
+      // Advance past CLIPBOARD_STALL_MS (2000 ms).
+      rtlAct(() => {
+        vi.advanceTimersByTime(2500);
+      });
+
+      expect(mockWriteText).toHaveBeenCalledWith("partial line 1\npartial line 2\n");
+      expect(session.remoteClipboard).toBe("partial line 1\npartial line 2\n");
+      // Stalled stream should be ack-closed so guacd can free the index.
+      expect(sendAck).toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("clipboard stream 42 stalled"));
+    } finally {
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not overwrite local clipboard when a stalled stream received zero blobs", async () => {
+    // If guacd opens the stream but never delivers a single blob, we must
+    // NOT clobber whatever the user had on their local clipboard with an
+    // empty string — that would make the bug visibly worse.
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { result } = renderHook(() => useSessionManager(), { wrapper });
+
+      const mockWriteText = vi.fn().mockResolvedValue(undefined);
+      Object.assign(navigator, {
+        clipboard: { writeText: mockWriteText },
+      });
+
+      let session: any;
+      rtlAct(() => {
+        session = result.current.createSession({
+          connectionId: "c1",
+          name: "A",
+          protocol: "rdp",
+          containerEl: document.createElement("div"),
+          connectParams: new URLSearchParams(),
+        });
+      });
+
+      vi.mocked(Guacamole.StringReader).mockImplementation(function () {
+        return {
+          set ontext(_fn: any) {
+            /* no data ever arrives */
+          },
+          set onend(_fn: any) {
+            /* stalled */
+          },
+        } as any;
+      });
+
+      rtlAct(() => {
+        session.client.onclipboard({ index: 7, sendAck: vi.fn() } as any, "text/plain");
+      });
+
+      rtlAct(() => {
+        vi.advanceTimersByTime(2500);
+      });
+
+      // Stall fired but no data → do not touch local clipboard.
+      expect(mockWriteText).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("clipboard stream 7 stalled"));
+    } finally {
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("triggers file download when server sends file", async () => {
     const { result } = renderHook(() => useSessionManager(), { wrapper });
 

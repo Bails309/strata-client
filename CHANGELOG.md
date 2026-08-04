@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.14.1] — 2026-08-04
+
+### Patch Release — Remote → local clipboard no longer silently stops working mid-session (RDP)
+
+**The ask.** "For some reason in Strata I can't copy large amounts of text from servers at random points — 12k lines. It worked when I closed Strata and reopened it and reconnected to the same server again."
+
+**Symptom.** During a long-lived RDP session, copying text inside the remote desktop would, at seemingly random points, stop updating the local clipboard entirely — the local clipboard silently retained its previous contents. No error appeared in the browser console. The only reliable recovery was to disconnect the session tab and reconnect to the same server, which spawns a fresh `guacd` process with clean channel state.
+
+**Root cause — an unterminated clipboard stream on the receive path.** The remote → local clipboard flow is a Guacamole stream: `guacd` sends `clipboard,<idx>,text/plain;`, then one or more `blob,<idx>,<base64>;` instructions, and finally `end,<idx>;`. The frontend handler in [`frontend/src/components/SessionManager.tsx`](frontend/src/components/SessionManager.tsx) (`client.onclipboard`) accumulates blob text via a `Guacamole.StringReader` and only writes to `navigator.clipboard.writeText()` inside the reader's `onend` callback.
+
+Under certain RDP **CLIPRDR** (clipboard virtual channel) conditions — most commonly when the Windows-side clipboard owner is a delayed-rendering application (Chrome, Edge, VS Code, many terminals) and a subsequent copy interrupts the format-data request, or when FreeRDP's CLIPRDR state becomes wedged after many transfers — `guacd` opens the stream and delivers zero or a partial set of blobs, then **never emits `end`**. The reader's `onend` therefore never fires, `writeText()` is never called, and the local clipboard is left holding stale data. Because the failure is entirely silent (no `onerror`, no console output), the user perceives it as "copy just stopped working." Reconnecting resets the server-side CLIPRDR channel, which is why a full reconnect restored the behaviour.
+
+The report's "large amounts of text / 12k lines" framing is a correlation, not the cause: large multi-blob transfers keep the CLIPRDR channel busy longer and are statistically more likely to be interrupted by the next copy, so they surface the underlying stall more often. The stall itself is size-independent.
+
+**The Fix (frontend-only, resilience).**
+- **Per-stream stall watchdog** in `client.onclipboard`. A 2-second timer is armed when the clipboard stream opens and re-armed on every received blob. If `end` arrives first, behaviour is unchanged (normal flush). If the timer fires first, the handler force-flushes whatever text was accumulated to the local clipboard, updates `session.remoteClipboard`, and logs a single diagnostic `console.warn` (`clipboard stream N stalled after M blob(s), K chars — flushing partial data`) so future occurrences are visible for correlation with server-side `guacd` logs.
+- **No-clobber guard.** A stall that received **zero** blobs does **not** overwrite the local clipboard — writing an empty string would wipe whatever the user had previously copied and make the bug visibly worse. `session.remoteClipboard` is still synced so the local → remote path does not echo an obsolete value.
+- **Orphan-stream cleanup.** On a stall, the handler acks the stalled stream (`sendAck` with a non-fatal status code) so `guacd` can release the orphaned stream index instead of leaking it for the remainder of the session.
+
+**Scope & safety.** This is a frontend-only change to the remote → local clipboard receive path. There is no schema, API surface, environment variable, or dependency change, and the local → remote (paste) path is untouched. It is a resilience/availability improvement, not a security-boundary change — the same authenticated WebSocket and tunnel ticket carry the same bytes. Two regression tests were added to [`frontend/src/__tests__/SessionManager.test.tsx`](frontend/src/__tests__/SessionManager.test.tsx): one asserting partial data is flushed after the stall timeout, one asserting a zero-blob stall does not clobber the local clipboard. `npx tsc --noEmit` is clean and all SessionManager tests pass.
+
+**Deploy.** Frontend-only: `docker compose pull && docker compose up -d --build frontend`.
+
 ## [1.14.0] — 2026-07-29
 
 ### Minor Release — Download Session Recordings in Windows-Playable Format (.mp4)

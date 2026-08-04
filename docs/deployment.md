@@ -2621,6 +2621,8 @@ Clipboard synchronisation between your local machine and the remote session is a
 
 No manual action is required. Clipboard sync works with both RDP and SSH sessions.
 
+> **Resilience (v1.14.1+).** The remote → local direction is delivered as a streamed sequence of chunks that the browser only commits to your local clipboard once the stream is closed. On RDP, the Windows clipboard channel (CLIPRDR) can occasionally open a transfer and then never close it — most often when the copying application renders its clipboard data lazily (Chrome, Edge, VS Code, terminals) and a second copy interrupts the first, or when the remote desktop's clipboard channel gets stuck after many transfers. Previously this left your local clipboard silently holding its previous contents until you disconnected and reconnected. Strata now runs a 2-second per-transfer watchdog: if a transfer stalls without closing, whatever text arrived is flushed to your local clipboard anyway, and a diagnostic is written to the browser console. A transfer that produced **no** data never overwrites what you already had copied. If you still see a clipboard transfer fail to complete, reconnecting the session resets the remote clipboard channel.
+
 ### File Transfer
 
 There are three ways to transfer files to and from a remote session:

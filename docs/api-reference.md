@@ -2338,6 +2338,8 @@ Upgrades to a WebSocket connection that proxies bidirectional binary frames betw
    - Username from the JWT
 4. Binary frames are proxied bidirectionally until either side closes
 
+> **Clipboard streaming (v1.14.1 note).** The remote → local clipboard is not a single instruction but a Guacamole stream: `guacd` sends `clipboard,<idx>,text/plain;`, then one or more `blob,<idx>,<base64>;` instructions, and finally `end,<idx>;`. The backend proxies these verbatim. The browser client (`SessionManager.tsx`) only commits the payload to `navigator.clipboard` when it receives `end`. Because RDP's CLIPRDR channel can occasionally open a clipboard stream and never terminate it (delayed-rendering clipboard owners whose format-data request is interrupted, or a wedged FreeRDP CLIPRDR state), the client applies a **2-second per-stream stall watchdog**: if `end` does not arrive within 2 s of the last `blob`, the client flushes whatever text it received, `sendAck`s the stalled stream so the server can free the stream index, and logs a diagnostic. A zero-blob stall is not flushed (no-clobber guard). This is entirely client-side; the tunnel wire protocol and the backend proxy loop are unchanged. The backend's own per-instruction pending-buffer cap remains **16 MiB** and the RDP `clipboard-buffer-size` guacd parameter remains **8 MiB**.
+
 **DMZ deployment mode (v1.5.2+)**: When a user reaches the backend through a public-facing `strata-dmz` edge node, this WebSocket upgrade is forwarded end-to-end through the reverse-tunnel link using **RFC 8441 Extended CONNECT** over the link's HTTP/2 connection. The DMZ proxy:
 
 1. Detects the WebSocket upgrade on the public listener (`Upgrade: websocket` + `Connection: Upgrade` + `Sec-WebSocket-Key`).

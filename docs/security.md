@@ -1440,6 +1440,24 @@ checked_in | expired`. Every transition is written
   releases stale `RequestAvailable` / `PasswordCheckedOut` requests
   before posting a new one, eliminating the 90001 / rotation
   combination and preventing the lockout class entirely.
+- **A lapsed appliance session fails to a re-auth prompt, never a
+  500 (v1.14.2).** In `per_user_browser` / `hybrid` modes the DB-side
+  TTL on a sealed `safeguard_user_tokens` bearer can outlive the
+  appliance's own session, so the appliance may reject a token Strata
+  still holds. When that happens on the approval-poll path — a
+  request that sat pending long enough for the live password (and the
+  session) to lapse — both the `CheckoutPassword` call and the
+  v1.12.12 state refetch return `HTTP 401`/`403`. `release_pending`
+  classifies these with `is_appliance_auth_failure` and, for non-A2A
+  modes, returns `AppError::Validation("safeguard.signin_required")`
+  (`HTTP 400`) instead of re-raising an opaque `HTTP 500`. The
+  `safeguard_pending_requests` row is **kept** (an expired session
+  does not invalidate the access request), request ownership is still
+  re-validated server-side on every poll, and no plaintext or token
+  material is exposed — the user is simply told to re-run
+  `Connect-Safeguard`. A2A mode is deliberately excluded because a
+  401/403 there is a trusted-credential misconfiguration, not a user
+  sign-in lapse, and must remain a diagnosable error.
 - **TLS is per-config, with optional pinning.** The `reqwest` HTTP
   client used to talk to Safeguard is built per config load (not
   per request) with: system trust store, an **additional**

@@ -27,6 +27,19 @@ const POLL_INTERVAL_MS = 15_000;
  */
 const POLL_MAX_MS = 30 * 60_000;
 
+/**
+ * Shown on a pending row when `/user/safeguard/release` reports the
+ * appliance rejected our Safeguard token (backend surfaces the stable
+ * `safeguard.signin_required` code as HTTP 400). This is what a
+ * long-pending request looks like once the live password — and the
+ * appliance-side session — has expired: the request may still be
+ * valid, the user just needs to re-authenticate before Refresh can
+ * succeed. We keep the row pending (Refresh button + poll survive)
+ * rather than dead-ending it.
+ */
+const SIGNIN_LAPSED_MSG =
+  "Your Safeguard sign-in has expired. Sign in to Safeguard again above, then press Refresh.";
+
 interface Props {
   profiles: CredentialProfile[];
   /** Pulled from the parent so we can hide when JIT is off entirely. */
@@ -179,17 +192,34 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
       }
     } catch (e: unknown) {
       // Surface as inline error text on the row by overwriting it.
-      const msg = e instanceof Error ? e.message : "Refresh failed";
-      setResults((prev) =>
-        prev.map((r) =>
-          r.profile_id === profileId ? { ...r, ok: false, state: "failed", error: msg } : r
-        )
-      );
-      setPollStartedAt((prev) => {
-        const next = new Map(prev);
-        next.delete(profileId);
-        return next;
-      });
+      const raw = e instanceof Error ? e.message : "Refresh failed";
+      const signinLapsed = raw.includes("safeguard.signin_required");
+      if (signinLapsed) {
+        // The appliance rejected our Safeguard token (the request sat
+        // pending long enough for the session to lapse). Keep the row
+        // pending so the Refresh button + background poll survive,
+        // swap in an actionable message, and re-pull the sign-in
+        // banner/gating so the user is nudged to re-authenticate.
+        setResults((prev) =>
+          prev.map((r) =>
+            r.profile_id === profileId
+              ? { ...r, ok: false, state: "pending", error: SIGNIN_LAPSED_MSG }
+              : r
+          )
+        );
+        void refresh();
+      } else {
+        setResults((prev) =>
+          prev.map((r) =>
+            r.profile_id === profileId ? { ...r, ok: false, state: "failed", error: raw } : r
+          )
+        );
+        setPollStartedAt((prev) => {
+          const next = new Map(prev);
+          next.delete(profileId);
+          return next;
+        });
+      }
     } finally {
       setPollingIds((prev) => {
         const next = new Set(prev);
@@ -567,10 +597,16 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
                 </div>
                 {result?.state === "pending" && result.request_id && (
                   <div className="text-[0.6875rem] text-warning mt-1 ml-8 break-words">
-                    Awaiting approver — request {result.request_id} is queued in Safeguard. We
-                    re-check every {Math.round(POLL_INTERVAL_MS / 1000)}s for up to{" "}
-                    {Math.round(POLL_MAX_MS / 60_000)} minutes; press Refresh to keep going past
-                    that window.
+                    {result.error === SIGNIN_LAPSED_MSG ? (
+                      result.error
+                    ) : (
+                      <>
+                        Awaiting approver — request {result.request_id} is queued in Safeguard. We
+                        re-check every {Math.round(POLL_INTERVAL_MS / 1000)}s for up to{" "}
+                        {Math.round(POLL_MAX_MS / 60_000)} minutes; press Refresh to keep going past
+                        that window.
+                      </>
+                    )}
                   </div>
                 )}
                 {result && result.state !== "pending" && !result.ok && result.error && (

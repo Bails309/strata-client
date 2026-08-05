@@ -29,6 +29,33 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.14.2",
+    subtitle:
+      "Patch release — Safeguard 'Awaiting approval' Refresh no longer dead-ends on an Internal Server Error after your Safeguard sign-in lapses. A user re-flagged a bug we thought was fixed: an approval-gated request sat in Awaiting approval long enough for its live password to expire, Strata never noticed it had been approved, and pressing Refresh returned HTTP 500 'Internal server error' in an unrecoverable loop. The v1.12.12 fix already turns terminal appliance states (Expired / Cancelled / Denied / …) and 404s into an actionable 'please submit a new checkout request' message — but it assumed the follow-up state lookup succeeds. It doesn't when the real problem is a dead bearer: in per_user_browser / hybrid modes Strata's stored Safeguard token can outlive the appliance's own session, so by the time you Refresh a long-pending row, both the CheckoutPassword call and the state-refetch come back HTTP 401/403, which bubbled up as a generic 500 with the pending row left stuck. v1.14.2 recognises those 401/403 appliance rejections and, for non-A2A auth modes, returns the stable safeguard.signin_required code (HTTP 400) instead of a 500 — the row now stays pending and refreshable and shows an actionable re-sign-in message. Backend + frontend patch — no schema, API, env-var, or dependency changes.",
+    sections: [
+      {
+        title: "Symptom — Awaiting approval stuck, Refresh returns Internal Server Error",
+        description:
+          "An approval-gated Safeguard profile sat on the yellow Awaiting approval badge in Credentials → Request Checkout. The live password expired before Strata observed the approval, and pressing the row's Refresh button returned HTTP 500 'Internal server error'. Reloading the page re-hydrated the same stuck row — an unrecoverable loop. This looked identical to the pre-v1.12.12 bug but was reached by a different path.",
+      },
+      {
+        title: "Root cause — a dead Safeguard bearer, not a dead request",
+        description:
+          "In per_user_browser / hybrid auth modes your Safeguard bearer is minted by Connect-Safeguard and sealed server-side. Strata's stored token TTL routinely outlives the appliance's own session, so the appliance can reject a token Strata still thinks is valid. When a request sits pending long enough for the live password to lapse, the session has usually lapsed too — so on Refresh both the CheckoutPassword call and the v1.12.12 safety-net state-refetch return HTTP 401/403. The refetch-failed branch re-raised the original error as HTTP 500 and left the pending row in place, so the badge could never clear. The v1.12.12 terminal-state / 404 handling only fires when that refetch succeeds, which a dead bearer prevents.",
+      },
+      {
+        title: "Fix — recognise 401/403 and prompt a re-sign-in instead of a 500",
+        description:
+          "release_pending now detects appliance auth rejections (HTTP 401/403) on both the CheckoutPassword error and the state-refetch error, and for non-A2A auth modes returns the stable safeguard.signin_required code (HTTP 400) rather than a generic 500. The pending row is kept (the underlying request may still be valid — you just need to re-authenticate). The Request Checkout row stays pending and refreshable, swaps its hint for 'Your Safeguard sign-in has expired. Sign in to Safeguard again above, then press Refresh.', and the card's signed-out banner and selection gating reappear. Sign in again and Refresh resolves the request normally.",
+      },
+      {
+        title: "Scope & deploy",
+        description:
+          "Backend + frontend change on the Safeguard release path; a 500 on one internal error path becomes an actionable 400 the SPA renders in place. No schema, API surface, environment variable, or dependency changes, and request ownership is still re-validated server-side on every poll. A genuinely dead request (valid token, terminal/purged appliance state) still falls through to the v1.12.12 'submit a new checkout request' message. Three regression tests were added (two backend, one frontend). Deploy: docker compose pull && docker compose up -d --build backend frontend.",
+      },
+    ],
+  },
+  {
     version: "1.14.1",
     subtitle:
       "Patch release — remote → local clipboard no longer silently stops working mid-session (RDP). A user reported that copying large amounts of text (12k lines) from a remote server stopped reaching the local clipboard 'at random points', and that only closing Strata and reconnecting to the same server fixed it. Root cause: the remote → local clipboard flow is a Guacamole stream (clipboard → one or more blob → end), and the frontend only writes to the local clipboard when the stream's terminating end instruction arrives. Under certain RDP CLIPRDR conditions — typically when the Windows clipboard owner is a delayed-rendering app (Chrome, Edge, VS Code, terminals) and a subsequent copy interrupts the format-data request, or when FreeRDP's clipboard channel becomes wedged after many transfers — guacd opens the stream, delivers zero or a partial set of blobs, and never sends end. The onend callback never fires, navigator.clipboard.writeText() is never called, and the local clipboard silently keeps its previous contents. No error surfaced, so it looked like copy 'just stopped working'; reconnecting reset the server-side clipboard channel, which is why a fresh session recovered it. The 12k-lines size is a correlation, not the cause — large multi-blob transfers keep the channel busy longer and are more likely to be interrupted, but the stall itself is size-independent. v1.14.1 adds a per-stream stall watchdog that force-flushes partial clipboard data if the stream never terminates, with a no-clobber guard so a zero-blob stall never wipes what you previously copied. Frontend-only change to the receive path; the paste (local → remote) path is untouched, and there are no schema, API, env-var, or dependency changes.",

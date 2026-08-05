@@ -1179,6 +1179,49 @@ marker, and surfaces any other error (auth, validation, not-found)
 immediately so a permanently-broken state never blocks behind
 transient retries.
 
+### Approval-required release & error-path reconciliation
+
+Tier-0 / break-glass accounts are bound to Safeguard policies that
+require an **Approver** to act before the password is released. For
+these, `CheckoutPassword` returns **Code 90117** ("awaiting
+approval") and the orchestrator surfaces
+`JitOutcome::PendingApproval { request_id, … }`. The bulk-checkout
+route persists a `safeguard_pending_requests` row and returns a
+`pending` result carrying the `request_id`; the SPA renders the
+yellow **Awaiting approval** badge and polls
+`POST /api/user/safeguard/release` (manual **Refresh** button + a
+15-second background loop, capped at 30 minutes) until an approver
+acts. `release_pending` retries `CheckoutPassword` against the same
+request id — no new `AccessRequest` is created, so repeated polls are
+idempotent and audit-clean.
+
+The subtlety is the **error path**: a non-2xx that is not Code
+`90117` must not strand the pending row on an opaque `HTTP 500`. Two
+fixes make it self-correcting:
+
+- **v1.12.12 — reconcile against live state.** On a `CheckoutPassword`
+  error, `release_pending` calls
+  `client::get_access_request_status(request_id)`. A **terminal**
+  appliance state (`Expired` / `Cancelled` / `Denied` / `Revoked` /
+  `Complete` / `PasswordCheckedIn`, matched by
+  `is_terminal_release_state`) or a **404** best-effort **DELETEs**
+  the `safeguard_pending_requests` row and returns
+  `AppError::Validation` (`HTTP 400`, "please submit a new checkout
+  request") so the badge clears instead of re-hydrating. A refetch
+  still reporting `PendingApproval` is treated as a transient
+  CheckoutPassword hiccup and keeps polling.
+- **v1.14.2 — a dead bearer becomes a re-auth prompt, not a 500.**
+  The v1.12.12 refetch reuses the same bearer that just failed, so a
+  lapsed appliance session (Strata's `safeguard_user_tokens` TTL can
+  outlive it in `per_user_browser` / `hybrid` modes) makes **both**
+  calls answer `HTTP 401`/`403`. `is_appliance_auth_failure` now
+  catches these at both points and, for non-A2A modes, returns
+  `AppError::Validation("safeguard.signin_required")` (`HTTP 400`)
+  while **keeping** the pending row — the access request is still
+  valid, so re-running `Connect-Safeguard` and pressing **Refresh**
+  resolves it. The SPA keeps the row `pending`/refreshable and shows
+  a re-sign-in prompt.
+
 ### Password cache lifecycle
 
 `safeguard_cached_passwords (user_id, profile_id)` is a composite-PK

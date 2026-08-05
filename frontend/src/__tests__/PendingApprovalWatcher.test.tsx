@@ -168,7 +168,9 @@ describe("PendingApprovalWatcher", () => {
     const user_ = userEvent.setup();
     vi.mocked(getPendingApprovals).mockResolvedValue([checkoutRequest()]);
     vi.mocked(decideCheckout).mockResolvedValue({ status: "Approved" });
-    mount();
+    // Long poll interval so the background poll can't clear the card out from
+    // under the click once the mock below flips to an empty queue.
+    mount({ user: user(), pollIntervalMs: 60_000 });
     await waitFor(() =>
       expect(screen.getByText(/Credential checkout requested/)).toBeInTheDocument()
     );

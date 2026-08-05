@@ -330,6 +330,43 @@ describe("SafeguardBulkCheckoutCard", () => {
     expect(screen.getByText("appliance down")).toBeInTheDocument();
   });
 
+  it("manual Refresh on a lapsed Safeguard session keeps the row refreshable with a sign-in prompt", async () => {
+    // Repro of the bug report: a request sits pending long enough for
+    // the live password (and the appliance-side Safeguard token) to
+    // expire. Refresh used to return HTTP 500 "Internal server error"
+    // and the badge stayed stuck forever. The backend now surfaces
+    // `safeguard.signin_required`; the row MUST stay pending (Refresh
+    // button survives) and show an actionable sign-in message rather
+    // than a dead-end "Failed" / raw error code.
+    (bulkSafeguardCheckout as any).mockResolvedValue([
+      {
+        profile_id: "p1",
+        label: "prod-db",
+        ok: false,
+        state: "pending",
+        request_id: "AR-500",
+        account_id: "42",
+        asset: "asset-1",
+      },
+    ]);
+    (releaseSafeguardPending as any).mockRejectedValue(new Error("safeguard.signin_required"));
+    render(<SafeguardBulkCheckoutCard profiles={[sgProfile()]} safeguardEnabled />);
+    await flush();
+    fireEvent.click(screen.getByLabelText("Select prod-db"));
+    fireEvent.change(screen.getByLabelText(/Justification/i), { target: { value: "approval" } });
+    fireEvent.click(screen.getByRole("button", { name: /Checkout selected/ }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /Refresh/ }));
+    await flush();
+    // Still pending (badge + Refresh button survive), no raw error code,
+    // and the actionable re-sign-in guidance is shown.
+    expect(screen.getByText("Awaiting approval")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Refresh/ })).toBeInTheDocument();
+    expect(screen.queryByText("Failed")).not.toBeInTheDocument();
+    expect(screen.queryByText(/safeguard\.signin_required/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Safeguard sign-in has expired/i)).toBeInTheDocument();
+  });
+
   it("manual Refresh on a still-pending response keeps the Awaiting badge", async () => {
     (bulkSafeguardCheckout as any).mockResolvedValue([
       {

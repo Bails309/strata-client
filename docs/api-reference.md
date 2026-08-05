@@ -2196,6 +2196,27 @@ Or, when the approver has not yet acted:
 > says 2 h 07 m" bug). Refetch failure remains non-fatal and
 > falls back to the local TTL alone.
 
+**Error responses**
+
+When `CheckoutPassword` fails with anything other than Code `90117`,
+`release_pending` reconciles the request against its live appliance
+state rather than surfacing a raw `500`:
+
+| Condition                                                                                                   | Status | Body `error`                                                                                            | Pending row |
+| ----------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------ | ----------- |
+| **Terminal appliance state** (Expired / Cancelled / Denied / Revoked / Complete / PasswordCheckedIn) — *v1.12.12* | `400`  | `Safeguard access request {id} is no longer releasable (appliance state: {state}). Please submit a new checkout request.` | cleared     |
+| **Request purged** (appliance `404`) — *v1.12.12*                                                           | `400`  | `Safeguard access request {id} no longer exists on the appliance. Please submit a new checkout request.` | cleared     |
+| **Bearer rejected** (`HTTP 401`/`403` on CheckoutPassword *or* the state refetch, non-A2A modes) — *v1.14.2* | `400`  | `safeguard.signin_required`                                                                             | **kept**    |
+| **Profile not owned / not a Safeguard profile / missing account_id or asset**                               | `400`  | validation message                                                                                     | untouched   |
+| **Still `PendingApproval`** (transient CheckoutPassword hiccup)                                              | `200`  | `state: "pending"` (normal poll continues)                                                              | refreshed   |
+
+`safeguard.signin_required` is the stable code the SPA matches on to
+prompt a fresh `Connect-Safeguard` sign-in; the row is **left
+pending and refreshable** because an expired appliance session does
+not invalidate the underlying access request — re-authenticating and
+pressing **Refresh** resolves it. See
+[docs/safeguard.md → CheckoutPassword-error reconciliation](safeguard.md#checkoutpassword-error-reconciliation-v11212-and-sign-in-lapse-v1142).
+
 #### `GET /api/user/safeguard/cached`
 
 Non-decrypting status of the calling user's live cache rows.

@@ -307,7 +307,74 @@ appliance_state }` and the route returns a `pending` row to
    | ------------------------------------------ | -------------------------------------------------------------------------------------------------- |
    | `200 OK` with the plaintext password       | `JitOutcome::Released(CheckoutResult { request_id, password, username, expires_on })`              |
    | `400 Bad Request` Code `90117` (still queued) | `JitOutcome::PendingApproval { request_id, username: None, appliance_state }`                   |
-   | Any other non-2xx (denied, cancelled, etc.) | `Err(AppError::*)` and a `failed` row in `safeguard_checkout_audit`                                |
+   | Any other non-2xx (denied, cancelled, etc.) | Reconciled against the live AccessRequest state — see below.                                       |
+
+### CheckoutPassword-error reconciliation (v1.12.12) and sign-in lapse (v1.14.2)
+
+A non-2xx that is **not** Code `90117` used to bubble straight out as
+`AppError::Internal` → `HTTP 500` with the persistent
+`safeguard_pending_requests` row left in place, so the SPA's yellow
+**Awaiting approval** badge re-hydrated on every mount and the
+**Refresh** button looped on "Internal server error" forever. Two
+fixes progressively turned that dead-end into an actionable result.
+
+**v1.12.12 — reconcile against the live AccessRequest.** On the
+`CheckoutPassword` error path, `release_pending` now calls
+`client::get_access_request_status(request_id)` (which returns
+`Ok(None)` on 404) and branches on what the appliance reports:
+
+| Refetched state                                                                   | Mapping                                                                                                                                                                                    |
+| --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Terminal** — `Expired` / `PasswordExpired` / `Denied` / `Cancelled` / `Revoked` / `Complete` / `PasswordCheckedIn` | Audit `failed` with the state hint, best-effort **DELETE** the `safeguard_pending_requests` row, return `AppError::Validation("… no longer releasable (appliance state: {state}). Please submit a new checkout request.")` → `HTTP 400`. |
+| **404** (`Ok(None)` — appliance purged the request)                               | Same treatment: audit, clear the stale row, return `AppError::Validation("… no longer exists on the appliance. Please submit a new checkout request.")` → `HTTP 400`.                       |
+| **Still `PendingApproval`**                                                        | The `CheckoutPassword` error was a transient hiccup (network blip / token race). Return the normal `JitOutcome::PendingApproval` so the poll continues; no audit row (would flood the table during a long queue). |
+| **Any other non-terminal state**                                                  | Audit with the state hint and re-raise the original error (operators still see the raw appliance response in the server log).                                                              |
+
+The terminal-state matcher is
+[`is_terminal_release_state`](../backend/src/services/safeguard/mod.rs)
+— substring-based and case-insensitive so it tolerates
+appliance-specific decorations, and deliberately **not** matching
+`RequestAvailable` / `PasswordCheckedOut` (still in play).
+
+**v1.14.2 — a rejected bearer must not become a 500.** The v1.12.12
+reconciliation assumes the state refetch **succeeds** — but it uses
+the same bearer that just failed `CheckoutPassword`. When a request
+has been pending long enough for the live password to lapse, the
+user's appliance-side Safeguard session has usually lapsed too: in
+`per_user_browser` / `hybrid` modes Strata's DB-side token TTL
+(`safeguard_user_tokens`) routinely outlives the appliance's own
+session, so `user_token::load` returns a token the appliance now
+rejects. Both `CheckoutPassword` and the refetch then answer
+`HTTP 401` / `403`, the refetch lands in its `Err(status_err)` arm,
+and the original `AppError::Internal` was re-raised → `HTTP 500`,
+row still stuck.
+
+`release_pending` now classifies these rejections with
+`is_appliance_auth_failure(&AppError)` (matches the `HTTP 401` /
+`HTTP 403` status the low-level client formats into its error
+strings) at **both** points — the `CheckoutPassword` error and the
+refetch error. When it matches **and** the configured `auth_mode` is
+not `a2a`, the handler returns
+`AppError::Validation("safeguard.signin_required")` → `HTTP 400`,
+the same stable code the SPA already recognises elsewhere. Crucially
+it does **not** clear `safeguard_pending_requests` — unlike a
+terminal request, an auth lapse leaves the access request itself
+valid, so once the user re-runs `Connect-Safeguard` the very next
+Refresh resolves it. A2A mode is excluded on purpose: a 401/403
+there is an appliance-trusted-credential configuration fault, not a
+user sign-in problem, and is left as the original error so operators
+can diagnose it.
+
+On the SPA side,
+[`SafeguardBulkCheckoutCard.tsx`](../frontend/src/pages/credentials/SafeguardBulkCheckoutCard.tsx)
+`refreshOne` detects `safeguard.signin_required`, keeps the row in
+the `pending` state (so the **Refresh** button and the 15-second
+background poll survive), replaces the queue hint with "Your
+Safeguard sign-in has expired. Sign in to Safeguard again above,
+then press Refresh.", and re-pulls the sign-in status so the card's
+"signed out of Safeguard" banner and selection gating re-appear.
+Non-auth Refresh failures are unchanged (row → `failed`, raw error
+surfaced inline).
 
 ### AccountName refetch on `Released` (v1.12.3); `ExpiresOn` recovery (v1.13.1)
 

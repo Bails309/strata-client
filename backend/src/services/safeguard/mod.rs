@@ -569,6 +569,23 @@ fn is_terminal_release_state(state: &str) -> bool {
     s == "passwordcheckedin" || s == "checkedin"
 }
 
+/// Returns `true` when a Safeguard client error indicates the
+/// appliance rejected our bearer token (HTTP 401 / 403). The
+/// low-level client formats these as `"Safeguard … returned HTTP
+/// 401: …"`, so we match on the status substring.
+///
+/// In `per_user_browser` / `hybrid` modes a 401/403 means the user's
+/// Safeguard session lapsed on the appliance even though Strata still
+/// held a (DB-TTL-valid) token — the actionable fix is a fresh
+/// Connect-Safeguard sign-in, NOT a dead-end HTTP 500. A2A mode uses
+/// its own appliance-trusted credentials, so a 401/403 there is a
+/// configuration fault rather than a user sign-in problem and must
+/// not be re-labelled as `signin_required`.
+fn is_appliance_auth_failure(err: &AppError) -> bool {
+    let s = err.to_string();
+    s.contains("HTTP 401") || s.contains("HTTP 403")
+}
+
 /// Attempt to release the password for an *already-issued* access
 /// request. Used to resolve a [`JitOutcome::PendingApproval`] without
 /// creating a new request: the caller hands back the same
@@ -656,6 +673,23 @@ pub async fn release_pending(
     let outcome = match checkout_password_with_retry(&http, &base, &bearer, request_id).await {
         Ok(o) => o,
         Err(e) => {
+            // The appliance rejected our bearer (401/403): in
+            // per-user / hybrid modes the user's Safeguard session
+            // lapsed on the appliance while Strata still held a
+            // DB-TTL-valid token. This is the common cause of the
+            // "stuck Awaiting approval + Refresh returns Internal
+            // server error" report: a request sits pending long
+            // enough for the live password (and the appliance-side
+            // token) to expire, so both CheckoutPassword and the
+            // status refetch below come back 401/403. Surface the
+            // stable `safeguard.signin_required` code (HTTP 400) so
+            // the SPA prompts a fresh Connect-Safeguard sign-in
+            // instead of a dead-end HTTP 500, and DO NOT clear the
+            // pending row — the access request may still be valid,
+            // the user just needs to re-authenticate.
+            if is_appliance_auth_failure(&e) && !matches!(cfg.auth_mode, config::AuthMode::A2a) {
+                return Err(AppError::Validation("safeguard.signin_required".into()));
+            }
             // Before surfacing this as a raw internal error, ask the
             // appliance what state the request is actually in. If
             // it's terminal (expired, cancelled, denied, revoked,
@@ -747,6 +781,16 @@ pub async fn release_pending(
                     return Err(e);
                 }
                 Err(status_err) => {
+                    // A 401/403 on the refetch means the same bearer
+                    // that just failed CheckoutPassword is dead —
+                    // treat it as a lapsed sign-in (non-A2A) rather
+                    // than bubbling the original 500 that would leave
+                    // the pending row permanently stuck.
+                    if is_appliance_auth_failure(&status_err)
+                        && !matches!(cfg.auth_mode, config::AuthMode::A2a)
+                    {
+                        return Err(AppError::Validation("safeguard.signin_required".into()));
+                    }
                     tracing::warn!(
                         "Safeguard AccessRequest refetch failed for {request_id} after CheckoutPassword error: {status_err}"
                     );
@@ -1126,5 +1170,37 @@ mod tests {
                 "expected `{s}` to be non-terminal"
             );
         }
+    }
+
+    #[test]
+    fn appliance_auth_failure_detects_401_and_403() {
+        // The low-level client formats appliance rejections with the
+        // HTTP status inline; 401/403 must be recognised so
+        // release_pending can surface `signin_required` instead of a
+        // dead-end 500.
+        assert!(is_appliance_auth_failure(&AppError::Internal(
+            "Safeguard CheckoutPassword returned HTTP 401: token expired".into()
+        )));
+        assert!(is_appliance_auth_failure(&AppError::Internal(
+            "Safeguard AccessRequests GET returned HTTP 403: Forbidden".into()
+        )));
+    }
+
+    #[test]
+    fn appliance_auth_failure_ignores_non_auth_errors() {
+        // Awaiting-approval (400/90117), terminal-state, and network
+        // faults must NOT be mislabelled as sign-in problems.
+        assert!(!is_appliance_auth_failure(&AppError::Internal(
+            "Safeguard CheckoutPassword returned HTTP 400: {\"Code\":90117}".into()
+        )));
+        assert!(!is_appliance_auth_failure(&AppError::Internal(
+            "Safeguard AccessRequests GET returned HTTP 404".into()
+        )));
+        assert!(!is_appliance_auth_failure(&AppError::Internal(
+            "safeguard checkout: connection refused".into()
+        )));
+        assert!(!is_appliance_auth_failure(&AppError::Validation(
+            "profile not found".into()
+        )));
     }
 }

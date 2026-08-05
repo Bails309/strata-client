@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.14.2] — 2026-08-05
+
+### Patch Release — Safeguard "Awaiting approval" Refresh no longer dead-ends on `HTTP 500` after the sign-in lapses
+
+**The ask.** "We looked at this issue in the past and we believed it was resolved but it doesn't appear to be. Live password expired, but Strata never knew it was approved. So it's stuck on Awaiting Approval. Refreshing it gets an Internal Server Error. I imagine making a new live password request would sort it, but just flagging the bug."
+
+**Symptom.** A Safeguard access request for an approval-gated profile sat in **PendingApproval** long enough that its live password (and, critically, the user's appliance-side Safeguard session) expired. The Credentials → Request Checkout row stayed pinned on the yellow **Awaiting approval** badge, and pressing **Refresh** returned `HTTP 500 { "error": "Internal server error" }` — an unrecoverable loop, exactly as reported before the v1.12.12 fix, but reached by a different path.
+
+**Why v1.12.12 didn't catch it.** v1.12.12 taught [`services::safeguard::release_pending`](backend/src/services/safeguard/mod.rs) to consult the appliance for the AccessRequest's current state on the `CheckoutPassword` error path and translate **terminal states** (Expired / Cancelled / Denied / Revoked / Complete / PasswordCheckedIn) and **404** into an actionable `HTTP 400` ("… no longer releasable … Please submit a new checkout request") while clearing the stuck `safeguard_pending_requests` row. That fix assumed the state refetch **succeeds**. It does not when the bearer itself is dead.
+
+**Root cause — a rejected bearer produces `HTTP 401/403` on _both_ calls.** In `per_user_browser` / `hybrid` modes the user's Safeguard RSTS bearer is minted by `Connect-Safeguard` and sealed in `safeguard_user_tokens`. Strata's DB-side TTL for that token routinely **outlives** the appliance's own session lifetime, so `user_token::load` cheerfully returns a token the appliance has already invalidated. When a request has been pending long enough for the live password to lapse, the appliance session has usually lapsed too, so on Refresh:
+
+1. `CheckoutPassword` → appliance returns `HTTP 401` / `403` → `AppError::Internal("Safeguard CheckoutPassword returned HTTP 401: …")`.
+2. The v1.12.12 safety-net refetch, `get_access_request_status`, uses the **same** dead bearer → also `HTTP 401` / `403` → `Err(AppError::Internal(…))`, landing in the refetch-failed `Err(status_err)` arm.
+3. That arm re-raised the **original** `AppError::Internal`, which maps to `HTTP 500` in [`backend/src/error.rs`](backend/src/error.rs) with the body forced to a generic "Internal server error", **and left the `safeguard_pending_requests` row in place** — so the badge re-hydrated on the next mount and the loop was permanent.
+
+**The Fix (backend + frontend, availability/resilience).**
+- **Recognise appliance auth rejections.** A new `is_appliance_auth_failure(&AppError)` helper in [`services/safeguard/mod.rs`](backend/src/services/safeguard/mod.rs) matches the `HTTP 401` / `HTTP 403` status the low-level client formats into its error strings.
+- **Surface a re-auth prompt, not a 500.** In `release_pending`, on **both** the `CheckoutPassword` error **and** the state-refetch error, an auth failure in a non-A2A auth mode now short-circuits to `AppError::Validation("safeguard.signin_required")` → `HTTP 400`. This is the same stable code the SPA already understands elsewhere (the profile editor's account picker), so the user is told to sign in to Safeguard again instead of hitting a dead-end. A2A mode is deliberately excluded: a 401/403 there is an appliance-trusted-credential configuration fault, not a user sign-in problem, and must not be mislabelled.
+- **Keep the pending row.** Unlike the terminal-state path, an auth lapse does **not** clear `safeguard_pending_requests` — the underlying access request may still be perfectly valid; the user simply needs to re-authenticate, after which Refresh resolves it normally.
+- **Frontend row stays refreshable.** [`SafeguardBulkCheckoutCard.tsx`](frontend/src/pages/credentials/SafeguardBulkCheckoutCard.tsx) `refreshOne` now detects `safeguard.signin_required`, keeps the row in the `pending` state (so the **Refresh** button and the 15-second background poll survive), swaps the inline hint for an actionable message ("Your Safeguard sign-in has expired. Sign in to Safeguard again above, then press Refresh."), and re-pulls the sign-in status so the card's "signed out of Safeguard" banner and selection gating re-appear. Non-auth Refresh failures are unchanged (row → `failed`, raw error surfaced).
+
+**Scope & safety.** No schema, no new API surface, no environment variable, and no dependency change — a `500` on one internal error path becomes an actionable `400`, and the SPA renders it in place. It is a resilience/availability improvement, not a security-boundary change: the same per-user bearer authorises the same request, and ownership is still re-validated server-side on every poll. Three regression tests were added — two backend unit tests (`appliance_auth_failure_detects_401_and_403`, `appliance_auth_failure_ignores_non_auth_errors`) and one frontend test ("manual Refresh on a lapsed Safeguard session keeps the row refreshable with a sign-in prompt"). `npx tsc --noEmit` is clean and all `SafeguardBulkCheckoutCard` tests pass.
+
+**Operator note.** A genuinely long-dead request — where the token is still valid but the appliance has moved the AccessRequest to a terminal state or purged it — continues to be handled by the v1.12.12 path with the "please submit a new checkout request" `400`. So the reporter's instinct ("making a new live password request would sort it") remains correct; v1.14.2 additionally ensures the intermediate "token lapsed" case tells the user *why* rather than showing an opaque 500.
+
+**Deploy.** Backend + frontend: `docker compose pull && docker compose up -d --build backend frontend`.
+
 ## [1.14.1] — 2026-08-04
 
 ### Patch Release — Remote → local clipboard no longer silently stops working mid-session (RDP)

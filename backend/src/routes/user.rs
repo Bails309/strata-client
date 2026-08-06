@@ -1299,14 +1299,11 @@ pub async fn bulk_safeguard_checkout(
             Some(user.id),
             None,
             Some(pid),
-            // Safeguard's `RequestedDurationHours` only accepts whole hours; ceil
-            // the profile's total (hours+minutes) so a 90-minute profile still
-            // asks for a 2-hour appliance window rather than a 1-hour one that
-            // expires before our own cache row.
-            Some({
-                let total = cp_svc::ttl_total_minutes(profile.ttl_hours, profile.ttl_minutes);
-                (total.div_euclid(60) + i64::from(total.rem_euclid(60) != 0)).max(1) as u32
-            }),
+            // Pass the profile's exact lifetime in minutes so a
+            // sub-hour profile (e.g. 15 min) books that precise
+            // appliance window — the Safeguard client splits it into
+            // RequestedDurationHours + RequestedDurationMinutes.
+            Some(cp_svc::ttl_total_minutes(profile.ttl_hours, profile.ttl_minutes).max(1) as u32),
         )
         .await
         {

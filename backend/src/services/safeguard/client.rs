@@ -283,10 +283,24 @@ pub struct CreateAccessRequestParams<'a> {
     /// `account_id`. The Capita PS1 helper uses `-AccountId <int>
     /// -AssetName <fqdn>`, so the common case is asset-as-name.
     pub asset_id: &'a str,
-    /// Hours requested. Clamped 1..=12 by the config DAO.
-    pub hours: u32,
+    /// Total requested duration in minutes. Split into
+    /// `RequestedDurationHours` + `RequestedDurationMinutes` on the
+    /// wire so sub-hour profiles (e.g. 15 min) book exactly that
+    /// window rather than being rounded up to a whole hour. Clamped
+    /// `>= 1` by the caller; the appliance's access policy may still
+    /// cap it to its own maximum.
+    pub minutes: u32,
     /// Operator-visible reason text (template-expanded upstream).
     pub reason: &'a str,
+}
+
+/// Split a total requested duration (minutes) into the whole-hours +
+/// remaining-minutes pair Safeguard's AccessRequest entity expects.
+/// Clamps the total to `>= 1` so at least one component is non-zero
+/// (Safeguard rejects a zero-length window).
+fn split_duration(total_minutes: u32) -> (u32, u32) {
+    let total = total_minutes.max(1);
+    (total / 60, total % 60)
 }
 
 #[derive(Debug, Deserialize)]
@@ -375,10 +389,19 @@ pub async fn create_access_request(
         }
     }
     body.insert("AccessRequestType".into(), serde_json::json!("Password"));
-    body.insert(
-        "RequestedDurationHours".into(),
-        serde_json::json!(params.hours),
-    );
+    // Split the total requested minutes into whole hours + the
+    // remaining minutes. Safeguard's AccessRequest entity accepts
+    // both `RequestedDurationHours` and `RequestedDurationMinutes`,
+    // so a 15-minute profile asks for exactly 15 minutes instead of
+    // being rounded up to a full hour. Only emit a component when
+    // it's non-zero — `split_duration` guarantees at least one is.
+    let (hours, mins) = split_duration(params.minutes);
+    if hours > 0 {
+        body.insert("RequestedDurationHours".into(), serde_json::json!(hours));
+    }
+    if mins > 0 {
+        body.insert("RequestedDurationMinutes".into(), serde_json::json!(mins));
+    }
     body.insert("ReasonComment".into(), serde_json::json!(params.reason));
 
     let resp = client
@@ -1079,6 +1102,27 @@ mod tests {
     fn base_url_custom_port_appended() {
         let c = cfg_with_fqdn("sg.example.com", 8443);
         assert_eq!(base_url(&c), "https://sg.example.com:8443");
+    }
+
+    #[test]
+    fn split_duration_sub_hour_stays_minutes() {
+        // A 15-minute profile must ask the appliance for exactly
+        // 0h15m, not a rounded-up whole hour (the reported bug).
+        assert_eq!(split_duration(15), (0, 15));
+        assert_eq!(split_duration(45), (0, 45));
+    }
+
+    #[test]
+    fn split_duration_mixed_and_whole_hours() {
+        assert_eq!(split_duration(60), (1, 0));
+        assert_eq!(split_duration(90), (1, 30));
+        assert_eq!(split_duration(720), (12, 0));
+    }
+
+    #[test]
+    fn split_duration_zero_clamps_to_one_minute() {
+        // Safeguard rejects a zero-length window; never emit 0h0m.
+        assert_eq!(split_duration(0), (0, 1));
     }
 
     #[test]

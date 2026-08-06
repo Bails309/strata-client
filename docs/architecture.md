@@ -1114,7 +1114,7 @@ sequenceDiagram
         opt stale request present
             BE->>SG: CheckIn or Cancel stale request
         end
-        BE->>SG: POST AccessRequests (RequestedDurationHours)
+        BE->>SG: POST AccessRequests (RequestedDurationHours + RequestedDurationMinutes)
         SG-->>BE: { id, AccountName, AccountDomainName }
         BE->>SG: POST {id}/CheckoutPassword
         alt Code 90010

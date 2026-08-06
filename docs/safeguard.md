@@ -577,14 +577,27 @@ authoritative expiry for the underlying AccessRequest, parsed from
 the create response or the post-release status refetch. The clamp
 matters because the appliance's duration window runs from request
 **creation** (approval-queue time is already spent by release
-time) and because the access policy may cap
-`RequestedDurationHours` below the profile TTL — and Safeguard
+time) and because the access policy may cap the requested duration
+below the profile TTL — and Safeguard
 auto-checks-in and **rotates the password** at its own `ExpiresOn`,
 so a cache row that outlives it would advertise a dead credential.
 Pre-v1.13.1 releases used only the local `now() + TTL` term, which
 is exactly the reported "Strata says 4.4 h, Safeguard says 2 h 07 m"
 bug. When the appliance timestamp is missing or unparseable the
 local term is used alone (the historical behaviour).
+
+> [!NOTE]
+> **v1.14.3 — the request carries exact minutes.** The AccessRequest
+> body now sends `RequestedDurationMinutes` alongside
+> `RequestedDurationHours`, so a profile set below an hour asks the
+> appliance for exactly that window (a 15-minute profile posts
+> `RequestedDurationMinutes = 15` with no hours field; a 90-minute
+> profile posts `1h 30m`). Before v1.14.3 the request only carried
+> whole hours, so both checkout paths ceiled a sub-hour TTL up to
+> the next hour — a 15-minute profile still booked a full hour on
+> the appliance. The access policy may still clamp the requested
+> window to its own configured maximum, and `ExpiresOn` remains the
+> authoritative expiry.
 
 - **Eager purge on read.** `password_cache::load(...)` deletes any
   row whose `expires_at` has passed before returning a hit, so a

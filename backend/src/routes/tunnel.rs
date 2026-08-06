@@ -422,16 +422,17 @@ pub async fn ws_tunnel(
                     Some(user.id),
                     Some(connection_id),
                     Some(profile_id),
-                    // Safeguard's RequestedDurationHours only takes
-                    // whole hours — ceil the profile's total lifetime
-                    // so a 90-minute profile still books a 2-hour
-                    // appliance window instead of 1.
+                    // Pass the profile's exact lifetime in minutes so
+                    // a sub-hour profile (e.g. 15 min) books that
+                    // precise appliance window — the Safeguard client
+                    // splits it into RequestedDurationHours +
+                    // RequestedDurationMinutes.
                     Some({
                         let total = crate::services::credential_profiles::ttl_total_minutes(
                             profile_ttl_hours,
                             profile_ttl_minutes,
                         );
-                        (total.div_euclid(60) + i64::from(total.rem_euclid(60) != 0)).max(1) as u32
+                        total.max(1) as u32
                     }),
                 )
                 .await?;

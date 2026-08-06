@@ -215,7 +215,7 @@ pub async fn jit_checkout(
     user_id: Option<uuid::Uuid>,
     connection_id: Option<uuid::Uuid>,
     profile_id: Option<uuid::Uuid>,
-    requested_hours: Option<u32>,
+    requested_minutes: Option<u32>,
 ) -> Result<JitOutcome> {
     let cfg = config::load(pool).await?;
     if !cfg.enabled {
@@ -290,10 +290,10 @@ pub async fn jit_checkout(
     };
 
     // Per-profile checkout duration wins when provided; otherwise
-    // fall back to the global Safeguard admin default. Clamp to >= 1
-    // because Safeguard rejects 0.
-    let hours = requested_hours
-        .unwrap_or(cfg.default_checkout_hours.max(1) as u32)
+    // fall back to the global Safeguard admin default (whole hours).
+    // Clamp to >= 1 because Safeguard rejects a zero-length window.
+    let minutes = requested_minutes
+        .unwrap_or((cfg.default_checkout_hours.max(1) as u32).saturating_mul(60))
         .max(1);
 
     // Preflight: Safeguard rejects a second simultaneous request for
@@ -402,7 +402,7 @@ pub async fn jit_checkout(
         let params = client::CreateAccessRequestParams {
             account_id,
             asset_id,
-            hours,
+            minutes,
             reason,
         };
 

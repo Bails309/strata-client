@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.14.3] — 2026-08-06
+
+### Patch Release — Safeguard checkout now requests the profile's exact sub-hour duration instead of rounding up to a whole hour
+
+**The ask.** "I've edited my live password request duration from 1 hour to 15 minutes. But Safeguard is still getting a request for 1 hour."
+
+**Symptom.** A `safeguard` credential profile whose lifetime was set below one hour (e.g. **15 minutes** via the profile editor's Hours/Minutes inputs or the "15 min" quick-pick chip) still produced a Safeguard AccessRequest for a **full hour** — the approval card and the appliance's access-request record both read "For 1 hour". Editing the duration down had no visible effect on what Safeguard received. The profile edit itself saved correctly; the value simply could not survive the trip to the appliance.
+
+**Root cause — the wire format only carried whole hours.** Since minute-precision TTLs landed in v1.13.0, the appliance request in [`services::safeguard::client::create_access_request`](backend/src/services/safeguard/client.rs) only ever sent `RequestedDurationHours`. Because that field is whole-hours-only, both checkout call sites — the direct-connect path in [`routes/tunnel.rs`](backend/src/routes/tunnel.rs) and the bulk-checkout path in [`routes/user.rs`](backend/src/routes/user.rs) — deliberately **ceiled** the profile's total minutes up to the next whole hour before submitting (`div_euclid(60) + (rem != 0)`), so `15 min` and `45 min` both became `RequestedDurationHours = 1`. This was documented as the "Safeguard bridge" limitation in v1.13.0, but it means a sub-hour profile can never ask the appliance for less than an hour, and the appliance — which auto-checks-in and rotates the password at *its* `ExpiresOn` — grants the full hour it was asked for.
+
+**The Fix (backend, correctness).** Safeguard's AccessRequest entity accepts `RequestedDurationMinutes` alongside `RequestedDurationHours`, so Strata now sends the profile's exact lifetime:
+- **Send hours + minutes.** `create_access_request` splits the requested total via a new pure `split_duration(total_minutes) -> (hours, minutes)` helper and emits each of `RequestedDurationHours` / `RequestedDurationMinutes` only when non-zero (a 15-minute profile posts `RequestedDurationMinutes = 15` with no hours field; a 90-minute profile posts `1h 30m`). The helper clamps the total to `>= 1` so a zero-length window is never requested.
+- **Stop ceiling at the call sites.** `jit_checkout` now takes `requested_minutes` (defaulting to the admin `default_checkout_hours × 60`), and both `routes/tunnel.rs` and `routes/user.rs` pass the profile's exact `ttl_total_minutes(...)` instead of rounding up to whole hours.
+- The cache-side expiry math was already minute-accurate and clamped to the appliance's authoritative `ExpiresOn` (v1.13.1), so a shorter appliance window now flows straight through to `credential_profiles.expires_at` and the `BulkSafeguardCheckoutResult.expires_at` badge with no further change.
+
+**Scope & safety.** Backend-only change to the outbound AccessRequest body and the two checkout call sites — no schema, no new API surface, no environment variable, and no dependency change. The appliance's access policy may still clamp the requested window to its own configured maximum (unchanged behaviour, and `ExpiresOn` remains authoritative). Three regression tests were added to [`services/safeguard/client.rs`](backend/src/services/safeguard/client.rs) covering the sub-hour, mixed, and zero-clamp cases; the backend image builds clean and the suite passes.
+
+**Deploy.** Backend-only: `docker compose pull && docker compose up -d --build backend`.
+
 ## [1.14.2] — 2026-08-05
 
 ### Patch Release — Safeguard "Awaiting approval" Refresh no longer dead-ends on `HTTP 500` after the sign-in lapses

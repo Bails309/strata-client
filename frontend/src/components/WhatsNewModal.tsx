@@ -29,6 +29,33 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.14.3",
+    subtitle:
+      "Patch release — Safeguard now requests your profile's exact sub-hour duration instead of rounding up to a whole hour. A user reported: 'I've edited my live password request duration from 1 hour to 15 minutes. But Safeguard is still getting a request for 1 hour.' Since minute-precision TTLs arrived in v1.13.0, a Safeguard profile set below an hour still booked a full hour on the appliance — the approval card read 'For 1 hour' no matter what you picked. Root cause: the outbound AccessRequest only ever carried RequestedDurationHours, which is whole-hours-only, so both checkout paths ceiled the profile's total minutes up to the next hour before sending (15 min and 45 min both became 1 hour). Since Safeguard auto-checks-in and rotates the password at its own expiry, it granted the full hour it was asked for. v1.14.3 sends the exact lifetime: create_access_request now emits RequestedDurationMinutes alongside RequestedDurationHours, and both checkout call sites pass the profile's precise total minutes instead of rounding up. Backend-only patch — no schema, API, env-var, or dependency changes.",
+    sections: [
+      {
+        title: "Symptom — a 15-minute profile still books a 1-hour Safeguard request",
+        description:
+          "You edited a Safeguard credential profile's password duration down (for example from 1 hour to 15 minutes, via the Hours/Minutes inputs or the '15 min' quick-pick chip), but the Safeguard approval card and the appliance's access-request record still read 'For 1 hour'. Editing the duration down had no visible effect on what Safeguard received. The profile edit saved correctly — the value just couldn't survive the trip to the appliance.",
+      },
+      {
+        title: "Root cause — the wire format only carried whole hours",
+        description:
+          "Since minute-precision TTLs landed in v1.13.0, the outbound Safeguard AccessRequest only ever sent RequestedDurationHours, which accepts whole hours only. So both checkout paths — direct connect and bulk checkout — deliberately ceiled the profile's total minutes up to the next whole hour before submitting, meaning 15 min and 45 min both became a 1-hour request. This was the documented 'Safeguard bridge' limitation, but it meant a sub-hour profile could never ask the appliance for less than an hour, and Safeguard auto-checks-in and rotates the password at its own expiry — so it granted the full hour it was asked for.",
+      },
+      {
+        title: "Fix — send RequestedDurationMinutes and stop rounding up",
+        description:
+          "Safeguard's AccessRequest entity accepts RequestedDurationMinutes alongside RequestedDurationHours, so Strata now sends the exact lifetime. A new split_duration helper splits the requested total into whole hours + remaining minutes and emits each field only when non-zero (a 15-minute profile posts 15 minutes with no hours field; a 90-minute profile posts 1h 30m), clamped so a zero-length window is never requested. Both the direct-connect and bulk-checkout call sites now pass the profile's precise total minutes instead of ceiling to hours. The cache-side expiry was already minute-accurate and clamped to the appliance's authoritative ExpiresOn (v1.13.1), so the shorter window flows straight through to the badge.",
+      },
+      {
+        title: "Scope & deploy",
+        description:
+          "Backend-only change to the outbound AccessRequest body and the two checkout call sites — no schema, no new API surface, no environment variable, and no dependency change. The appliance's access policy may still clamp the requested window to its own configured maximum, and ExpiresOn remains authoritative. Three regression tests were added covering the sub-hour, mixed, and zero-clamp cases. Deploy: docker compose pull && docker compose up -d --build backend.",
+      },
+    ],
+  },
+  {
     version: "1.14.2",
     subtitle:
       "Patch release — Safeguard 'Awaiting approval' Refresh no longer dead-ends on an Internal Server Error after your Safeguard sign-in lapses. A user re-flagged a bug we thought was fixed: an approval-gated request sat in Awaiting approval long enough for its live password to expire, Strata never noticed it had been approved, and pressing Refresh returned HTTP 500 'Internal server error' in an unrecoverable loop. The v1.12.12 fix already turns terminal appliance states (Expired / Cancelled / Denied / …) and 404s into an actionable 'please submit a new checkout request' message — but it assumed the follow-up state lookup succeeds. It doesn't when the real problem is a dead bearer: in per_user_browser / hybrid modes Strata's stored Safeguard token can outlive the appliance's own session, so by the time you Refresh a long-pending row, both the CheckoutPassword call and the state-refetch come back HTTP 401/403, which bubbled up as a generic 500 with the pending row left stuck. v1.14.2 recognises those 401/403 appliance rejections and, for non-A2A auth modes, returns the stable safeguard.signin_required code (HTTP 400) instead of a 500 — the row now stays pending and refreshable and shows an actionable re-sign-in message. Backend + frontend patch — no schema, API, env-var, or dependency changes.",

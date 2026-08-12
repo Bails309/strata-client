@@ -3,8 +3,8 @@
    decoration, or render-time time/derivation patterns. See
    eslint.config.js W4-1 commentary. */
 import { useState, useCallback, useEffect, useRef } from "react";
-import Guacamole from "guacamole-common-js";
 import { GuacSession } from "./SessionManager";
+import { sendClipboardToRemote } from "./clipboardSync";
 import FileBrowser from "./FileBrowser";
 
 interface Props {
@@ -52,11 +52,7 @@ export default function SessionMenu({
       // Debounce the send
       if (clipboardTimerRef.current) clearTimeout(clipboardTimerRef.current);
       clipboardTimerRef.current = setTimeout(() => {
-        const stream = session.client.createClipboardStream("text/plain");
-        const writer = new Guacamole.StringWriter(stream);
-        writer.sendText(text);
-        writer.sendEnd();
-        session.remoteClipboard = text;
+        void sendClipboardToRemote(session, text, "session-menu");
       }, 300);
     },
     [session]

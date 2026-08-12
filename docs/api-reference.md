@@ -2059,11 +2059,11 @@ some succeed and some fail.
 
 `state` is one of:
 
-| `state`     | Meaning                                                                                                                          |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `ok`        | `CheckoutPassword` succeeded; password sealed into `safeguard_cached_passwords`. `ok = true`.                                    |
-| `pending`   | Appliance returned Code `90117` (awaiting approval). The `request_id` is **still valid**; the caller polls `/safeguard/release` to retry once an approver acts. No cache row is written. `ok = false`. |
-| `failed`    | Any other terminal error (denied, cancelled, transport, kill-switch). Audit row `outcome = 'failed'`. `ok = false`.              |
+| `state`   | Meaning                                                                                                                                                                                                |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ok`      | `CheckoutPassword` succeeded; password sealed into `safeguard_cached_passwords`. `ok = true`.                                                                                                          |
+| `pending` | Appliance returned Code `90117` (awaiting approval). The `request_id` is **still valid**; the caller polls `/safeguard/release` to retry once an approver acts. No cache row is written. `ok = false`. |
+| `failed`  | Any other terminal error (denied, cancelled, transport, kill-switch). Audit row `outcome = 'failed'`. `ok = false`.                                                                                    |
 
 The `state` field is a discriminator added for the bulk-checkout
 UI so it can render a third "pending approval" badge; old
@@ -2090,7 +2090,7 @@ before the new request was opened.
 > `RequestedDurationHours` below the profile TTL or the request
 > had spent time in an approval queue — Safeguard's duration
 > window runs from request **creation**, and the appliance
-> rotates the password at *its* expiry, so the cached credential
+> rotates the password at _its_ expiry, so the cached credential
 > could be dead while the badge still said Cached. When the
 > appliance timestamp is missing or unparseable the local term
 > is used alone (the pre-v1.13.1 behaviour).
@@ -2173,7 +2173,7 @@ Or, when the approver has not yet acted:
 > `CheckoutPassword` does not echo `AccountName` back —
 > which surfaced at tunnel-open time as an empty NLA
 > username and an `Authentication failure (invalid
-> credentials?)` rejection from the target server. Refetch
+credentials?)` rejection from the target server. Refetch
 > failure is non-fatal: the password is still returned and
 > cached; only the `username` field falls back to `null`,
 > logged at `warn`. See [docs/safeguard.md →
@@ -2202,13 +2202,13 @@ When `CheckoutPassword` fails with anything other than Code `90117`,
 `release_pending` reconciles the request against its live appliance
 state rather than surfacing a raw `500`:
 
-| Condition                                                                                                   | Status | Body `error`                                                                                            | Pending row |
-| ----------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------ | ----------- |
-| **Terminal appliance state** (Expired / Cancelled / Denied / Revoked / Complete / PasswordCheckedIn) — *v1.12.12* | `400`  | `Safeguard access request {id} is no longer releasable (appliance state: {state}). Please submit a new checkout request.` | cleared     |
-| **Request purged** (appliance `404`) — *v1.12.12*                                                           | `400`  | `Safeguard access request {id} no longer exists on the appliance. Please submit a new checkout request.` | cleared     |
-| **Bearer rejected** (`HTTP 401`/`403` on CheckoutPassword *or* the state refetch, non-A2A modes) — *v1.14.2* | `400`  | `safeguard.signin_required`                                                                             | **kept**    |
-| **Profile not owned / not a Safeguard profile / missing account_id or asset**                               | `400`  | validation message                                                                                     | untouched   |
-| **Still `PendingApproval`** (transient CheckoutPassword hiccup)                                              | `200`  | `state: "pending"` (normal poll continues)                                                              | refreshed   |
+| Condition                                                                                                         | Status | Body `error`                                                                                                              | Pending row |
+| ----------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| **Terminal appliance state** (Expired / Cancelled / Denied / Revoked / Complete / PasswordCheckedIn) — _v1.12.12_ | `400`  | `Safeguard access request {id} is no longer releasable (appliance state: {state}). Please submit a new checkout request.` | cleared     |
+| **Request purged** (appliance `404`) — _v1.12.12_                                                                 | `400`  | `Safeguard access request {id} no longer exists on the appliance. Please submit a new checkout request.`                  | cleared     |
+| **Bearer rejected** (`HTTP 401`/`403` on CheckoutPassword _or_ the state refetch, non-A2A modes) — _v1.14.2_      | `400`  | `safeguard.signin_required`                                                                                               | **kept**    |
+| **Profile not owned / not a Safeguard profile / missing account_id or asset**                                     | `400`  | validation message                                                                                                        | untouched   |
+| **Still `PendingApproval`** (transient CheckoutPassword hiccup)                                                   | `200`  | `state: "pending"` (normal poll continues)                                                                                | refreshed   |
 
 `safeguard.signin_required` is the stable code the SPA matches on to
 prompt a fresh `Connect-Safeguard` sign-in; the row is **left
@@ -2361,6 +2361,10 @@ Upgrades to a WebSocket connection that proxies bidirectional binary frames betw
 
 > **Clipboard streaming (v1.14.1 note).** The remote → local clipboard is not a single instruction but a Guacamole stream: `guacd` sends `clipboard,<idx>,text/plain;`, then one or more `blob,<idx>,<base64>;` instructions, and finally `end,<idx>;`. The backend proxies these verbatim. The browser client (`SessionManager.tsx`) only commits the payload to `navigator.clipboard` when it receives `end`. Because RDP's CLIPRDR channel can occasionally open a clipboard stream and never terminate it (delayed-rendering clipboard owners whose format-data request is interrupted, or a wedged FreeRDP CLIPRDR state), the client applies a **2-second per-stream stall watchdog**: if `end` does not arrive within 2 s of the last `blob`, the client flushes whatever text it received, `sendAck`s the stalled stream so the server can free the stream index, and logs a diagnostic. A zero-blob stall is not flushed (no-clobber guard). This is entirely client-side; the tunnel wire protocol and the backend proxy loop are unchanged. The backend's own per-instruction pending-buffer cap remains **16 MiB** and the RDP `clipboard-buffer-size` guacd parameter remains **8 MiB**.
 
+> **Clipboard stream concurrency (v1.14.4 note).** The local → remote direction uses the same stream shape in reverse (`clipboard` → `blob`… → `end`), and the wire protocol permits multiple stream indices to be open simultaneously. **`guacd`'s RDP clipboard does not honour that**: it maintains a single shared buffer that the `clipboard` instruction resets and every `blob` appends to, regardless of stream index. Two overlapping clipboard streams therefore splice their payloads and re-announce the result over CLIPRDR, which can leave the Windows-side clipboard owner (`rdpclip.exe`) wedged for the remainder of the logged-on Windows session — a state that survives reconnecting the tunnel, because RDP reattaches to the same Windows session.
+>
+> Client implementations **must serialise** local → remote clipboard transmission: open at most one clipboard stream at a time and send its `end` before opening the next. Strata's client does this in [`clipboardSync.ts`](../frontend/src/components/clipboardSync.ts). The backend proxy loop is unchanged and does not enforce this — it forwards whatever the client sends — so third-party clients speaking this tunnel are subject to the same constraint. Set `STRATA_CLIPBOARD_TRACE=1` (see [Tunnel diagnostics environment](#tunnel-diagnostics-environment)) to have the backend `WARN` when it observes overlapping clipboard streams in either direction.
+
 **DMZ deployment mode (v1.5.2+)**: When a user reaches the backend through a public-facing `strata-dmz` edge node, this WebSocket upgrade is forwarded end-to-end through the reverse-tunnel link using **RFC 8441 Extended CONNECT** over the link's HTTP/2 connection. The DMZ proxy:
 
 1. Detects the WebSocket upgrade on the public listener (`Upgrade: websocket` + `Connection: Upgrade` + `Sec-WebSocket-Key`).
@@ -2482,6 +2486,19 @@ Force-grant the co-pilot input token to a specific participant. The session owne
 - `409 Conflict` if `target_pid` is not currently in the room.
 
 Audit row `connection.copilot_force_grant` is written on success with the share id, share token, and target pid.
+
+### Tunnel diagnostics environment
+
+| Variable                 | Default | Description                                                                                                                                                                                                                                                                                                                   |
+| ------------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STRATA_CLIPBOARD_TRACE` | unset   | `1` / `true` enables per-tunnel clipboard stream tracing in both directions (v1.14.4+). Logs stream open / end, blob counts, payload **sizes**, ack status codes, elapsed timings, and a `WARN` when two clipboard streams overlap in the same direction. Never logs clipboard contents. Fully inert (no parsing) when unset. |
+
+The tracer reads the variable once per tunnel at connect time, so a
+change requires restarting the backend container (or at minimum
+re-establishing the tunnels you want traced). Browser-side correlation
+is available from the session tab's devtools console via
+`strataClipboard.print()` — see
+[deployment.md](deployment.md#diagnosing-clipboard-problems-v1144).
 
 ---
 
@@ -3573,6 +3590,7 @@ Download a session recording owned by the calling user. The response serves the 
 **Response** `200 OK` — binary stream with `Content-Type: video/mp4` (or `application/octet-stream` for raw `.guac`) and `Content-Disposition: attachment; filename="<connection_name>_<recording_id>.mp4"`.
 
 **Errors**:
+
 - `401 Unauthorized` — user is unauthenticated.
 - `403 Forbidden` / `404 Not Found` — recording does not exist or is not owned by the calling user.
 - `500 Internal Server Error` — video encoding conversion failed (`guacenc` execution error).
@@ -3592,6 +3610,7 @@ Download any session recording as an administrator. Requires `can_view_sessions`
 **Response** `200 OK` — binary stream with `Content-Type: video/mp4` and `Content-Disposition: attachment; filename="<connection_name>_<recording_id>.mp4"`.
 
 **Errors**:
+
 - `401 Unauthorized` — user is unauthenticated.
 - `403 Forbidden` — user lacks `can_view_sessions` permission.
 - `404 Not Found` — recording file not found in local storage or Azure Blob Storage.
@@ -3600,7 +3619,6 @@ Download any session recording as an administrator. Requires `can_view_sessions`
 ---
 
 ### Display Tags
-
 
 Users can pin a single tag per connection to display on session thumbnails in the Active Sessions sidebar.
 

@@ -443,6 +443,202 @@ fn parse_instruction(raw: &str) -> Result<(String, Vec<String>), AppError> {
     Ok((opcode, elements))
 }
 
+/// Walk one length-prefixed Guacamole instruction from the front of `s`.
+///
+/// Returns the instruction's elements plus the byte offset just past its
+/// terminating `;`. Uses the protocol's own length prefixes so payload
+/// bytes can never be mistaken for a delimiter. Returns `None` when `s`
+/// does not begin with a complete, well-formed instruction.
+fn scan_instruction(s: &str) -> Option<(Vec<&str>, usize)> {
+    let mut elements = Vec::new();
+    let mut pos = 0usize;
+    loop {
+        let rest = s.get(pos..)?;
+        let dot = rest.find('.')?;
+        let len: usize = rest[..dot].parse().ok()?;
+        let value_start = pos + dot + 1;
+        let pool = s.get(value_start..)?;
+        let byte_len = match pool.char_indices().nth(len) {
+            Some((idx, _)) => idx,
+            // Fewer than `len + 1` characters remain: valid only when the
+            // element is exactly the rest of the pool.
+            None if pool.chars().count() == len => pool.len(),
+            None => return None,
+        };
+        elements.push(&pool[..byte_len]);
+        pos = value_start + byte_len;
+        match s.as_bytes().get(pos) {
+            Some(b',') => pos += 1,
+            Some(b';') => return Some((elements, pos + 1)),
+            _ => return None,
+        }
+    }
+}
+
+/// A clipboard stream observed in flight on the tunnel.
+struct TracedClipboardStream {
+    opened: Instant,
+    blobs: u32,
+    /// Total encoded payload characters. Contents are never retained.
+    payload_chars: usize,
+    acks: u32,
+}
+
+/// Opt-in tracer for the Guacamole clipboard channel, in both directions.
+///
+/// Enabled per-process with `STRATA_CLIPBOARD_TRACE=1`. Deliberately never
+/// records clipboard *contents* — only opcodes, stream indices, payload
+/// sizes and timings — so a trace can be attached to a support bundle
+/// without leaking whatever the operator had copied.
+///
+/// The signals worth looking for in a trace:
+///   * `clipboard stream opened while another is still open` — two streams
+///     interleaving in the same direction. guacd's RDP clipboard is one
+///     shared buffer, so this splices payloads and can wedge CLIPRDR.
+///   * a `stream-open` with no matching `stream-end` — the remote never
+///     finished the transfer (the classic delayed-render CLIPRDR hang).
+///   * `blobs=0` on a completed inbound stream — the remote announced a
+///     format and then produced nothing.
+///   * open streams still outstanding at teardown.
+#[derive(Default)]
+struct ClipboardTracer {
+    enabled: bool,
+    /// Keyed by (direction, stream index).
+    open: std::collections::HashMap<(&'static str, String), TracedClipboardStream>,
+}
+
+impl ClipboardTracer {
+    fn new() -> Self {
+        let enabled = std::env::var("STRATA_CLIPBOARD_TRACE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if enabled {
+            tracing::info!("Clipboard tracing enabled (STRATA_CLIPBOARD_TRACE)");
+        }
+        Self {
+            enabled,
+            open: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Scan a batch of complete instructions flowing in `dir`.
+    fn observe_batch(&mut self, dir: &'static str, batch: &str) {
+        if !self.enabled {
+            return;
+        }
+        let mut rest = batch;
+        while !rest.is_empty() {
+            let Some((elements, next)) = scan_instruction(rest) else {
+                break;
+            };
+            if let Some((opcode, args)) = elements.split_first() {
+                self.observe(dir, opcode, args);
+            }
+            rest = &rest[next..];
+        }
+    }
+
+    fn observe(&mut self, dir: &'static str, opcode: &str, args: &[&str]) {
+        match opcode {
+            "clipboard" => {
+                let Some(index) = args.first() else { return };
+                let mimetype = args.get(1).copied().unwrap_or("");
+                // Another stream already open in this direction means two
+                // transfers are interleaving on a channel that cannot
+                // multiplex them.
+                let conflict_ms = self
+                    .open
+                    .iter()
+                    .find(|((d, _), _)| *d == dir)
+                    .map(|(_, s)| s.opened.elapsed().as_millis() as u64);
+                if let Some(open_for_ms) = conflict_ms {
+                    tracing::warn!(
+                        dir,
+                        index,
+                        open_for_ms,
+                        "clipboard stream opened while another is still open in the same direction \
+                         — payloads will interleave in guacd's shared clipboard buffer"
+                    );
+                }
+                tracing::info!(dir, index, mimetype, "clipboard stream-open");
+                self.open.insert(
+                    (dir, index.to_string()),
+                    TracedClipboardStream {
+                        opened: Instant::now(),
+                        blobs: 0,
+                        payload_chars: 0,
+                        acks: 0,
+                    },
+                );
+            }
+            "blob" => {
+                let Some(index) = args.first() else { return };
+                if let Some(s) = self.open.get_mut(&(dir, index.to_string())) {
+                    s.blobs += 1;
+                    s.payload_chars += args.get(1).map(|d| d.len()).unwrap_or(0);
+                }
+            }
+            "end" => {
+                let Some(index) = args.first() else { return };
+                if let Some(s) = self.open.remove(&(dir, index.to_string())) {
+                    tracing::info!(
+                        dir,
+                        index,
+                        blobs = s.blobs,
+                        payload_chars = s.payload_chars,
+                        acks = s.acks,
+                        ms = s.opened.elapsed().as_millis() as u64,
+                        "clipboard stream-end"
+                    );
+                }
+            }
+            "ack" => {
+                // Acks travel opposite to the stream they acknowledge.
+                let Some(index) = args.first() else { return };
+                let peer = if dir == DIR_TO_GUACD {
+                    DIR_FROM_GUACD
+                } else {
+                    DIR_TO_GUACD
+                };
+                if let Some(s) = self.open.get_mut(&(peer, index.to_string())) {
+                    s.acks += 1;
+                }
+                let code = args.get(2).copied().unwrap_or("0");
+                if code != "0" {
+                    tracing::warn!(
+                        dir,
+                        index,
+                        code,
+                        message = args.get(1).copied().unwrap_or(""),
+                        "clipboard stream ack reported an error"
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Report any transfer that never completed. Called at teardown.
+    fn report_outstanding(&self) {
+        if !self.enabled {
+            return;
+        }
+        for ((dir, index), s) in &self.open {
+            tracing::warn!(
+                dir,
+                index,
+                blobs = s.blobs,
+                payload_chars = s.payload_chars,
+                open_for_ms = s.opened.elapsed().as_millis() as u64,
+                "clipboard stream never received `end` — transfer was abandoned"
+            );
+        }
+    }
+}
+
+const DIR_TO_GUACD: &str = "client->guacd";
+const DIR_FROM_GUACD: &str = "guacd->client";
+
 /// Proxy frames between a WebSocket (frontend) and a TCP stream (guacd).
 #[allow(clippy::too_many_arguments)]
 pub async fn proxy(
@@ -694,6 +890,10 @@ async fn handle_guac_handshake(
     let mut last_host_send = Instant::now();
     const HOST_SEND_GAP_WARN: Duration = Duration::from_secs(1);
 
+    // Opt-in clipboard channel tracer (STRATA_CLIPBOARD_TRACE=1). Records
+    // stream lifecycle only — never clipboard contents.
+    let mut clipboard_tracer = ClipboardTracer::new();
+
     // WebSocket keepalive – send a Ping every 15 s, timeout if no Pong in 30 s.
     let mut ping_interval = tokio::time::interval(Duration::from_secs(15));
     ping_interval.tick().await; // consume the first immediate tick
@@ -846,6 +1046,7 @@ async fn handle_guac_handshake(
                         if let Some(last_semi) = pending.iter().rposition(|&b| b == b';') {
                             let complete = &pending[..=last_semi];
                             let text = String::from_utf8_lossy(complete).into_owned();
+                            clipboard_tracer.observe_batch(DIR_FROM_GUACD, &text);
                             // `drain(..=last_semi)` is O(remainder) but avoids the full
                             // Vec reallocation that `pending = remainder.to_vec()` used to
                             // do on every burst — meaningful on Win+Arrow bitmap floods.
@@ -924,6 +1125,7 @@ async fn handle_guac_handshake(
                             sess.bytes_to_guacd
                                 .fetch_add(text.len() as u64, std::sync::atomic::Ordering::Relaxed);
                         }
+                        clipboard_tracer.observe_batch(DIR_TO_GUACD, &text);
                         if tcp_write.write_all(text.as_bytes()).await.is_err()
                             || tcp_write.flush().await.is_err()
                         {
@@ -1079,6 +1281,7 @@ async fn handle_guac_handshake(
         });
     }
 
+    clipboard_tracer.report_outstanding();
     tracing::info!("Tunnel closed");
     Ok(())
 }
@@ -1086,6 +1289,83 @@ async fn handle_guac_handshake(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_instruction_reads_one_instruction_and_offset() {
+        let (elements, next) = scan_instruction("9.clipboard,1.0,10.text/plain;4.blob,1.0,2.QQ;")
+            .expect("well-formed instruction");
+        assert_eq!(elements, vec!["clipboard", "0", "text/plain"]);
+        assert_eq!(next, "9.clipboard,1.0,10.text/plain;".len());
+    }
+
+    #[test]
+    fn scan_instruction_is_not_fooled_by_delimiters_inside_payloads() {
+        // A payload containing ';' and ',' must be consumed by its length
+        // prefix, not by a naive delimiter split.
+        let (elements, next) =
+            scan_instruction("4.blob,1.0,5.a;b,c;").expect("well-formed instruction");
+        assert_eq!(elements, vec!["blob", "0", "a;b,c"]);
+        assert_eq!(next, "4.blob,1.0,5.a;b,c;".len());
+    }
+
+    #[test]
+    fn scan_instruction_rejects_truncated_input() {
+        assert!(scan_instruction("9.clipboard,1.0,10.text/pl").is_none());
+        assert!(scan_instruction("4.blob,1.0,2.QQ").is_none());
+    }
+
+    #[test]
+    fn clipboard_tracer_tracks_stream_lifecycle() {
+        let mut tracer = ClipboardTracer {
+            enabled: true,
+            open: std::collections::HashMap::new(),
+        };
+        tracer.observe_batch(DIR_FROM_GUACD, "9.clipboard,1.7,10.text/plain;");
+        assert!(tracer.open.contains_key(&(DIR_FROM_GUACD, "7".to_string())));
+
+        tracer.observe_batch(DIR_FROM_GUACD, "4.blob,1.7,4.QUJD;4.blob,1.7,4.REVG;");
+        let stream = &tracer.open[&(DIR_FROM_GUACD, "7".to_string())];
+        assert_eq!(stream.blobs, 2);
+        assert_eq!(stream.payload_chars, 8);
+
+        tracer.observe_batch(DIR_FROM_GUACD, "3.end,1.7;");
+        assert!(tracer.open.is_empty());
+    }
+
+    #[test]
+    fn clipboard_tracer_ignores_other_directions_and_opcodes() {
+        let mut tracer = ClipboardTracer {
+            enabled: true,
+            open: std::collections::HashMap::new(),
+        };
+        tracer.observe_batch(DIR_TO_GUACD, "9.clipboard,1.3,10.text/plain;");
+        // A blob on the same index but the opposite direction is a different
+        // stream and must not be attributed to this one.
+        tracer.observe_batch(DIR_FROM_GUACD, "4.blob,1.3,4.QUJD;");
+        assert_eq!(tracer.open[&(DIR_TO_GUACD, "3".to_string())].blobs, 0);
+
+        tracer.observe_batch(DIR_TO_GUACD, "4.sync,4.1234;");
+        assert_eq!(tracer.open.len(), 1);
+    }
+
+    #[test]
+    fn clipboard_tracer_credits_acks_to_the_opposite_direction() {
+        let mut tracer = ClipboardTracer {
+            enabled: true,
+            open: std::collections::HashMap::new(),
+        };
+        tracer.observe_batch(DIR_TO_GUACD, "9.clipboard,1.1,10.text/plain;");
+        // guacd acknowledges the client's stream on the inbound path.
+        tracer.observe_batch(DIR_FROM_GUACD, "3.ack,1.1,2.OK,1.0;");
+        assert_eq!(tracer.open[&(DIR_TO_GUACD, "1".to_string())].acks, 1);
+    }
+
+    #[test]
+    fn clipboard_tracer_is_inert_when_disabled() {
+        let mut tracer = ClipboardTracer::default();
+        tracer.observe_batch(DIR_FROM_GUACD, "9.clipboard,1.7,10.text/plain;");
+        assert!(tracer.open.is_empty());
+    }
 
     // ── guac_instruction encoding ──────────────────────────────────
     #[test]

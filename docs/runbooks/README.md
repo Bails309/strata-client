@@ -9,7 +9,7 @@ exactly what to do, in order, to achieve a specific outcome. They are
 
 ## When to write a runbook
 
-Write one the first time you answer *"how do we do X in prod"* where X is
+Write one the first time you answer _"how do we do X in prod"_ where X is
 repeatable, time-sensitive, or risky. Typical triggers:
 
 - A customer-visible incident has a known remediation sequence.
@@ -47,12 +47,15 @@ Every runbook in this directory should contain, at minimum:
 
 The runbooks listed below cover §26/§28 of the Coding Standards.
 
-| Runbook | Scope | Status |
-|---------|-------|--------|
-| disaster-recovery.md | Backup/restore, RTO/RPO | Active |
-| security-incident.md | Security incident response | Active |
-| certificate-rotation.md | ACME + internal CA rotation | Active |
-| vault-operations.md | Vault unseal, rekey, rotate keys | Active |
-| database-operations.md | Postgres failover, migration rollback | Active |
-| dmz-incident.md | DMZ split-topology incident response | Active |
-| dmz-production-certs.md | Production DMZ mTLS cert generation & setup | Active |
+| Runbook                  | Scope                                                       | Status |
+| ------------------------ | ----------------------------------------------------------- | ------ |
+| disaster-recovery.md     | Backup/restore, RTO/RPO                                     | Active |
+| security-incident.md     | Security incident response                                  | Active |
+| certificate-rotation.md  | ACME + internal CA rotation                                 | Active |
+| vault-operations.md      | Vault unseal, rekey, rotate keys                            | Active |
+| database-operations.md   | Postgres failover, migration rollback                       | Active |
+| dmz-incident.md          | DMZ split-topology incident response                        | Active |
+| dmz-production-certs.md  | Production DMZ mTLS cert generation & setup                 | Active |
+| smtp-troubleshooting.md  | Notification email delivery failures, retry-worker stalls   | Active |
+| av-operations.md         | AV scanner outage, signature updates, false-positive triage | Active |
+| clipboard-diagnostics.md | RDP clipboard failure triage, recovery & evidence capture   | Active |

@@ -1,10 +1,14 @@
+# What's New in v1.14.4
+
+> **Patch release — copy/paste no longer dies for the rest of the Windows session, plus end-to-end clipboard diagnostics.** A user reported: _"I think it's something to do with going back to the server when the session closes but you don't log off and then you connect back in. I logged off from a session and logged back in and the copy and paste started to work again."_ This is a different defect to the v1.14.1 clipboard stall: it kills **both** directions, and — crucially — **reconnecting does not fix it**, because RDP reattaches to the still-logged-on Windows session. Root cause: pushing your local clipboard to the remote was driven by six independent triggers (three mouse/focus listeners, a window `paste` handler, the pop-out window's own pair bound to the _same_ element, the session-menu textarea, and three command-palette actions), each with its own inline copy of the "open a clipboard stream, chunk it, close it" sequence. A single click on a popped-out session fires up to four of them. They all checked "have I already sent this?" against the same value, but none wrote it back until _after_ their own transfer finished — so every one passed the check and opened its own stream, and because large payloads pause between chunks, their data interleaved on the wire. `guacd`'s RDP clipboard is a **single shared buffer** that cannot multiplex streams, so the interleaved payloads spliced together and were announced over the Windows clipboard channel twice, leaving `rdpclip.exe` waiting on a response that never matched. That wedged state lives in the **Windows session, not in Strata** — which is exactly why only a Windows log off and back on (restarting `rdpclip.exe`) recovered it. v1.14.4 routes every clipboard push through a single serialised path so only one transfer is ever in flight, fixes three compounding defects (a leaked clipboard listener on every dropped connection and auto-reconnect attempt; a failed send permanently poisoning the duplicate check so the same text could never be pasted again; and no re-priming of the clipboard channel after a reconnect), and adds opt-in **deep diagnostics** on both ends — an always-recording 500-entry ring buffer in the browser (`strataClipboard.print()`) and a `STRATA_CLIPBOARD_TRACE=1` tunnel tracer on the backend that warns the moment two clipboard streams overlap. Neither logs clipboard **contents** — only opcodes, sizes, timings and a one-way digest — so traces are safe to attach to a support ticket. **Already-stuck Windows sessions need one log off to recover;** a redeploy alone will not clear them. No schema, API, or dependency changes; 14 regression tests added.
+
 # What's New in v1.14.3
 
-> **Patch release — Safeguard now requests your profile's exact sub-hour duration instead of rounding up to a whole hour.** A user reported: *"I've edited my live password request duration from 1 hour to 15 minutes. But Safeguard is still getting a request for 1 hour."* Since minute-precision TTLs arrived in v1.13.0, a `safeguard` profile set below an hour still booked a **full hour** on the appliance — the approval card read "For 1 hour" no matter what you picked. Root cause: the outbound AccessRequest only ever carried `RequestedDurationHours`, which is whole-hours-only, so both checkout paths **ceiled** the profile's total minutes up to the next hour before sending (`15 min` and `45 min` both became 1 hour). Since Safeguard auto-checks-in and rotates the password at *its* expiry, it granted the full hour it was asked for. v1.14.3 sends the exact lifetime: `create_access_request` now emits `RequestedDurationMinutes` alongside `RequestedDurationHours` (a 15-minute profile posts 15 minutes with no hours field; a 90-minute profile posts 1h 30m), and both the direct-connect and bulk-checkout call sites pass the profile's precise `ttl_total_minutes(...)` instead of rounding up. The cache-side expiry was already minute-accurate and clamped to the appliance's authoritative `ExpiresOn` (v1.13.1), so the shorter window flows straight through to the badge. The access policy can still clamp the request to its own maximum. Backend-only patch — no schema, API, env-var, or dependency changes; three regression tests added.
+> **Patch release — Safeguard now requests your profile's exact sub-hour duration instead of rounding up to a whole hour.** A user reported: _"I've edited my live password request duration from 1 hour to 15 minutes. But Safeguard is still getting a request for 1 hour."_ Since minute-precision TTLs arrived in v1.13.0, a `safeguard` profile set below an hour still booked a **full hour** on the appliance — the approval card read "For 1 hour" no matter what you picked. Root cause: the outbound AccessRequest only ever carried `RequestedDurationHours`, which is whole-hours-only, so both checkout paths **ceiled** the profile's total minutes up to the next hour before sending (`15 min` and `45 min` both became 1 hour). Since Safeguard auto-checks-in and rotates the password at _its_ expiry, it granted the full hour it was asked for. v1.14.3 sends the exact lifetime: `create_access_request` now emits `RequestedDurationMinutes` alongside `RequestedDurationHours` (a 15-minute profile posts 15 minutes with no hours field; a 90-minute profile posts 1h 30m), and both the direct-connect and bulk-checkout call sites pass the profile's precise `ttl_total_minutes(...)` instead of rounding up. The cache-side expiry was already minute-accurate and clamped to the appliance's authoritative `ExpiresOn` (v1.13.1), so the shorter window flows straight through to the badge. The access policy can still clamp the request to its own maximum. Backend-only patch — no schema, API, env-var, or dependency changes; three regression tests added.
 
 # What's New in v1.14.2
 
-> **Patch release — Safeguard "Awaiting approval" Refresh no longer dead-ends on an Internal Server Error after your Safeguard sign-in lapses.** A user re-flagged a bug we thought was fixed: an approval-gated request sat in **Awaiting approval** long enough for its live password to expire, Strata never noticed it had been approved, and pressing **Refresh** returned `HTTP 500 "Internal server error"` in an unrecoverable loop. The v1.12.12 fix already turns *terminal* appliance states (Expired / Cancelled / Denied / …) and 404s into an actionable "please submit a new checkout request" message — but it assumed the follow-up state lookup succeeds. It doesn't when the real problem is a **dead bearer**: in `per_user_browser` / `hybrid` modes Strata's stored Safeguard token can outlive the appliance's own session, so by the time you Refresh a long-pending row, both the `CheckoutPassword` call **and** the state-refetch come back `HTTP 401/403`, which bubbled up as a generic 500 with the pending row left stuck. v1.14.2 recognises those `401/403` appliance rejections and, for non-A2A auth modes, returns the stable `safeguard.signin_required` code (`HTTP 400`) instead of a 500 — the row now stays **pending and refreshable** and shows an actionable "Your Safeguard sign-in has expired. Sign in to Safeguard again above, then press Refresh." message, and the card's "signed out of Safeguard" banner reappears. Sign in again and Refresh resolves the request normally; a genuinely dead request still falls through to the v1.12.12 "submit a new checkout request" path. Backend + frontend patch — no schema, API, env-var, or dependency changes.
+> **Patch release — Safeguard "Awaiting approval" Refresh no longer dead-ends on an Internal Server Error after your Safeguard sign-in lapses.** A user re-flagged a bug we thought was fixed: an approval-gated request sat in **Awaiting approval** long enough for its live password to expire, Strata never noticed it had been approved, and pressing **Refresh** returned `HTTP 500 "Internal server error"` in an unrecoverable loop. The v1.12.12 fix already turns _terminal_ appliance states (Expired / Cancelled / Denied / …) and 404s into an actionable "please submit a new checkout request" message — but it assumed the follow-up state lookup succeeds. It doesn't when the real problem is a **dead bearer**: in `per_user_browser` / `hybrid` modes Strata's stored Safeguard token can outlive the appliance's own session, so by the time you Refresh a long-pending row, both the `CheckoutPassword` call **and** the state-refetch come back `HTTP 401/403`, which bubbled up as a generic 500 with the pending row left stuck. v1.14.2 recognises those `401/403` appliance rejections and, for non-A2A auth modes, returns the stable `safeguard.signin_required` code (`HTTP 400`) instead of a 500 — the row now stays **pending and refreshable** and shows an actionable "Your Safeguard sign-in has expired. Sign in to Safeguard again above, then press Refresh." message, and the card's "signed out of Safeguard" banner reappears. Sign in again and Refresh resolves the request normally; a genuinely dead request still falls through to the v1.12.12 "submit a new checkout request" path. Backend + frontend patch — no schema, API, env-var, or dependency changes.
 
 # What's New in v1.14.1
 
@@ -15,7 +19,6 @@
 > **Minor release — Download Session Recordings in Windows-Playable Format (.mp4).** A feature request to allow downloading session recordings in a format natively playable on Windows OS. Guacamole session recordings are natively stored as raw `.guac` instruction streams, which default Windows media players (Windows Media Player, Movies & TV, Edge, Chrome, VLC) cannot play directly. v1.14.0 introduces an on-demand video conversion service in the backend using Apache Guacamole's native `guacenc` utility and `ffmpeg`. When a user or administrator requests an `.mp4` download, Strata renders the `.guac` instruction stream into an H.264 video container (`.mp4`), setting proper `video/mp4` MIME headers and `<connection_name>_<recording_id>.mp4` download filenames. Download MP4 buttons are added to **My Recordings**, **Sessions** (admin view), and the **Historical Player** modal header. Container packaging in `backend/Dockerfile` updated to include `ffmpeg`.
 
 # What's New in v1.13.2
-
 
 > **Patch release — AD Sync service-account auto-rotation no
 > longer loses the rotated password.** Enabling **Auto-rotate
@@ -57,10 +60,10 @@
 > stamped `expires_at = now() + profile TTL` and never read the
 > appliance's authoritative `ExpiresOn` — which diverges when a
 > request sat in `PendingApproval` before the approver acted
-> (Safeguard's window runs from request *creation*, and Strata
+> (Safeguard's window runs from request _creation_, and Strata
 > restarted the clock at approval time) or when the access policy
 > clamps `RequestedDurationHours` to its own maximum. Worse than
-> cosmetic: Safeguard rotates the password at *its* expiry, so the
+> cosmetic: Safeguard rotates the password at _its_ expiry, so the
 > green "Cached · Nh left" badge could advertise a dead credential
 > for the over-reported tail. v1.13.1 parses `ExpiresOn` from the
 > create response and the status refetch (lenient parser — format
@@ -211,7 +214,7 @@ connection that has NO display tag pinned. Its tab MUST read
 > friends), and when the request is in any other terminal state
 > (cancelled, denied, revoked, complete) — bubbled up as
 > `AppError::Internal`, which maps to `HTTP 500 { "error":
-> "Internal server error" }` (real message goes to the log so we
+"Internal server error" }` (real message goes to the log so we
 > don't leak appliance internals). Meanwhile
 > `release_pending`'s `Err` arm did audit the failure but never
 > cleared the stale `safeguard_pending_requests` row, so the
@@ -221,8 +224,8 @@ connection that has NO display tag pinned. Its tab MUST read
 > CheckoutPassword error path — Terminal states (Expired /
 > Cancelled / Denied / Revoked / Complete / PasswordCheckedIn)
 > and 404s translate to a clear `HTTP 400 "Safeguard access
-> request X is no longer releasable (appliance state: Y). Please
-> submit a new checkout request."` AND best-effort DELETE the
+request X is no longer releasable (appliance state: Y). Please
+submit a new checkout request."` AND best-effort DELETE the
 > stale pending row so the badge doesn't re-hydrate; still-
 > pending states return the normal `JitOutcome::PendingApproval`
 > so the row keeps polling. Any other unexpected state (or a
@@ -246,7 +249,7 @@ The upshot for operators:
   code path was already calling on the happy path.
 - **Two new module-private helpers** in
   `services::safeguard::mod`: `is_terminal_release_state(state:
-  &str) -> bool` (case-insensitive substring match on the
+&str) -> bool` (case-insensitive substring match on the
   Safeguard state vocabulary) and
   `clear_pending_best_effort(pool, user_id, profile_id)`
   (silences DB errors from the cleanup path so they can never
@@ -263,8 +266,8 @@ The upshot for operators:
 
 If a user still sees the yellow **Awaiting approval** badge stuck
 after pressing Refresh, the row's error text now tells you which
-appliance state was reported (e.g. *"appliance state: Expired.
-Please submit a new checkout request."*). That gives support a
+appliance state was reported (e.g. _"appliance state: Expired.
+Please submit a new checkout request."_). That gives support a
 one-line diagnosis instead of the pre-v1.12.12 "Internal server
 error" black-box. The stale pending row is also deleted server-
 side, so re-opening the page will no longer re-hydrate the stuck
@@ -281,7 +284,7 @@ Docker deploy: `docker compose pull && docker compose up -d --build backend`.
 > reported that connecting directly to a connection whose
 > credential profile is mapped to a Safeguard account requiring
 > approver action ("auto-request on direct-connect") never
-> updated the credentials page to say *Pending Approval*, so every
+> updated the credentials page to say _Pending Approval_, so every
 > subsequent connect attempt looked like a fresh JIT checkout to
 > the user (the backend's `reuse_pending` preflight kept us from
 > creating actual duplicate access requests on the appliance —
@@ -311,8 +314,8 @@ The bug and its fix are described in full in the [CHANGELOG](CHANGELOG.md#11211-
 The upshot for operators:
 
 - **New table**: `safeguard_pending_requests(user_id UUID,
-  profile_id UUID, request_id TEXT, account_id TEXT,
-  asset TEXT, created_at TIMESTAMPTZ)` — indexed by user; FK
+profile_id UUID, request_id TEXT, account_id TEXT,
+asset TEXT, created_at TIMESTAMPTZ)` — indexed by user; FK
   cascades on both `users(id)` and `credential_profiles(id)`.
 - **New endpoint**: `GET /api/user/safeguard/pending` returns
   every pending row for the calling user, newest-first. Requires
@@ -478,7 +481,9 @@ explicitly preserving `pending` rows:
 setResults((prev) => {
   if (profileId) return prev.filter((r) => r.profile_id !== profileId);
   const cachedIds = new Set(cached.map((c) => c.profile_id));
-  return prev.filter((r) => r.state === "pending" || !cachedIds.has(r.profile_id));
+  return prev.filter(
+    (r) => r.state === "pending" || !cachedIds.has(r.profile_id),
+  );
 });
 ```
 
@@ -653,8 +658,8 @@ build a single `Map<tagId, tagName.toLowerCase()>` from `allTags`,
 then extend the row predicate with a fourth `||` clause:
 
 ```ts
-(allConnTagMap[c.id] || []).some(
-  (tid) => (tagNameById.get(tid) || "").includes(q),
+(allConnTagMap[c.id] || []).some((tid) =>
+  (tagNameById.get(tid) || "").includes(q),
 );
 ```
 
@@ -708,7 +713,7 @@ documentation.
   no new test was added because the search closure is a private
   implementation detail of one `useMemo` and the public
   behavioural contract (`empty query → all rows; non-empty
-  query → matching rows`) is unchanged.
+query → matching rows`) is unchanged.
 - **Performance**: the new clause is `O(tagsPerConnection)`
   per row per keystroke, and `tagsPerConnection` is bounded by
   the size of the tag inventory in practice (operators tag with
@@ -730,7 +735,7 @@ documentation.
 3. Navigate to `/dashboard` and locate the **Search** input
    below the connection tiles.
 4. **Expected on v1.12.9**: the placeholder reads `Search name,
-   host, description or tag`. Type `domain` — the row for
+host, description or tag`. Type `domain` — the row for
    `cicsazt1mgt-p` (and every other connection tagged
    `Domain Controllers`) is included in the filtered list, even
    though the literal string `domain` does not appear in the
@@ -758,7 +763,7 @@ documentation.
   "search" means.
 - No customer action is required beyond updating to v1.12.9.
   The standard deploy is `docker compose pull && docker compose
-  up -d --build frontend` (frontend-only — the backend container
+up -d --build frontend` (frontend-only — the backend container
   image is byte-identical to v1.12.8 in everything except the
   `[workspace.package].version` field embedded in the binary,
   and there is no reason to redeploy it solely for this change

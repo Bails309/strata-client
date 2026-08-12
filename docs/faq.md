@@ -128,6 +128,17 @@ Yes — via the Window Management API (Chromium 100+). Best supported with all-l
 
 On Windows hosts with AVC444 + hardware encoding enabled, RDP H.264 is roughly an order of magnitude lower bandwidth than the legacy bitmap path, and renders crisp text during rapid window animations. Strata passes H.264 NAL units end-to-end (FreeRDP 3 → guacd → WebSocket → browser WebCodecs `VideoDecoder`) with no proxy-side transcode. See [docs/h264-passthrough.md](h264-passthrough.md) and the [`docs/Configure-RdpAvc444.ps1`](Configure-RdpAvc444.ps1) helper.
 
+### Copy/paste has stopped working in an RDP session. What now?
+
+First establish which of the two failure modes you have, because the recovery differs:
+
+- **Only copying _from_ the remote is broken, and reconnecting fixes it.** This is a stalled clipboard transfer — RDP's CLIPRDR channel opened a transfer and never closed it, usually because the copying application renders its clipboard data lazily (Chrome, Edge, VS Code, terminals) and a second copy interrupted the first. Since v1.14.1 Strata flushes whatever arrived after a 2-second watchdog rather than silently leaving stale text on your clipboard, so this should now degrade to a partial copy rather than a dead one.
+- **Both copy _and_ paste are broken, and reconnecting does _not_ fix it.** The Windows-side clipboard service (`rdpclip.exe`) is wedged. Because reconnecting reattaches to the same still-logged-on Windows session, the tunnel is not what needs resetting — **log off the Windows session** (not just disconnect) and log back in. Prior to v1.14.4, overlapping clipboard transfers from a single click could cause this; v1.14.4 serialises clipboard pushes so it should no longer occur, but a session already stuck before the upgrade still needs the one-time log off.
+
+To capture evidence for a bug report, run `strataClipboard.print()` in the session tab's devtools console — a 500-entry diagnostic buffer is always recording, so you do not need to reproduce the fault with logging switched on. Operators can additionally set `STRATA_CLIPBOARD_TRACE=1` on the backend. Neither records clipboard **contents**, only opcodes, sizes and timings, so the output is safe to attach to a ticket. See [docs/deployment.md](deployment.md#diagnosing-clipboard-problems-v1144).
+
+If clipboard access is denied outright (nothing transfers in either direction), check that Strata is served over **HTTPS** — browsers refuse Clipboard API reads on insecure origins — and that the connection does not have `disable-copy` / `disable-paste` set in its guacd parameters.
+
 ---
 
 ## Recording & audit
@@ -174,7 +185,7 @@ No. There is no telemetry, no analytics, no auto-update beacon. All outbound tra
 
 ### Does Strata scan uploaded files for malware? (v1.12.0+)
 
-Yes — opt-in. v1.12.0 added a pluggable AV scanner that runs on both Quick Share upload paths (inbound *to* the remote session and outbound approval-gated *from* the remote session). The default backend is `off` so v1.11.x deployments upgrade with no behaviour change; flip to `clamav` (with the bundled sidecar via the `av` compose profile) or `command` (Microsoft Defender, Sophos, ESET, any scanner with the `0=clean, 1=infected` exit-code contract) to enable scanning. See [av-scanning.md](av-scanning.md) for the full operator guide and [ADR-0011](adr/ADR-0011-av-scanning.md) for the design rationale.
+Yes — opt-in. v1.12.0 added a pluggable AV scanner that runs on both Quick Share upload paths (inbound _to_ the remote session and outbound approval-gated _from_ the remote session). The default backend is `off` so v1.11.x deployments upgrade with no behaviour change; flip to `clamav` (with the bundled sidecar via the `av` compose profile) or `command` (Microsoft Defender, Sophos, ESET, any scanner with the `0=clean, 1=infected` exit-code contract) to enable scanning. See [av-scanning.md](av-scanning.md) for the full operator guide and [ADR-0011](adr/ADR-0011-av-scanning.md) for the design rationale.
 
 ### What happens if the AV scanner is down?
 

@@ -4,10 +4,19 @@
    eslint.config.js W4-1 commentary. */
 import { createContext, useContext, useCallback, useEffect, useRef, useState } from "react";
 import Guacamole from "guacamole-common-js";
-import { preparePastePayload } from "./pastePayload";
+import {
+  clipboardDiag,
+  clipboardFingerprint,
+  installClipboardDiagnostics,
+  resetRemoteClipboardEcho,
+  sendClipboardToRemote,
+  type ClipboardTxState,
+} from "./clipboardSync";
 import { notifySessionActivity } from "./sessionActivity";
 import { submitOutboundShare } from "../api";
 import { useOptionalToast } from "./ToastProvider";
+
+installClipboardDiagnostics();
 export interface GuacSession {
   id: string; // connection UUID
   connectionId: string;
@@ -23,8 +32,10 @@ export interface GuacSession {
   error?: string;
   /** Filesystem objects exposed by guacd (RDP drive, SFTP, etc.) */
   filesystems: { object: Guacamole.GuacObject; name: string }[];
-  /** Remote clipboard text (last received from the session) */
+  /** Remote clipboard text (last received from, or last successfully sent to, the session) */
   remoteClipboard: string;
+  /** Internal serialisation state for local → remote clipboard pushes. Owned by `clipboardSync`. */
+  _clipboardTx?: ClipboardTxState;
   /**
    * Justification text to attach to the *next* outbound-share file
    * intercepted from this session. Set by the user via the
@@ -32,7 +43,7 @@ export interface GuacSession {
    * `client.onfile` when an outbound file arrives.
    */
   pendingOutboundJustification?: string;
-  /** Cleanup function for paste event listener */
+  /** Removes every clipboard listener this session registered (window + displayEl) */
   _cleanupPaste?: () => void;
   /** Pop-out state and actions */
   isPoppedOut?: boolean;
@@ -376,12 +387,18 @@ export function SessionManagerProvider({
     // gives us evidence to correlate with server-side guacd logs.
     const CLIPBOARD_STALL_MS = 2000;
     client.onclipboard = (stream: Guacamole.InputStream, mimetype: string) => {
-      if (mimetype !== "text/plain") return;
+      if (mimetype !== "text/plain") {
+        clipboardDiag(sessionId, "in", "ignored-mimetype", { mimetype, index: stream.index });
+        return;
+      }
       const reader = new Guacamole.StringReader(stream);
+      const openedAt = Date.now();
       let data = "";
       let blobCount = 0;
       let flushed = false;
       let stallTimer: ReturnType<typeof setTimeout> | undefined;
+
+      clipboardDiag(sessionId, "in", "stream-open", { index: stream.index });
 
       const writeToLocalClipboard = (text: string): void => {
         // When the session is in a pop-out window the main window lacks focus
@@ -395,6 +412,7 @@ export function SessionManagerProvider({
           // Best-effort copy — don't surface this to users (it spams on
           // every keystroke in the iframe), but log so devs can spot a
           // Permissions-Policy or cross-origin clipboard denial.
+          clipboardDiag(sessionId, "in", "local-write-failed", { err: String(err) });
           console.warn("[session] clipboard write failed:", err);
         });
       };
@@ -421,6 +439,13 @@ export function SessionManagerProvider({
             /* stream may already be closed */
           }
         }
+        clipboardDiag(sessionId, "in", reason === "end" ? "stream-end" : "stream-stalled", {
+          index: stream.index,
+          blobs: blobCount,
+          chars: data.length,
+          ms: Date.now() - openedAt,
+          fp: data.length > 0 ? clipboardFingerprint(data) : undefined,
+        });
         // Only overwrite the local clipboard when we actually received
         // something. An empty flush from a stall with zero blobs would
         // wipe whatever the user had copied previously, making the bug
@@ -451,27 +476,12 @@ export function SessionManagerProvider({
     const pushClipboard = async () => {
       try {
         const text = await navigator.clipboard?.readText();
-        if (text && text !== session.remoteClipboard) {
-          const payload = preparePastePayload(text, session.protocol);
-          const stream = client.createClipboardStream("text/plain");
-          const writer = new Guacamole.StringWriter(stream);
-
-          // Split text into chunks to avoid hitting Guacamole protocol
-          // instruction size limits (typically 8KB). 4096 is a safe chunk size.
-          // Add a small delay between chunks to avoid overwhelming the tunnel.
-          const CHUNK_SIZE = 4096;
-          for (let i = 0; i < payload.length; i += CHUNK_SIZE) {
-            writer.sendText(payload.substring(i, i + CHUNK_SIZE));
-            // Tiny delay to let the event loop process and allow guacd to
-            // handle the reassembly buffer without bursting.
-            await new Promise((resolve) => setTimeout(resolve, 5));
-          }
-
-          writer.sendEnd();
-          session.remoteClipboard = text; // Update local state to avoid echo
-        }
-      } catch {
-        // Silently fail if clipboard access is denied
+        if (text) await sendClipboardToRemote(session, text, "focus");
+      } catch (err) {
+        // Denied (no transient activation, insecure context, blocked
+        // permission). Recorded rather than swallowed — a permanently
+        // denied read looks identical to "paste stopped working".
+        clipboardDiag(sessionId, "out", "local-read-failed", { err: String(err) });
       }
     };
     // Push local clipboard whenever the display gets focus or is clicked.
@@ -480,7 +490,9 @@ export function SessionManagerProvider({
     // in another app and clicks directly into the session: mouseenter fires
     // *before* the click grants transient user-activation, so the Clipboard
     // API denies access.  mousedown IS the user gesture, so readText()
-    // succeeds.
+    // succeeds.  All three funnel into the same serialised sender, so the
+    // burst of events a single click produces cannot open concurrent
+    // clipboard streams.
     displayEl.addEventListener("mouseenter", pushClipboard);
     displayEl.addEventListener("mousedown", pushClipboard);
     displayEl.addEventListener("focus", pushClipboard, true);
@@ -490,20 +502,20 @@ export function SessionManagerProvider({
     // browsers always provide clipboardData on user-initiated paste events.
     const handlePaste = (e: ClipboardEvent) => {
       const text = e.clipboardData?.getData("text/plain");
-      if (text && text !== session.remoteClipboard) {
-        const payload = preparePastePayload(text, session.protocol);
-        const stream = client.createClipboardStream("text/plain");
-        const writer = new Guacamole.StringWriter(stream);
-        const CHUNK_SIZE = 4096;
-        for (let i = 0; i < payload.length; i += CHUNK_SIZE) {
-          writer.sendText(payload.substring(i, i + CHUNK_SIZE));
-        }
-        writer.sendEnd();
-        session.remoteClipboard = text;
-      }
+      if (text) void sendClipboardToRemote(session, text, "paste-event");
     };
     window.addEventListener("paste", handlePaste as EventListener);
-    session._cleanupPaste = () => window.removeEventListener("paste", handlePaste as EventListener);
+    // Tears down every clipboard listener this session owns. MUST be called
+    // on both close paths (explicit closeSession and the tunnel-CLOSED
+    // handler below) — a missed call leaves a window-level `paste` listener
+    // bound to a dead client for the lifetime of the page, and those
+    // accumulate on every dropped connection and auto-reconnect.
+    session._cleanupPaste = () => {
+      window.removeEventListener("paste", handlePaste as EventListener);
+      displayEl.removeEventListener("mouseenter", pushClipboard);
+      displayEl.removeEventListener("mousedown", pushClipboard);
+      displayEl.removeEventListener("focus", pushClipboard, true);
+    };
 
     // ── Filesystem objects (RDP drive, SFTP, etc.) ──
     client.onfilesystem = (object: Guacamole.GuacObject, name: string) => {
@@ -681,10 +693,16 @@ export function SessionManagerProvider({
     // sessions are always cleaned up from the sessions list and session bar.
     tunnel.onstatechange = (state: number) => {
       if (state === 2 /* Guacamole.Tunnel.State.CLOSED */) {
+        clipboardDiag(sessionId, "out", "tunnel-closed", {});
         setSessions((prev) => {
           const s = prev.find((x) => x.id === sessionId);
           if (s) {
             cleanupPopout(s);
+            // Without this, the window-level `paste` listener registered
+            // above survives the dead session. Every network drop and every
+            // auto-reconnect attempt then adds another, all firing on each
+            // Ctrl+V against clients whose tunnels are gone.
+            s._cleanupPaste?.();
             s.keyboard.onkeydown = null;
             s.keyboard.onkeyup = null;
             s.keyboard.reset();
@@ -706,6 +724,12 @@ export function SessionManagerProvider({
     // On connected, re-send the container size to ensure guacd matches the viewport
     client.onstatechange = (state: number) => {
       if (state === 3) {
+        // A freshly-spawned guacd has an empty clipboard, and when RDP
+        // reattaches to an already-logged-on Windows session the CLIPRDR
+        // channel is renegotiated from scratch. Drop our belief about what
+        // the remote holds so the next focus/paste re-primes it instead of
+        // being suppressed as a duplicate.
+        resetRemoteClipboardEcho(session, "client-connected");
         requestAnimationFrame(() => {
           const parent = displayEl.parentElement;
           if (parent) {

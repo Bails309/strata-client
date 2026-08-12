@@ -522,6 +522,43 @@ describe("SessionManager", () => {
     }
   });
 
+  it("removes clipboard listeners when the tunnel closes on its own", () => {
+    // Regression guard: only the explicit closeSession() path used to call
+    // _cleanupPaste. A tunnel that closed by itself (network drop, server
+    // disconnect, every auto-reconnect attempt) left its window-level
+    // `paste` listener bound to a dead client forever, and they piled up
+    // one per dropped connection.
+    const addSpy = vi.spyOn(window, "addEventListener");
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+    try {
+      const { result } = renderHook(() => useSessionManager(), { wrapper });
+
+      let session: any;
+      rtlAct(() => {
+        session = result.current.createSession({
+          connectionId: "c1",
+          name: "A",
+          protocol: "rdp",
+          containerEl: document.createElement("div"),
+          connectParams: new URLSearchParams(),
+        });
+      });
+
+      const registered = addSpy.mock.calls.find(([type]) => type === "paste");
+      expect(registered).toBeDefined();
+
+      rtlAct(() => {
+        session.tunnel.onstatechange(2 /* CLOSED */);
+      });
+
+      expect(removeSpy).toHaveBeenCalledWith("paste", registered![1]);
+      expect(result.current.sessions).toHaveLength(0);
+    } finally {
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
+    }
+  });
+
   it("triggers file download when server sends file", async () => {
     const { result } = renderHook(() => useSessionManager(), { wrapper });
 

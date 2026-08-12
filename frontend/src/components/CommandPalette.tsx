@@ -4,7 +4,6 @@
    eslint.config.js W4-1 commentary. */
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import Guacamole from "guacamole-common-js";
 import {
   getMyConnections,
   getTags,
@@ -20,6 +19,7 @@ import {
 } from "../api";
 import { useUserPreferences } from "./UserPreferencesProvider";
 import { useSessionManager } from "./SessionManager";
+import { sendClipboardToRemote } from "./clipboardSync";
 import { requestFullscreenWithLock, exitFullscreenWithUnlock } from "../utils/keyboardLock";
 
 /* ── Protocol icon (inline SVG, matching Dashboard) ──────────────── */
@@ -458,11 +458,9 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
             await new Promise((r) => setTimeout(r, 250));
 
             // 2. Push the argument onto the remote clipboard.
-            const stream = sess.client.createClipboardStream("text/plain");
-            const writer = new Guacamole.StringWriter(stream);
-            writer.sendText(explorerArgTrimmed);
-            writer.sendEnd();
-            sess.remoteClipboard = explorerArgTrimmed;
+            await sendClipboardToRemote(sess, explorerArgTrimmed, "palette-explorer", {
+              force: true,
+            });
             await new Promise((r) => setTimeout(r, 80));
 
             // 3. Ctrl+V to paste.
@@ -592,14 +590,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
               // actually receives it. We deliberately do NOT log the
               // text in the audit details — only the trigger + length.
               try {
-                const stream = sess.client.createClipboardStream("text/plain");
-                const writer = new Guacamole.StringWriter(stream);
-                const CHUNK = 4096;
-                for (let i = 0; i < text.length; i += CHUNK) {
-                  writer.sendText(text.substring(i, i + CHUNK));
-                }
-                writer.sendEnd();
-                sess.remoteClipboard = text;
+                await sendClipboardToRemote(sess, text, "palette-paste-text", { force: true });
                 // Give the clipboard transfer a moment to land before
                 // the paste keystroke. 80 ms matches the empirical
                 // delay used by SessionBar's Paste button.
@@ -656,11 +647,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                 await new Promise((r) => setTimeout(r, 250));
 
                 // 2. Push the path into the remote clipboard.
-                const stream = sess.client.createClipboardStream("text/plain");
-                const writer = new Guacamole.StringWriter(stream);
-                writer.sendText(path);
-                writer.sendEnd();
-                sess.remoteClipboard = path;
+                await sendClipboardToRemote(sess, path, "palette-open-path", { force: true });
                 await new Promise((r) => setTimeout(r, 80));
 
                 // 3. Ctrl+V to paste.

@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.14.4] — 2026-08-12
+
+### Patch Release — Copy/paste no longer dies for the rest of the Windows session, plus end-to-end clipboard diagnostics
+
+**The ask.** "We have a bug issue in the copy and paste. I think it's something to do with going back to the server when the session closes but you don't log off and then you connect back in. I logged off from a session and logged back in and the copy and paste started to work again. Can we put deep logging on to find the issue and also if you can see any bugs in this can we look to resolve them."
+
+**Symptom.** Copy **and** paste both stop working in an RDP session. Unlike the v1.14.1 defect — which affected only the remote → local direction and was cured by reconnecting — this one **survives a reconnect**. Disconnecting the Strata tab and dialling back into the same host leaves the clipboard just as dead, because RDP reattaches to the still-logged-on Windows session. The only reliable recovery is to log **off** the Windows session entirely and log back in.
+
+**Root cause — concurrent clipboard streams interleaving into `guacd`'s single shared clipboard buffer.**
+
+The local → remote push was driven by six independent triggers, each carrying its own inline copy of the "open a clipboard stream → chunk the text into 4 KiB `blob`s → `sendEnd`" sequence:
+
+| Trigger                                                       | Location                                                           |
+| ------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `mouseenter` / `mousedown` / `focus` on the session display   | [`SessionManager.tsx`](frontend/src/components/SessionManager.tsx) |
+| window-level `paste` event                                    | [`SessionManager.tsx`](frontend/src/components/SessionManager.tsx) |
+| pop-out window `mouseenter` / `mousedown` / `focus` / `paste` | [`usePopOut.ts`](frontend/src/components/usePopOut.ts)             |
+| session-menu clipboard textarea                               | [`SessionMenu.tsx`](frontend/src/components/SessionMenu.tsx)       |
+| `paste-text`, `open-path`, `:explorer` palette commands       | [`CommandPalette.tsx`](frontend/src/components/CommandPalette.tsx) |
+
+A single click fires several of them at once — and, critically, the pop-out registers its handlers on the **same** `displayEl` the main window already uses, so a popped-out session fires up to four pushes per click. Each one consulted `session.remoteClipboard` to decide "have I already sent this?", but none of them wrote the value back until **after** its own transfer completed. Every concurrent caller therefore passed the guard and opened its own clipboard stream. Because the large-payload path `await`s ~5 ms between chunks to avoid bursting `guacd`'s reassembly buffer, the `blob` instructions belonging to the different streams **interleave on the wire**.
+
+`guacd`'s RDP clipboard is a **single shared buffer**. The `clipboard` instruction resets it and every `blob` appends to it, _regardless of stream index_ — the channel cannot multiplex. Two interleaved streams therefore splice their payloads together and announce the result over **CLIPRDR** twice. Windows' clipboard owner (`rdpclip.exe`) can be left waiting on a format-data response that never matches, at which point both copy and paste stay dead for the remainder of the Windows session. That wedged state lives in the **Windows session, not in `guacd`** — which is exactly why the reporter found that reconnecting did nothing but logging off and back on (which restarts `rdpclip.exe`) fixed it.
+
+Three supporting defects compounded it:
+
+1. **Leaked clipboard listeners on every dropped connection.** Only the explicit `closeSession()` path invoked `session._cleanupPaste()`. The `tunnel.onstatechange` `CLOSED` handler — which is what actually fires on a network drop, a server-side disconnect, and **every** auto-reconnect attempt — did not. Each dropped connection therefore left a window-level `paste` listener bound to a dead `Guacamole.Client` for the lifetime of the page, and they accumulated one per drop, each still allocating output-stream indices on a tunnel that was gone.
+2. **A failed send poisoned the duplicate guard permanently.** `session.remoteClipboard = text` was assigned unconditionally after `writer.sendEnd()`. But `Guacamole.Client.endStream()` silently returns without transmitting when the tunnel is not connected, so a push into a dead tunnel still recorded the text as delivered — after which every later paste of that same text was suppressed as a duplicate, forever.
+3. **No re-priming on reconnect.** A freshly-spawned `guacd` has an empty clipboard, and when RDP reattaches to an already-logged-on Windows session the CLIPRDR channel is renegotiated from scratch. Nothing reset the frontend's belief about what the remote held, so the first push after a reconnect could be discarded as a duplicate of a value the new remote never had.
+
+**The Fix (frontend, correctness + resilience).**
+
+- **A single serialised transmission path.** New module [`frontend/src/components/clipboardSync.ts`](frontend/src/components/clipboardSync.ts) replaces all six inline copies. Every caller now routes through `sendClipboardToRemote(session, text, source)`, which chains sends per session on a promise so **only one clipboard stream is ever open at a time** — concurrent triggers can no longer interleave.
+- **Duplicate suppression that accounts for in-flight work.** The guard now tests the candidate text against both the last _confirmed_ `remoteClipboard` value **and** the text of any send still queued, which is what collapses a single click's burst of triggers into one transfer. Explicit user commands (`paste-text`, `open-path`, `:explorer`) pass `{ force: true }` to bypass it, because the Ctrl+V keystroke that follows is worthless if the cached belief turns out to be stale.
+- **Refuse to write to a closed tunnel**, re-checked both before queueing and again after the send acquires its turn in the chain (the tunnel can drop while waiting). `remoteClipboard` is now updated **only** on a confirmed write, so failure 2 above can no longer poison the guard.
+- **`resetRemoteClipboardEcho()` on `CONNECTED`.** Fires whenever a client reaches state 3, so a reconnect always re-primes the renegotiated CLIPRDR channel instead of trusting a belief inherited from the previous connection.
+- **`_cleanupPaste()` on the tunnel-`CLOSED` path**, and it now also removes the three `displayEl` listeners in addition to the window `paste` listener.
+- **Latent-crash fix.** [`frontend/src/guacamole-common-js.d.ts`](frontend/src/guacamole-common-js.d.ts) declares `Guacamole.Client.isConnected()`, but the vendored 1.6.0 bundle only defines it as a _private_ function inside the `Client` closure — calling it would have thrown a `TypeError`. Liveness is now derived from `tunnel.state` instead.
+
+**Deep logging (new).** Both ends gained opt-in instrumentation, since the failure is silent by construction and the reporter had no evidence to hand.
+
+- **Browser** — `clipboardSync.ts` writes every clipboard lifecycle event into a **500-entry ring buffer that is always recording**, so a user can be asked for a dump _after_ hitting the bug rather than being told to reproduce it with logging on. A console helper is published on `window.strataClipboard` with `enable()` (echo to console, persisted in `localStorage` under `strata.debug.clipboard`), `disable()`, `print()` (a `console.table` ready to paste into a bug report), `dump()` and `clear()`. Outbound events: `queued`, `skip-duplicate`, `skip-disconnected`, `stream-open`, `ack`, `ack-error`, `abort-mid-stream`, `stream-failed`, `stream-end`, `echo-reset`, `tunnel-closed`. Inbound events: `stream-open`, `stream-end`, `stream-stalled`, `ignored-mimetype`, `local-write-failed`.
+- **Backend** — the new `STRATA_CLIPBOARD_TRACE=1` environment variable enables `ClipboardTracer` in [`backend/src/tunnel.rs`](backend/src/tunnel.rs). It walks every instruction batch in **both** directions using a new `scan_instruction` helper that consumes elements via the protocol's own length prefixes (so a payload containing `;` or `,` can never be mistaken for a delimiter) and logs clipboard stream lifecycles. The headline signal is a `WARN` when a `clipboard` instruction opens a stream **while another is still open in the same direction** — that is the interleaving condition above, observable server-side. It also flags streams that never receive `end`, non-zero `ack` status codes, and any transfers still outstanding at tunnel teardown.
+- **Privacy.** Neither tracer ever records clipboard **contents** — only opcodes, stream indices, payload sizes, timings, and a non-reversible 32-bit FNV-1a digest that lets two entries be compared for "same text" without revealing it. Traces are safe to attach to a support bundle.
+
+**Scope & safety.** Frontend behavioural change plus a backend logging addition that is **inert unless `STRATA_CLIPBOARD_TRACE` is set**. No schema, no new API surface, no dependency change, and no change to what data crosses the tunnel — the same bytes travel over the same authenticated WebSocket on the same tunnel ticket. This is a correctness/resilience fix, not a security-boundary change; the new diagnostics are deliberately content-free so enabling them cannot turn an operator's clipboard into log data. The v1.14.1 remote → local stall watchdog is retained unchanged and now emits structured diagnostics alongside its existing `console.warn`.
+
+**Testing.** A new suite [`frontend/src/__tests__/clipboardSync.test.ts`](frontend/src/__tests__/clipboardSync.test.ts) adds seven tests, including an explicit regression guard asserting that two concurrent pushes never interleave (stream 0 must fully close before stream 1 opens), that a dead tunnel leaves `remoteClipboard` untouched, that `resetRemoteClipboardEcho` re-primes after a reconnect, and that clipboard contents never appear in the diagnostic dump. One test was added to [`SessionManager.test.tsx`](frontend/src/__tests__/SessionManager.test.tsx) pinning listener removal on the tunnel-`CLOSED` path. Six backend unit tests in [`tunnel.rs`](backend/src/tunnel.rs) cover the length-prefixed instruction scanner (including payloads containing `;` and `,`), stream lifecycle tracking, direction isolation, ack attribution, and that the tracer is fully inert when disabled. The full frontend suite (78 files, 1598 tests) passes, `npx tsc --noEmit` is clean, and `cargo fmt --check` is clean.
+
+**Operator note.** Deployments already wedged by this bug need the affected **Windows** sessions logged off once to restart `rdpclip.exe`; a Strata redeploy alone will not clear a session that is already stuck. To capture evidence of a recurrence, set `STRATA_CLIPBOARD_TRACE=1` on the backend and have the user run `strataClipboard.enable()` in their browser console before reproducing.
+
+**Deploy.** Backend + frontend: `docker compose pull && docker compose up -d --build backend frontend`.
+
 ## [1.14.3] — 2026-08-06
 
 ### Patch Release — Safeguard checkout now requests the profile's exact sub-hour duration instead of rounding up to a whole hour
@@ -13,9 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Symptom.** A `safeguard` credential profile whose lifetime was set below one hour (e.g. **15 minutes** via the profile editor's Hours/Minutes inputs or the "15 min" quick-pick chip) still produced a Safeguard AccessRequest for a **full hour** — the approval card and the appliance's access-request record both read "For 1 hour". Editing the duration down had no visible effect on what Safeguard received. The profile edit itself saved correctly; the value simply could not survive the trip to the appliance.
 
-**Root cause — the wire format only carried whole hours.** Since minute-precision TTLs landed in v1.13.0, the appliance request in [`services::safeguard::client::create_access_request`](backend/src/services/safeguard/client.rs) only ever sent `RequestedDurationHours`. Because that field is whole-hours-only, both checkout call sites — the direct-connect path in [`routes/tunnel.rs`](backend/src/routes/tunnel.rs) and the bulk-checkout path in [`routes/user.rs`](backend/src/routes/user.rs) — deliberately **ceiled** the profile's total minutes up to the next whole hour before submitting (`div_euclid(60) + (rem != 0)`), so `15 min` and `45 min` both became `RequestedDurationHours = 1`. This was documented as the "Safeguard bridge" limitation in v1.13.0, but it means a sub-hour profile can never ask the appliance for less than an hour, and the appliance — which auto-checks-in and rotates the password at *its* `ExpiresOn` — grants the full hour it was asked for.
+**Root cause — the wire format only carried whole hours.** Since minute-precision TTLs landed in v1.13.0, the appliance request in [`services::safeguard::client::create_access_request`](backend/src/services/safeguard/client.rs) only ever sent `RequestedDurationHours`. Because that field is whole-hours-only, both checkout call sites — the direct-connect path in [`routes/tunnel.rs`](backend/src/routes/tunnel.rs) and the bulk-checkout path in [`routes/user.rs`](backend/src/routes/user.rs) — deliberately **ceiled** the profile's total minutes up to the next whole hour before submitting (`div_euclid(60) + (rem != 0)`), so `15 min` and `45 min` both became `RequestedDurationHours = 1`. This was documented as the "Safeguard bridge" limitation in v1.13.0, but it means a sub-hour profile can never ask the appliance for less than an hour, and the appliance — which auto-checks-in and rotates the password at _its_ `ExpiresOn` — grants the full hour it was asked for.
 
 **The Fix (backend, correctness).** Safeguard's AccessRequest entity accepts `RequestedDurationMinutes` alongside `RequestedDurationHours`, so Strata now sends the profile's exact lifetime:
+
 - **Send hours + minutes.** `create_access_request` splits the requested total via a new pure `split_duration(total_minutes) -> (hours, minutes)` helper and emits each of `RequestedDurationHours` / `RequestedDurationMinutes` only when non-zero (a 15-minute profile posts `RequestedDurationMinutes = 15` with no hours field; a 90-minute profile posts `1h 30m`). The helper clamps the total to `>= 1` so a zero-length window is never requested.
 - **Stop ceiling at the call sites.** `jit_checkout` now takes `requested_minutes` (defaulting to the admin `default_checkout_hours × 60`), and both `routes/tunnel.rs` and `routes/user.rs` pass the profile's exact `ttl_total_minutes(...)` instead of rounding up to whole hours.
 - The cache-side expiry math was already minute-accurate and clamped to the appliance's authoritative `ExpiresOn` (v1.13.1), so a shorter appliance window now flows straight through to `credential_profiles.expires_at` and the `BulkSafeguardCheckoutResult.expires_at` badge with no further change.
@@ -41,6 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 3. That arm re-raised the **original** `AppError::Internal`, which maps to `HTTP 500` in [`backend/src/error.rs`](backend/src/error.rs) with the body forced to a generic "Internal server error", **and left the `safeguard_pending_requests` row in place** — so the badge re-hydrated on the next mount and the loop was permanent.
 
 **The Fix (backend + frontend, availability/resilience).**
+
 - **Recognise appliance auth rejections.** A new `is_appliance_auth_failure(&AppError)` helper in [`services/safeguard/mod.rs`](backend/src/services/safeguard/mod.rs) matches the `HTTP 401` / `HTTP 403` status the low-level client formats into its error strings.
 - **Surface a re-auth prompt, not a 500.** In `release_pending`, on **both** the `CheckoutPassword` error **and** the state-refetch error, an auth failure in a non-A2A auth mode now short-circuits to `AppError::Validation("safeguard.signin_required")` → `HTTP 400`. This is the same stable code the SPA already understands elsewhere (the profile editor's account picker), so the user is told to sign in to Safeguard again instead of hitting a dead-end. A2A mode is deliberately excluded: a 401/403 there is an appliance-trusted-credential configuration fault, not a user sign-in problem, and must not be mislabelled.
 - **Keep the pending row.** Unlike the terminal-state path, an auth lapse does **not** clear `safeguard_pending_requests` — the underlying access request may still be perfectly valid; the user simply needs to re-authenticate, after which Refresh resolves it normally.
@@ -48,7 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Scope & safety.** No schema, no new API surface, no environment variable, and no dependency change — a `500` on one internal error path becomes an actionable `400`, and the SPA renders it in place. It is a resilience/availability improvement, not a security-boundary change: the same per-user bearer authorises the same request, and ownership is still re-validated server-side on every poll. Three regression tests were added — two backend unit tests (`appliance_auth_failure_detects_401_and_403`, `appliance_auth_failure_ignores_non_auth_errors`) and one frontend test ("manual Refresh on a lapsed Safeguard session keeps the row refreshable with a sign-in prompt"). `npx tsc --noEmit` is clean and all `SafeguardBulkCheckoutCard` tests pass.
 
-**Operator note.** A genuinely long-dead request — where the token is still valid but the appliance has moved the AccessRequest to a terminal state or purged it — continues to be handled by the v1.12.12 path with the "please submit a new checkout request" `400`. So the reporter's instinct ("making a new live password request would sort it") remains correct; v1.14.2 additionally ensures the intermediate "token lapsed" case tells the user *why* rather than showing an opaque 500.
+**Operator note.** A genuinely long-dead request — where the token is still valid but the appliance has moved the AccessRequest to a terminal state or purged it — continues to be handled by the v1.12.12 path with the "please submit a new checkout request" `400`. So the reporter's instinct ("making a new live password request would sort it") remains correct; v1.14.2 additionally ensures the intermediate "token lapsed" case tells the user _why_ rather than showing an opaque 500.
 
 **Deploy.** Backend + frontend: `docker compose pull && docker compose up -d --build backend frontend`.
 
@@ -67,6 +122,7 @@ Under certain RDP **CLIPRDR** (clipboard virtual channel) conditions — most co
 The report's "large amounts of text / 12k lines" framing is a correlation, not the cause: large multi-blob transfers keep the CLIPRDR channel busy longer and are statistically more likely to be interrupted by the next copy, so they surface the underlying stall more often. The stall itself is size-independent.
 
 **The Fix (frontend-only, resilience).**
+
 - **Per-stream stall watchdog** in `client.onclipboard`. A 2-second timer is armed when the clipboard stream opens and re-armed on every received blob. If `end` arrives first, behaviour is unchanged (normal flush). If the timer fires first, the handler force-flushes whatever text was accumulated to the local clipboard, updates `session.remoteClipboard`, and logs a single diagnostic `console.warn` (`clipboard stream N stalled after M blob(s), K chars — flushing partial data`) so future occurrences are visible for correlation with server-side `guacd` logs.
 - **No-clobber guard.** A stall that received **zero** blobs does **not** overwrite the local clipboard — writing an empty string would wipe whatever the user had previously copied and make the bug visibly worse. `session.remoteClipboard` is still synced so the local → remote path does not echo an obsolete value.
 - **Orphan-stream cleanup.** On a stall, the handler acks the stalled stream (`sendAck` with a non-fatal status code) so `guacd` can release the orphaned stream index instead of leaking it for the remainder of the session.
@@ -84,6 +140,7 @@ The report's "large amounts of text / 12k lines" framing is a correlation, not t
 **Background & Architecture.** Session recordings generated by `guacd` are stored as raw `.guac` instruction streams. While raw `.guac` files preserve instruction data for WebSocket streaming playback, Windows default media players (Windows Media Player, Movies & TV, Chrome, Edge, VLC) cannot natively play `.guac` files.
 
 **The Solution.**
+
 - **Backend Conversion Service (`guacenc`/`ffmpeg`)**:
   - Implemented `convert_guac_to_mp4` in [`backend/src/services/recordings.rs`](backend/src/services/recordings.rs). When requested, Strata invokes Apache Guacamole's native `guacenc` encoding utility (compiled against `ffmpeg`) to render the `.guac` instruction stream into an H.264 video file (`.mp4`).
   - Added `prepare_recording_for_download` to handle both local disk storage and Azure Blob Storage downloads, formatting user-friendly filenames (`<connection_name>_<recording_id>.mp4`) with `video/mp4` MIME type and `Content-Disposition: attachment`.
@@ -97,7 +154,6 @@ The report's "large amounts of text / 12k lines" framing is a correlation, not t
 - **Container Packaging**: Added `ffmpeg` package to runtime dependencies in [`backend/Dockerfile`](backend/Dockerfile).
 
 ## [1.13.2] — 2026-07-20
-
 
 ### Patch Release — AD Sync service-account auto-rotation no longer loses the rotated password
 
@@ -270,7 +326,7 @@ an opaque black pill.
 
 **Compatibility.** Zero schema changes, zero new endpoints, zero
 new env vars, zero new Cargo or npm dependencies. The `ExpiresOn`
-clamp only ever *shortens* a cache row, and only when the appliance
+clamp only ever _shortens_ a cache row, and only when the appliance
 reports an earlier authoritative expiry.
 
 ## [1.13.0] — 2026-07-10
@@ -354,12 +410,12 @@ tabs open in the same browser window, every tab title collapsed to
 the connection hostname followed by the product name — e.g.
 `cicsazvm082 — Strata` — with nothing to distinguish `cicsazvm082`
 open under three different roles / purposes. Their exact request:
-*"Could you add the tag name to the browser tab title bar? For
+_"Could you add the tag name to the browser tab title bar? For
 example, when connected to a connection it currently displays
 'cicsazvm082 - strata'. It would be helpful if it could display
 'cicsazvm082 - Adhoc2 - strata' (where Adhoc2 is the server tag
 assigned by me in the active connections window). This would make
-it much easier to identify which server we are connected to."*
+it much easier to identify which server we are connected to."_
 
 **The fix.** `SessionClient` (the page that owns the browser tab
 for an active session) now fetches the user's pinned display-tag
@@ -400,7 +456,7 @@ title format is byte-for-byte identical to v1.12.12.
   side-by-side both continue to serve `/user/display-tags`; older
   frontends just render the pre-v1.12.13 title format.
 - **Docker deploy**: `docker compose pull && docker compose up -d
-  --build frontend`.
+--build frontend`.
 
 ### Known limitations
 
@@ -460,8 +516,8 @@ already returns `Ok(None)` on 404). Three outcomes:
   effort DELETE the `safeguard_pending_requests` row so the SPA
   doesn't re-hydrate the stuck badge on the next mount, and return
   `AppError::Validation(format!("Safeguard access request {id} is
-  no longer releasable (appliance state: {state}). Please submit a
-  new checkout request."))`. Validation errors map to `HTTP 400`
+no longer releasable (appliance state: {state}). Please submit a
+new checkout request."))`. Validation errors map to `HTTP 400`
   with the message body exposed, so the SPA's inline error row
   shows the actionable text instead of the pre-v1.12.12 generic
   "Internal server error".
@@ -469,8 +525,8 @@ already returns `Ok(None)` on 404). Three outcomes:
 - **404 on the appliance** (returned as `Ok(None)` by
   `get_access_request_status`) — same treatment: audit, clear the
   stale row, return `AppError::Validation(format!("Safeguard access
-  request {id} no longer exists on the appliance. Please submit a
-  new checkout request."))`.
+request {id} no longer exists on the appliance. Please submit a
+new checkout request."))`.
 
 - **Still `PendingApproval` on the appliance** — the original
   `CheckoutPassword` error was a transient hiccup (network blip,
@@ -501,7 +557,7 @@ migration work.
 - **New helpers** — `is_terminal_release_state(state: &str) -> bool`
   (case-insensitive substring match on the Safeguard state
   vocabulary) and `clear_pending_best_effort(pool, user_id,
-  profile_id)` (silences DB errors from the cleanup path so they
+profile_id)` (silences DB errors from the cleanup path so they
   can never mask the validation error the caller is about to
   return).
 
@@ -530,7 +586,7 @@ migration work.
   the older ones just keep returning 500 for the edge case the
   newer ones now handle.
 - **Docker deploy**: `docker compose pull && docker compose up -d
-  --build backend`.
+--build backend`.
 
 ## [1.12.11] — 2026-07-01
 
@@ -555,14 +611,14 @@ it were the first: another JIT checkout call, another appliance-side
 The backend deduplication logic (added in v1.12.6) kept us from
 actually creating duplicate requests, but the user's browser never
 learned there was anything to wait on and reported it as
-*"the auto-request feature keeps re-requesting because the
-credentials page never shows Pending Approval"*.
+_"the auto-request feature keeps re-requesting because the
+credentials page never shows Pending Approval"_.
 
 **The fix.** A new `safeguard_pending_requests` table gives every
 `JitOutcome::PendingApproval` a persistent home:
 
 - **Migration 079** adds `safeguard_pending_requests(user_id,
-  profile_id, request_id, account_id, asset, created_at)` with the
+profile_id, request_id, account_id, asset, created_at)` with the
   same `(user_id, profile_id)` composite primary key and FK cascade
   semantics as `safeguard_cached_passwords`.
 - **`services::safeguard::pending_requests`** — a new module with
@@ -712,7 +768,9 @@ the new checkout survive unchanged, including their
 setResults((prev) => {
   if (profileId) return prev.filter((r) => r.profile_id !== profileId);
   const cachedIds = new Set(cached.map((c) => c.profile_id));
-  return prev.filter((r) => r.state === "pending" || !cachedIds.has(r.profile_id));
+  return prev.filter(
+    (r) => r.state === "pending" || !cachedIds.has(r.profile_id),
+  );
 });
 ```
 
@@ -862,7 +920,7 @@ two surfaces now agree on what "search" means.
 - **Tests**: the full vitest suite (~1,600 cases across 47 files)
   continues to pass without modification. The change is small
   enough that the existing `Dashboard.test.tsx` `"filters by
-  search"` case already exercises the predicate; no new test was
+search"` case already exercises the predicate; no new test was
   added because the search closure is a private implementation
   detail of one `useMemo` and the public behavioural contract
   (`empty query → all rows; non-empty query → matching rows`) is
@@ -873,14 +931,14 @@ two surfaces now agree on what "search" means.
 1. Apply v1.12.9 to a deployment that has at least one connection
    tagged via **Tags** in the connection editor or via the
    **Admin → Tags** tab (e.g. tag `cicsazt1mgt-p` with `Domain
-   Controllers`).
+Controllers`).
 2. Sign in as any user with access to the tagged connection.
 3. On `/dashboard`, click into the **Search** input below the
    connection tiles.
 4. **Expected on v1.12.9**: the placeholder reads `Search name,
-   host, description or tag`. Type `domain` — the row for
+host, description or tag`. Type `domain` — the row for
    `cicsazt1mgt-p` (and every other connection tagged `Domain
-   Controllers`) is included in the filtered list, even though
+Controllers`) is included in the filtered list, even though
    the literal string `domain` does not appear in the connection's
    `name`, `hostname`, or `description` field.
 5. **Was on v1.12.8**: the same query returned zero rows because
@@ -889,7 +947,7 @@ two surfaces now agree on what "search" means.
    work unchanged: clicking the `Domain Controllers` pill
    `AND`-narrows the visible rows to that tag, and is composable
    with the search query (e.g. search `mgt` + chip `Domain
-   Controllers` returns the intersection).
+Controllers` returns the intersection).
 
 ### Other repository changes rolled into v1.12.9
 

@@ -24,6 +24,10 @@ function createMockSession(overrides = {}) {
   return {
     id: "sess-1",
     name: "Test Server",
+    protocol: "rdp",
+    // Guacamole.Tunnel.State.OPEN — clipboardSync refuses to open a
+    // stream on a closed tunnel.
+    tunnel: { state: 1, isConnected: () => true },
     client: {
       createClipboardStream: vi.fn(() => ({})),
       sendMouseState: vi.fn(),
@@ -365,6 +369,9 @@ describe("SessionMenu", () => {
       const textarea = screen.getByRole("textbox");
       await user.type(textarea, "test");
       vi.advanceTimersByTime(350);
+      // The push is serialised through a promise chain now, so let the
+      // microtask queue drain before asserting.
+      await vi.advanceTimersByTimeAsync(0);
       expect(session.client.createClipboardStream).toHaveBeenCalledWith("text/plain");
     } finally {
       vi.useRealTimers();

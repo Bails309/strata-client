@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Guacamole from "guacamole-common-js";
 import { GuacSession } from "./SessionManager";
-import { preparePastePayload } from "./pastePayload";
+import { clipboardDiag, sendClipboardToRemote } from "./clipboardSync";
 import { notifySessionActivity } from "./sessionActivity";
 import { createWinKeyProxy } from "../utils/winKeyProxy";
 import { installShortcutProxy } from "../utils/shortcutProxy";
@@ -320,40 +320,23 @@ export function usePopOut(
 
     // ── Clipboard sync for the popup window ──
     // The main window's paste listener doesn't fire in the popup, so we
-    // need dedicated handlers here.
+    // need dedicated handlers here. They share the session's serialised
+    // sender with the opener's handlers — both sets are bound to the same
+    // `sess.displayEl`, so a single click fires four pushes that would
+    // otherwise open four concurrent clipboard streams.
     const pushClipboardPopup = async () => {
       try {
         const text = await popup.navigator.clipboard?.readText();
-        if (text && text !== sess.remoteClipboard) {
-          const payload = preparePastePayload(text, sess.protocol);
-          const stream = sess.client.createClipboardStream("text/plain");
-          const writer = new Guacamole.StringWriter(stream);
-          const CHUNK_SIZE = 4096;
-          for (let i = 0; i < payload.length; i += CHUNK_SIZE) {
-            writer.sendText(payload.substring(i, i + CHUNK_SIZE));
-          }
-          writer.sendEnd();
-          sess.remoteClipboard = text;
-        }
-      } catch {
-        // Clipboard access denied in popup — ignore
+        if (text) await sendClipboardToRemote(sess, text, "popout-focus");
+      } catch (err) {
+        clipboardDiag(sess.id, "out", "popout-read-failed", { err: String(err) });
       }
     };
 
     const handlePastePopup = (e: Event) => {
       const ce = e as ClipboardEvent;
       const text = ce.clipboardData?.getData("text/plain");
-      if (text && text !== sess.remoteClipboard) {
-        const payload = preparePastePayload(text, sess.protocol);
-        const stream = sess.client.createClipboardStream("text/plain");
-        const writer = new Guacamole.StringWriter(stream);
-        const CHUNK_SIZE = 4096;
-        for (let i = 0; i < payload.length; i += CHUNK_SIZE) {
-          writer.sendText(payload.substring(i, i + CHUNK_SIZE));
-        }
-        writer.sendEnd();
-        sess.remoteClipboard = text;
-      }
+      if (text) void sendClipboardToRemote(sess, text, "popout-paste-event");
     };
 
     sess.displayEl.addEventListener("mouseenter", pushClipboardPopup);

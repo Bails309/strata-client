@@ -95,7 +95,6 @@ Volumes:
 
 **On-demand MP4 Video Conversion Pipeline (v1.14.0+):** Raw `.guac` session recordings store Guacamole instruction streams that are streamed to `guacamole-common-js` for playback. To support native playback and downloading on Windows OS, the backend service `convert_guac_to_mp4` (`backend/src/services/recordings.rs`) invokes Apache Guacamole's native `guacenc` encoding binary (compiled against `ffmpeg` in `backend/Dockerfile`) with the `-f` flag. `guacenc` renders the `.guac` stream frame-by-frame into an H.264 video container (`.mp4` / `.m4v`). Converted MP4 files are cached locally adjacent to the raw recording file for fast subsequent downloads. The `prepare_recording_for_download` function resolves local disk files as well as Azure Blob Storage objects, serving `video/mp4` downloads with sanitized filenames (`<connection_name>_<recording_id>.mp4`).
 
-
 ### 2. Rust Backend
 
 | Item      | Value               |
@@ -183,7 +182,7 @@ Pages:
 
 - **Setup Wizard** — first-boot database and Vault configuration with bundled/external/skip vault mode selector
 - **Dashboard** — user's connections with connect/credential vault, multi-select for tiled view, last-accessed tracking, favorites filter, group view toggle (flat list or collapsible group headers), and connection health status indicators (green/red/gray dots showing online/offline/unknown from background TCP probes). The **My Connections** search input matches against connection `name`, `hostname`, `description`, **and assigned tag names** (v1.12.9+ — fourth `||` clause on the `filtered` `useMemo` predicate, lazily building a `Map<tagId, tagName.toLowerCase()>` from the existing `allTags` derivation; placeholder reads `Search name, host, description or tag`). The dedicated tag-chip filter row immediately below the search composes with the query via `AND`. **(v1.8.3)** Preference and settings providers are mounted inside the authentication boundary to eliminate 401 log noise on the login screen.
-- **Session Client** — HTML5 Canvas via `guacamole-common-js` (vendored 1.6.0 bundle with H.264 GFX passthrough; v0.28.0+) with clipboard sync (including pop-out windows), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Quick Share, Keyboard, etc.) into a sleek right-side overlay, **Command Palette** (`Ctrl+K`) for instant connection search and launch from any session, **keyboard shortcut proxy** (Right Ctrl → Win key, `Ctrl+Alt+\`` → Win+Tab), **Keyboard Lock API** for capturing OS-level shortcuts in fullscreen over HTTPS, **display tags** (optional per-connection colored badge on session thumbnails, user-assignable via a tag picker dropdown), **dynamic browser tab title** (shows the active session's server name, e.g. "SERVER01 — Strata"), pop-out windows that persist across navigation with automatic screen-change detection and re-scaling, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with ~30 fps `setInterval`render loop (avoids`requestAnimationFrame`throttling when popups have focus),`MutationObserver`-based cursor sync across all secondary windows, horizontal-only layout (all monitors arranged left-to-right regardless of physical vertical position — best supported configuration is all landscape monitors side by side; monitors above or below appear as slices to the right), aggregate height capped to primary monitor height for taskbar visibility, `moveTo`/`resizeTo`/`requestFullscreen`auto-maximize on secondary popups, live`screenschange`detection for hot-plugged monitors, screen count detection shown in the toolbar tooltip, Chrome popup-blocker bypass via in-gesture`getScreenDetails()`for 3+ monitors, and Brave/privacy-browser compatibility, Quick Share panel (conditional on file transfer enabled) with drag-and-drop upload and one-click copy-to-clipboard download URLs, expired credential renewal at connect time, and automatic redirect to the next active session when one ends. (The legacy`forceDisplayRepaint()` ghost-pixel mitigation and the manual **Refresh display** button from v0.25.1–v0.27.x have been retired — H.264 passthrough eliminates the underlying ghost class.)
+- **Session Client** — HTML5 Canvas via `guacamole-common-js` (vendored 1.6.0 bundle with H.264 GFX passthrough; v0.28.0+) with clipboard sync (including pop-out windows) routed through a single serialised sender with a receive-side stall watchdog and opt-in content-free diagnostics (v1.14.4+), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Quick Share, Keyboard, etc.) into a sleek right-side overlay, **Command Palette** (`Ctrl+K`) for instant connection search and launch from any session, **keyboard shortcut proxy** (Right Ctrl → Win key, `Ctrl+Alt+\`` → Win+Tab), **Keyboard Lock API** for capturing OS-level shortcuts in fullscreen over HTTPS, **display tags** (optional per-connection colored badge on session thumbnails, user-assignable via a tag picker dropdown), **dynamic browser tab title** (shows the active session's server name, e.g. "SERVER01 — Strata"), pop-out windows that persist across navigation with automatic screen-change detection and re-scaling, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with ~30 fps `setInterval`render loop (avoids`requestAnimationFrame`throttling when popups have focus),`MutationObserver`-based cursor sync across all secondary windows, horizontal-only layout (all monitors arranged left-to-right regardless of physical vertical position — best supported configuration is all landscape monitors side by side; monitors above or below appear as slices to the right), aggregate height capped to primary monitor height for taskbar visibility, `moveTo`/`resizeTo`/`requestFullscreen`auto-maximize on secondary popups, live`screenschange`detection for hot-plugged monitors, screen count detection shown in the toolbar tooltip, Chrome popup-blocker bypass via in-gesture`getScreenDetails()`for 3+ monitors, and Brave/privacy-browser compatibility, Quick Share panel (conditional on file transfer enabled) with drag-and-drop upload and one-click copy-to-clipboard download URLs, expired credential renewal at connect time, and automatic redirect to the next active session when one ends. (The legacy`forceDisplayRepaint()` ghost-pixel mitigation and the manual **Refresh display** button from v0.25.1–v0.27.x have been retired — H.264 passthrough eliminates the underlying ghost class.)
 - **Tiled View** — multi-connection grid layout with per-tile focus, keyboard broadcast, and inline credential prompts
 - **NVR Player** — admin-only read-only session observer with 5-minute rewind buffer plus a per-session persistent-state log (v1.9.4) that salvages drawing instructions as they age out of the ring buffer so newly-joining observers reconstruct the full canvas instead of seeing a black frame; supports replay→live transition and timeline controls
 - **Sessions** — unified role-based page with Live Sessions and Recording History tabs; users see their own sessions, admins see all with kill/observe/rewind controls
@@ -673,7 +672,12 @@ commandMappings` (JSONB array, max 50 entries per user). Each
    `open-path` `args.path` is capped at 1024 characters and rejected
    if it contains any control characters. The `paste-text` action
    writes `args.text` to the active session's remote clipboard via
-   `Guacamole.Client.createClipboardStream`, then fires a Ctrl+V
+   `sendClipboardToRemote(session, text, source, { force: true })` in
+   [`clipboardSync.ts`](../frontend/src/components/clipboardSync.ts) —
+   which serialises behind any in-flight clipboard transfer and
+   `force`-bypasses duplicate suppression, because the Ctrl+V that
+   follows is worthless if the cached belief about the remote
+   clipboard turns out to be stale — then fires a Ctrl+V
    keystroke (keysyms `0xffe3` + `0x76`) so the focused remote
    application actually receives the paste. The `open-path` action
    drives the Windows Run dialog on the remote target: it sends Win+R
@@ -1336,7 +1340,7 @@ strata-client/
 │   └── src/
 │       ├── api.ts         Typed API client
 │       ├── App.tsx        Router + boot detection
-│       ├── components/    Shared components (Layout, Select, SessionBar, SessionManager, QuickShare, SessionTimeoutWarning, ThemeProvider, ToastProvider, CredentialProfileExpiryWatcher, WhatsNewModal)
+│       ├── components/    Shared components (Layout, Select, SessionBar, SessionManager, clipboardSync, QuickShare, SessionTimeoutWarning, ThemeProvider, ToastProvider, CredentialProfileExpiryWatcher, WhatsNewModal)
 │       └── pages/         Page components (Dashboard, Documentation, SessionClient, AdminSettings, AuditLogs, Approvals, Login, SetupWizard, SharedViewer)
 │           ├── admin/     One module per Admin Settings tab (Security, Network, Display, SSO, Kerberos, Recordings, Vault, Tags, Health, Sessions, Passwords, AdSync, Access) plus the shared connection-form helpers
 │           └── credentials/  Credentials page child components (RequestCheckoutForm, ProfileEditor)
@@ -1522,16 +1526,17 @@ numbered ADRs under [adr/](adr/):
 Step-by-step procedures for on-call engineers live under
 [runbooks/](runbooks/):
 
-| Runbook                                                     | When to use                                                                                          |
-| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| [disaster-recovery.md](runbooks/disaster-recovery.md)       | Host loss or corrupted volumes (RTO ≤ 4h, RPO ≤ 24h)                                                 |
-| [security-incident.md](runbooks/security-incident.md)       | Credential exposure, token replay, unauthorised config change                                        |
-| [certificate-rotation.md](runbooks/certificate-rotation.md) | Scheduled rotation or expiry alert (ACME + internal CA)                                              |
-| [vault-operations.md](runbooks/vault-operations.md)         | Vault unseal, Transit key rotate + rewrap, Shamir rekey                                              |
-| [database-operations.md](runbooks/database-operations.md)   | Replica promotion, migration rollback, panic-boot recovery                                           |
-| [smtp-troubleshooting.md](runbooks/smtp-troubleshooting.md) | Notification emails not arriving, SMTP failures, retry-worker stalls, Vault sealing during config    |
-| [dmz-incident.md](runbooks/dmz-incident.md)                 | DMZ link flap, links-up:0, edge-HMAC/PSK rotation, suspected DMZ host compromise                     |
-| [av-operations.md](runbooks/av-operations.md)               | AV scanner outage, signature update failure, false-positive triage, EICAR smoke test, capacity check |
+| Runbook                                                       | When to use                                                                                                   |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| [disaster-recovery.md](runbooks/disaster-recovery.md)         | Host loss or corrupted volumes (RTO ≤ 4h, RPO ≤ 24h)                                                          |
+| [security-incident.md](runbooks/security-incident.md)         | Credential exposure, token replay, unauthorised config change                                                 |
+| [certificate-rotation.md](runbooks/certificate-rotation.md)   | Scheduled rotation or expiry alert (ACME + internal CA)                                                       |
+| [vault-operations.md](runbooks/vault-operations.md)           | Vault unseal, Transit key rotate + rewrap, Shamir rekey                                                       |
+| [database-operations.md](runbooks/database-operations.md)     | Replica promotion, migration rollback, panic-boot recovery                                                    |
+| [smtp-troubleshooting.md](runbooks/smtp-troubleshooting.md)   | Notification emails not arriving, SMTP failures, retry-worker stalls, Vault sealing during config             |
+| [dmz-incident.md](runbooks/dmz-incident.md)                   | DMZ link flap, links-up:0, edge-HMAC/PSK rotation, suspected DMZ host compromise                              |
+| [av-operations.md](runbooks/av-operations.md)                 | AV scanner outage, signature update failure, false-positive triage, EICAR smoke test, capacity check          |
+| [clipboard-diagnostics.md](runbooks/clipboard-diagnostics.md) | RDP copy/paste reported broken — classify stalled-transfer vs wedged `rdpclip.exe`, recover, capture evidence |
 
 ## Session-activity bus and proactive token refresh (v1.6.1)
 
@@ -1635,11 +1640,11 @@ reader's `onend` callback.
 
 That single-point-of-flush design has a failure mode on RDP. The
 Windows clipboard is exposed through the **CLIPRDR** virtual channel,
-which is a *delayed-rendering* protocol: when an application copies,
+which is a _delayed-rendering_ protocol: when an application copies,
 Windows advertises the available formats but does not produce the
 actual bytes until a consumer requests a specific format. If the
 clipboard owner is an app that renders lazily (Chrome, Edge, VS Code,
-most terminals) and a *subsequent* copy interrupts the in-flight
+most terminals) and a _subsequent_ copy interrupts the in-flight
 format-data request, or if FreeRDP's CLIPRDR state machine becomes
 wedged after many transfers, `guacd` can open the stream and deliver
 zero or a partial set of `blob`s and then **never emit `end`**. The
@@ -1663,9 +1668,9 @@ v1.14.1 wraps the receive path in a **per-stream stall watchdog**:
   `stream.sendAck(...)` with a non-fatal status code so `guacd` can
   release the orphaned stream index, and logs a single diagnostic
   `console.warn` (`clipboard stream N stalled after M blob(s), K
-  chars — flushing partial data`) for correlation with server-side
+chars — flushing partial data`) for correlation with server-side
   `guacd` logs.
-- A **no-clobber guard** ensures a stall that received *zero* blobs
+- A **no-clobber guard** ensures a stall that received _zero_ blobs
   never overwrites the local clipboard — an empty flush would wipe
   whatever the user had copied previously and make the defect worse.
 
@@ -1678,6 +1683,110 @@ silently stale content, and it makes every future occurrence visible.
 Two regression tests in
 [`__tests__/SessionManager.test.tsx`](../frontend/src/__tests__/SessionManager.test.tsx)
 pin the flush-on-stall and zero-blob-no-clobber behaviours.
+
+## Local → remote clipboard serialisation (v1.14.4)
+
+Pushing the local clipboard to the remote is driven by six independent
+triggers: `mouseenter`, `mousedown` and `focus` on the session display,
+a window-level `paste` listener, the pop-out window's own pair of
+handlers (bound to the _same_ `displayEl`), and the explicit
+`paste-text` / `open-path` command-palette actions. Each one used to
+carry its own inline copy of the "open a clipboard stream, chunk the
+text into 4 KiB `blob`s, `sendEnd`" sequence.
+
+A single click on a popped-out session fires up to four of those
+triggers. They all read `session.remoteClipboard` to decide whether the
+payload had already been sent, but none of them wrote it back until
+_after_ their transfer finished — so every one of them passed the guard
+and opened its own clipboard stream. Because the large-payload path
+awaits between chunks, the `blob` instructions of the concurrent
+streams interleave on the wire.
+
+`guacd`'s RDP clipboard is a **single shared buffer**: the `clipboard`
+instruction resets it and every `blob` appends to it, regardless of
+stream index. Interleaved streams therefore splice two payloads
+together and announce the result over CLIPRDR twice. Windows'
+clipboard owner (`rdpclip.exe`) can be left waiting on a format-data
+response that never matches, at which point **both copy and paste stay
+dead for the remainder of the Windows session**. Reconnecting the
+tunnel does not help — the wedged state lives in the Windows session,
+not in `guacd` — which is why the only reliable recovery was to log off
+the Windows session and log back in, restarting `rdpclip.exe`.
+
+[`clipboardSync.ts`](../frontend/src/components/clipboardSync.ts) is
+now the single transmission path. Every caller routes through
+`sendClipboardToRemote(session, text, source)`, which:
+
+- **Serialises** sends per session on a promise chain, so only one
+  clipboard stream is ever open at a time.
+- **Suppresses duplicates** against both the last confirmed
+  `remoteClipboard` value and the text of any send still queued, which
+  is what collapses a single click's burst of triggers into one
+  transfer. Explicit user commands pass `{ force: true }` to bypass it.
+- **Refuses to write to a closed tunnel**, and only updates
+  `remoteClipboard` once the payload has actually been written.
+  Previously a send into a dead tunnel still recorded the text as
+  "delivered", which permanently suppressed every later paste of that
+  same text.
+
+`resetRemoteClipboardEcho` is called whenever a client reaches the
+`CONNECTED` state. A freshly-spawned `guacd` has an empty clipboard,
+and when RDP reattaches to an already-logged-on Windows session the
+CLIPRDR channel is renegotiated from scratch, so the frontend must
+forget what it believed the remote held or the first push after a
+reconnect is discarded as a duplicate.
+
+Related fix: the tunnel-`CLOSED` handler in `SessionManager` now calls
+`session._cleanupPaste()`. Only the explicit `closeSession()` path did
+so before, which meant every network drop, server-side disconnect and
+auto-reconnect attempt left a window-level `paste` listener bound to a
+dead client for the lifetime of the page.
+
+## Clipboard diagnostics (v1.14.4)
+
+Both ends carry opt-in instrumentation for diagnosing clipboard
+failures in the field. Neither records clipboard **contents** — only
+opcodes, stream indices, payload sizes, timings and a non-reversible
+FNV-1a digest — so a capture can be attached to a support bundle
+safely.
+
+**Browser.** `clipboardSync.ts` writes every clipboard lifecycle event
+into a 500-entry ring buffer that is always recording, so a user can be
+asked for a dump _after_ they hit the bug. The console helper is
+published on `window.strataClipboard`:
+
+| Call                        | Effect                                                                                 |
+| --------------------------- | -------------------------------------------------------------------------------------- |
+| `strataClipboard.enable()`  | Echo events to the console; persisted in `localStorage` under `strata.debug.clipboard` |
+| `strataClipboard.disable()` | Stop echoing                                                                           |
+| `strataClipboard.print()`   | `console.table` of the ring buffer                                                     |
+| `strataClipboard.dump()`    | Structured entries, oldest first                                                       |
+| `strataClipboard.clear()`   | Reset the buffer                                                                       |
+
+Outbound events are `queued`, `skip-duplicate`, `skip-disconnected`,
+`stream-open`, `ack`, `ack-error`, `abort-mid-stream`, `stream-failed`,
+`stream-end`, `echo-reset` and `tunnel-closed`. Inbound events are
+`stream-open`, `stream-end`, `stream-stalled`, `ignored-mimetype` and
+`local-write-failed`.
+
+**Backend.** Setting `STRATA_CLIPBOARD_TRACE=1` on the backend enables
+`ClipboardTracer` in [`tunnel.rs`](../backend/src/tunnel.rs), which
+walks every instruction batch in both directions using the protocol's
+own length prefixes and logs clipboard stream lifecycles. What to look
+for in a trace:
+
+- `clipboard stream opened while another is still open in the same direction`
+  — two transfers interleaving; the condition described above.
+- A `stream-open` with no matching `stream-end` — the remote never
+  finished the transfer (the delayed-render CLIPRDR hang).
+- `blobs=0` on a completed inbound stream — the remote announced a
+  format and then produced nothing.
+- `clipboard stream never received end` at teardown — outstanding
+  transfers abandoned when the tunnel closed.
+- `clipboard stream ack reported an error` — `guacd` rejected a chunk.
+
+Correlate with `guacd`'s own CLIPRDR logging by raising its log level
+(`GUACD_LOG_LEVEL=debug`) in the same window.
 
 ## OIDC discovery and JWKS cache consolidation (v1.6.1)
 

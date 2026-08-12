@@ -110,7 +110,7 @@ Requirements: `cosign >= 2.2` and `slsa-verifier >= 2.5` in `PATH`.
 
 Edit `.env` or set environment variables:
 
-```bash
+````bash
 HTTP_PORT=80             # Nginx HTTP listener (host mapping)
 HTTPS_PORT=443           # Nginx HTTPS listener (host mapping)
 RUST_LOG=info            # Log level: trace, debug, info, warn, error
@@ -121,12 +121,13 @@ Since v1.8.3, you **must** provide a persistent `JWT_SECRET` in your `.env` file
 
 ```bash
 JWT_SECRET=your-random-32-character-secret-string
-```
+````
 
 - **Why?** Without a persistent secret, the backend generates a random one on every startup. This invalidates all active user sessions (access and refresh tokens) whenever the backend container restarts, forcing all users to log in again.
 - **Security:** Use a cryptographically strong random string. You can generate one using `openssl rand -base64 32`.
 - **Note:** If you change this secret in the future, all existing sessions will be invalidated.
-```
+
+````
 
 ### 2. Build & run
 
@@ -134,7 +135,7 @@ For local evaluation or development:
 
 ```bash
 docker compose up -d --build
-```
+````
 
 For production deployment on an Ubuntu VM, see the detailed [Ubuntu VM Deployment Guide](docs/ubuntu-vm-deployment.md).
 
@@ -579,6 +580,7 @@ docker compose up -d
 ```
 
 Verify post-upgrade:
+
 1. Dragging the collapsible session sidebar handle should feel instantaneous and responsive with no lag.
 2. The session bar toggle should remain clearly visible and high-contrast in both light and dark themes.
 3. Active RDP/VNC sessions should be 100% interactive across the entire viewport (no top-left click deadzone).
@@ -599,12 +601,13 @@ docker compose up -d
 ```
 
 Verify post-upgrade:
+
 1. Saving changes to an existing SSO provider should succeed.
 2. Testing the connection of an existing SSO provider with a hidden client secret should succeed.
 
 #### v1.8.4 → v1.9.0 (Multiple SSO/OIDC Connections & Dynamic Login Branding)
 
-v1.9.0 introduces multi-tenant OIDC/SSO capabilities, allowing operators to run multiple identity provider configurations side-by-side. 
+v1.9.0 introduces multi-tenant OIDC/SSO capabilities, allowing operators to run multiple identity provider configurations side-by-side.
 
 - **Rebuild mandatory**: Both `backend` and `frontend` images must be rebuilt to include multi-provider routes, database models, individual Vault encryption pathways, and dynamic login page branded buttons.
 - **New `.env` configuration**: If you are using reverse proxies or non-standard ports, you must add `BASE_URL=https://<your-host>:<port>` to your `.env` file to prevent downstreams from stripping ports from redirect URIs.
@@ -622,6 +625,7 @@ docker compose up -d
 ```
 
 Verify post-upgrade:
+
 1. Verify the migration: Check that the table `sso_providers` is created and populated with any pre-existing configuration.
 2. Verify the login page: If you have active SSO configurations, confirm separate login buttons are dynamically displayed with their corresponding branded labels.
 
@@ -642,6 +646,7 @@ docker compose up -d
 ```
 
 Verify post-upgrade:
+
 1. Run frontend tests: `cd frontend && npm run test`. All tests should pass without `ERR_INVALID_URL` errors.
 
 #### v1.8.2 → v1.8.3 (Security Hardening & Session Stability)
@@ -2562,6 +2567,52 @@ Strata Client works in any modern browser (Chrome, Edge, Firefox, Safari). Some 
 
 Clipboard synchronisation requires the [Clipboard API](https://developer.mozilla.org/en-US/docs/Web/API/Clipboard_API), supported in all modern browsers. HTTPS (or localhost) is required for clipboard read access in most browsers.
 
+#### Diagnosing clipboard problems (v1.14.4+)
+
+Clipboard failures are silent by construction — the Guacamole clipboard
+stream has no error instruction for a transfer the remote simply never
+completes — so both ends carry opt-in instrumentation. Neither records
+clipboard **contents**: only opcodes, stream indices, payload sizes,
+timings, and a non-reversible digest used to correlate entries. Traces
+are safe to attach to a support ticket.
+
+**Browser side.** A 500-entry ring buffer is **always recording**, so a
+user can be asked for a dump _after_ they hit the problem rather than
+being asked to reproduce it with logging switched on. In the session
+tab's devtools console:
+
+| Call                        | Effect                                                   |
+| --------------------------- | -------------------------------------------------------- |
+| `strataClipboard.print()`   | `console.table` of the buffer — the one to ask users for |
+| `strataClipboard.enable()`  | Also echo events live; persisted across reloads          |
+| `strataClipboard.disable()` | Stop echoing                                             |
+| `strataClipboard.dump()`    | Structured entries, oldest first                         |
+| `strataClipboard.clear()`   | Reset the buffer                                         |
+
+**Backend side.** Set `STRATA_CLIPBOARD_TRACE=1` on the backend
+container to trace clipboard stream lifecycles in both directions:
+
+```bash
+# docker-compose.override.yml, or .env
+STRATA_CLIPBOARD_TRACE=1
+```
+
+| Env var                  | Default | Effect                                                                                           |
+| ------------------------ | ------- | ------------------------------------------------------------------------------------------------ |
+| `STRATA_CLIPBOARD_TRACE` | unset   | `1` / `true` enables per-tunnel clipboard stream tracing. Fully inert (zero parsing) when unset. |
+
+What to look for in the backend log:
+
+| Message                                                                     | Meaning                                                                                                                  |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `clipboard stream opened while another is still open in the same direction` | Two transfers overlapping. `guacd`'s RDP clipboard is one shared buffer, so this splices payloads and can wedge CLIPRDR. |
+| `clipboard stream never received end`                                       | The remote abandoned a transfer — the delayed-render CLIPRDR hang behind the v1.14.1 watchdog.                           |
+| `clipboard stream-end` with `blobs=0`                                       | The remote announced a clipboard format and then produced nothing.                                                       |
+| `clipboard stream ack reported an error`                                    | `guacd` rejected a chunk; the accompanying code identifies why.                                                          |
+
+To correlate with `guacd`'s own CLIPRDR logging, raise its log level
+(`GUACD_LOG_LEVEL=debug`) in the same window.
+
 ---
 
 ## User Guide
@@ -2622,6 +2673,10 @@ Clipboard synchronisation between your local machine and the remote session is a
 No manual action is required. Clipboard sync works with both RDP and SSH sessions.
 
 > **Resilience (v1.14.1+).** The remote → local direction is delivered as a streamed sequence of chunks that the browser only commits to your local clipboard once the stream is closed. On RDP, the Windows clipboard channel (CLIPRDR) can occasionally open a transfer and then never close it — most often when the copying application renders its clipboard data lazily (Chrome, Edge, VS Code, terminals) and a second copy interrupts the first, or when the remote desktop's clipboard channel gets stuck after many transfers. Previously this left your local clipboard silently holding its previous contents until you disconnected and reconnected. Strata now runs a 2-second per-transfer watchdog: if a transfer stalls without closing, whatever text arrived is flushed to your local clipboard anyway, and a diagnostic is written to the browser console. A transfer that produced **no** data never overwrites what you already had copied. If you still see a clipboard transfer fail to complete, reconnecting the session resets the remote clipboard channel.
+
+> **Reliability (v1.14.4+).** The local → remote direction is now sent one transfer at a time. Previously a single click could start several transfers at once — the session view reacts to mouse-enter, mouse-down and focus, and a popped-out session adds its own set of handlers on the same view — and because Windows' RDP clipboard is a single shared buffer that cannot keep overlapping transfers apart, their contents could splice together. In the worst case that left the Windows-side clipboard service (`rdpclip.exe`) stuck, and **both** copy and paste stayed broken for the rest of that Windows session. This is the case where reconnecting did _not_ help, because reconnecting reattaches to the same still-logged-on Windows session; only logging off Windows and back on recovered it. Strata now serialises clipboard pushes so overlapping transfers cannot happen, re-primes the clipboard channel whenever a session (re)connects, and no longer suppresses a repeat paste of text whose earlier send silently failed.
+>
+> If you are on a host that was already stuck before this release, log off the Windows session once (not just disconnect) to restart `rdpclip.exe`.
 
 ### File Transfer
 

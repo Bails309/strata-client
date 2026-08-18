@@ -564,6 +564,39 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v1.14.4 → v1.14.5 (Dependency security: `h2` HTTP/2 DoS, `nanoid` infinite loop)
+
+v1.14.5 is a **dependency-only** release — no application source file changed, so there is no behavioural difference to verify. It exists to take two upstream security patches.
+
+- **`h2` 0.4.14 → 0.4.16 (RUSTSEC-2026-0258 / GHSA-q83h-524g-xf6h).** Earlier versions accept and queue empty HTTP/2 `DATA` frames without limit, so a peer that floods a stream nobody drains can exhaust memory on the receiving side, or trigger an overflow panic. The frame accounting runs **before** any Strata authorisation, so no permission setting mitigates it.
+- **`nanoid` 3.3.16 → 3.3.18 (GHSA-2v37-7h3g-55p8 / CVE-2026-67213).** Build-toolchain dependency only; no runtime exposure. Included so the dependency-audit gate stays green.
+
+**Rebuild requirements:**
+
+- **Backend rebuild mandatory** — picks up `h2 0.4.16` for the HTTP/2 server side of the DMZ link and for `hyper`/`axum`.
+- **Frontend rebuild mandatory** — re-resolves the build toolchain to `nanoid 3.3.18`.
+- **DMZ edge rebuild mandatory for split topologies, and this is the priority component.** `strata-dmz`'s public TLS listener advertises `h2` in its ALPN list, so it terminates HTTP/2 for **anonymous internet clients** before any credential is presented. Patching the internal node while leaving an unpatched edge in place leaves the exposed half unfixed.
+- **No database migrations, no `.env` changes, no API changes.**
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+
+# Split (DMZ) topology — the edge must be rebuilt too
+docker compose -f docker-compose.dmz.yml build dmz
+docker compose -f docker-compose.dmz.yml up -d dmz
+```
+
+Verify post-upgrade:
+
+1. `docker compose exec backend /app/strata-backend --version` (or the image label) reports `1.14.5`.
+2. The in-app **What's New** modal shows the v1.14.5 card on first load after the upgrade.
+3. For DMZ deployments, the link status in Admin → DMZ returns to `connected` and public sessions reconnect normally — the HTTP/2 settings, window sizes, ping watchdog, and Extended CONNECT negotiation are all unchanged by this patch.
+
+Rollback is a plain image rollback; there is no schema or state change to reverse.
+
 #### v1.9.1 → v1.9.2 (Premium RDP interaction improvements, seamless collapsible sidebar dragging, and theme visual contrast)
 
 v1.9.2 resolves layout and user experience issues in active RDP/VNC sessions, including a top-left click deadzone, dragging lag on the collapsible sidebar toggle, and visibility contrast of the right-hand chevron button in dark theme.

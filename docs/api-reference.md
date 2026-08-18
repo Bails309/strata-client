@@ -2500,6 +2500,25 @@ is available from the session tab's devtools console via
 `strataClipboard.print()` — see
 [deployment.md](deployment.md#diagnosing-clipboard-problems-v1144).
 
+### Transport baseline (v1.14.5+)
+
+No request or response shape on this page changed in v1.14.5, but the
+transport underneath the WebSocket surface has a new hard floor that
+matters when a deployment is assembled from mixed-version images.
+
+| Component        | Requirement       | Why                                                                                                                                                                                                                                 |
+| ---------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `h2` crate       | **`>= 0.4.16`**   | Earlier versions accept and queue empty HTTP/2 `DATA` frames without limit (RUSTSEC-2026-0258), allowing memory exhaustion or an overflow panic. Applies to `strata-backend` **and** `strata-dmz`.                                    |
+
+In DMZ topologies every WebSocket described on this page — the session
+tunnel, the recording-playback stream, and the Co-Pilot channel — is
+carried as an RFC 8441 Extended CONNECT stream over that HTTP/2 link,
+and the DMZ's public listener also negotiates HTTP/2 directly with
+untrusted browsers. **Upgrade both binaries together**; running a
+patched internal node behind an unpatched edge leaves the exposed half
+unfixed. See
+[security.md § Dependency & supply-chain security](security.md#dependency--supply-chain-security).
+
 ---
 
 ## Connection Sharing

@@ -1404,6 +1404,17 @@ host's link port.
   user request is one HTTP/2 stream, WebSockets ride RFC 8441
   Extended CONNECT, and per-stream flow control comes for free.
 
+  **Minimum `h2` version (v1.14.5+)** — `Cargo.lock` pins `h2 >= 0.4.16`.
+  Versions below that accepted and queued empty `DATA` frames without
+  limit (RUSTSEC-2026-0258), which is exploitable for memory exhaustion
+  by any peer that can complete an HTTP/2 handshake. That includes
+  **anonymous internet clients** on the DMZ's public listener, whose
+  `alpn_protocols` list (`crates/strata-dmz/src/public_tls.rs`)
+  advertises `h2` before any credential is presented — so the edge
+  binary must be redeployed alongside the internal node when applying
+  this patch. See
+  [security.md § Dependency & supply-chain security](security.md#dependency--supply-chain-security).
+
   **WebSocket-over-HTTP/2 (v1.5.2+)** — both ends negotiate the
   `SETTINGS_ENABLE_CONNECT_PROTOCOL` extension (h2 server side calls
   `enable_connect_protocol()`; the DMZ client side sends per-request

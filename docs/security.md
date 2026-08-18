@@ -1258,6 +1258,82 @@ All services in the Docker Compose stack apply security constraints:
 
 ---
 
+## Dependency & supply-chain security
+
+_Documented in v1.14.5. The gates themselves have been in force for many releases; this section is the first written description of them._
+
+Strata's attack surface is not limited to code written in this repository. The backend links a 463-crate Rust graph, the frontend builds against several hundred npm packages, and three container images are assembled from upstream base layers. Every one of those is a potential ingress. The repository therefore treats third-party code as **untrusted until a gate has cleared it**, and it enforces that on every push and pull request rather than on a periodic scan.
+
+### The gates
+
+All of the following run in CI. A red gate blocks the merge; there is no "warn and continue" tier for vulnerabilities.
+
+| Gate                     | Scope                                        | Where                                                                             | Enforcement                                                                                                                                |
+| ------------------------ | -------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `gitleaks`               | Full git history + working tree              | [`ci.yml`](../.github/workflows/ci.yml) → **Secrets Scan**                        | Fails on any detected credential, key, or token.                                                                                            |
+| `cargo audit`            | `Cargo.lock` (whole workspace)               | [`ci.yml`](../.github/workflows/ci.yml) → **Dependency Audit**                    | `--deny unsound --deny unmaintained`. Escalates RustSec `unsound` and `unmaintained` notices to hard failures, not just `vulnerability` IDs. |
+| `cargo deny`             | Licenses, banned crates, crate sources        | [`ci.yml`](../.github/workflows/ci.yml) → **Dependency Audit**                    | `check bans licenses sources` against [`deny.toml`](../deny.toml).                                                                          |
+| `npm audit`              | `frontend/` and `e2e/` production graphs      | [`ci.yml`](../.github/workflows/ci.yml) → **Dependency Audit**                    | `--audit-level=high --omit=dev`.                                                                                                            |
+| OSV-Scanner              | `Cargo.lock` + npm lockfiles                  | OpenSSF Scorecard ([`scorecard.yml`](../.github/workflows/scorecard.yml))          | Config at [`osv-scanner.toml`](../osv-scanner.toml); backs the Scorecard `Vulnerabilities` check.                                            |
+| Trivy                    | Built container images                        | [`trivy.yml`](../.github/workflows/trivy.yml)                                     | Scans the assembled `backend` / `frontend` / `guacd` images, catching OS-package CVEs the language-level tools cannot see.                   |
+| CodeQL                   | First-party Rust + TypeScript                 | [`codeql.yml`](../.github/workflows/codeql.yml)                                   | Static analysis of code we wrote, complementing the dependency gates.                                                                       |
+| Dependency Review        | Dependency diff on every pull request         | [`dependency-review.yml`](../.github/workflows/dependency-review.yml)             | Blocks a PR that *introduces* a vulnerable or disallowed-licence package, before it is ever merged.                                          |
+
+Two design details are worth calling out because they are easy to get wrong:
+
+- **`cargo audit` is wrapped in a bounded retry.** The advisory database is fetched from `github.com/RustSec/advisory-db` at job time, and a transient network failure there is indistinguishable from a real finding if the exit code is taken at face value. The CI step retries up to three times with escalating backoff and only then emits `::error::cargo audit failed after N attempts` — so a flaky fetch cannot fail an otherwise-clean build, and, crucially, a genuine finding still fails it three times over rather than being papered over.
+- **`osv-scanner.toml` must live at the workspace root.** OSV-Scanner only applies an ignore-config that sits in the **same directory as the manifest being scanned**. A copy under `backend/` would be silently ignored while appearing to work, which is the worst possible failure mode for a suppression file. The file therefore lives next to `Cargo.lock` at the repository root, and the header comment in it says so.
+
+### Advisory triage policy
+
+When a gate fires, the finding is classified before anything is changed:
+
+1. **Is the package actually compiled / shipped?** A lockfile entry is not proof of exposure. Cargo locks resolved versions for every reachable optional and feature-gated crate across the workspace, including crates that no selected feature ever builds. The authoritative check is `cargo tree` on the real feature set, not the lockfile. On the npm side the equivalent question is whether the package is a `dev` dependency of the build toolchain or an actual runtime import — the production `frontend` image serves static assets from nginx and contains **no `node_modules` at all**, so a build-time-only package cannot reach a tenant.
+2. **Is the vulnerable code path reachable from untrusted input?** A denial-of-service in a frame parser that terminates an anonymous internet connection is a different class of problem to one reachable only across a mutually-authenticated, certificate-pinned link.
+3. **Is there a semver-compatible patch?** If so it is taken immediately, regardless of assessed exposure, because the cost of the update is a lockfile line and the cost of a permanently-red gate is that everyone learns to ignore it.
+4. **Only if there is no fix** is a suppression considered — and it must be justified in writing, in the config file itself, with the specific technical reason the code is unreachable and the condition under which the suppression will be removed.
+
+### Suppressions currently in force
+
+**`RUSTSEC-2023-0071` — Marvin timing side-channel in the pure-Rust `rsa` crate.** Unfixable upstream. Suppressed in [`osv-scanner.toml`](../osv-scanner.toml) as a **documented false positive**: `rsa` appears in `Cargo.lock` as a resolution-graph artefact and is never compiled into the `strata-backend` binary, because
+
+- `jsonwebtoken` is built with the `aws_lc_rs` feature, which uses the AWS-LC native crypto backend (RustCrypto-free) for RSA signature verification; and
+- `sqlx` is built with `default-features = false` and only the `postgres` backend, which excludes `sqlx-mysql` — the crate that pulls `rsa` in for MySQL `caching_sha2_password` authentication.
+
+`cargo tree` does not list `rsa` in the compiled graph. The suppression is removed if `sqlx` ever drops `rsa` from its umbrella manifest, or if any future feature selection pulls it into the build.
+
+**Yanked-crate notices are warnings, not suppressions.** `cargo audit` reports `aes 0.9.0`, `metrics 0.24.5`, and `spin 0.9.8` as yanked. A yank is a publisher signal, not a vulnerability; `deny.toml` sets `yanked = "warn"` deliberately so that these remain visible in the log without gating a release on a decision the upstream publisher may reverse.
+
+### Handled advisories
+
+| Advisory                                                   | Package             | Affected → fixed        | Exposure in Strata                                                                                                                                                                          | Released |
+| ---------------------------------------------------------- | ------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `RUSTSEC-2026-0258` / `GHSA-q83h-524g-xf6h`                | `h2` (Rust)         | `0.4.14` → `0.4.16`   | **Real, and partly unauthenticated.** See below.                                                                                                                                            | v1.14.5  |
+| `GHSA-2v37-7h3g-55p8` / `CVE-2026-67213`                   | `nanoid` (npm)      | `3.3.16` → `3.3.18`   | **None at runtime.** Build-toolchain `dev` transitive (`vite` → `postcss` → `nanoid`) used to mint source-map identifiers at a fixed size; never bundled, never in the runtime image. | v1.14.5  |
+| `RUSTSEC-2023-0071`                                        | `rsa` (Rust)        | — (no fix)           | **None.** Lockfile artefact only; not in the compiled graph. Suppressed with justification (above).                                                                                          | —        |
+
+#### `h2` unbounded empty `DATA` frames — why this one was material (v1.14.5)
+
+`h2` accepted and queued **empty HTTP/2 `DATA` frames without limit**. A peer that opens a stream and floods it with zero-length `DATA` frames, on a stream the application never drains, causes unbounded memory growth on the receiving side and can panic if the accumulated length overflows. The frame accounting happens in the transport, **before** any Strata authentication or authorisation middleware runs, so no permission model mitigates it.
+
+`h2` is a **declared workspace dependency** (`h2 = "0.4"`), not merely a transitive of `hyper`, and it sits on three paths with materially different trust properties:
+
+| Path                                                                                                    | Peer trust                                                                | Consequence                                                                            |
+| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **DMZ public TLS listener** — [`public_tls.rs`](../crates/strata-dmz/src/public_tls.rs) advertises `alpn_protocols = ["h2", "http/1.1"]` | **None.** Any anonymous internet client can negotiate HTTP/2 with the edge. | Highest-value exposure: memory exhaustion of the internet-facing edge binary.           |
+| **DMZ ↔ internal reverse link** — [`h2_serve.rs`](../backend/src/services/dmz_link/h2_serve.rs) (server side) over the connection dialled by [`listener.rs`](../crates/strata-dmz/src/link_server/listener.rs) (client side) | mTLS with pinned certificates + edge-header HMAC.                          | Requires an already-trusted peer, but the link multiplexes **every** WebSocket session via Extended CONNECT, so a compromised edge could starve the internal node. |
+| **`hyper` / `axum` HTTP/2** on the single-node topology                                                  | Behind the nginx gateway.                                                  | Standard HTTP/2 server exposure.                                                        |
+
+The fix is the lockfile bump to `h2 0.4.16`. The declared `"0.4"` requirement is unchanged because the patch is semver-compatible, and exactly one package moved in the graph. **Operator action:** DMZ deployments should treat v1.14.5 as a priority patch and redeploy the `strata-dmz` edge binary in addition to the backend — the edge is the component that terminates untrusted HTTP/2.
+
+### Keeping the graph current
+
+- **Renovate** ([`renovate.json`](../renovate.json)) raises routine dependency-update PRs, which then pass through the same gates plus Dependency Review before merge.
+- **Lockfiles are committed** for both ecosystems (`Cargo.lock`, `package-lock.json`, `frontend/package-lock.json`, `e2e/package-lock.json`) so that a build is reproducible and an audit result is meaningful. CI installs with `npm ci`, never `npm install`, so the lockfile is authoritative.
+- **Transitive pins use `overrides`.** When a vulnerable package is pulled in by a dependency whose own requirement range is not ours to edit, the fix is an `overrides` entry in [`frontend/package.json`](../frontend/package.json) — not a forked dependency and not a suppression. Each entry is expected to be removed once the parent package's own range moves past it.
+
+---
+
 ## Session Recording & Retention
 
 Session recording captures are managed by a background sync task:

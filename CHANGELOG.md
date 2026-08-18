@@ -5,6 +5,66 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.14.5] — 2026-08-18
+
+### Patch Release — Dependency security: `h2` HTTP/2 denial-of-service (RUSTSEC-2026-0258) and `nanoid` infinite loop (GHSA-2v37-7h3g-55p8)
+
+**The ask.** Two independent supply-chain gates fired within a day of each other. The OSV scan on the frontend dependency graph reported `Project is vulnerable to: GHSA-2v37-7h3g-55p8`, and the CI **Dependency Audit** job began failing hard on the Rust workspace: `error: 1 vulnerability found! … Crate: h2 … ID: RUSTSEC-2026-0258 … Solution: Upgrade to >=0.4.16`. Neither had a code-level symptom in Strata — both were caught by the automated gates before any release, which is the gates working as designed.
+
+**Advisory 1 — `h2` unbounded empty `DATA` frames (RUSTSEC-2026-0258 / GHSA-q83h-524g-xf6h).**
+
+| Field                | Value                                                                  |
+| -------------------- | ---------------------------------------------------------------------- |
+| Crate                | `h2`                                                                   |
+| Affected             | `< 0.4.16` (Strata shipped **0.4.14**)                                  |
+| Patched              | `>= 0.4.16`                                                            |
+| Category             | Denial of service                                                      |
+| Reported / issued    | 2026-08-17 / 2026-08-18                                                |
+| Upstream write-up    | <https://github.com/hyperium/hyper/security/advisories/GHSA-q83h-524g-xf6h> |
+
+`h2` accepted and queued **empty `DATA` frames without limit**. A peer that opens an HTTP/2 stream and then floods it with zero-length `DATA` frames — while the application never drains that stream — drives unbounded memory growth on the receiving side, and can panic outright if the accumulated length overflows. There is no authentication step in the frame-accounting path, so the frames are counted before any Strata-level authorisation runs.
+
+**Why this one mattered for Strata.** Unlike most transitive advisories, `h2` is a **first-class runtime dependency declared in the workspace** (`h2 = "0.4"` in [`Cargo.toml`](Cargo.toml)) and it sits on three distinct paths, two of which face untrusted peers:
+
+1. **DMZ public TLS listener (internet-facing, unauthenticated).** [`crates/strata-dmz/src/public_tls.rs`](crates/strata-dmz/src/public_tls.rs) advertises `alpn_protocols = ["h2", "http/1.1"]`, so **any anonymous client on the public interface can negotiate HTTP/2** with the edge binary before presenting a credential. This is the highest-value exposure: an unauthenticated peer could hold the DMZ edge's memory hostage.
+2. **The reverse link between the DMZ edge and the internal node.** The internal node runs the HTTP/2 **server** side ([`backend/src/services/dmz_link/h2_serve.rs`](backend/src/services/dmz_link/h2_serve.rs), `h2::server::Builder`) over the connection the DMZ dials via `h2::client::handshake` ([`crates/strata-dmz/src/link_server/listener.rs`](crates/strata-dmz/src/link_server/listener.rs)). This leg is mutually authenticated with pinned certificates and an edge-header HMAC, so reaching it requires an already-trusted peer — but the tunnel also multiplexes every WebSocket session via Extended CONNECT ([`ws_proxy.rs`](crates/strata-dmz/src/ws_proxy.rs), [`proxy.rs`](crates/strata-dmz/src/proxy.rs)), so a compromised edge could have starved the internal node.
+3. **`hyper`/`axum`'s own HTTP/2 support** on the single-node topology, behind the nginx gateway.
+
+**Fix.** `cargo update -p h2` moved [`Cargo.lock`](Cargo.lock) from `h2 0.4.14` → **`0.4.16`**. The declared requirement stays `"0.4"` (the patch is semver-compatible), so no manifest edit was needed and no other crate in the 463-crate graph moved — the lockfile diff is exactly the `h2` package block and its checksum. No API, behavioural, configuration, or protocol change: the same HTTP/2 settings, window sizes, ping watchdog, and Extended CONNECT negotiation apply.
+
+**Advisory 2 — `nanoid` infinite loop on a zero `size` (GHSA-2v37-7h3g-55p8 / CVE-2026-67213).**
+
+| Field                | Value                                                       |
+| -------------------- | ----------------------------------------------------------- |
+| Package              | `nanoid` (npm)                                              |
+| Affected             | `< 3.3.18` on the 3.x line (Strata shipped **3.3.16**)       |
+| Patched              | `3.3.18` (3.x) / `5.1.6` (5.x)                              |
+| Weakness             | CWE-835 — loop with unreachable exit condition              |
+| Severity             | CVSS 3.1 **5.9 Medium** · CVSS 4.0 **8.2 High**             |
+| Published            | 2026-07-29                                                  |
+
+`nanoid`'s `customAlphabet` and `customRandom` generators spin forever when configured with a `size` of `0`: the internal generation loop never satisfies its exit condition, hanging the calling thread. An application that forwards an unvalidated, attacker-controlled `size` into either function is exposed to a denial of service.
+
+**Exposure assessment — none at runtime.** `nanoid` is **not** a Strata dependency. It appears in [`frontend/package-lock.json`](frontend/package-lock.json) only as a `dev` transitive of the build toolchain (`vite` → `postcss` → `nanoid`), where `postcss` uses it to mint source-map identifiers with a fixed, hard-coded size. It is never bundled into the browser artefact, never reachable from user input, and never present in the runtime container image — the production `frontend` image serves static assets from nginx and ships no `node_modules`. The practical worst case was a hung build agent, not a hung tenant. It is fixed anyway, because a dependency-audit gate that is allowed to stay red is a gate nobody reads.
+
+**Fix.** `postcss` declares `nanoid ^3.3.11`, so the resolved version is not ours to choose directly; an [`overrides`](frontend/package.json) entry pins the whole tree to `"nanoid": "^3.3.18"`. `npm ci` re-resolved to **3.3.18** and the frontend production build was re-verified. The 3.x line was deliberately retained rather than jumping to 5.x, which is ESM-only and incompatible with `postcss`'s CommonJS require.
+
+**New documentation — `docs/security.md` § "Dependency & supply-chain security".** This release closes a long-standing gap in the security documentation: the repository has run five independent supply-chain gates in CI for many versions, and **none of them were described anywhere**. The new section documents the full set — `gitleaks` secret scanning, `cargo audit` (with its retry-on-transient-network wrapper), `cargo deny` (license allow-list, banned/duplicate crates, source allow-list), `npm audit` on both the frontend and E2E graphs, OSV-Scanner (which also backs the OpenSSF Scorecard `Vulnerabilities` check), Trivy image scanning, CodeQL, and Dependency Review — along with the advisory-triage policy, the rules for suppressing a finding, and a walk-through of the two suppressions currently in force.
+
+**Documented suppressions (unchanged, re-verified this release).** [`osv-scanner.toml`](osv-scanner.toml) carries one `IgnoredVulns` entry — `RUSTSEC-2023-0071` (Marvin timing side-channel in the pure-Rust `rsa` crate), a documented false positive: `rsa` is a lockfile resolution artefact only and is never compiled into `strata-backend`, because `jsonwebtoken` is built on the `aws_lc_rs` backend and `sqlx` is built with `default-features = false` plus the `postgres` backend only, excluding the `sqlx-mysql` crate that pulls `rsa` in. The three yanked-crate notices that accompany every audit run (`aes 0.9.0`, `metrics 0.24.5`, `spin 0.9.8`) remain **warnings**, not vulnerabilities, and are not gated.
+
+**Also in this patch — release-hygiene fixes.**
+
+- **Root lockfile version drift corrected.** [`package-lock.json`](package-lock.json) had been pinned at `1.8.4` since v1.8.4 — six minor lines behind — because the documented release checklist listed `package.json` but never its lockfile. Both are now `1.14.5`, and [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md) has been rewritten to enumerate **every** version-bearing file (`VERSION`, both `package.json` + both `package-lock.json`, the workspace `Cargo.toml`, and the three workspace crate entries in `Cargo.lock`) so the drift cannot silently reappear.
+- **Truncated release-process document repaired.** `docs/RELEASE_PROCESS.md` ended with a stray `*** End Patch` marker left behind by an earlier tooling artefact, and omitted the `Cargo.lock`, README release-table, and post-release documentation-verification steps entirely.
+- **`docs/DOCUMENTATION_STANDARDS.md` expanded** from a 9-line summary into the actual, enforceable standard the repository has been following since v1.10 — the required anatomy of a CHANGELOG entry (the ask, the symptom, the root cause, the fix, scope & safety, testing, deploy), the "every user-visible change appears in five places" rule, the linking conventions, and a per-release documentation checklist.
+
+**Scope & safety.** **Dependency-only release: no application source file changed.** No schema migration, no new or altered API surface, no new environment variable, no configuration change, and no behavioural change to any feature. Both updates are semver-compatible patch bumps that keep every existing manifest requirement intact. The remaining changes in this release are documentation and version metadata.
+
+**Testing.** `npm ci` re-resolved the frontend tree to `nanoid 3.3.18` and `npm run build` completed clean (2,317 kB bundle, unchanged from v1.14.4). `cargo update -p h2` moved exactly one package and left the other 462 untouched, verified against `Cargo.lock`. The CI **Dependency Audit** job — `cargo audit --deny unsound --deny unmaintained`, `cargo deny check bans licenses sources`, and `npm audit --audit-level=high` on both Node graphs — is the authoritative gate for this release, alongside the full backend and frontend suites.
+
+**Deploy.** Backend + frontend rebuild: `docker compose pull && docker compose up -d --build backend frontend`. **DMZ deployments should treat this as a priority patch** — the `h2` fix protects the internet-facing edge listener, so redeploy the `strata-dmz` edge binary as well: `docker compose -f docker-compose.dmz.yml up -d --build dmz`. No migration step, no downtime beyond the container restart, and no rollback hazard — reverting is a plain image rollback.
+
 ## [1.14.4] — 2026-08-12
 
 ### Patch Release — Copy/paste no longer dies for the rest of the Windows session, plus end-to-end clipboard diagnostics

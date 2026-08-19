@@ -187,10 +187,6 @@ impl HandshakeParams {
                 .or_insert_with(|| "false".into());
             m.entry("disable-auth".into())
                 .or_insert_with(|| "false".into());
-
-            // Increase clipboard buffer size to 8 MiB (default is often 64KB - 256KB)
-            m.entry("clipboard-buffer-size".into())
-                .or_insert_with(|| "8388608".into());
         }
 
         // SSH terminal defaults — mirrors rustguac (sol1/rustguac src/guacd.rs)
@@ -260,6 +256,23 @@ impl HandshakeParams {
             .or_insert_with(|| "false".into());
         m.entry("disable-paste".into())
             .or_insert_with(|| "false".into());
+
+        // Clipboard buffer size, 8 MiB. guacd allocates a single fixed-size
+        // buffer per connection and `guac_common_clipboard_append()`
+        // *silently truncates* anything past the end of it, so this value is
+        // a hard ceiling on how much text can cross in either direction.
+        // guacd's own default is `GUAC_COMMON_CLIPBOARD_MIN_LENGTH`
+        // (262144 = 256 KiB), which a large script or PEM bundle exceeds
+        // easily; the accepted range is 256 KiB..50 MiB
+        // (`GUAC_COMMON_CLIPBOARD_MAX_LENGTH`), and out-of-range values are
+        // clamped by guacd rather than rejected.
+        //
+        // Set for every protocol, not just RDP — `clipboard-buffer-size` is
+        // in the arg list for rdp, vnc, ssh, telnet and kubernetes alike, and
+        // guacd ignores parameters it did not advertise, so this is safe to
+        // apply unconditionally.
+        m.entry("clipboard-buffer-size".into())
+            .or_insert_with(|| "8388608".into());
 
         // Merge extra params — only allow known safe guacd parameter names.
         // This prevents injection of arbitrary protocol options.
@@ -2234,7 +2247,42 @@ mod tests {
     }
 
     #[test]
-    fn full_param_map_rdp_clipboard_buffer() {
+    fn full_param_map_clipboard_buffer_all_protocols() {
+        // guacd's default is 256 KiB and it truncates silently past that, so
+        // every protocol that supports the parameter must get the raised
+        // ceiling — not just RDP.
+        for proto in ["rdp", "vnc", "ssh", "telnet", "kubernetes"] {
+            let hp = HandshakeParams {
+                protocol: proto.into(),
+                hostname: "h".into(),
+                port: 3389,
+                username: None,
+                password: None,
+                domain: None,
+                security: None,
+                ignore_cert: false,
+                recording_path: None,
+                recording_name: None,
+                create_recording_path: false,
+                width: 1920,
+                height: 1080,
+                dpi: 96,
+                extra: std::collections::HashMap::new(),
+            };
+            let m = hp.full_param_map();
+            assert_eq!(
+                m["clipboard-buffer-size"], "8388608",
+                "clipboard-buffer-size missing for {proto}"
+            ); // 8 MiB
+        }
+    }
+
+    #[test]
+    fn full_param_map_clipboard_buffer_override_within_guacd_range() {
+        // Per-connection overrides are whitelisted; guacd clamps to
+        // 256 KiB..50 MiB, so anything we forward should sit inside it.
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("clipboard-buffer-size".into(), "33554432".into());
         let hp = HandshakeParams {
             protocol: "rdp".into(),
             hostname: "h".into(),
@@ -2250,10 +2298,10 @@ mod tests {
             width: 1920,
             height: 1080,
             dpi: 96,
-            extra: std::collections::HashMap::new(),
+            extra,
         };
         let m = hp.full_param_map();
-        assert_eq!(m["clipboard-buffer-size"], "8388608"); // 8 MiB
+        assert_eq!(m["clipboard-buffer-size"], "33554432"); // 32 MiB
     }
 
     #[test]

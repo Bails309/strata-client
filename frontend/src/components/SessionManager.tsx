@@ -380,12 +380,23 @@ export function SessionManagerProvider({
     // as "copy just stopped working, but reconnecting fixes it".
     //
     // Guard the receive path with a per-stream watchdog: if we don't see
-    // `end` within STALL_MS of the last blob (or of stream open when no
-    // blobs arrived), flush whatever we have to the local clipboard and
-    // log a diagnostic. Getting *some* new text is much better than silently
-    // leaving stale text sitting on the clipboard, and the console warning
-    // gives us evidence to correlate with server-side guacd logs.
-    const CLIPBOARD_STALL_MS = 2000;
+    // `end` within the applicable stall window, flush whatever we have to
+    // the local clipboard and log a diagnostic. Getting *some* new text is
+    // much better than silently leaving stale text sitting on the clipboard,
+    // and the console warning gives us evidence to correlate with
+    // server-side guacd logs.
+    //
+    // The window is deliberately asymmetric. A stream that opens and never
+    // delivers a single blob is the wedged-CLIPRDR signature the watchdog
+    // was written for, and 2 s is plenty to recognise it. A gap *between*
+    // blobs is a completely different animal: guacd emits the whole
+    // clipboard as one back-to-back burst of 4 KiB blobs out of a single
+    // in-memory buffer, so a mid-transfer pause is transport backpressure,
+    // not a wedge — and the odds of hitting one grow with payload size.
+    // Treating those at 2 s truncated exactly the copies users care about
+    // (a multi-thousand-line script) while leaving small ones intact.
+    const CLIPBOARD_OPEN_STALL_MS = 2000;
+    const CLIPBOARD_BLOB_STALL_MS = 10000;
     client.onclipboard = (stream: Guacamole.InputStream, mimetype: string) => {
       if (mimetype !== "text/plain") {
         clipboardDiag(sessionId, "in", "ignored-mimetype", { mimetype, index: stream.index });
@@ -395,7 +406,12 @@ export function SessionManagerProvider({
       const openedAt = Date.now();
       let data = "";
       let blobCount = 0;
-      let flushed = false;
+      /** Stream is finished or abandoned — no further writes. */
+      let closed = false;
+      /** Characters already pushed to the local clipboard. */
+      let published = -1;
+      /** `data.length` observed by the previous stall, to detect progress. */
+      let charsAtLastStall = -1;
       let stallTimer: ReturnType<typeof setTimeout> | undefined;
 
       clipboardDiag(sessionId, "in", "stream-open", { index: stream.index });
@@ -417,35 +433,28 @@ export function SessionManagerProvider({
         });
       };
 
-      const flush = (reason: "end" | "stall"): void => {
-        if (flushed) return;
-        flushed = true;
+      const clearStallTimer = (): void => {
         if (stallTimer !== undefined) {
           clearTimeout(stallTimer);
           stallTimer = undefined;
         }
-        if (reason === "stall") {
-          // Diagnostic only — helps correlate with guacd/FreeRDP CLIPRDR
-          // hangs. Do NOT downgrade to console.debug; users pasting bug
-          // reports need this visible without dev-tools filters.
-          console.warn(
-            `[session] clipboard stream ${stream.index} stalled after ${blobCount} blob(s), ${data.length} chars — flushing partial data`
-          );
-          // Force-close the stalled stream so guacd sees an ack for the
-          // orphaned index instead of leaking it forever.
-          try {
-            stream.sendAck("Stream stalled — flushed by client watchdog", 0x0200);
-          } catch {
-            /* stream may already be closed */
-          }
-        }
-        clipboardDiag(sessionId, "in", reason === "end" ? "stream-end" : "stream-stalled", {
+      };
+
+      /**
+       * Publish what has accumulated so far. Safe to call repeatedly: a
+       * partial flush followed by more data is re-published in full, so a
+       * transfer that merely paused still ends up complete on the clipboard.
+       */
+      const publish = (event: string): void => {
+        clipboardDiag(sessionId, "in", event, {
           index: stream.index,
           blobs: blobCount,
           chars: data.length,
           ms: Date.now() - openedAt,
           fp: data.length > 0 ? clipboardFingerprint(data) : undefined,
         });
+        if (data.length === published) return;
+        published = data.length;
         // Only overwrite the local clipboard when we actually received
         // something. An empty flush from a stall with zero blobs would
         // wipe whatever the user had copied previously, making the bug
@@ -458,12 +467,58 @@ export function SessionManagerProvider({
         setSessions((prev) => [...prev]); // trigger re-render
       };
 
+      const flush = (reason: "end" | "stall"): void => {
+        if (closed) return;
+
+        if (reason === "end") {
+          closed = true;
+          clearStallTimer();
+          publish("stream-end");
+          return;
+        }
+
+        // A stall that arrived after real progress is treated as a pause,
+        // not a failure: publish the partial so the user is never left with
+        // stale text, then keep listening. Only when a second window passes
+        // with nothing new (or when nothing ever arrived) do we give up and
+        // ack-close the index.
+        const progressed = blobCount > 0 && data.length > charsAtLastStall;
+        charsAtLastStall = data.length;
+        if (progressed) {
+          console.warn(
+            `[session] clipboard stream ${stream.index} paused after ${blobCount} blob(s), ${data.length} chars — flushing partial data, still listening`
+          );
+          publish("stream-paused");
+          armStallTimer();
+          return;
+        }
+
+        closed = true;
+        clearStallTimer();
+        // Diagnostic only — helps correlate with guacd/FreeRDP CLIPRDR
+        // hangs. Do NOT downgrade to console.debug; users pasting bug
+        // reports need this visible without dev-tools filters.
+        console.warn(
+          `[session] clipboard stream ${stream.index} stalled after ${blobCount} blob(s), ${data.length} chars — abandoning transfer`
+        );
+        // Force-close the stalled stream so guacd sees an ack for the
+        // orphaned index instead of leaking it forever.
+        try {
+          stream.sendAck("Stream stalled — flushed by client watchdog", 0x0200);
+        } catch {
+          /* stream may already be closed */
+        }
+        publish("stream-stalled");
+      };
+
       const armStallTimer = (): void => {
-        if (stallTimer !== undefined) clearTimeout(stallTimer);
-        stallTimer = setTimeout(() => flush("stall"), CLIPBOARD_STALL_MS);
+        clearStallTimer();
+        const delay = blobCount === 0 ? CLIPBOARD_OPEN_STALL_MS : CLIPBOARD_BLOB_STALL_MS;
+        stallTimer = setTimeout(() => flush("stall"), delay);
       };
 
       reader.ontext = (text: string) => {
+        if (closed) return;
         data += text;
         blobCount++;
         armStallTimer();

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Identify which of the two known clipboard failure modes a user has hit,
+Identify which of the known clipboard failure modes a user has hit,
 recover the affected session, and capture content-free diagnostic
 evidence for a bug report.
 
@@ -17,6 +17,7 @@ A user reports any of the following against an RDP session:
 - Text copied locally no longer reaches the remote desktop.
 - Clipboard works after reconnecting, then breaks again.
 - Clipboard is dead and **reconnecting does not help**.
+- **Large** copies arrive **truncated** while small ones are fine.
 
 ## Prerequisites
 
@@ -61,6 +62,28 @@ reconnect to the same server, does copy/paste come back?"**
 | Yes, reconnecting fixes it       | **A — stalled transfer**     | A single clipboard transfer opened on RDP's CLIPRDR channel and never closed. Server-side channel state; a fresh `guacd` process clears it. |
 | No, still broken after reconnect | **B — wedged `rdpclip.exe`** | The Windows-side clipboard owner is stuck. Reconnecting reattaches to the _same_ still-logged-on Windows session, so it cannot help.        |
 
+If the clipboard is not dead but **incomplete** — a long script or PEM
+bundle pastes back as its first few hundred lines while a short snippet
+is fine — that is **Mode C — truncation**, and neither recovery below
+applies. Two ceilings produce it:
+
+1. **`clipboard-buffer-size`.** `guacd` allocates one fixed-size buffer
+   per connection and silently truncates appends past its end. Strata
+   sets 8 MiB on every protocol; `guacd`'s own default is 256 KiB, and
+   the accepted range is 256 KiB..50 MB. Check
+   **Admin → Connections → _connection_ → Advanced** for a
+   `clipboard-buffer-size` override, and compare the `chars` field of
+   the inbound `stream-end` entry (step 2) against it. A `chars` value
+   sitting suspiciously close to a round buffer size is the tell.
+2. **A receive-side stall that was never resumed.** Look for
+   `stream-paused` followed by `stream-stalled` rather than
+   `stream-end`. Builds before the asymmetric-watchdog fix abandoned
+   the stream at the first 2-second gap, so everything after the pause
+   was discarded — and because the chance of hitting one gap grows with
+   the blob count, only large copies were affected. Upgrading is the
+   fix; there is no per-session workaround beyond copying in smaller
+   pieces.
+
 Mode B is the v1.14.4 defect. Mode A is the v1.14.1 defect, which
 should now degrade to a partial copy plus a console warning rather
 than a silent dead clipboard.
@@ -102,6 +125,8 @@ strataClipboard.disable();
 | `echo-reset`                                                    | out       | Normal on every (re)connect — the clipboard belief was cleared so the channel gets re-primed.                                    |
 | `stream-open` with no `stream-end`                              | in        | Mode A. Should be followed by `stream-stalled` from the watchdog.                                                                |
 | `stream-stalled` with `blobs: 0`                                | in        | The remote announced a clipboard format and produced nothing.                                                                    |
+| `stream-paused` then `stream-end`                               | in        | A large transfer stalled mid-flight and recovered. The partial was published, then superseded by the complete text. Benign.      |
+| `stream-paused` then `stream-stalled`                           | in        | A large transfer stalled and never resumed — the clipboard holds a **truncated** copy. Check `chars` against `clipboard-buffer-size`. |
 | `local-write-failed`                                            | in        | The browser refused the clipboard write (permissions / focus / insecure origin).                                                 |
 
 > Neither tracer records clipboard **contents**. Entries carry

@@ -108,7 +108,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git clone https://github.com/apache/guacamole-server.git /src \
-    && cd /src && git checkout 4163ead8be54baa35ef5f7ad8897a57497649112
+    && cd /src && git checkout be83001bda2e60f1356604c91144628e8150afeb
 
 WORKDIR /src
 RUN autoreconf -fi \

@@ -7,19 +7,30 @@
 # Patches from sol1/rustguac fix FreeRDP 3 API compatibility and add
 # Kerberos NLA support.
 #
-# Pinned to guacamole-server commit 4163ead (head of staging/1.6.1 as of
-# May 3, 2026). NOTE: GUACAMOLE-2273 (FreeRDP 3.25 AuthenticateEx, upstream
-# commit 7696572) has NOT yet landed on staging/1.6.1 at this pin, so our
-# local patch 006 is still required to build against FreeRDP 3.25 (which
-# removed the legacy `Authenticate` callback from struct rdp_freerdp).
-# Other notable fixes since 2980cf0:
-# GUACAMOLE-2268 (VNC UTF-8 clipboard), GUACAMOLE-2271 (VNC
-# FinishedFrameBufferUpdate), GUACAMOLE-2255 (RDP uninitialized var),
-# GUACAMOLE-2264 (FreeRDP CMAKE_BUILD_TYPE=Release), GUACAMOLE-2259 (cursor
-# sync skip), GUACAMOLE-2213 (OSC handling), GUACAMOLE-2241 (display plan
-# infinite loop), GUACAMOLE-2221 (RDP busy-loop on transport failure),
-# GUACAMOLE-2238 (EINTR retry), GUACAMOLE-2182 (config.h segfaults),
-# GUACAMOLE-2035 (Dockerfile health check start period).
+# Pinned to guacamole-server commit be83001 on **main** (2026-08-07). `main`
+# is upstream's development trunk: work flows staging/1.6.1 → patch → main, so
+# be83001 provably contains f22a2df, the head of staging/1.6.1 at time of
+# pinning. Both branches declare version 1.6.1 in configure.ac.
+#
+# Moved off staging/1.6.1 (was 4163ead) because RDP support for the
+# `clipboard-buffer-size` parameter exists only on main. On staging/1.6.1 the
+# RDP clipboard is a fixed 256 KiB buffer with a *stack-allocated* receive
+# array, and overrunning it is silent: guac_iconv() fails and
+# guac_rdp_cliprdr_format_data_response() skips reset/append/send entirely,
+# so a large copy is dropped wholesale rather than truncated. main allocates
+# that buffer on the heap and honours the parameter.
+#
+# Notable fixes gained over 4163ead:
+#   GUACAMOLE-2273 (FreeRDP AuthenticateEx — obsoletes our local patch 006),
+#   GUACAMOLE-1625 (sockets inherited by connection processes; parents were
+#   observed holding tens of GB), GUACAMOLE-2118 (connection processes
+#   blocked forever when a user vanishes without `disconnect`),
+#   GUACAMOLE-2270 (ABBA deadlock between guac_display_dup() and frame
+#   flush), GUACAMOLE-2315 (libwebsockets 5.0.0 build), GUACAMOLE-2314
+#   (guacd start without guacd.conf), GUACAMOLE-2294/2295 (resource leaks),
+#   GUACAMOLE-2313 (lock modifiers / macOS keys).
+#
+# Pin the SHA, never the branch name — main moves.
 # ──────────────────────────────────────────────────────────────────────
 
 # ── Builder stage ─────────────────────────────────────────────────────
@@ -45,7 +56,7 @@ RUN apk add --no-cache \
 
 # Clone guacamole-server pinned to known-good commit (compatible with patches)
 RUN git clone https://github.com/apache/guacamole-server.git /src && \
-    cd /src && git checkout 4163ead8be54baa35ef5f7ad8897a57497649112
+    cd /src && git checkout be83001bda2e60f1356604c91144628e8150afeb
 
 # Apply FreeRDP 3 compatibility + Kerberos NLA patches (from sol1/rustguac)
 COPY patches/ /tmp/patches/
@@ -54,8 +65,8 @@ RUN apk add --no-cache patch && cd /src && \
         echo "Applying $(basename $p)..." && \
         (git apply "$p" 2>/dev/null || patch -p1 -F3 < "$p") || { echo "ERROR: Patch $(basename $p) failed to apply" && exit 1; }; \
     done && \
-    grep -q '#include <freerdp/version.h>' src/protocols/rdp/rdp.c || { echo "ERROR: 006 patch did not add freerdp/version.h include" && exit 1; } && \
-    grep -q 'rdp_inst->AuthenticateEx = rdp_freerdp_authenticate;' src/protocols/rdp/rdp.c || { echo "ERROR: 006 patch did not introduce AuthenticateEx assignment" && exit 1; }
+    grep -q 'AuthenticateEx' src/protocols/rdp/rdp.c || { echo "ERROR: upstream AuthenticateEx support missing — patch 006 may need reinstating" && exit 1; } && \
+    grep -q '"clipboard-buffer-size"' src/protocols/rdp/settings.c || { echo "ERROR: RDP does not accept clipboard-buffer-size at this pin — large copies would be silently dropped" && exit 1; }
 
 WORKDIR /src
 

@@ -2,22 +2,22 @@ diff --git a/src/libguac/display-layer-list.c b/src/libguac/display-layer-list.c
 index b876d25..a20028c 100644
 --- a/src/libguac/display-layer-list.c
 +++ b/src/libguac/display-layer-list.c
-@@ -366,6 +366,15 @@ void guac_display_remove_layer(guac_display_layer* display_layer) {
-     guac_mem_free(display_layer->last_frame.buffer);
-     guac_mem_free(display_layer->pending_frame_cells);
+@@ -363,6 +363,15 @@ void guac_display_free_removed_layers(guac_display* display,
+         guac_mem_free(current->last_frame.buffer);
+         guac_mem_free(current->pending_frame_cells);
  
-+    /* Free any queued H.264 frames */
-+    struct guac_h264_frame* h264_frame = display_layer->h264_queue;
-+    while (h264_frame != NULL) {
-+        struct guac_h264_frame* next = h264_frame->next;
-+        guac_mem_free(h264_frame->data);
-+        guac_mem_free(h264_frame);
-+        h264_frame = next;
-+    }
++        /* Free any queued H.264 frames */
++        struct guac_h264_frame* h264_frame = current->h264_queue;
++        while (h264_frame != NULL) {
++            struct guac_h264_frame* next = h264_frame->next;
++            guac_mem_free(h264_frame->data);
++            guac_mem_free(h264_frame);
++            h264_frame = next;
++        }
 +
-     pthread_mutex_destroy(&display_layer->path_lock);
+         pthread_mutex_destroy(&current->path_lock);
  
-     guac_mem_free(display_layer);
+         if (layer->index != 0) {
 diff --git a/src/libguac/display-layer.c b/src/libguac/display-layer.c
 index 2c983a1..410e42a 100644
 --- a/src/libguac/display-layer.c

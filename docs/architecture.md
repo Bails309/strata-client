@@ -40,22 +40,22 @@ The official Apache Guacamole server daemon, custom-compiled with:
   custom guacd builds against whichever FreeRDP 3.x ships with the
   base image (Alpine 3.23 community + edge currently resolves to
   `freerdp-3.25.0-r0`; Debian 13 / Trixie still ships
-  `freerdp-3.24.x`). Patch `006-freerdp325-authenticate-ex.patch`
-  (added in v1.3.2) `#include`s `<freerdp/version.h>` and uses the
-  `FREERDP_VERSION_MAJOR` / `FREERDP_VERSION_MINOR` preprocessor
-  macros to switch between the legacy four-argument
+  `freerdp-3.24.x`). Upstream GUACAMOLE-2273 now selects between the
+  legacy four-argument
   `Authenticate(freerdp*, char**, char**, char**)` callback (FreeRDP
-  ≤ 3.24) and the new five-argument
+  ≤ 3.24) and the five-argument
   `AuthenticateEx(freerdp*, char**, char**, char**, rdp_auth_reason)`
-  callback (FreeRDP ≥ 3.25), so the same source tree compiles
-  cleanly on both Alpine edge and Debian Trixie.
+  callback (FreeRDP ≥ 3.25), so the same source tree compiles cleanly
+  on both Alpine edge and Debian Trixie. Our local patch 006, which
+  did this from v1.3.2 until the pin moved to `main`, has been
+  removed.
 - **Kerberos** (`krb5-dev` at build, `krb5` + `krb5-libs` at runtime) for GSSAPI/NLA authentication
 - **H.264 GFX** — `ffmpeg-dev` / `ffmpeg-libs` for FreeRDP 3 GFX pipeline with H.264 encoding, dramatically lowering bandwidth for RDP sessions
 
 The build pipeline applies a numbered series of unified-diff
 patches under [`guacd/patches/`](../guacd/patches/) to the
 upstream `apache/guacamole-server` tree (pinned to commit
-`2980cf0`, release 1.6.1) before `autoreconf -fi && ./configure`.
+`be83001` on `main`, 2026-08-07) before `autoreconf -fi && ./configure`.
 The patches are applied in lexicographic order via the loop in
 [`guacd/Dockerfile`](../guacd/Dockerfile), with `git apply`
 preferred and a `patch -p1 -F3` fallback for fuzz tolerance:
@@ -67,16 +67,15 @@ preferred and a `patch -p1 -F3` fallback for fuzz tolerance:
 | `003-null-guard-and-config-h.patch`    | Hardening: NULL guards on a handful of hot paths and consistent `config.h` inclusion.                                                                                                                                                                    |
 | `004-h264-display-worker.patch`        | Hooks FreeRDP's RDPGFX `SurfaceCommand` callback and emits the custom `4.h264` Guacamole instruction (see "[H.264 GFX passthrough]" below).                                                                                                              |
 | `005-refresh-rect-on-resize.patch`     | Marks the entire layer dirty after `gdi_resize` and asks the RDP server to re-send pixels for the full new desktop area, eliminating black "ghost regions" along the edge of the canvas after a server-driven RDP resize (v1.3.2).                       |
-| `006-freerdp325-authenticate-ex.patch` | Selects between the legacy `Authenticate` callback and the new `AuthenticateEx` callback on `struct rdp_freerdp` based on `FREERDP_VERSION_MAJOR`/`FREERDP_VERSION_MINOR`, restoring the build on FreeRDP 3.25+ while keeping it green on 3.24 (v1.3.2). |
 
-After the loop, the Dockerfile runs two `grep -q` assertions on
-the post-patch `src/protocols/rdp/rdp.c` to verify that
-`#include <freerdp/version.h>` and
-`rdp_inst->AuthenticateEx = rdp_freerdp_authenticate;` are
-present — defence-in-depth catch for silent semantic regressions
-of patch 006 (the first iteration of which applied successfully
-but selected the wrong `#if` branch because the version macros
-were undefined). Patch files are pinned to LF line endings via
+After the loop, the Dockerfile runs two `grep -q` assertions
+against the upstream tree: `AuthenticateEx` in
+`src/protocols/rdp/rdp.c`, and `"clipboard-buffer-size"` in
+`src/protocols/rdp/settings.c`. Both guard against a future pin
+silently regressing — the first would mean patch 006 needs
+reinstating, the second that RDP has lost the configurable
+clipboard buffer and large copies would be dropped without
+error. Patch files are pinned to LF line endings via
 [`guacd/patches/.gitattributes`](../guacd/patches/.gitattributes)
 because byte-sensitive unified-diff hunks fail to apply when CRLF
 sneaks in via `core.autocrlf=true` on Windows.
@@ -182,7 +181,7 @@ Pages:
 
 - **Setup Wizard** — first-boot database and Vault configuration with bundled/external/skip vault mode selector
 - **Dashboard** — user's connections with connect/credential vault, multi-select for tiled view, last-accessed tracking, favorites filter, group view toggle (flat list or collapsible group headers), and connection health status indicators (green/red/gray dots showing online/offline/unknown from background TCP probes). The **My Connections** search input matches against connection `name`, `hostname`, `description`, **and assigned tag names** (v1.12.9+ — fourth `||` clause on the `filtered` `useMemo` predicate, lazily building a `Map<tagId, tagName.toLowerCase()>` from the existing `allTags` derivation; placeholder reads `Search name, host, description or tag`). The dedicated tag-chip filter row immediately below the search composes with the query via `AND`. **(v1.8.3)** Preference and settings providers are mounted inside the authentication boundary to eliminate 401 log noise on the login screen.
-- **Session Client** — HTML5 Canvas via `guacamole-common-js` (vendored 1.6.0 bundle with H.264 GFX passthrough; v0.28.0+) with clipboard sync (including pop-out windows) routed through a single serialised sender with a receive-side stall watchdog and opt-in content-free diagnostics (v1.14.4+), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Quick Share, Keyboard, etc.) into a sleek right-side overlay, **Command Palette** (`Ctrl+K`) for instant connection search and launch from any session, **keyboard shortcut proxy** (Right Ctrl → Win key, `Ctrl+Alt+\`` → Win+Tab), **Keyboard Lock API** for capturing OS-level shortcuts in fullscreen over HTTPS, **display tags** (optional per-connection colored badge on session thumbnails, user-assignable via a tag picker dropdown), **dynamic browser tab title** (shows the active session's server name, e.g. "SERVER01 — Strata"), pop-out windows that persist across navigation with automatic screen-change detection and re-scaling, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with ~30 fps `setInterval`render loop (avoids`requestAnimationFrame`throttling when popups have focus),`MutationObserver`-based cursor sync across all secondary windows, horizontal-only layout (all monitors arranged left-to-right regardless of physical vertical position — best supported configuration is all landscape monitors side by side; monitors above or below appear as slices to the right), aggregate height capped to primary monitor height for taskbar visibility, `moveTo`/`resizeTo`/`requestFullscreen`auto-maximize on secondary popups, live`screenschange`detection for hot-plugged monitors, screen count detection shown in the toolbar tooltip, Chrome popup-blocker bypass via in-gesture`getScreenDetails()`for 3+ monitors, and Brave/privacy-browser compatibility, Quick Share panel (conditional on file transfer enabled) with drag-and-drop upload and one-click copy-to-clipboard download URLs, expired credential renewal at connect time, and automatic redirect to the next active session when one ends. (The legacy`forceDisplayRepaint()` ghost-pixel mitigation and the manual **Refresh display** button from v0.25.1–v0.27.x have been retired — H.264 passthrough eliminates the underlying ghost class.)
+- **Session Client** — HTML5 Canvas via `guacamole-common-js` (vendored 1.6.0 bundle with H.264 GFX passthrough; v0.28.0+) with clipboard sync (including pop-out windows) routed through a single serialised sender with a receive-side stall watchdog whose window is asymmetric — 2 s while no data has arrived, 10 s once blobs are flowing, republishing on each pause so a large transfer that merely stalls still completes (v1.14.6+) — an 8 MiB per-connection `guacd` clipboard buffer negotiated and logged at handshake, and opt-in content-free diagnostics (v1.14.4+), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Quick Share, Keyboard, etc.) into a sleek right-side overlay, **Command Palette** (`Ctrl+K`) for instant connection search and launch from any session, **keyboard shortcut proxy** (Right Ctrl → Win key, `Ctrl+Alt+\`` → Win+Tab), **Keyboard Lock API** for capturing OS-level shortcuts in fullscreen over HTTPS, **display tags** (optional per-connection colored badge on session thumbnails, user-assignable via a tag picker dropdown), **dynamic browser tab title** (shows the active session's server name, e.g. "SERVER01 — Strata"), pop-out windows that persist across navigation with automatic screen-change detection and re-scaling, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with ~30 fps `setInterval`render loop (avoids`requestAnimationFrame`throttling when popups have focus),`MutationObserver`-based cursor sync across all secondary windows, horizontal-only layout (all monitors arranged left-to-right regardless of physical vertical position — best supported configuration is all landscape monitors side by side; monitors above or below appear as slices to the right), aggregate height capped to primary monitor height for taskbar visibility, `moveTo`/`resizeTo`/`requestFullscreen`auto-maximize on secondary popups, live`screenschange`detection for hot-plugged monitors, screen count detection shown in the toolbar tooltip, Chrome popup-blocker bypass via in-gesture`getScreenDetails()`for 3+ monitors, and Brave/privacy-browser compatibility, Quick Share panel (conditional on file transfer enabled) with drag-and-drop upload and one-click copy-to-clipboard download URLs, expired credential renewal at connect time, and automatic redirect to the next active session when one ends. (The legacy`forceDisplayRepaint()` ghost-pixel mitigation and the manual **Refresh display** button from v0.25.1–v0.27.x have been retired — H.264 passthrough eliminates the underlying ghost class.)
 - **Tiled View** — multi-connection grid layout with per-tile focus, keyboard broadcast, and inline credential prompts
 - **NVR Player** — admin-only read-only session observer with 5-minute rewind buffer plus a per-session persistent-state log (v1.9.4) that salvages drawing instructions as they age out of the ring buffer so newly-joining observers reconstruct the full canvas instead of seeing a black frame; supports replay→live transition and timeline controls
 - **Sessions** — unified role-based page with Live Sessions and Recording History tabs; users see their own sessions, admins see all with kill/observe/rewind controls
@@ -1716,20 +1715,46 @@ complete-payload-after-a-pause behaviours.
 
 ## Clipboard size ceiling — `clipboard-buffer-size`
 
-`guacd` allocates **one fixed-size clipboard buffer per connection**
-and `guac_common_clipboard_append()` **silently truncates** anything
-past its end — no error instruction, no log line on the client, no
-`onerror`. That buffer is therefore the hard ceiling on how much text
-can cross in *either* direction, and overrunning it is
-indistinguishable from a successful copy until the user pastes and
-finds the tail missing.
+`guacd` allocates **one fixed-size clipboard buffer per connection**,
+and that buffer is the hard ceiling on how much text can cross in
+either direction. Overrunning it produces no error instruction, no
+client-side `onerror`, and nothing in `guacd`'s log at default
+verbosity — but the two directions fail **differently**, which matters
+when reading a diagnostic trace:
+
+- **Remote → local (copy out) — dropped wholesale.**
+  `guac_rdp_cliprdr_format_data_response()` converts the incoming
+  UTF-16 into a buffer of exactly `clipboard-buffer-size` bytes.
+  `guac_iconv()` returns 0 when the output fills before it reaches the
+  null terminator, and the reset/append/send calls sit **inside** that
+  `if`. A copy that overruns therefore emits **no `clipboard` stream
+  at all** — the browser sees nothing whatsoever, not a short payload.
+- **Local → remote (paste in) — truncated.**
+  `guac_rdp_clipboard_blob_handler()` calls
+  `guac_common_clipboard_append()`, which clamps to the remaining
+  space. The paste lands with its tail missing. Note the outbound
+  conversion is UTF-8 → UTF-16, so the *effective* ceiling on this
+  direction is roughly **half** the buffer.
+
+In a `strataClipboard` dump the difference is unmistakable: an
+overrun copy leaves **zero `dir: "in"` entries**, whereas a stalled
+transfer leaves `stream-paused` / `stream-stalled` with a short
+`chars`.
 
 | Bound                                   | Value                | Where                                                     |
 | --------------------------------------- | -------------------- | --------------------------------------------------------- |
 | `guacd` default (parameter unset)       | 256 KiB (`262144`)   | `GUAC_COMMON_CLIPBOARD_MIN_LENGTH`                        |
 | `guacd` maximum (larger values clamped) | 50 MB (`52428800`)   | `GUAC_COMMON_CLIPBOARD_MAX_LENGTH`                        |
-| **Strata default**                      | 8 MiB (`8388608`)    | `HandshakeParams::full_param_map()` in `backend/src/tunnel.rs` |
+| **Strata default**                      | 8 MiB (`8388608`)    | `DEFAULT_CLIPBOARD_BUFFER_BYTES` in `backend/src/tunnel.rs` |
+| Deployment override                     | env                  | `STRATA_CLIPBOARD_BUFFER_BYTES`, clamped to the range above |
 | Per-connection override                 | admin-set            | `extra["clipboard-buffer-size"]`, whitelisted by `is_allowed_guacd_param()` |
+
+The effective value is logged at every handshake — `clipboard buffer
+size negotiated with guacd` at INFO, or a WARN when `guacd` did not
+advertise the parameter (in which case transfers silently fall back to
+the 256 KiB default). `docker compose logs backend | grep -i clipboard`
+answers "what ceiling is this connection actually running under?"
+without needing to reproduce anything.
 
 Strata sets `clipboard-buffer-size` for **every** protocol, not just
 RDP — the parameter is in the arg list for `rdp`, `vnc`, `ssh`,

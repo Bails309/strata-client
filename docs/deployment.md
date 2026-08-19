@@ -2711,6 +2711,21 @@ No manual action is required. Clipboard sync works with both RDP and SSH session
 >
 > If you are on a host that was already stuck before this release, log off the Windows session once (not just disconnect) to restart `rdpclip.exe`.
 
+> **Size limits (v1.14.6+).** There is a hard ceiling on how much text can cross the clipboard in one operation, set by `guacd`'s per-connection clipboard buffer. Strata requests **8 MiB**, which is comfortably beyond normal use. Two things are worth knowing:
+>
+> - **Exceeding the ceiling when copying _from_ the remote loses the copy entirely** — you get nothing, rather than a shortened version. That is `guacd`'s behaviour: the conversion into its fixed buffer fails, and the code that would have delivered the text is skipped. Nothing is logged at default verbosity, so it presents purely as "the clipboard didn't update".
+> - **Exceeding it when pasting _into_ the remote truncates instead**, at roughly half the buffer, because that direction converts to UTF-16.
+>
+> Before v1.14.6 the requested 8 MiB was **never applied to RDP connections** — the pinned `guacd` did not support the parameter for RDP, and Guacamole silently ignores parameters the server does not advertise, so RDP ran at a hard-coded **256 KiB**. A copy only slightly over that (for example a 12,747-line, 281,852-character script) vanished with no error, while a file that sounded larger but was smaller in bytes worked fine. **This is fixed by rebuilding the `guacd` image**, not by a backend upgrade — see the release notes for v1.14.6.
+>
+> To confirm what a deployment is actually using:
+>
+> ```sh
+> docker compose logs backend | grep -i "clipboard buffer"
+> ```
+>
+> A line reading `clipboard buffer size negotiated with guacd … clipboard_buffer_size="8388608"` confirms it. A `WARN` that `guacd` did not advertise `clipboard-buffer-size` means transfers are capped at `guacd`'s 256 KiB default and the `guacd` image needs rebuilding. Set `STRATA_CLIPBOARD_BUFFER_BYTES` on the backend to raise the request (maximum `52428800`); Strata clamps it to the range `guacd` accepts, so the logged value is always the effective one. Reconnect existing sessions after changing it — the buffer is negotiated once, at connect.
+
 ### File Transfer
 
 There are three ways to transfer files to and from a remote session:

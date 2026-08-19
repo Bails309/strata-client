@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.14.6] — 2026-08-19
+
+### Patch Release — Large RDP clipboard copies were being discarded outright, because `clipboard-buffer-size` has never existed for RDP in the pinned `guacd`
+
+**The ask.** A user reported: _"We have a reoccuring issue with the clipboard not capturing everything the user wants but I seem to have been able to drill this down to length and/or size of the clipboard being copied now. If I copy a large amount of text a 12,000 line powershell code block, then it doesn't capture but if i copy a 50line powershell code block it seems ok or if i copy a smaller length file like an 8000 line certificate file it's fine."_ The file was later measured precisely: **12,747 lines, 281,852 characters**.
+
+**The symptom, and why every size-based theory was wrong.** This looked like the third instalment of a familiar story. v1.14.1 fixed a remote → local clipboard **stall**; v1.14.4 fixed a local → remote **race** that wedged `rdpclip.exe`. Both were size-correlated, so "large copies truncate" was the obvious reading — and it was wrong twice over.
+
+The browser-side diagnostic ring buffer (`strataClipboard.dump()`, shipped in v1.14.4) settled it. For the failing copy there were **zero `dir: "in"` entries of any kind** — no `stream-open`, no `blob`, no `stream-end`, no stall warning. Two small copies in the same capture (8 and 6 characters) completed normally. `guacd` had not truncated the transfer; it had **never announced one**. The largest payload anywhere in a five-minute capture was 160 characters.
+
+| Observation | What it ruled out |
+| ------------- | ------------------- |
+| Zero inbound events, not a short `stream-end` | Truncation anywhere on the wire |
+| No `stream-paused` / `stream-stalled` | The v1.14.1 stall watchdog |
+| Small copies working in the same session | A wedged CLIPRDR channel, and the v1.14.4 interleaving defect |
+| Reconnecting restored small copies | Windows-side `rdpclip.exe` (that survives a reconnect; this did not) |
+
+**The root cause.** `guacd` allocates **one fixed-size clipboard buffer per connection**. On the remote → local path, [`guac_rdp_cliprdr_format_data_response()`](https://github.com/apache/guacamole-server/blob/main/src/protocols/rdp/channels/cliprdr.c) converts the incoming UTF-16 into a buffer of exactly that size, and the calls that publish the result sit **inside** the success branch:
+
+```c
+if (guac_iconv(remote_reader, &input, data_len,
+               GUAC_WRITE_UTF8, &output, sizeof(received_data))) {
+    guac_common_clipboard_reset(clipboard->clipboard, "text/plain");
+    guac_common_clipboard_append(clipboard->clipboard, received_data, length);
+    guac_common_clipboard_send(clipboard->clipboard, client);
+}
+```
+
+`guac_iconv()` returns non-zero only when it reaches the input's null terminator. If the **output** buffer fills first, it returns `0`, the entire block is skipped, and the function returns `CHANNEL_RC_OK`. **An oversize copy is therefore dropped wholesale — not truncated.** No error instruction, no `onerror`, no log line at default verbosity, and no `clipboard` stream. That is precisely the "nothing happened" the user described, and it is why the two clipboard fixes that preceded this one could not have helped: they both operate on a stream that in this case was never opened.
+
+**Why the buffer was 256 KiB, when Strata has been asking for 8 MiB since v1.3.x.** [`HandshakeParams::full_param_map()`](backend/src/tunnel.rs) has long sent `clipboard-buffer-size=8388608` for RDP, with a comment claiming it raised the ceiling from a default "often 64KB - 256KB". **That comment was wrong from the day it was written.** In the pinned `guacamole-server` tree (`staging/1.6.1` @ `4163ead`):
+
+- `GUAC_RDP_CLIENT_ARGS[]` in `src/protocols/rdp/settings.c` ends `"force-lossless", "normalize-clipboard", NULL` — **there is no `clipboard-buffer-size` entry**;
+- `guac_rdp_clipboard_alloc(guac_client* client)` takes **no size argument**, calling `guac_common_clipboard_alloc()` with the compile-time `GUAC_COMMON_CLIPBOARD_MAX_LENGTH` of **262,144**.
+
+The Guacamole handshake only carries values for parameters `guacd` itself advertises in its `args` response, so the backend's 8 MiB was silently discarded at every single connect. Support for the parameter on RDP — together with a heap-allocated receive buffer replacing the stack array — exists only on upstream `main`, after the `staging/1.6.1` pin was taken.
+
+The arithmetic then closes exactly:
+
+| | |
+| ---------------------- | -------------------- |
+| Reported file | **281,852** bytes |
+| `guacd` RDP buffer | **262,144** bytes |
+| Overrun | 19,708 bytes (7.5%) |
+
+At 22.1 characters per line, that is roughly 891 lines over the cliff — which is why a 12,747-line script failed while an 8,000-line certificate (under the same ceiling in bytes, despite sounding larger) did not. Line count was never the variable; bytes were.
+
+**The fix — three parts, in the order they matter.**
+
+1. **`guacd` pinned to upstream `main` @ `be83001` (2026-08-07).** This is the actual fix: RDP now accepts `clipboard-buffer-size`, and the receive buffer is heap-allocated. Verified against a real image build — `guacd` advertises `21.clipboard-buffer-size` in its RDP `args` response, and the negotiated value is 8 MiB, a 30× margin over the failing payload. `main` is a strict **superset** of `staging/1.6.1`, not a fork: upstream merges `staging/1.6.1` → a patch branch → `main`, and `be83001` provably contains `f22a2df`, the head of `staging/1.6.1`. Both branches declare `1.6.1` in `configure.ac`, so the version string distinguishes nothing.
+
+2. **The receive-side stall watchdog is now asymmetric.** The flat 2-second window introduced in v1.14.1 latched on its first fire and ack-killed the stream, discarding every blob that arrived afterwards. Because the chance of hitting one ≥ 2 s gap grows with blob count, that truncated exactly the transfers that matter. `CLIPBOARD_OPEN_STALL_MS` (2 s) now applies only while **zero** blobs have arrived — the genuine wedged-channel signature, with detection speed unchanged — while `CLIPBOARD_BLOB_STALL_MS` (10 s) applies once data is flowing. A window that fires after real progress publishes the partial and **keeps listening**; late blobs accumulate and are re-published in full, so a transfer that merely paused still completes. The stream is only abandoned and ack-closed after a window that saw no new data at all. The zero-blob no-clobber guard is retained unchanged.
+
+3. **The ceiling is now visible and configurable.** Every handshake logs the negotiated value at `INFO`, and `WARN`s when `guacd` did not advertise the parameter at all — the condition that hid this defect for the entire life of the setting. `STRATA_CLIPBOARD_BUFFER_BYTES` overrides the 8 MiB default without a rebuild, clamped in Strata to `guacd`'s accepted 256 KiB – 50 MB range so the value that is logged is the value that takes effect. The parameter is also now sent for **every** protocol rather than RDP only.
+
+**Rejected approaches.** Raising `GUAC_COMMON_CLIPBOARD_MAX_LENGTH` in the pinned tree was designed and discarded: at that pin the receive buffer is a **stack array** (`char received_data[GUAC_COMMON_CLIPBOARD_MAX_LENGTH]`), so bumping the constant to 8 MiB would have overflowed the per-connection thread stack on musl. Backporting upstream's heap-allocation change by hand was also rejected in favour of taking the tested upstream commit.
+
+**`guacd` patch-set changes.**
+
+- **`006-freerdp325-authenticate-ex.patch` deleted.** GUACAMOLE-2273 landed upstream on 2026-07-28 (`336d5e8`), making the local patch redundant. Its two post-patch `grep` assertions are replaced with assertions against the **upstream** tree: `AuthenticateEx` in `rdp.c` (if this ever fails, patch 006 must be reinstated) and `"clipboard-buffer-size"` in `rdp/settings.c` (so a future pin cannot silently reintroduce this defect). Noted for the record: an earlier attempt to drop this patch, between `de0ba24` and `1064a8e`, broke the image build because the upstream fix had not yet landed at the then-current pin.
+- **`004-h264-display-worker.patch` retargeted.** GUACAMOLE-2118 split layer teardown: `guac_display_remove_layer()` now only unlinks the layer and defers destruction, while the freeing moved into `guac_display_free_removed_layers()`, whose loop variable is `current`, not `display_layer`. The patch's first hunk still targeted the old function and — because the Dockerfile falls back to `patch -p1 -F3` — **fuzz-matched into the new one and reported success**, failing only at compile with `'display_layer' undeclared`. The hunk now targets the correct function. This is a cautionary example of fuzzy patch application: it applies cleanly and puts the code in the wrong place.
+
+**Scope & safety.** No schema migration and no new or altered REST/WebSocket API surface. **One new environment variable**, `STRATA_CLIPBOARD_BUFFER_BYTES` (optional; defaults to the existing 8 MiB). One dependency change: the pinned `guacamole-server` commit for both the `guacd` image and the backend's `guacenc` builder stage — these must stay in step so `guacenc` links the same `libguac`. FreeRDP 3 support is unaffected: `configure.ac` on `main` carries the identical `freerdp3`/`freerdp-client3`/`winpr3` detection and every 3.x compatibility probe. The clipboard payload itself is unchanged on the wire, and no diagnostic added here records clipboard **contents**.
+
+**Testing.** Three frontend regression tests in [`SessionManager.test.tsx`](frontend/src/__tests__/SessionManager.test.tsx) pin the watchdog's behaviour — partial flush without ack, abandonment only after a second dead window, and complete delivery when a transfer pauses mid-stream; 34 clipboard tests pass. Backend unit tests cover the buffer-size clamp, the bounds matching `guacd`'s own constants (a tripwire if a future pin changes them), and the parameter being present for all five protocols. The `guacd` image was **built end-to-end**: all five patches apply, both Dockerfile assertions pass, `guacd`/`guacenc`/`guaclog` compile and link, and all four `libguac-client-*.so` are produced. Because patch 004 had hunks apply with offsets and one at fuzz 2, the patched sources were extracted from the builder stage and inspected directly rather than trusted on the strength of a successful compile — the `h264_queue` fields land inside `struct guac_display_layer`, and the free loop inside `guac_display_free_removed_layers`. The backend's `guacenc-builder` stage was built against the same pin.
+
+**Deploy.** Full rebuild — `docker compose build --no-cache guacd && docker compose build backend frontend && docker compose up -d guacd backend frontend`. **The `guacd` rebuild is mandatory and is the part that fixes the bug**; a backend/frontend-only deploy changes nothing observable. Existing sessions must be reconnected to negotiate the new buffer. Verify with `docker compose logs backend | grep -i "clipboard buffer"`, which should report `clipboard buffer size negotiated with guacd … clipboard_buffer_size="8388608"`; a `WARN` that `guacd` did not advertise the parameter means the `guacd` image did not actually rebuild. Operators who need more than 8 MiB can set `STRATA_CLIPBOARD_BUFFER_BYTES` (maximum 52428800) without rebuilding. No migration, no forced re-login, no rollback hazard beyond reverting the images.
+
+**Known limitation.** `enable-h264` remains opt-in and defaults to `false`. Patch 004 applied with offsets and one fuzz-2 hunk against the new tree; placement was verified structurally, but connections that enable H.264 should be smoke-tested after upgrading.
+
 ## [1.14.5] — 2026-08-18
 
 ### Patch Release — Dependency security: `h2` HTTP/2 denial-of-service (RUSTSEC-2026-0258) and `nanoid` infinite loop (GHSA-2v37-7h3g-55p8)

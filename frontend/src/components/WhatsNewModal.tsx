@@ -29,6 +29,48 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.14.6",
+    subtitle:
+      "Patch release — large RDP clipboard copies were being thrown away entirely, and the setting meant to prevent that had never worked for RDP. A user reported that copying a 12,000-line PowerShell script did not reach the local clipboard, while a 50-line block, or an 8,000-line certificate file, was fine. The file measured 12,747 lines and 281,852 characters. This looked like a third instalment of the v1.14.1 clipboard stall and the v1.14.4 clipboard race, and it was neither: the diagnostic buffer added in v1.14.4 showed no inbound clipboard events at all for the failing copy, while two small copies in the same capture completed normally. guacd had not truncated the transfer, it had never announced one. The root cause is that guacd allocates one fixed-size clipboard buffer per connection and discards an oversize copy wholesale rather than truncating it, and the parameter Strata has been sending since v1.3.x to raise that ceiling has never existed for RDP in the pinned guacd. Fixed by moving guacd to an upstream build that accepts it, reworking the stall watchdog so a paused transfer completes, and making the ceiling visible and configurable. The guacd image rebuild is mandatory and existing sessions must reconnect.",
+    sections: [
+      {
+        title: "Symptom — nothing arrives, rather than something incomplete",
+        description:
+          "Copying a large block of text inside an RDP session left the local clipboard holding its previous contents. Small copies from the same session worked normally, and reconnecting restored things for a while, so it presented as the familiar size-related clipboard problem seen in two earlier releases. The always-on diagnostic ring buffer introduced in v1.14.4 is what distinguished it. For the failing copy there were zero inbound clipboard events of any kind — no stream opening, no data blobs, no completion, and no stall warning — while two small copies in the same five-minute capture completed normally. That is a materially different signature to a truncated transfer, and it ruled out both previous defects: there was no stream to stall, and no second transfer to interleave with.",
+      },
+      {
+        title: "Root cause — an oversize copy is discarded, not truncated",
+        description:
+          "guacd allocates a single fixed-size clipboard buffer for each connection. When text is copied inside the remote desktop, guacd converts it into a buffer of exactly that size, and the three calls that store and publish the result sit inside a success branch. That conversion only reports success when it reaches the end of the incoming text; if the output buffer fills first it reports failure, the entire branch is skipped, and the function returns normally. The consequence is that a copy larger than the buffer produces no clipboard announcement at all — no error, no partial text, no log entry at normal verbosity. Copying out is therefore all-or-nothing, while pasting in truncates, which is why the two directions behave differently and why the browser sees silence rather than a short payload.",
+      },
+      {
+        title: "Why the buffer was far smaller than intended",
+        description:
+          "Strata has sent a request for an 8 MiB clipboard buffer on RDP connections since v1.3.x, with a comment in the code stating that it raised the ceiling above the default. That comment was wrong from the day it was written. In the version of guacd that was pinned, the clipboard buffer size parameter does not exist for RDP at all: it is absent from the RDP argument list, and the clipboard is allocated with a hard-coded size of 262,144 bytes. The Guacamole handshake only carries values for parameters that guacd itself advertises, so the 8 MiB request was silently discarded on every single connection. The arithmetic then closes exactly. The reported file was 281,852 bytes against a 262,144-byte ceiling, an overrun of 7.5%, or roughly 891 lines at this file's density. That is why a 12,747-line script failed while an 8,000-line certificate — smaller in bytes despite sounding larger — did not. Line count was never the variable.",
+      },
+      {
+        title: "The fix — a guacd rebuild, and it is mandatory",
+        description:
+          "guacd is now built from an upstream commit where RDP accepts the clipboard buffer size parameter and the receive buffer is allocated on the heap rather than the stack. A verified image build confirms guacd now advertises the parameter and negotiates 8 MiB, a thirty-fold margin over the payload that was failing. Raising the limit in the previously pinned version was considered and rejected: the receive buffer there is a stack array, so a larger value would have overflowed the per-connection thread stack. Because the fix lives in the guacd image, a backend or frontend deploy on its own changes nothing observable — the guacd container must be rebuilt, and existing sessions must be reconnected to negotiate the new buffer.",
+      },
+      {
+        title: "A paused transfer now completes instead of being abandoned",
+        description:
+          "The stall watchdog added in v1.14.1 armed a single two-second timer and, when it fired, published whatever had arrived and then closed the stream. Everything that arrived afterwards was discarded. Because guacd sends a clipboard as one burst of small blocks, the chance of a single gap exceeding two seconds grows with the size of the transfer, so this quietly truncated exactly the copies that matter while leaving small ones untouched. The window is now asymmetric. A two-second limit still applies while nothing at all has arrived, which is the genuine signature of a wedged clipboard channel and is detected just as quickly as before. Once data is flowing, a ten-second limit applies, and a pause after real progress publishes what has arrived so far and keeps listening. Late data continues to accumulate and is republished in full, so a transfer that merely paused still ends up complete. The transfer is only abandoned after a window that sees no new data whatsoever, and the guard that stops an empty flush from wiping your existing clipboard is unchanged.",
+      },
+      {
+        title: "The ceiling is no longer invisible",
+        description:
+          "Diagnosing this took several rounds of log archaeology because nothing anywhere stated the clipboard buffer size actually in effect, and guacd only mentions it when the value is invalid — so silence was equally consistent with the setting working and with it being ignored entirely. Every connection now logs the negotiated value, and warns explicitly when guacd never advertised the parameter, which is the exact condition that hid this defect for the entire life of the setting. A new STRATA_CLIPBOARD_BUFFER_BYTES environment variable raises the ceiling without a rebuild, up to the fifty-megabyte maximum guacd accepts, and is clamped by Strata so the value that is logged is the value that takes effect. The setting is now also sent for every protocol rather than for RDP alone.",
+      },
+      {
+        title: "Scope, safety and deployment",
+        description:
+          "There is no database migration and no change to any REST or WebSocket interface. One new optional environment variable is added, defaulting to the existing eight megabytes. The pinned guacamole-server commit changes for both the guacd image and the backend's video-encoder build stage, which are deliberately kept in step. FreeRDP 3 support is unaffected. No diagnostic added here records clipboard contents — only sizes, timings and a non-reversible digest. Deploy by rebuilding guacd, then the backend and frontend, and reconnecting sessions. One known limitation: the H.264 graphics passthrough patch applied to the new source tree with some positional drift, and although its placement was verified by inspecting the patched source, connections that explicitly enable H.264 should be smoke-tested after upgrading.",
+      },
+    ],
+  },
+  {
     version: "1.14.5",
     subtitle:
       "Patch release — dependency security: an internet-facing HTTP/2 denial-of-service in the h2 crate, and an infinite loop in a build-time copy of nanoid. Two supply-chain gates fired within a day of each other and both are fixed here. h2 — the HTTP/2 implementation underneath hyper, and a first-class Strata dependency — accepted and queued empty DATA frames without limit, so a peer that floods a stream nobody drains could drive unbounded memory growth or an outright panic, all before any Strata-level authorisation runs. That matters most at the edge, where the DMZ's public TLS listener advertises h2 to anonymous internet clients. nanoid's customAlphabet and customRandom generators spin forever when given a size of 0, but Strata was never exposed at runtime: nanoid arrives only as a build-tool transitive and is never bundled into the browser artefact. Dependency-only release — no application source file changed, and no schema, API, env-var, or behavioural change. DMZ deployments should treat this as a priority patch.",

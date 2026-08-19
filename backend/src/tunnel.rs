@@ -257,22 +257,25 @@ impl HandshakeParams {
         m.entry("disable-paste".into())
             .or_insert_with(|| "false".into());
 
-        // Clipboard buffer size, 8 MiB. guacd allocates a single fixed-size
-        // buffer per connection and `guac_common_clipboard_append()`
-        // *silently truncates* anything past the end of it, so this value is
-        // a hard ceiling on how much text can cross in either direction.
-        // guacd's own default is `GUAC_COMMON_CLIPBOARD_MIN_LENGTH`
-        // (262144 = 256 KiB), which a large script or PEM bundle exceeds
-        // easily; the accepted range is 256 KiB..50 MiB
-        // (`GUAC_COMMON_CLIPBOARD_MAX_LENGTH`), and out-of-range values are
-        // clamped by guacd rather than rejected.
+        // Clipboard buffer size. guacd allocates a single fixed-size buffer
+        // per connection, and overrunning it is *not* a clean truncation on
+        // the remote → local path: `guac_iconv()` returns 0 once the output
+        // buffer fills, and `guac_rdp_cliprdr_format_data_response()` skips
+        // reset/append/send entirely, so an oversize copy is dropped wholesale
+        // — no error instruction, nothing logged at default verbosity, and no
+        // `clipboard` stream ever reaches the browser. (The local → remote
+        // path does truncate, via `guac_common_clipboard_append()`.)
+        //
+        // guacd falls back to GUAC_COMMON_CLIPBOARD_MIN_LENGTH (256 KiB) when
+        // the parameter is absent, which a large script or PEM bundle exceeds
+        // easily.
         //
         // Set for every protocol, not just RDP — `clipboard-buffer-size` is
         // in the arg list for rdp, vnc, ssh, telnet and kubernetes alike, and
         // guacd ignores parameters it did not advertise, so this is safe to
         // apply unconditionally.
         m.entry("clipboard-buffer-size".into())
-            .or_insert_with(|| "8388608".into());
+            .or_insert_with(|| clipboard_buffer_bytes().to_string());
 
         // Merge extra params — only allow known safe guacd parameter names.
         // This prevents injection of arbitrary protocol options.
@@ -283,6 +286,26 @@ impl HandshakeParams {
         }
         m
     }
+}
+
+/// guacd's `GUAC_COMMON_CLIPBOARD_MIN_LENGTH`, and the size it silently falls
+/// back to whenever `clipboard-buffer-size` is absent or unparseable.
+const GUACD_CLIPBOARD_MIN_BYTES: u64 = 262_144;
+/// guacd's `GUAC_COMMON_CLIPBOARD_MAX_LENGTH`. Larger values are clamped.
+const GUACD_CLIPBOARD_MAX_BYTES: u64 = 52_428_800;
+/// 8 MiB.
+const DEFAULT_CLIPBOARD_BUFFER_BYTES: u64 = 8_388_608;
+
+/// Clipboard buffer size to request from guacd, in bytes.
+///
+/// Clamped here rather than left to guacd so the value we log is the value
+/// that actually takes effect.
+fn clipboard_buffer_bytes() -> u64 {
+    std::env::var("STRATA_CLIPBOARD_BUFFER_BYTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_CLIPBOARD_BUFFER_BYTES)
+        .clamp(GUACD_CLIPBOARD_MIN_BYTES, GUACD_CLIPBOARD_MAX_BYTES)
 }
 
 /// Whitelist of guacd parameters that connections may override via `extra`.
@@ -767,6 +790,38 @@ async fn handle_guac_handshake(
         };
         let msg = format!("  arg '{}' = '{}'", name, display);
         tracing::info!(msg);
+    }
+
+    // Called out separately from the arg dump above because an absent or
+    // empty value here is invisible in that dump, yet silently caps every
+    // clipboard transfer at guacd's 256 KiB fallback — and an overrun on the
+    // remote → local path is dropped wholesale rather than truncated.
+    if arg_names.iter().any(|n| n == "clipboard-buffer-size") {
+        let negotiated = param_map
+            .get("clipboard-buffer-size")
+            .cloned()
+            .unwrap_or_default();
+        if negotiated.is_empty() {
+            tracing::warn!(
+                protocol = %handshake.protocol,
+                fallback_bytes = GUACD_CLIPBOARD_MIN_BYTES,
+                "no clipboard-buffer-size sent to guacd — clipboard transfers \
+                 will be capped at guacd's default"
+            );
+        } else {
+            tracing::info!(
+                protocol = %handshake.protocol,
+                clipboard_buffer_size = %negotiated,
+                "clipboard buffer size negotiated with guacd"
+            );
+        }
+    } else {
+        tracing::warn!(
+            protocol = %handshake.protocol,
+            fallback_bytes = GUACD_CLIPBOARD_MIN_BYTES,
+            "guacd did not advertise clipboard-buffer-size — clipboard \
+             transfers will be capped at guacd's default"
+        );
     }
 
     let connect_values: Vec<String> = arg_names
@@ -2243,6 +2298,26 @@ mod tests {
                 m["disable-paste"], "false",
                 "disable-paste missing for {proto}"
             );
+        }
+    }
+
+    #[test]
+    fn clipboard_buffer_default_is_8_mib() {
+        assert_eq!(DEFAULT_CLIPBOARD_BUFFER_BYTES, 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn clipboard_buffer_bounds_match_guacd() {
+        // Mirrors GUAC_COMMON_CLIPBOARD_MIN_LENGTH / _MAX_LENGTH in
+        // guacamole-server's src/common/common/clipboard.h. If guacd is ever
+        // bumped past a release that changes these, this test is the tripwire.
+        assert_eq!(GUACD_CLIPBOARD_MIN_BYTES, 262_144);
+        assert_eq!(GUACD_CLIPBOARD_MAX_BYTES, 52_428_800);
+        const {
+            assert!(DEFAULT_CLIPBOARD_BUFFER_BYTES >= GUACD_CLIPBOARD_MIN_BYTES);
+        }
+        const {
+            assert!(DEFAULT_CLIPBOARD_BUFFER_BYTES <= GUACD_CLIPBOARD_MAX_BYTES);
         }
     }
 

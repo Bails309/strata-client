@@ -1716,20 +1716,46 @@ complete-payload-after-a-pause behaviours.
 
 ## Clipboard size ceiling — `clipboard-buffer-size`
 
-`guacd` allocates **one fixed-size clipboard buffer per connection**
-and `guac_common_clipboard_append()` **silently truncates** anything
-past its end — no error instruction, no log line on the client, no
-`onerror`. That buffer is therefore the hard ceiling on how much text
-can cross in *either* direction, and overrunning it is
-indistinguishable from a successful copy until the user pastes and
-finds the tail missing.
+`guacd` allocates **one fixed-size clipboard buffer per connection**,
+and that buffer is the hard ceiling on how much text can cross in
+either direction. Overrunning it produces no error instruction, no
+client-side `onerror`, and nothing in `guacd`'s log at default
+verbosity — but the two directions fail **differently**, which matters
+when reading a diagnostic trace:
+
+- **Remote → local (copy out) — dropped wholesale.**
+  `guac_rdp_cliprdr_format_data_response()` converts the incoming
+  UTF-16 into a buffer of exactly `clipboard-buffer-size` bytes.
+  `guac_iconv()` returns 0 when the output fills before it reaches the
+  null terminator, and the reset/append/send calls sit **inside** that
+  `if`. A copy that overruns therefore emits **no `clipboard` stream
+  at all** — the browser sees nothing whatsoever, not a short payload.
+- **Local → remote (paste in) — truncated.**
+  `guac_rdp_clipboard_blob_handler()` calls
+  `guac_common_clipboard_append()`, which clamps to the remaining
+  space. The paste lands with its tail missing. Note the outbound
+  conversion is UTF-8 → UTF-16, so the *effective* ceiling on this
+  direction is roughly **half** the buffer.
+
+In a `strataClipboard` dump the difference is unmistakable: an
+overrun copy leaves **zero `dir: "in"` entries**, whereas a stalled
+transfer leaves `stream-paused` / `stream-stalled` with a short
+`chars`.
 
 | Bound                                   | Value                | Where                                                     |
 | --------------------------------------- | -------------------- | --------------------------------------------------------- |
 | `guacd` default (parameter unset)       | 256 KiB (`262144`)   | `GUAC_COMMON_CLIPBOARD_MIN_LENGTH`                        |
 | `guacd` maximum (larger values clamped) | 50 MB (`52428800`)   | `GUAC_COMMON_CLIPBOARD_MAX_LENGTH`                        |
-| **Strata default**                      | 8 MiB (`8388608`)    | `HandshakeParams::full_param_map()` in `backend/src/tunnel.rs` |
+| **Strata default**                      | 8 MiB (`8388608`)    | `DEFAULT_CLIPBOARD_BUFFER_BYTES` in `backend/src/tunnel.rs` |
+| Deployment override                     | env                  | `STRATA_CLIPBOARD_BUFFER_BYTES`, clamped to the range above |
 | Per-connection override                 | admin-set            | `extra["clipboard-buffer-size"]`, whitelisted by `is_allowed_guacd_param()` |
+
+The effective value is logged at every handshake — `clipboard buffer
+size negotiated with guacd` at INFO, or a WARN when `guacd` did not
+advertise the parameter (in which case transfers silently fall back to
+the 256 KiB default). `docker compose logs backend | grep -i clipboard`
+answers "what ceiling is this connection actually running under?"
+without needing to reproduce anything.
 
 Strata sets `clipboard-buffer-size` for **every** protocol, not just
 RDP — the parameter is in the arg list for `rdp`, `vnc`, `ssh`,

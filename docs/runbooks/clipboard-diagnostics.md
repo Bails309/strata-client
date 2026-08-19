@@ -62,31 +62,65 @@ reconnect to the same server, does copy/paste come back?"**
 | Yes, reconnecting fixes it       | **A — stalled transfer**     | A single clipboard transfer opened on RDP's CLIPRDR channel and never closed. Server-side channel state; a fresh `guacd` process clears it. |
 | No, still broken after reconnect | **B — wedged `rdpclip.exe`** | The Windows-side clipboard owner is stuck. Reconnecting reattaches to the _same_ still-logged-on Windows session, so it cannot help.        |
 
-If the clipboard is not dead but **incomplete** — a long script or PEM
-bundle pastes back as its first few hundred lines while a short snippet
-is fine — that is **Mode C — truncation**, and neither recovery below
-applies. Two ceilings produce it:
+If the clipboard is not dead but **incomplete**, or a large copy produces
+**nothing at all** while short ones work, that is **Mode C — the size
+ceiling**, and neither recovery below applies. The two directions fail
+differently:
 
-1. **`clipboard-buffer-size`.** `guacd` allocates one fixed-size buffer
-   per connection and silently truncates appends past its end. Strata
-   sets 8 MiB on every protocol; `guacd`'s own default is 256 KiB, and
-   the accepted range is 256 KiB..50 MB. Check
-   **Admin → Connections → _connection_ → Advanced** for a
-   `clipboard-buffer-size` override, and compare the `chars` field of
-   the inbound `stream-end` entry (step 2) against it. A `chars` value
-   sitting suspiciously close to a round buffer size is the tell.
-2. **A receive-side stall that was never resumed.** Look for
-   `stream-paused` followed by `stream-stalled` rather than
-   `stream-end`. Builds before the asymmetric-watchdog fix abandoned
-   the stream at the first 2-second gap, so everything after the pause
-   was discarded — and because the chance of hitting one gap grows with
-   the blob count, only large copies were affected. Upgrading is the
-   fix; there is no per-session workaround beyond copying in smaller
-   pieces.
+1. **Remote → local is dropped wholesale.**
+   `guac_rdp_cliprdr_format_data_response()` converts into a buffer of
+   exactly `clipboard-buffer-size` bytes; `guac_iconv()` returns 0 when
+   that fills, and the reset/append/send calls sit inside the `if`. No
+   `clipboard` stream is emitted. In a `strataClipboard.print()` dump
+   the signature is **zero `dir: "in"` entries** for the failed copy —
+   not a short one.
+2. **Local → remote is truncated** by `guac_common_clipboard_append()`,
+   at roughly **half** the buffer, since that direction converts
+   UTF-8 → UTF-16.
+
+Check the negotiated ceiling first — it is logged at every handshake:
+
+```bash
+docker compose logs backend | grep -i clipboard
+```
+
+`clipboard buffer size negotiated with guacd` gives the effective value.
+A WARN means `guacd` never advertised the parameter and transfers are
+capped at its 256 KiB fallback. Raise it with
+`STRATA_CLIPBOARD_BUFFER_BYTES` (clamped to 256 KiB..50 MB) or per
+connection under **Admin → Connections → _connection_ → Advanced**.
+
+A separate truncation mode exists on the receive path: `stream-paused`
+followed by `stream-stalled` means a transfer stalled mid-flight and
+never resumed. Builds before the asymmetric-watchdog fix abandoned the
+stream at the first 2-second gap, so everything after the pause was
+discarded; the chance of hitting one gap grows with blob count, which is
+why only large copies were affected. Upgrading is the fix.
 
 Mode B is the v1.14.4 defect. Mode A is the v1.14.1 defect, which
 should now degrade to a partial copy plus a console warning rather
 than a silent dead clipboard.
+
+### 1b. Attribute a Mode C failure to a stage
+
+When a copy vanishes entirely, bring up both tracers and reproduce:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.clipboard-debug.yml up -d guacd backend
+docker compose logs -f guacd | grep -iE "CLIPRDR|clipboard"
+```
+
+Reconnect, copy something small (confirm it works), then reproduce the
+failing copy.
+
+| guacd logs                                                     | Meaning                                                        |
+| --------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `Received format data response.` then **no** `Broadcasting clipboard` | `guac_iconv()` overran the buffer — the copy was dropped. Raise the buffer. |
+| `CLIPRDR ... channel disconnected`                              | FreeRDP tore the channel down. Not a buffer problem.            |
+| No `Received format data response.` at all                       | The RDP server never answered the format data request.          |
+
+Revert with a plain `docker compose up -d guacd backend` — `-L trace` is
+far too verbose to leave running.
 
 ### 2. Capture browser evidence — do this before any reload
 

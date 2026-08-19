@@ -1669,21 +1669,39 @@ interrupted — but the stall itself is size-independent.
 
 v1.14.1 wraps the receive path in a **per-stream stall watchdog**:
 
-- A 2-second timer (`CLIPBOARD_STALL_MS`) is armed when the stream
-  opens and re-armed on every received `blob`. Continuous delivery
-  therefore never trips it; only a gap of ≥ 2 s with no `end` does.
+- A timer is armed when the stream opens and re-armed on every
+  received `blob`. Continuous delivery therefore never trips it.
+- The window is **asymmetric**, because "nothing ever arrived" and
+  "delivery paused" are different failures.
+  `CLIPBOARD_OPEN_STALL_MS` (2 s) applies while zero blobs have been
+  received — that is the wedged-CLIPRDR signature and 2 s is ample to
+  recognise it. `CLIPBOARD_BLOB_STALL_MS` (10 s) applies once data is
+  flowing: `guacd` emits the whole clipboard as one back-to-back burst
+  of 4 KiB blobs out of a single in-memory buffer, so a gap between
+  blobs is transport backpressure rather than a wedge.
 - If `end` arrives first, the flush is normal and unchanged.
-- If the timer fires first, the handler flushes whatever text it has
-  accumulated to the local clipboard, mirrors it into
-  `session.remoteClipboard`, acks the stalled stream via
-  `stream.sendAck(...)` with a non-fatal status code so `guacd` can
-  release the orphaned stream index, and logs a single diagnostic
-  `console.warn` (`clipboard stream N stalled after M blob(s), K
-chars — flushing partial data`) for correlation with server-side
-  `guacd` logs.
+- If the timer fires **after real progress**, the handler publishes
+  what it has (so the user is never left holding stale text) and
+  **keeps listening**. Late blobs continue to accumulate and are
+  re-published in full, so a transfer that merely paused still ends up
+  complete on the clipboard.
+- The stream is only **abandoned** — ack-closed via
+  `stream.sendAck(...)` so `guacd` can release the orphaned index — on
+  a stall window that saw no new data at all. A `console.warn`
+  (`clipboard stream N stalled after M blob(s), K chars — abandoning
+transfer`) is logged for correlation with server-side `guacd` logs;
+  the intermediate partial flush logs `… paused …, still listening`.
 - A **no-clobber guard** ensures a stall that received _zero_ blobs
   never overwrites the local clipboard — an empty flush would wipe
   whatever the user had copied previously and make the defect worse.
+
+> **Why the asymmetry matters.** The original flat 2-second window
+> latched on its first fire and ack-killed the stream, so every blob
+> after the pause was discarded. Because the chance of hitting one
+> ≥ 2 s gap grows with the number of blobs, this truncated exactly the
+> copies that matter — a multi-thousand-line script came back as a few
+> hundred lines — while small copies were unaffected. That is the
+> "large clipboard doesn't capture everything" report.
 
 The watchdog is a resilience layer over the receive path only; the
 local → remote (paste) path, the pop-out clipboard path, and the
@@ -1691,9 +1709,43 @@ CLIPRDR channel on the server side are unchanged. It cannot un-wedge
 `guacd`'s clipboard state — that remains a server-side concern — but
 it guarantees the user receives whatever text did arrive instead of
 silently stale content, and it makes every future occurrence visible.
-Two regression tests in
+Three regression tests in
 [`__tests__/SessionManager.test.tsx`](../frontend/src/__tests__/SessionManager.test.tsx)
-pin the flush-on-stall and zero-blob-no-clobber behaviours.
+pin the flush-on-stall, zero-blob-no-clobber, and
+complete-payload-after-a-pause behaviours.
+
+## Clipboard size ceiling — `clipboard-buffer-size`
+
+`guacd` allocates **one fixed-size clipboard buffer per connection**
+and `guac_common_clipboard_append()` **silently truncates** anything
+past its end — no error instruction, no log line on the client, no
+`onerror`. That buffer is therefore the hard ceiling on how much text
+can cross in *either* direction, and overrunning it is
+indistinguishable from a successful copy until the user pastes and
+finds the tail missing.
+
+| Bound                                   | Value                | Where                                                     |
+| --------------------------------------- | -------------------- | --------------------------------------------------------- |
+| `guacd` default (parameter unset)       | 256 KiB (`262144`)   | `GUAC_COMMON_CLIPBOARD_MIN_LENGTH`                        |
+| `guacd` maximum (larger values clamped) | 50 MB (`52428800`)   | `GUAC_COMMON_CLIPBOARD_MAX_LENGTH`                        |
+| **Strata default**                      | 8 MiB (`8388608`)    | `HandshakeParams::full_param_map()` in `backend/src/tunnel.rs` |
+| Per-connection override                 | admin-set            | `extra["clipboard-buffer-size"]`, whitelisted by `is_allowed_guacd_param()` |
+
+Strata sets `clipboard-buffer-size` for **every** protocol, not just
+RDP — the parameter is in the arg list for `rdp`, `vnc`, `ssh`,
+`telnet` and `kubernetes` alike, and `guacd` ignores parameters it did
+not advertise, so applying it unconditionally is safe. Before this it
+was RDP-only, which left SSH/VNC sessions on the 256 KiB default: a
+single ~8,000-line PEM bundle or a moderately sized script overran it
+and was silently clipped.
+
+Chunking on the wire is separate from and much smaller than this
+ceiling: `guacd` emits 4 KiB blobs
+(`GUAC_COMMON_CLIPBOARD_BLOCK_SIZE`), and the browser sends 4096-char
+chunks from `clipboardSync.ts`, each re-split by
+`Guacamole.StringWriter` to stay inside the Guacamole protocol's
+8192-byte per-element limit.
+
 
 ## Local → remote clipboard serialisation (v1.14.4)
 

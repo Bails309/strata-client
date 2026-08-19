@@ -453,16 +453,91 @@ describe("SessionManager", () => {
       // Before the stall timer fires, nothing should have been written.
       expect(mockWriteText).not.toHaveBeenCalled();
 
-      // Advance past CLIPBOARD_STALL_MS (2000 ms).
+      // Advance past CLIPBOARD_BLOB_STALL_MS (10000 ms). Data arrived, so
+      // this first window publishes a partial but keeps the stream open.
       rtlAct(() => {
-        vi.advanceTimersByTime(2500);
+        vi.advanceTimersByTime(10500);
       });
 
       expect(mockWriteText).toHaveBeenCalledWith("partial line 1\npartial line 2\n");
       expect(session.remoteClipboard).toBe("partial line 1\npartial line 2\n");
-      // Stalled stream should be ack-closed so guacd can free the index.
+      expect(sendAck).not.toHaveBeenCalled();
+
+      // A second window with no progress means the transfer really is dead:
+      // ack-close the index so guacd can free it.
+      rtlAct(() => {
+        vi.advanceTimersByTime(10500);
+      });
       expect(sendAck).toHaveBeenCalled();
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("clipboard stream 42 stalled"));
+    } finally {
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("delivers the complete payload when a large transfer pauses mid-stream", async () => {
+    // Regression guard for silently-truncated large copies: a multi-megabyte
+    // clipboard arrives as hundreds of blobs, and transport backpressure can
+    // stall one gap for longer than the watchdog window. The watchdog used to
+    // latch after its first fire and ack-close the stream, so every blob
+    // after the pause was discarded — a 12,000-line script came back as a
+    // few hundred lines. A pause must publish a partial and keep listening.
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { result } = renderHook(() => useSessionManager(), { wrapper });
+
+      const mockWriteText = vi.fn().mockResolvedValue(undefined);
+      Object.assign(navigator, {
+        clipboard: { writeText: mockWriteText },
+      });
+
+      let session: any;
+      rtlAct(() => {
+        session = result.current.createSession({
+          connectionId: "c1",
+          name: "A",
+          protocol: "rdp",
+          containerEl: document.createElement("div"),
+          connectParams: new URLSearchParams(),
+        });
+      });
+
+      let ontext: (t: string) => void = () => {};
+      let onend: () => void = () => {};
+      vi.mocked(Guacamole.StringReader).mockImplementation(function () {
+        return {
+          set ontext(fn: any) {
+            ontext = fn;
+          },
+          set onend(fn: any) {
+            onend = fn;
+          },
+        } as any;
+      });
+
+      const sendAck = vi.fn();
+      rtlAct(() => {
+        session.client.onclipboard({ index: 9, sendAck } as any, "text/plain");
+      });
+
+      rtlAct(() => ontext("first half "));
+      // Longer than the old flat 2 s watchdog, and long enough to trip the
+      // inter-blob window too.
+      rtlAct(() => {
+        vi.advanceTimersByTime(10500);
+      });
+      // Transfer resumes and completes normally.
+      rtlAct(() => {
+        ontext("second half");
+        onend();
+      });
+
+      expect(session.remoteClipboard).toBe("first half second half");
+      expect(mockWriteText).toHaveBeenLastCalledWith("first half second half");
+      // Never abandoned, so the stream was not ack-killed out from under guacd.
+      expect(sendAck).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
       vi.useRealTimers();

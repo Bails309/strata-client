@@ -310,13 +310,40 @@ runtime delivery and are documented here for production deployments:
 | ------------------------------- | ------------------------------------------------------------------------------------------------- |
 | RDP / SSH / VNC + web (default) | `docker compose up -d --build`                                                                    |
 | Add bundled PostgreSQL          | `docker compose --profile local-db up -d --build`                                                 |
+| Add a second guacd              | `docker compose --profile scale up -d --build`                                                    |
+| Add antivirus scanning          | `docker compose --profile av up -d --build`                                                       |
 | Add VDI                         | `docker compose -f docker-compose.yml -f docker-compose.vdi.yml up -d --build`                    |
 | Everything                      | `docker compose -f docker-compose.yml -f docker-compose.vdi.yml --profile local-db up -d --build` |
 
 `-f` flags select which compose files to merge (structural — for
 VDI's host-root mount). `--profile` flags select which optional
 services to start (local postgres, extra guacd). The two are
-independent. TLS is terminated by the frontend nginx gateway using
+independent.
+
+> **Set `COMPOSE_PROFILES` in `.env` if you run any optional service.**
+> A profile that is not active is invisible to Compose: its services are
+> not started, not rebuilt, and not shown by `docker compose ps`. Crucially,
+> `docker compose up -d --build` does **not** stop services outside the
+> active set — so a profiled container carries on running its **old image**
+> while everything else is upgraded, with no error and nothing in the diff
+> to notice. On the `scale` profile that means `guacd` and `guacd-2` end up
+> on different builds, and because sessions distribute across both, a
+> version-dependent bug then appears to be *intermittently* fixed. That is
+> a genuinely difficult thing to diagnose after the fact.
+>
+> Putting the profiles in `.env` removes the footgun permanently, because
+> every later `ps`, `logs`, `down` and `up` sees the same set:
+>
+> ```bash
+> COMPOSE_PROFILES=scale,av
+> ```
+>
+> A bare `docker compose up -d --build` then rebuilds and recreates
+> everything you actually run. Verify the full set resolves as expected
+> with `docker compose config --services`, and list every profile the
+> project defines with `docker compose config --profiles`.
+
+TLS is terminated by the frontend nginx gateway using
 the certificates mounted from `./certs/` — there is no separate
 reverse-proxy service.
 

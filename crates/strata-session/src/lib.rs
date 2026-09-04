@@ -40,10 +40,11 @@
 //!
 //! ## Status
 //!
-//! Phase 1 of the migration: wire protocol, actor pipeline, dual-mode
-//! transport and the engine abstraction are complete and tested. The RDP
-//! (`ironrdp`), SSH (`russh`) and VNC engines land in Phase 2 behind
-//! [`engine::ProtocolEngine`]; [`engine::mock`] stands in until then.
+//! Phase 2 of the migration. The wire protocol, actor pipeline,
+//! dual-mode transport and engine abstraction are complete; the SSH
+//! engine ([`engine::ssh`]) is real, and [`routing`] owns the dual-stack
+//! decision that keeps everything else on `guacd` until its engine
+//! lands. RDP (`ironrdp`) and VNC are still to come.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -52,6 +53,7 @@ pub mod actor;
 pub mod engine;
 pub mod error;
 pub mod protocol;
+pub mod routing;
 pub mod transport;
 
 pub use error::{EngineError, SessionError, WireError};

@@ -11,6 +11,25 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = ["ssh"]
+# Real protocol engines. Each pulls a substantial dependency tree, so
+# they are opt-in and can be rolled out one at a time (ADR-0015 Phase 2).
+ssh = ["dep:russh"]
+# Re-enables RSA host keys and RSA public-key auth.
+#
+# OFF by default, and `cargo deny check advisories` is why: russh's `rsa`
+# feature pulls `rsa 0.10.0-rc.x`, which carries RUSTSEC-2023-0071 (the
+# Marvin attack -- key recovery through a timing sidechannel) with no
+# fixed release available. Shipping that in a privileged-access gateway
+# is not a trade we should make silently. ed25519, ECDSA (P-256/384/521)
+# and the post-quantum KEX remain available, which covers every target
+# running a current OpenSSH.
+#
+# Enable only for targets that present no non-RSA host key, and expect
+# to add a documented `advisories.ignore` entry when you do.
+ssh-rsa = ["ssh", "russh/rsa"]
+
 # IMPORTANT: this crate runs in the TRUSTED internal zone, never in the
 # DMZ. `crates/strata-dmz` MUST NOT depend on it — the edge reaches the
 # session tier over a signed socket, not in-process. Enforced by
@@ -38,6 +57,15 @@ zeroize = { workspace = true }
 # Errors / logging
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+# SSH engine (feature `ssh`)
+# `ring` rather than the default `aws-lc-rs`: aws-lc is a C library, and
+# removing C from the session tier is the point of this crate. rustls
+# already standardises the workspace on ring.
+russh = { version = "0.63", optional = true, default-features = false, features = [
+    "ring",
+    "flate2",
+] }
 
 # IDs / time
 uuid = { workspace = true }

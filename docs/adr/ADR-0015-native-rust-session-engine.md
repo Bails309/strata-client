@@ -64,6 +64,21 @@ VNC is the honest exception: pure-Rust RFB implementations still lack
 Tight encoding, dynamic resize and complete auth handshakes, so we contain
 the C rather than pretend it is gone.
 
+**No RSA in the SSH engine.** `russh`'s `rsa` feature pulls
+`rsa 0.10.0-rc.x`, which carries RUSTSEC-2023-0071 — the Marvin attack,
+key recovery through a timing sidechannel — with no fixed release. A
+privileged-access gateway is precisely the wrong place to ship that, and
+`cargo deny check advisories` agrees. The engine builds without it;
+ed25519, ECDSA (P-256/384/521) and the post-quantum key exchange cover
+every target running a current OpenSSH. An opt-in `ssh-rsa` cargo feature
+exists for targets that present no other host key, and enabling it means
+owning a documented `advisories.ignore` entry. `russh` also uses the
+`ring` backend rather than the default `aws-lc-rs`, which is a C library
+and would have quietly reintroduced what this migration removes.
+
+**Host key verification is not optional.** The SSH engine takes an
+allow-list of SHA-256 fingerprints and has no "accept anything" variant.
+
 **Dual-track transport.** Two encoders sit behind one `FrameEncoder`
 trait:
 
@@ -130,9 +145,13 @@ Four phases, each independently reversible.
 | 3 | Direct streaming end to end; Vault credential injection; observation and recording move off `guaclog` | Frontend flag reverts the client to wire mode |
 | 4 | Decommission the `guacd` container, delete `guacd/patches/`, drop the C toolchain from CI | Re-enable the pinned `guacd` digest |
 
-**Phase 1 is complete as of this ADR.** The parser, actor pipeline,
-transports, audit sink and engine abstraction are implemented and tested;
-`engine::mock` stands in for the real engines, which land in Phase 2.
+**Phase 1 is complete, and Phase 2 is under way.** The parser, actor
+pipeline, transports, audit sink and engine abstraction are implemented
+and tested. The SSH engine is real; `routing` owns the dual-stack
+decision and defaults to sending everything to `guacd`. Still outstanding
+in Phase 2: the `ironrdp` engine, the VNC bridge, the server-side
+terminal rasteriser that SSH needs in Guacamole Wire Compatibility Mode,
+and the backend wiring that consults `routing` on a live connection.
 
 ## Verification
 

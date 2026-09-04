@@ -45,8 +45,39 @@ session. This phase lands the foundation:
 - **Fuzz harnesses** for the instruction parser, the streaming decoder and
   the media envelope.
 
-The `ironrdp`, `russh` and VNC engines land in Phase 2 behind the
-`ProtocolEngine` trait.
+### Phase 2 — SSH engine and dual-stack routing
+
+- **SSH engine (`russh`)** — replaces `libguac-client-ssh`, which drove
+  `libssh2` through polling wrappers because `libssh2` has no async story.
+  The new engine is Tokio-native: no bridging threads, no unmanaged C.
+  Opens an interactive shell on a PTY, tracks window resizes, and forwards
+  the raw byte stream as `TargetEvent::TerminalOutput`.
+- **Host key verification is mandatory.** The engine accepts a list of
+  SHA-256 fingerprints and nothing else — there is deliberately no
+  "accept anything" mode, because an SSH gateway that skips host key
+  verification is a man-in-the-middle waiting to happen.
+- **RSA is disabled by default.** `russh`'s `rsa` feature pulls
+  `rsa 0.10.0-rc.x`, which carries RUSTSEC-2023-0071 (the Marvin attack —
+  key recovery through a timing sidechannel) with no fixed release.
+  `cargo deny check advisories` fails with it enabled, so the session
+  engine builds without it; ed25519, ECDSA and the post-quantum key
+  exchange cover every target running a current OpenSSH. An opt-in
+  `ssh-rsa` cargo feature exists for targets that present no other host
+  key. `russh` also uses the `ring` backend rather than the default
+  `aws-lc-rs`, which is a C library.
+- **Keysym translation** — X11 keysyms to PTY byte sequences, covering
+  control codes, Alt-as-ESC-prefix, arrow and function keys, and Unicode
+  keysyms. Backspace maps to DEL, matching xterm; sending BS instead
+  breaks `readline` editing on essentially every modern Linux target.
+- **Dual-stack routing (`strata_session::routing`)** — decides per session
+  whether `guacd` or the native engine serves a connection. A protocol
+  with no compiled engine can never be routed native, the decision is
+  stable per target host so a canary cohort does not flap between
+  engines on reconnect, and a single kill switch returns everything to
+  `guacd`.
+
+The `ironrdp` and VNC engines, and the server-side terminal rasteriser
+needed for SSH in Guacamole Wire Compatibility Mode, are still to come.
 
 ## [1.14.6] — 2026-08-19
 

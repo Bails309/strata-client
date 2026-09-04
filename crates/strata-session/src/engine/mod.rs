@@ -18,6 +18,9 @@ use crate::error::EngineError;
 
 pub mod mock;
 
+#[cfg(feature = "ssh")]
+pub mod ssh;
+
 /// Which remote-access protocol an engine speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Protocol {

@@ -4,6 +4,7 @@ members = [
     "backend",
     "crates/strata-protocol",
     "crates/strata-dmz",
+    "crates/strata-session",
 ]
 
 [workspace.package]
@@ -64,3 +65,8 @@ anyhow = "1"
 # IDs / time
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+
+# Session engine (strata-session)
+winnow = "0.7"
+async-trait = "0.1"
+secrecy = "0.10"

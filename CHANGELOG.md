@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [Unreleased] — v2.0.0 — Native Rust session engine
+
+### Phase 1 — `crates/strata-session` foundation
+
+The v2.0.0 line replaces the Apache Guacamole C daemon (`guacd`) with a
+native Rust session engine. The rationale, the dual-track transport design
+and the four-phase rollout are recorded in
+[ADR-0015](docs/adr/ADR-0015-native-rust-session-engine.md).
+
+Nothing is routed to the new engine yet — `guacd` still serves every
+session. This phase lands the foundation:
+
+- **New crate `crates/strata-session`**, running in the trusted internal
+  zone. CI (`dmz-deps.yml`) now fails if it leaks into the DMZ dependency
+  closure.
+- **Guacamole wire protocol** — zero-copy `winnow` parser and encoder.
+  Length prefixes are counted in Unicode characters, not bytes, so a
+  multi-byte glyph in a clipboard payload can no longer desynchronise the
+  stream. Malformed input is distinguished from an incomplete prefix, so a
+  split read waits instead of killing the session.
+- **Actor pipeline** — one Tokio task per session, replacing `guacd`'s
+  thread-per-connection model. Live observers attach to a
+  `tokio::sync::broadcast` tap with no latency cost to the operator; a
+  lagging observer is dropped rather than allowed to stall the primary
+  stream. Dual-control moderation gates input without a lock.
+- **Dual-track transport** — Guacamole Wire Compatibility Mode emits
+  framing byte-identical to `guacd`, so existing clients need no change.
+  Native Direct Streaming Mode wraps compressed H.264 slices and raw PTY
+  bytes in a new binary envelope (`strata_protocol::media`) for the
+  browser's `VideoDecoder` and `xterm.js`, removing the server-side
+  decode → rasterise → re-encode round trip.
+- **Credential handling** — Vault secrets stay in `secrecy::SecretString`
+  and are revoked on teardown, even when engine shutdown fails. No
+  plaintext credential crosses a process boundary; `TargetSpec` redacts
+  its secret in `Debug`.
+- **Recording** — an in-process append-only audit sink, replacing
+  `guaclog`.
+- **Fuzz harnesses** for the instruction parser, the streaming decoder and
+  the media envelope.
+
+The `ironrdp`, `russh` and VNC engines land in Phase 2 behind the
+`ProtocolEngine` trait.
+
 ## [1.14.6] — 2026-08-19
 
 ### Patch Release — Large RDP clipboard copies were being discarded outright, because `clipboard-buffer-size` has never existed for RDP in the pinned `guacd`

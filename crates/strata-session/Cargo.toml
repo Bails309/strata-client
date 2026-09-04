@@ -1,0 +1,46 @@
+[package]
+name = "strata-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Native Rust remote-session engine replacing the Apache Guacamole C daemon (guacd)."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# IMPORTANT: this crate runs in the TRUSTED internal zone, never in the
+# DMZ. `crates/strata-dmz` MUST NOT depend on it — the edge reaches the
+# session tier over a signed socket, not in-process. Enforced by
+# .github/workflows/dmz-deps.yml. See
+# docs/adr/ADR-0015-native-rust-session-engine.md.
+
+[dependencies]
+strata-protocol = { path = "../strata-protocol" }
+
+# Async runtime
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures-util = { workspace = true }
+bytes = { workspace = true }
+async-trait = { workspace = true }
+
+# Wire parsing
+winnow = { workspace = true }
+base64 = { workspace = true }
+
+# Secrets
+secrecy = { workspace = true }
+zeroize = { workspace = true }
+
+# Errors / logging
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# IDs / time
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

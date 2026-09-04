@@ -21,6 +21,7 @@ pub mod errors;
 pub mod frame;
 pub mod handshake;
 pub mod link;
+pub mod media;
 pub mod resume_token;
 pub mod versioning;
 

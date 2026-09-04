@@ -75,9 +75,23 @@ session. This phase lands the foundation:
   stable per target host so a canary cohort does not flap between
   engines on reconnect, and a single kill switch returns everything to
   `guacd`.
+- **Terminal rasteriser (`strata_session::terminal`)** — the Guacamole
+  protocol has no text primitive, so an SSH session reaching a legacy
+  client has to arrive as pixels. `alacritty_terminal` keeps VT state and
+  `fontdue` rasterises glyphs; damaged line runs are encoded as PNG and
+  framed as ordinary `img`/`blob`/`end` streams. No shaping engine is
+  involved — a monospace grid needs glyph bitmaps and nothing else, which
+  keeps the dependency to one small crate rather than a text-layout
+  stack. Native Direct Streaming Mode does not compile any of it in.
+  - Rendering is skipped when the cells to be drawn match what the client
+    already has: `alacritty_terminal` reports the cursor's line as
+    damaged on every poll, so damage alone would re-encode a PNG for an
+    idle terminal several times a second.
+  - The backend image now installs `fonts-dejavu-core` explicitly rather
+    than inheriting a font from Chromium's dependency closure.
 
-The `ironrdp` and VNC engines, and the server-side terminal rasteriser
-needed for SSH in Guacamole Wire Compatibility Mode, are still to come.
+The `ironrdp` and VNC engines are still to come, as is the backend wiring
+that consults `routing` on a live connection.
 
 ## [1.14.6] — 2026-08-19
 

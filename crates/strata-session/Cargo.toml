@@ -16,6 +16,10 @@ default = ["ssh"]
 # Real protocol engines. Each pulls a substantial dependency tree, so
 # they are opt-in and can be rolled out one at a time (ADR-0015 Phase 2).
 ssh = ["dep:russh"]
+# Server-side terminal rasteriser, needed only by Guacamole Wire
+# Compatibility Mode. Native Direct Streaming sends raw PTY bytes to
+# xterm.js and does not pull this in.
+terminal = ["dep:alacritty_terminal", "dep:fontdue", "dep:image"]
 # Re-enables RSA host keys and RSA public-key auth.
 #
 # OFF by default, and `cargo deny check advisories` is why: russh's `rsa`
@@ -65,6 +69,15 @@ tracing = { workspace = true }
 russh = { version = "0.63", optional = true, default-features = false, features = [
     "ring",
     "flate2",
+] }
+
+# Terminal rasteriser (feature `terminal`)
+# No shaping engine: a monospace grid needs glyph rasterisation and
+# nothing else, so `fontdue` replaces the cosmic-text/tiny-skia stack.
+alacritty_terminal = { version = "0.26", optional = true }
+fontdue = { version = "0.9", optional = true }
+image = { version = "0.25", optional = true, default-features = false, features = [
+    "png",
 ] }
 
 # IDs / time

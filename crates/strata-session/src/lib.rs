@@ -54,6 +54,8 @@ pub mod engine;
 pub mod error;
 pub mod protocol;
 pub mod routing;
+#[cfg(feature = "terminal")]
+pub mod terminal;
 pub mod transport;
 
 pub use error::{EngineError, SessionError, WireError};

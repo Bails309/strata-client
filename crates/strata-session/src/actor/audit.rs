@@ -128,6 +128,79 @@ impl AuditSink for FileAuditSink {
     }
 }
 
+/// Append-only `.guac` recording.
+///
+/// Writes the raw Guacamole instruction stream and nothing else, which
+/// is exactly what `guacd` produces for its `recording-path` parameter.
+/// Keeping the format byte-compatible means the existing playback route,
+/// `guacenc` and the MP4 conversion path all work against a natively
+/// served session without knowing one exists.
+#[derive(Debug)]
+pub struct GuacRecordingSink {
+    path: PathBuf,
+    writer: BufWriter<File>,
+    bytes: u64,
+}
+
+impl GuacRecordingSink {
+    /// Create the recording at `path`, creating parent directories.
+    pub async fn create(path: impl AsRef<Path>) -> Result<Self, SessionError> {
+        let path = path.as_ref().to_path_buf();
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| SessionError::Audit(format!("create {}: {e}", parent.display())))?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await
+            .map_err(|e| SessionError::Audit(format!("open {}: {e}", path.display())))?;
+        Ok(Self {
+            path,
+            writer: BufWriter::new(file),
+            bytes: 0,
+        })
+    }
+
+    /// Instruction bytes written so far.
+    #[must_use]
+    pub fn bytes_written(&self) -> u64 {
+        self.bytes
+    }
+}
+
+#[async_trait]
+impl AuditSink for GuacRecordingSink {
+    async fn record(&mut self, record: AuditRecord) -> Result<(), SessionError> {
+        // Binary media envelopes are not Guacamole instructions; writing
+        // them would corrupt the recording for every existing reader.
+        let ClientFrame::Text(bytes) = &record.frame else {
+            return Ok(());
+        };
+        self.writer
+            .write_all(bytes)
+            .await
+            .map_err(|e| SessionError::Audit(format!("write {}: {e}", self.path.display())))?;
+        self.bytes += bytes.len() as u64;
+        Ok(())
+    }
+
+    async fn finalize(&mut self) -> Result<(), SessionError> {
+        self.writer
+            .flush()
+            .await
+            .map_err(|e| SessionError::Audit(format!("flush {}: {e}", self.path.display())))?;
+        self.writer
+            .get_mut()
+            .sync_all()
+            .await
+            .map_err(|e| SessionError::Audit(format!("fsync {}: {e}", self.path.display())))?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,6 +245,61 @@ mod tests {
 
         let written = tokio::fs::read(&path).await.unwrap();
         assert_eq!(written.len(), 3 * 22);
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn guac_recording_is_a_raw_instruction_stream() {
+        let dir = std::env::temp_dir().join(format!("strata-guac-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("nested").join("session.guac");
+
+        let mut sink = GuacRecordingSink::create(&path).await.unwrap();
+        for (seq, text) in [b"4.size,1.0,4.1024,3.768;".as_slice(), b"3.nop;"]
+            .into_iter()
+            .enumerate()
+        {
+            sink.record(AuditRecord {
+                seq: seq as u64,
+                timestamp_ms: 0,
+                frame: ClientFrame::Text(Bytes::copy_from_slice(text)),
+            })
+            .await
+            .unwrap();
+        }
+        sink.finalize().await.unwrap();
+
+        // Byte-for-byte what guacd would have written: no framing, no
+        // timestamps, just the instructions.
+        let written = tokio::fs::read(&path).await.unwrap();
+        assert_eq!(written, b"4.size,1.0,4.1024,3.768;3.nop;");
+        assert_eq!(sink.bytes_written(), written.len() as u64);
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn guac_recording_never_contains_binary_envelopes() {
+        let dir = std::env::temp_dir().join(format!("strata-guac-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("session.guac");
+
+        let mut sink = GuacRecordingSink::create(&path).await.unwrap();
+        sink.record(AuditRecord {
+            seq: 0,
+            timestamp_ms: 0,
+            frame: ClientFrame::Binary(Bytes::from_static(b"\xAA\x01binary")),
+        })
+        .await
+        .unwrap();
+        sink.record(AuditRecord {
+            seq: 1,
+            timestamp_ms: 0,
+            frame: ClientFrame::Text(Bytes::from_static(b"3.nop;")),
+        })
+        .await
+        .unwrap();
+        sink.finalize().await.unwrap();
+
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"3.nop;");
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 }

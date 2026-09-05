@@ -105,6 +105,24 @@ session. This phase lands the foundation:
     (comma-separated `SHA256:…` values). Without it the engine has
     nothing to verify the target against and the session stays on
     `guacd`.
+- **Session governance parity on the native path.** A natively served
+  session is subject to the same controls as a `guacd` one, because a
+  session that escapes its audit trail by being routed to a new engine
+  would be worse than no new engine:
+  - **Recording** — the engine writes its own `.guac` file, byte-identical
+    in format to what `guacd` produces for `recording-path`. Existing
+    playback, `guacenc` and the MP4 conversion path work against it
+    unchanged. Binary media envelopes are never written to a recording,
+    since they would corrupt it for every existing reader.
+  - **Live observation** — frames are pushed to the session ring buffer
+    and broadcast to NVR subscribers exactly as the `guacd` loop does.
+  - **Administrative termination**, the **token-revocation and
+    maximum-duration watchdog** (both emitting Guacamole status 521 and
+    the same audit reasons), and **viewer-injected shared input** are all
+    honoured.
+  - Teardown wakes viewers, unregisters the session, cleans up
+    quick-share files and finalises the recording row with duration and
+    byte counts.
 
 The `ironrdp` and VNC engines are still to come.
 

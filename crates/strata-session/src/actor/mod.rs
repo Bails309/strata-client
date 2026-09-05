@@ -4,7 +4,7 @@ pub mod audit;
 pub mod manager;
 pub mod session;
 
-pub use audit::{AuditRecord, AuditSink, FileAuditSink, NullAuditSink};
+pub use audit::{AuditRecord, AuditSink, FileAuditSink, GuacRecordingSink, NullAuditSink};
 pub use manager::{SessionManager, SessionOptions};
 pub use session::{
     CredentialGuard, InputModerator, Moderation, SessionActor, SessionCommand, SessionConfig,

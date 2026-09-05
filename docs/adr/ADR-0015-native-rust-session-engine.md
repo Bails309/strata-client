@@ -106,6 +106,16 @@ message passing: the session actor publishes every outgoing frame to a
 falls behind is dropped rather than allowed to stall the operator. Dual
 control is an `InputModerator` on the input path.
 
+**Governance parity is a precondition, not a follow-up.** A session
+served by the native engine is subject to the same recording, live
+observation, administrative termination, revocation watchdog and
+maximum-duration limit as one served by `guacd`. This matters more than
+it might look: a routing flag that quietly exempted some sessions from
+recording would be a worse outcome than never replacing `guacd` at all.
+The recording is written by the engine itself as a `.guac` file in
+`guacd`'s own format, so the existing playback route, `guacenc` and the
+MP4 conversion path work against it without knowing the difference.
+
 ## Consequences
 
 **Good.**

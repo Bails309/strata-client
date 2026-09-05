@@ -18,20 +18,33 @@
 //! | `STRATA_SESSION_NATIVE_PROTOCOLS` | comma-separated protocols eligible for the rollout |
 
 use std::collections::HashSet;
-use std::sync::OnceLock;
+use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use secrecy::SecretString;
-use strata_session::actor::{NullAuditSink, SessionActor, SessionConfig, SessionHandle};
+use strata_session::actor::{
+    AuditSink, GuacRecordingSink, NullAuditSink, SessionActor, SessionConfig, SessionHandle,
+};
 use strata_session::engine::ssh::{SshConfig, SshEngineFactory};
 use strata_session::engine::{EngineFactory, Protocol, ProtocolEngine, TargetSpec};
+use strata_session::protocol::ServerInstruction;
 use strata_session::routing::{RoutingPolicy, SessionBackend};
 use strata_session::terminal::{RasterisingEngine, TerminalFont, DEFAULT_FONT_SIZE_PX};
 use strata_session::transport::{ClientFrame, GuacDecoder, GuacWireEncoder};
+use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::tunnel::HandshakeParams;
+use crate::tunnel::{HandshakeParams, NvrContext};
+
+/// How often the revocation / duration watchdog runs.
+const WATCHDOG_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Hard ceiling on a single session, matching the `guacd` path.
+const MAX_TUNNEL_DURATION: Duration = Duration::from_secs(8 * 60 * 60);
 
 /// Connection parameter naming the target's accepted host keys.
 ///
@@ -163,19 +176,71 @@ fn host_key_fingerprints(handshake: &HandshakeParams) -> Vec<String> {
 }
 
 /// Serve one session with the native engine.
+///
+/// Deliberately mirrors every concurrent concern of the `guacd` loop in
+/// [`crate::tunnel`] — recording, live observation, admin kill, the
+/// revocation watchdog and shared input. A session must not lose its
+/// audit trail just because it was routed to the new engine.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_native(
     ws: WebSocket,
     handshake: HandshakeParams,
     protocol: Protocol,
-    session_id: String,
+    nvr: Option<NvrContext>,
+    watchdog_token: Option<String>,
+    user_id: Uuid,
 ) -> Result<(), AppError> {
     let engine = connect_engine(protocol, &handshake).await?;
+    let audit = open_recording(&handshake).await?;
+
+    let session_id = nvr
+        .as_ref()
+        .map(|ctx| ctx.session_id.clone())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+    // Register before the first frame so an observer attaching early
+    // cannot miss the layer-size instruction.
+    let mut broadcast = None;
+    let mut buffer = None;
+    let mut kill_rx = None;
+    let mut shared_input_rx = None;
+    let mut bandwidth = None;
+    if let Some(ctx) = nvr.as_ref() {
+        match ctx
+            .registry
+            .register(
+                ctx.session_id.clone(),
+                ctx.connection_id,
+                ctx.connection_name.clone(),
+                ctx.protocol.clone(),
+                ctx.user_id,
+                ctx.username.clone(),
+                handshake.hostname.clone(),
+                ctx.client_ip.clone(),
+            )
+            .await
+        {
+            Some((tx, buf, kill, input)) => {
+                broadcast = Some(tx);
+                buffer = Some(buf);
+                kill_rx = Some(kill);
+                shared_input_rx = Some(input);
+                bandwidth = ctx.registry.get(&ctx.session_id).await;
+            }
+            None => {
+                tracing::error!("Session limit reached — rejecting native tunnel");
+                return Err(AppError::Internal(
+                    "Maximum concurrent session limit reached".into(),
+                ));
+            }
+        }
+    }
 
     let (handle, mut frames) = SessionActor::spawn(SessionConfig {
         id: session_id,
         engine,
         encoder: Box::new(GuacWireEncoder::new()),
-        audit: Box::new(NullAuditSink),
+        audit,
         moderator: None,
         credential: None,
     });
@@ -183,26 +248,84 @@ pub async fn run_native(
     let (mut sink, mut stream) = ws.split();
     let mut decoder = GuacDecoder::default();
 
+    let mut watchdog = tokio::time::interval(WATCHDOG_INTERVAL);
+    watchdog.tick().await; // consume the immediate first tick
+    let started_at = tokio::time::Instant::now();
+
     let reason = loop {
         tokio::select! {
+            // Administrative kill signal.
+            _ = async {
+                match kill_rx {
+                    Some(ref mut rx) => rx.await.ok(),
+                    None => std::future::pending().await,
+                }
+            } => {
+                send_error(&mut sink, "Session terminated by administrator").await;
+                break "terminated by administrator";
+            }
+
+            _ = watchdog.tick() => {
+                if let Some(reason) = watchdog_verdict(
+                    watchdog_token.as_deref(),
+                    started_at,
+                ) {
+                    if let Some(ctx) = nvr.as_ref() {
+                        let _ = crate::services::audit::log(
+                            &ctx.db_pool,
+                            Some(user_id),
+                            "tunnel.watchdog_closed",
+                            &serde_json::json!({
+                                "connection_id": ctx.connection_id.to_string(),
+                                "reason": reason.audit,
+                                "engine": "native",
+                            }),
+                        )
+                        .await;
+                    }
+                    send_error(&mut sink, reason.client).await;
+                    break reason.audit;
+                }
+            }
+
             frame = frames.recv() => {
                 let Some(frame) = frame else {
                     break "session ended";
                 };
-                let message = match frame {
-                    ClientFrame::Text(bytes) => match String::from_utf8(bytes.to_vec()) {
-                        Ok(text) => Message::Text(text.into()),
-                        Err(_) => break "engine emitted invalid utf-8",
-                    },
-                    ClientFrame::Binary(bytes) => Message::Binary(bytes),
+                let message = match &frame {
+                    ClientFrame::Text(bytes) => {
+                        let Ok(text) = std::str::from_utf8(bytes) else {
+                            break "engine emitted invalid utf-8";
+                        };
+                        let shared = Arc::new(text.to_owned());
+                        // Observers and the ring buffer see exactly what
+                        // the operator sees.
+                        if let Some(buf) = buffer.as_ref() {
+                            buf.write().await.push(shared.as_ref().clone());
+                        }
+                        if let Some(tx) = broadcast.as_ref() {
+                            let _ = tx.send(Arc::clone(&shared));
+                        }
+                        Message::Text(shared.as_str().into())
+                    }
+                    ClientFrame::Binary(bytes) => Message::Binary(bytes.clone()),
                 };
+                if let Some(sess) = bandwidth.as_ref() {
+                    sess.bytes_from_guacd
+                        .fetch_add(frame.len() as u64, Ordering::Relaxed);
+                }
                 if sink.send(message).await.is_err() {
                     break "client socket closed";
                 }
             }
+
             incoming = stream.next() => {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
+                        if let Some(sess) = bandwidth.as_ref() {
+                            sess.bytes_to_guacd
+                                .fetch_add(text.len() as u64, Ordering::Relaxed);
+                        }
                         decoder.extend(text.as_bytes());
                         if let Err(why) = forward_instructions(&mut decoder, &handle).await {
                             break why;
@@ -220,12 +343,133 @@ pub async fn run_native(
                     Some(Ok(_)) => {}
                 }
             }
+
+            // Input injected by an authorised viewer (multiviewer / co-pilot).
+            Some(injected) = async {
+                match shared_input_rx {
+                    Some(ref mut rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                let mut injected_decoder = GuacDecoder::default();
+                injected_decoder.extend(injected.as_bytes());
+                if let Err(why) = forward_instructions(&mut injected_decoder, &handle).await {
+                    break why;
+                }
+            }
         }
     };
 
+    tracing::info!(%reason, "native session ending");
     let _ = handle.terminate(reason).await;
     let _ = sink.close().await;
+
+    if let Some(ctx) = nvr.as_ref() {
+        finalize_session(ctx, bandwidth.as_ref()).await;
+    }
     Ok(())
+}
+
+/// Open the `.guac` recording for this session, if recording is on.
+async fn open_recording(handshake: &HandshakeParams) -> Result<Box<dyn AuditSink>, AppError> {
+    let (Some(dir), Some(name)) = (&handshake.recording_path, &handshake.recording_name) else {
+        return Ok(Box::new(NullAuditSink));
+    };
+    let path = Path::new(dir).join(name);
+    let sink = GuacRecordingSink::create(&path)
+        .await
+        .map_err(|e| AppError::Internal(format!("open recording {}: {e}", path.display())))?;
+    tracing::info!(path = %path.display(), "recording native session");
+    Ok(Box::new(sink))
+}
+
+/// Why the watchdog wants the session closed.
+struct WatchdogVerdict {
+    client: &'static str,
+    audit: &'static str,
+}
+
+fn watchdog_verdict(
+    token: Option<&str>,
+    started_at: tokio::time::Instant,
+) -> Option<WatchdogVerdict> {
+    if token.is_some_and(crate::services::token_revocation::is_revoked) {
+        return Some(WatchdogVerdict {
+            client: "Session closed: token revoked",
+            audit: "revoked",
+        });
+    }
+    if started_at.elapsed() >= MAX_TUNNEL_DURATION {
+        return Some(WatchdogVerdict {
+            client: "Session closed: maximum duration reached",
+            audit: "max_duration",
+        });
+    }
+    None
+}
+
+/// Tell the client why it is being disconnected, best effort.
+async fn send_error<S>(sink: &mut S, message: &str)
+where
+    S: SinkExt<Message> + Unpin,
+{
+    let instruction = ServerInstruction::Error {
+        text: message.to_owned(),
+        // 521 = SESSION_CLOSED, matching the guacd path.
+        status: 521,
+    }
+    .to_bytes();
+    let Ok(text) = String::from_utf8(instruction.to_vec()) else {
+        return;
+    };
+    let _ = sink.send(Message::Text(text.into())).await;
+}
+
+/// Mirror the guacd path's teardown: wake viewers, unregister, clean up
+/// shared files, and finalise the recording row.
+async fn finalize_session(
+    ctx: &NvrContext,
+    bandwidth: Option<&Arc<crate::services::session_registry::ActiveSession>>,
+) {
+    let (bytes_from, bytes_to) = bandwidth.map_or((0i64, 0i64), |sess| {
+        (
+            sess.bytes_from_guacd.load(Ordering::Relaxed) as i64,
+            sess.bytes_to_guacd.load(Ordering::Relaxed) as i64,
+        )
+    });
+
+    // Viewers hold their own Arc, so they outlive `unregister` and would
+    // otherwise sit on a silent socket forever.
+    if let Some(sess) = bandwidth {
+        sess.mark_ended();
+    }
+    ctx.registry.unregister(&ctx.session_id).await;
+
+    let file_session_key = ctx.connection_id.to_string();
+    let cleaned = ctx.file_store.cleanup_session(&file_session_key).await;
+    if cleaned > 0 {
+        tracing::info!("Cleaned up {cleaned} quick-share file(s) for session {file_session_key}");
+    }
+
+    let duration = (chrono::Utc::now() - ctx.started_at).num_seconds() as i32;
+    match sqlx::query(
+        "UPDATE recordings SET duration_secs = $1, bytes_from_guacd = $2, bytes_to_guacd = $3 \
+         WHERE session_id = $4",
+    )
+    .bind(duration)
+    .bind(bytes_from)
+    .bind(bytes_to)
+    .bind(&ctx.session_id)
+    .execute(&ctx.db_pool)
+    .await
+    {
+        Ok(r) if r.rows_affected() == 0 => tracing::warn!(
+            session_id = %ctx.session_id,
+            "recording finalize matched 0 rows — recording file may be orphaned"
+        ),
+        Ok(_) => {}
+        Err(e) => tracing::error!(error = %e, "failed to update recording duration"),
+    }
 }
 
 /// Drain every complete instruction the decoder holds into the session.

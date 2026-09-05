@@ -692,11 +692,15 @@ pub async fn proxy(
     user_id: uuid::Uuid,
 ) -> Result<(), AppError> {
     if let Some(protocol) = crate::session_engine::select_native(&handshake) {
-        let session_id = nvr
-            .as_ref()
-            .map(|ctx| ctx.session_id.clone())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        return crate::session_engine::run_native(ws, handshake, protocol, session_id).await;
+        return crate::session_engine::run_native(
+            ws,
+            handshake,
+            protocol,
+            nvr,
+            watchdog_token,
+            user_id,
+        )
+        .await;
     }
 
     // Connect to guacd

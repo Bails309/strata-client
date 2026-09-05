@@ -123,6 +123,15 @@ session. This phase lands the foundation:
   - Teardown wakes viewers, unregisters the session, cleans up
     quick-share files and finalises the recording row with duration and
     byte counts.
+- **Verified against a real OpenSSH server.** `docker-compose.ssh-test.yml`
+  brings up a throwaway sshd on an isolated network, and
+  `crates/strata-session/tests/ssh_live.rs` drives the engine against it:
+  shell round-trip, keysym translation reaching the remote shell as typed
+  characters, Ctrl+C arriving as an interrupt, a client resize actually
+  reflowing the remote PTY (asserted with `stty size`), host-key pinning
+  refusing an unpinned target, password rejection, remote exit, and real
+  shell output rasterising to PNG frames. The tests are `#[ignore]`d so
+  the default suite still needs no target.
 
 The `ironrdp` and VNC engines are still to come.
 

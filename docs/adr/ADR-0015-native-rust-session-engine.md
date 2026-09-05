@@ -183,10 +183,19 @@ the record:
 | --- | --- | --- |
 | Protocol conformance | Replay recorded instruction streams through the parser | 100% structural equivalence |
 | Parser robustness | `cargo-fuzz` on the instruction parser, the streaming decoder and the media envelope | No panic or unbounded allocation over 72h |
+| Live SSH behaviour | `tests/ssh_live.rs` against a throwaway sshd (`docker-compose.ssh-test.yml`) | Shell I/O, keysym translation, PTY resize, host-key pinning, auth rejection |
 | Latency | Synthetic input-to-frame on 60 FPS RDP | p50 < 20 ms, p99 < 45 ms |
 | Memory | 500 concurrent sessions | > 70% RSS reduction vs `guacd` |
 | Credential hygiene | Core-dump inspection after handshake | No plaintext credential remnants |
 | Supply chain | `cargo deny check` | Zero advisory / ban / licence violations |
+
+Mocks were never going to be enough for the protocol engines. A mock
+cannot tell you whether `russh` negotiates with a real sshd, whether the
+remote PTY actually adopts a resize, or whether a translated keysym
+arrives at the shell as the character the user pressed — so the SSH
+engine is exercised against a real OpenSSH server on an isolated Docker
+network. Those tests are `#[ignore]`d, because a test that silently skips
+when its target is missing is worse than one that is honestly absent.
 
 ## References
 

@@ -1,0 +1,30 @@
+# Live protocol targets for `crates/strata-session/tests/*_live.rs`.
+#
+# Those tests are `#[ignore]`d by default because they need real servers.
+# To run them:
+#
+#   docker compose -f docker-compose.session-test.yml up -d --build
+#   # then run the test container on the strata-session-test network with
+#   # the STRATA_*_TEST_* variables set (see each test file's header).
+#   docker compose -f docker-compose.session-test.yml down -v
+#
+# Isolated network, no published ports: nothing here is reachable from
+# outside the Docker host.
+name: strata-session-test
+
+services:
+  sshd:
+    build: ./crates/strata-session/tests/sshd
+    container_name: strata-ssh-target
+    networks:
+      - session-test
+
+  rdp:
+    build: ./crates/strata-session/tests/rdp
+    container_name: strata-rdp-target
+    networks:
+      - session-test
+
+networks:
+  session-test:
+    name: strata-session-test-net

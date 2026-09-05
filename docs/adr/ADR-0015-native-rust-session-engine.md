@@ -162,11 +162,32 @@ renders it for existing `guacamole-common-js` clients, and the backend
 consults `routing` before dialling `guacd`. Rollout is off by default:
 `STRATA_SESSION_ENGINE=guacd`.
 
-Outstanding in Phase 2: the `ironrdp` engine and the VNC bridge. Until
-those land, `routing` refuses to send RDP or VNC sessions to the native
-engine no matter what the rollout percentage says — a property with a
-test on it, because "rollout at 100% on an SSH-only build" is exactly
-how that mistake would reach production.
+Outstanding in Phase 2: the VNC bridge. Until it lands, `routing`
+refuses to send VNC sessions to the native engine no matter what the
+rollout percentage says — a property with a test on it, because "rollout
+at 100% on a build without that engine" is exactly how that mistake would
+reach production.
+
+Two RDP-specific consequences belong on the record:
+
+- **NLA is not optional, and the engine fails closed.** The connector
+  advertises CredSSP and nothing else. Advertising the legacy TLS
+  security layer alongside it lets the server negotiate down, and on that
+  layer the RDP connection completes *before* any credential is checked —
+  authentication moves to an in-session login screen. A live test against
+  xrdp found precisely this: a deliberately wrong password produced a
+  healthy session that a gateway would have reported as authenticated.
+  `ironrdp-tls` also does not verify the server certificate (RDP
+  certificates are self-signed as a matter of course), so CredSSP's
+  binding to the server public key is the only thing authenticating the
+  target. Both reasons point the same way: no CredSSP, no session.
+- **The RDP session runs on its own thread.** `ironrdp-async` 0.7's
+  connection future is not `Send` — its `AsyncNetworkClient` hook is a
+  bare trait object — so it cannot be driven from the shared Tokio
+  runtime behind `ProtocolEngine`. The session owns a current-thread
+  runtime for its lifetime and is reached over channels. This is the
+  same isolation the plan anticipated for the VNC FFI bridge, arriving
+  earlier than expected and for a different reason.
 
 ### Pinning `ironrdp` and `russh` so both engines can coexist
 
@@ -227,8 +248,7 @@ the record:
 | --- | --- | --- |
 | Protocol conformance | Replay recorded instruction streams through the parser | 100% structural equivalence |
 | Parser robustness | `cargo-fuzz` on the instruction parser, the streaming decoder and the media envelope | No panic or unbounded allocation over 72h |
-| Live SSH behaviour | `tests/ssh_live.rs` against a throwaway sshd (`docker-compose.ssh-test.yml`) | Shell I/O, keysym translation, PTY resize, host-key pinning, auth rejection |
-| Latency | Synthetic input-to-frame on 60 FPS RDP | p50 < 20 ms, p99 < 45 ms |
+| Live SSH behaviour | `tests/ssh_live.rs` against a throwaway sshd (`docker-compose.ssh-test.yml`) | Shell I/O, keysym translation, PTY resize, host-key pinning, auth rejection || Live RDP behaviour | `tests/rdp_live.rs` against xrdp (non-NLA) and, for session tests, an NLA-capable target | Refusal to negotiate down from CredSSP, credential rejection || Latency | Synthetic input-to-frame on 60 FPS RDP | p50 < 20 ms, p99 < 45 ms |
 | Memory | 500 concurrent sessions | > 70% RSS reduction vs `guacd` |
 | Credential hygiene | Core-dump inspection after handshake | No plaintext credential remnants |
 | Supply chain | `cargo deny check` | Zero advisory / ban / licence violations |

@@ -100,6 +100,8 @@ impl RoutingPolicy {
         let mut set = HashSet::new();
         #[cfg(feature = "ssh")]
         set.insert(Protocol::Ssh);
+        #[cfg(feature = "rdp")]
+        set.insert(Protocol::Rdp);
         set
     }
 

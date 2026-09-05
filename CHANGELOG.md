@@ -132,8 +132,39 @@ session. This phase lands the foundation:
   refusing an unpinned target, password rejection, remote exit, and real
   shell output rasterising to PNG frames. The tests are `#[ignore]`d so
   the default suite still needs no target.
+- **RDP engine (`ironrdp`)** — replaces `libguac-client-rdp`, which drove
+  FreeRDP: the largest block of unmanaged C in the old session tier and
+  the reason `guacd/patches/` exists.
+  - **NLA is mandatory, and the engine fails closed without it.** The
+    connector advertises CredSSP *only*. Advertising the legacy TLS
+    security layer as well lets the server negotiate down to it, and on
+    that layer the RDP connection completes before any credential is
+    checked — authentication moves to an in-session login screen. A live
+    test against xrdp caught exactly that: a deliberately wrong password
+    produced a healthy, apparently authenticated session. The engine now
+    refuses a target that will not do CredSSP.
+  - `ironrdp-tls` deliberately does not verify the server certificate,
+    because RDP certificates are self-signed as a matter of course;
+    CredSSP's binding to the server public key is what authenticates the
+    target, which is the other reason NLA cannot be optional.
+  - **Keysym to PC scancode translation**, covering the US-layout
+    positions, the extended-key cluster, and left/right modifier
+    distinction so AltGr survives on non-US layouts. The remote host
+    applies its own layout on top, exactly as a real RDP client behaves.
+  - Damaged framebuffer regions are cropped and PNG-encoded into the same
+    `img`/`blob`/`end` streams the terminal renderer already uses.
+  - The session runs on a **dedicated thread with its own current-thread
+    runtime**: `ironrdp-async`'s connection future is not `Send`, so it
+    cannot be driven from the shared runtime. The engine exposes a `Send`
+    handle over channels.
+  - `docker-compose.session-test.yml` now provides both an sshd and an
+    xrdp target. xrdp does not implement NLA server-side, which makes it
+    the right target for proving the refusal above and the wrong one for
+    testing a successful session — those tests need Windows,
+    `gnome-remote-desktop` or FreeRDP shadow, and are marked as such
+    rather than being pointed at a server that cannot exercise them.
 
-The `ironrdp` and VNC engines are still to come.
+The VNC bridge is still to come.
 
 ## [1.14.6] — 2026-08-19
 

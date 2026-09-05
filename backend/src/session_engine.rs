@@ -29,6 +29,7 @@ use secrecy::SecretString;
 use strata_session::actor::{
     AuditSink, GuacRecordingSink, NullAuditSink, SessionActor, SessionConfig, SessionHandle,
 };
+use strata_session::engine::rdp::{RdpConfig, RdpEngineFactory};
 use strata_session::engine::ssh::{SshConfig, SshEngineFactory};
 use strata_session::engine::{EngineFactory, Protocol, ProtocolEngine, TargetSpec};
 use strata_session::protocol::ServerInstruction;
@@ -149,17 +150,23 @@ pub fn select_native(handshake: &HandshakeParams) -> Option<Protocol> {
 
 /// Everything that must be true before a session can run natively.
 fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), String> {
-    if protocol != Protocol::Ssh {
-        return Err(format!("no native engine for {}", protocol.as_str()));
+    match protocol {
+        Protocol::Ssh => {
+            if host_key_fingerprints(handshake).is_empty() {
+                return Err(format!(
+                    "connection has no `{HOST_KEY_PARAM}` parameter, and the native SSH \
+                     engine will not connect to an unverified host"
+                ));
+            }
+            // Only SSH needs the rasteriser, and only in wire mode.
+            TerminalFont::discover(DEFAULT_FONT_SIZE_PX).map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        // RDP produces image updates itself, so it needs no font, and
+        // CredSSP authenticates the target rather than a pinned key.
+        Protocol::Rdp => Ok(()),
+        other => Err(format!("no native engine for {}", other.as_str())),
     }
-    if host_key_fingerprints(handshake).is_empty() {
-        return Err(format!(
-            "connection has no `{HOST_KEY_PARAM}` parameter, and the native SSH \
-             engine will not connect to an unverified host"
-        ));
-    }
-    TerminalFont::discover(DEFAULT_FONT_SIZE_PX).map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 fn host_key_fingerprints(handshake: &HandshakeParams) -> Vec<String> {
@@ -500,13 +507,6 @@ async fn connect_engine(
     protocol: Protocol,
     handshake: &HandshakeParams,
 ) -> Result<Box<dyn ProtocolEngine>, AppError> {
-    if protocol != Protocol::Ssh {
-        return Err(AppError::Internal(format!(
-            "no native engine for {}",
-            protocol.as_str()
-        )));
-    }
-
     let spec = TargetSpec {
         protocol,
         hostname: handshake.hostname.clone(),
@@ -517,23 +517,41 @@ async fn connect_engine(
         height: handshake.height,
     };
 
-    let factory = SshEngineFactory::new(SshConfig::with_fingerprints(host_key_fingerprints(
-        handshake,
-    )));
-    let engine = factory
-        .connect(spec)
-        .await
-        .map_err(|e| AppError::Internal(format!("native ssh connect: {e}")))?;
+    match protocol {
+        Protocol::Ssh => {
+            let factory = SshEngineFactory::new(SshConfig::with_fingerprints(
+                host_key_fingerprints(handshake),
+            ));
+            let engine = factory
+                .connect(spec)
+                .await
+                .map_err(|e| AppError::Internal(format!("native ssh connect: {e}")))?;
 
-    let font = TerminalFont::discover(DEFAULT_FONT_SIZE_PX)
-        .map_err(|e| AppError::Internal(format!("terminal font: {e}")))?;
+            let font = TerminalFont::discover(DEFAULT_FONT_SIZE_PX)
+                .map_err(|e| AppError::Internal(format!("terminal font: {e}")))?;
 
-    Ok(Box::new(RasterisingEngine::new(
-        engine,
-        font,
-        handshake.width,
-        handshake.height,
-    )))
+            Ok(Box::new(RasterisingEngine::new(
+                engine,
+                font,
+                handshake.width,
+                handshake.height,
+            )))
+        }
+        Protocol::Rdp => {
+            let factory = RdpEngineFactory::new(RdpConfig {
+                domain: handshake.domain.clone(),
+                ..RdpConfig::default()
+            });
+            factory
+                .connect(spec)
+                .await
+                .map_err(|e| AppError::Internal(format!("native rdp connect: {e}")))
+        }
+        other => Err(AppError::Internal(format!(
+            "no native engine for {}",
+            other.as_str()
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -590,7 +608,14 @@ mod tests {
 
     #[test]
     fn protocols_without_an_engine_fail_preflight() {
-        let err = preflight(Protocol::Rdp, &handshake("rdp", Some("SHA256:aaa"))).unwrap_err();
-        assert!(err.contains("rdp"));
+        let err = preflight(Protocol::Vnc, &handshake("vnc", Some("SHA256:aaa"))).unwrap_err();
+        assert!(err.contains("vnc"));
+    }
+
+    #[test]
+    fn rdp_needs_no_pinned_host_key_or_font() {
+        // CredSSP authenticates the target, and the engine emits image
+        // updates itself, so neither SSH precondition applies.
+        assert!(preflight(Protocol::Rdp, &handshake("rdp", None)).is_ok());
     }
 }

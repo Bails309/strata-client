@@ -18,6 +18,9 @@ use crate::error::EngineError;
 
 pub mod mock;
 
+#[cfg(feature = "rdp")]
+pub mod rdp;
+
 #[cfg(feature = "ssh")]
 pub mod ssh;
 

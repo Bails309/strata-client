@@ -9,10 +9,10 @@
 //! They are `#[ignore]`d because they need a target. To run them:
 //!
 //! ```text
-//! docker compose -f docker-compose.ssh-test.yml up -d --build
+//! docker compose -f docker-compose.session-test.yml up -d --build
 //! FP=$(docker exec strata-ssh-target \
 //!        ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub | awk '{print $2}')
-//! docker run --rm --network strata-ssh-test-net \
+//! docker run --rm --network strata-session-test-net \
 //!     -v "$PWD:/w" -w /w -e CARGO_TARGET_DIR=/tmp/target \
 //!     -e STRATA_SSH_TEST_HOST=strata-ssh-target \
 //!     -e STRATA_SSH_TEST_USER=strata \
@@ -20,7 +20,7 @@
 //!     -e STRATA_SSH_TEST_FINGERPRINT="$FP" \
 //!     rust:1.98-slim-trixie \
 //!     cargo test -p strata-session --all-features --test ssh_live -- --ignored
-//! docker compose -f docker-compose.ssh-test.yml down
+//! docker compose -f docker-compose.session-test.yml down -v
 //! ```
 
 #![cfg(feature = "ssh")]

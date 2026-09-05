@@ -57,6 +57,7 @@ strata-protocol = { path = "../strata-protocol" }
 # Async runtime
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+tokio-rustls = { workspace = true }
 futures-util = { workspace = true }
 bytes = { workspace = true }
 async-trait = { workspace = true }

@@ -89,9 +89,24 @@ session. This phase lands the foundation:
     idle terminal several times a second.
   - The backend image now installs `fonts-dejavu-core` explicitly rather
     than inheriting a font from Chromium's dependency closure.
+- **Backend wiring** — `tunnel::proxy` now consults the router before
+  dialling `guacd`, and `backend/src/session_engine.rs` bridges the
+  browser WebSocket to the in-process engine. Controlled by
+  `STRATA_SESSION_ENGINE` (`guacd` by default, then `canary`, then
+  `native`), with `STRATA_SESSION_NATIVE_PERCENT`,
+  `STRATA_SESSION_NATIVE_HOSTS` and `STRATA_SESSION_NATIVE_PROTOCOLS`.
+  Anything unrecognised in those variables means `guacd` — a typo must
+  not enable the new engine.
+  - A session the policy selects but that cannot actually run natively —
+    no host key pinned on the connection, no font installed — logs a
+    warning and falls back to `guacd`. During a canary, not moving a
+    session is better than breaking it.
+  - Native SSH requires a `host-key-fingerprint` connection parameter
+    (comma-separated `SHA256:…` values). Without it the engine has
+    nothing to verify the target against and the session stays on
+    `guacd`.
 
-The `ironrdp` and VNC engines are still to come, as is the backend wiring
-that consults `routing` on a live connection.
+The `ironrdp` and VNC engines are still to come.
 
 ## [1.14.6] — 2026-08-19
 

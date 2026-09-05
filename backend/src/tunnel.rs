@@ -676,6 +676,10 @@ const DIR_TO_GUACD: &str = "client->guacd";
 const DIR_FROM_GUACD: &str = "guacd->client";
 
 /// Proxy frames between a WebSocket (frontend) and a TCP stream (guacd).
+///
+/// During the Phase 2 dual-stack rollout (ADR-0015) this is also where
+/// the native Rust session engine is chosen. `guacd` remains the default
+/// and the fallback for anything the native engine cannot serve.
 #[allow(clippy::too_many_arguments)]
 pub async fn proxy(
     ws: WebSocket,
@@ -687,6 +691,14 @@ pub async fn proxy(
     watchdog_token: Option<String>,
     user_id: uuid::Uuid,
 ) -> Result<(), AppError> {
+    if let Some(protocol) = crate::session_engine::select_native(&handshake) {
+        let session_id = nvr
+            .as_ref()
+            .map(|ctx| ctx.session_id.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        return crate::session_engine::run_native(ws, handshake, protocol, session_id).await;
+    }
+
     // Connect to guacd
     let addr = format!("{guacd_host}:{guacd_port}");
     let stream = TcpStream::connect(&addr)

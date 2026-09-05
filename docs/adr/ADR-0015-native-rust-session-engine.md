@@ -145,13 +145,27 @@ Four phases, each independently reversible.
 | 3 | Direct streaming end to end; Vault credential injection; observation and recording move off `guaclog` | Frontend flag reverts the client to wire mode |
 | 4 | Decommission the `guacd` container, delete `guacd/patches/`, drop the C toolchain from CI | Re-enable the pinned `guacd` digest |
 
-**Phase 1 is complete, and Phase 2 is under way.** The parser, actor
-pipeline, transports, audit sink and engine abstraction are implemented
-and tested. The SSH engine is real; `routing` owns the dual-stack
-decision and defaults to sending everything to `guacd`. Still outstanding
-in Phase 2: the `ironrdp` engine, the VNC bridge, the server-side
-terminal rasteriser that SSH needs in Guacamole Wire Compatibility Mode,
-and the backend wiring that consults `routing` on a live connection.
+**Phase 1 is complete, and Phase 2 is substantially done.** The parser,
+actor pipeline, transports, audit sink and engine abstraction are
+implemented and tested. The SSH engine is real, the terminal rasteriser
+renders it for existing `guacamole-common-js` clients, and the backend
+consults `routing` before dialling `guacd`. Rollout is off by default:
+`STRATA_SESSION_ENGINE=guacd`.
+
+Outstanding in Phase 2: the `ironrdp` engine and the VNC bridge. Until
+those land, `routing` refuses to send RDP or VNC sessions to the native
+engine no matter what the rollout percentage says — a property with a
+test on it, because "rollout at 100% on an SSH-only build" is exactly
+how that mistake would reach production.
+
+Two operational constraints came out of the Phase 2 work and belong on
+the record:
+
+- Native SSH needs a `host-key-fingerprint` parameter on the connection.
+  There is no trust-on-first-use path, so a connection without it stays
+  on `guacd`.
+- Wire Compatibility Mode needs a monospace font in the backend image.
+  Direct Streaming Mode needs none.
 
 ## Verification
 

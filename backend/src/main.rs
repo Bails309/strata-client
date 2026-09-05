@@ -6,6 +6,7 @@ mod db;
 mod error;
 mod routes;
 mod services;
+mod session_engine;
 mod tunnel;
 
 use std::sync::Arc;

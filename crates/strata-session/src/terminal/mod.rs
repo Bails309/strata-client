@@ -31,8 +31,9 @@ use image::{ExtendedColorType, ImageEncoder};
 
 use crate::engine::{InputEvent, Protocol, ProtocolEngine, TargetEvent};
 use crate::error::EngineError;
-use crate::terminal::font::{CellMetrics, TerminalFont};
-use crate::terminal::palette::{Palette, Pixel};
+
+pub use font::{CellMetrics, TerminalFont};
+pub use palette::{Palette, Pixel};
 
 /// Default font size for the rendered grid.
 pub const DEFAULT_FONT_SIZE_PX: f32 = 16.0;

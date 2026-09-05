@@ -157,12 +157,17 @@ session. This phase lands the foundation:
     runtime**: `ironrdp-async`'s connection future is not `Send`, so it
     cannot be driven from the shared runtime. The engine exposes a `Send`
     handle over channels.
-  - `docker-compose.session-test.yml` now provides both an sshd and an
-    xrdp target. xrdp does not implement NLA server-side, which makes it
-    the right target for proving the refusal above and the wrong one for
-    testing a successful session — those tests need Windows,
-    `gnome-remote-desktop` or FreeRDP shadow, and are marked as such
-    rather than being pointed at a server that cannot exercise them.
+  - `docker-compose.session-test.yml` provides three targets: an sshd, an
+    xrdp server that **cannot** do NLA (which is what proves the refusal
+    above), and a FreeRDP shadow server that can. Windows is not usable
+    here — Windows containers need a Windows container host and ship no
+    RDP server, and running Windows in a VM would need KVM passthrough
+    and a licensed multi-gigabyte image — but FreeRDP's shadow server
+    speaks the same CredSSP handshake, which is what the engine needs
+    exercised. `crates/strata-session/tests/rdp_live.rs` drives it:
+    CredSSP completing, the layer size preceding any drawing, real PNG
+    frames cropped from a real framebuffer, input accepted, credential
+    rejection, and a clean disconnect.
 
 The VNC bridge is still to come.
 

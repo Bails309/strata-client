@@ -248,7 +248,7 @@ the record:
 | --- | --- | --- |
 | Protocol conformance | Replay recorded instruction streams through the parser | 100% structural equivalence |
 | Parser robustness | `cargo-fuzz` on the instruction parser, the streaming decoder and the media envelope | No panic or unbounded allocation over 72h |
-| Live SSH behaviour | `tests/ssh_live.rs` against a throwaway sshd (`docker-compose.ssh-test.yml`) | Shell I/O, keysym translation, PTY resize, host-key pinning, auth rejection || Live RDP behaviour | `tests/rdp_live.rs` against xrdp (non-NLA) and, for session tests, an NLA-capable target | Refusal to negotiate down from CredSSP, credential rejection || Latency | Synthetic input-to-frame on 60 FPS RDP | p50 < 20 ms, p99 < 45 ms |
+| Live SSH behaviour | `tests/ssh_live.rs` against a throwaway sshd (`docker-compose.ssh-test.yml`) | Shell I/O, keysym translation, PTY resize, host-key pinning, auth rejection || Live RDP behaviour | `tests/rdp_live.rs` against FreeRDP shadow (NLA) and xrdp (non-NLA) | CredSSP completion, framebuffer cropping, input, credential rejection, refusal to negotiate down || Latency | Synthetic input-to-frame on 60 FPS RDP | p50 < 20 ms, p99 < 45 ms |
 | Memory | 500 concurrent sessions | > 70% RSS reduction vs `guacd` |
 | Credential hygiene | Core-dump inspection after handshake | No plaintext credential remnants |
 | Supply chain | `cargo deny check` | Zero advisory / ban / licence violations |

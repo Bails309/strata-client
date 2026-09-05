@@ -19,8 +19,17 @@ services:
     networks:
       - session-test
 
-  rdp:
+  # Deliberately cannot do NLA: proves the engine refuses to negotiate
+  # down to the legacy security layer.
+  rdp-legacy:
     build: ./crates/strata-session/tests/rdp
+    container_name: strata-rdp-legacy
+    networks:
+      - session-test
+
+  # FreeRDP shadow server, which does speak CredSSP.
+  rdp-nla:
+    build: ./crates/strata-session/tests/rdp-nla
     container_name: strata-rdp-target
     networks:
       - session-test

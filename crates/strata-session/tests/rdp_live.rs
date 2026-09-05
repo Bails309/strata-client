@@ -15,17 +15,19 @@
 //! place. `docker-compose.session-test.yml` provides it as
 //! `STRATA_RDP_LEGACY_HOST`.
 //!
-//! The session tests need a real NLA-capable target — Windows,
-//! `gnome-remote-desktop`, or FreeRDP's shadow server — pointed at by
-//! `STRATA_RDP_TEST_HOST`. There is deliberately no container for it
-//! here, because pretending a non-NLA server exercises the NLA path is
-//! how this bug survived unit testing.
+//! The session tests need a target that speaks CredSSP, provided as
+//! `STRATA_RDP_TEST_HOST` by FreeRDP's shadow server. Windows is not an
+//! option here: Windows containers require a Windows container host and
+//! ship no RDP server, and running Windows in a VM would need KVM
+//! passthrough and a licensed multi-gigabyte image. The shadow server
+//! performs the same CredSSP handshake, which is the part that matters.
 //!
 //! ```text
 //! docker compose -f docker-compose.session-test.yml up -d --build
 //! docker run --rm --network strata-session-test-net \
 //!     -v "$PWD:/w" -w /w -e CARGO_TARGET_DIR=/tmp/target \
-//!     -e STRATA_RDP_LEGACY_HOST=strata-rdp-target \
+//!     -e STRATA_RDP_TEST_HOST=strata-rdp-target \
+//!     -e STRATA_RDP_LEGACY_HOST=strata-rdp-legacy \
 //!     -e STRATA_RDP_TEST_USER=strata \
 //!     -e STRATA_RDP_TEST_PASSWORD=strata-test-password \
 //!     rust:1.98-slim-trixie \

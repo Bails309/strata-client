@@ -20,6 +20,12 @@ ssh = ["dep:russh"]
 # Compatibility Mode. Native Direct Streaming sends raw PTY bytes to
 # xterm.js and does not pull this in.
 terminal = ["dep:alacritty_terminal", "dep:fontdue", "dep:image"]
+# NOTE: there is deliberately no `rdp` feature yet. `ironrdp-connector`
+# 0.10 pins `picky = "=7.0.0-rc.25"`, which pins
+# `curve25519-dalek = "=5.0.0-rc.1"`; russh 0.63 requires
+# `curve25519-dalek ^5` and resolves to 5.0.0 stable. Cargo cannot hold
+# two 5.x versions, so ironrdp and russh will not resolve together.
+# See docs/adr/ADR-0015-native-rust-session-engine.md.
 # Re-enables RSA host keys and RSA public-key auth.
 #
 # OFF by default, and `cargo deny check advisories` is why: russh's `rsa`

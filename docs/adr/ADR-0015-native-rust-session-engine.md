@@ -168,6 +168,41 @@ engine no matter what the rollout percentage says — a property with a
 test on it, because "rollout at 100% on an SSH-only build" is exactly
 how that mistake would reach production.
 
+### Blocker: `ironrdp` and `russh` do not currently resolve together
+
+`ironrdp-connector` 0.10 pins `picky = "=7.0.0-rc.25"`, which in turn
+pins `curve25519-dalek = "=5.0.0-rc.1"`. `russh` 0.63 requires
+`curve25519-dalek ^5`, which resolves to 5.0.0 stable. Cargo cannot hold
+two 5.x versions of one crate, so the two engines cannot share a
+dependency graph. Verified against the registry:
+
+| Combination | Resolves | `curve25519-dalek` |
+| --- | --- | --- |
+| `ironrdp-connector` 0.10 alone | yes | 5.0.0-rc.1 |
+| `russh` 0.63 alone | yes | 5.0.0 |
+| `ironrdp-connector` 0.10 + `russh` 0.63 | **no** | — |
+| `ironrdp-connector` 0.10 + `russh` 0.54 | yes | 4.1.3 and 5.0.0-rc.1 |
+| `ironrdp-connector` 0.7 + `russh` 0.63 | yes | 4.1.3 and 5.0.0 |
+
+Three ways forward, none of them free:
+
+1. **Downgrade `russh` to 0.54.** Rewrites a working, live-tested SSH
+   engine against an older API, gives up nine minor versions of upstream
+   fixes, and still ships a release-candidate curve25519 in the crypto
+   path.
+2. **Use `ironrdp-connector` 0.7.** Keeps `russh` and keeps
+   `curve25519-dalek` on stable 4.1.3, at the cost of an RDP stack three
+   minor versions behind. Still ships `picky 7.0.0-rc.17`; every
+   `ironrdp` depends on a `picky` release candidate today.
+3. **Wait** for `picky` to reach 7.0.0 proper, then take current
+   `ironrdp` and current `russh` together.
+
+Option 2 is the pragmatic choice if RDP is wanted sooner; option 3 is the
+cleaner supply chain. This is a deliberate decision for the maintainers
+rather than an implementation detail, because it changes what ships in a
+privileged-access product — the same reasoning that kept
+`rsa 0.10.0-rc.x` out of the SSH engine.
+
 Two operational constraints came out of the Phase 2 work and belong on
 the record:
 

@@ -168,40 +168,49 @@ engine no matter what the rollout percentage says — a property with a
 test on it, because "rollout at 100% on an SSH-only build" is exactly
 how that mistake would reach production.
 
-### Blocker: `ironrdp` and `russh` do not currently resolve together
+### Pinning `ironrdp` and `russh` so both engines can coexist
 
-`ironrdp-connector` 0.10 pins `picky = "=7.0.0-rc.25"`, which in turn
-pins `curve25519-dalek = "=5.0.0-rc.1"`. `russh` 0.63 requires
+RDP is the primary protocol and SSH the secondary one, so the natural
+instinct was to take current `ironrdp` and fit SSH around it. That turns
+out to be the wrong way round, and the reason is worth recording.
+
+`ironrdp-connector` 0.8 and later pin a `picky` release candidate that
+pins `curve25519-dalek = "=5.0.0-rc.1"`. A patched `russh` requires
 `curve25519-dalek ^5`, which resolves to 5.0.0 stable. Cargo cannot hold
-two 5.x versions of one crate, so the two engines cannot share a
-dependency graph. Verified against the registry:
+two 5.x versions, so current `ironrdp` and current `russh` do not
+resolve together. Verified against the registry:
 
-| Combination | Resolves | `curve25519-dalek` |
-| --- | --- | --- |
-| `ironrdp-connector` 0.10 alone | yes | 5.0.0-rc.1 |
-| `russh` 0.63 alone | yes | 5.0.0 |
-| `ironrdp-connector` 0.10 + `russh` 0.63 | **no** | — |
-| `ironrdp-connector` 0.10 + `russh` 0.54 | yes | 4.1.3 and 5.0.0-rc.1 |
-| `ironrdp-connector` 0.7 + `russh` 0.63 | yes | 4.1.3 and 5.0.0 |
+| Combination | Resolves | Builds | Notes |
+| --- | --- | --- | --- |
+| `ironrdp` 0.10 + `russh` 0.63 | no | — | two 5.x `curve25519-dalek` |
+| `ironrdp` 0.10 + `russh` 0.54 | yes | yes | **`russh` carries RUSTSEC-2026-0153/0154** |
+| `ironrdp` 0.7 + `russh` 0.63 | yes | only with `picky` pinned | chosen |
 
-Three ways forward, none of them free:
+The middle row is the trap. Dropping `russh` to 0.54 makes current
+`ironrdp` work, and it is what "RDP first" naively implies — but 0.54
+predates 0.58, and in those releases the unchecked `CryptoVec` growth of
+RUSTSEC-2026-0153 is reachable from **remote SSH traffic** (transport
+packet reads and zlib decompression, and we enable `flate2`). The
+documented impact is process abort under allocation failure.
 
-1. **Downgrade `russh` to 0.54.** Rewrites a working, live-tested SSH
-   engine against an older API, gives up nine minor versions of upstream
-   fixes, and still ships a release-candidate curve25519 in the crypto
-   path.
-2. **Use `ironrdp-connector` 0.7.** Keeps `russh` and keeps
-   `curve25519-dalek` on stable 4.1.3, at the cost of an RDP stack three
-   minor versions behind. Still ships `picky 7.0.0-rc.17`; every
-   `ironrdp` depends on a `picky` release candidate today.
-3. **Wait** for `picky` to reach 7.0.0 proper, then take current
-   `ironrdp` and current `russh` together.
+This engine runs **in-process inside the backend**. A remote peer able to
+abort the process would not merely kill one SSH session; it would take
+every concurrent RDP session down with it. Prioritising RDP therefore
+argues *against* the older `russh`, not for it — the availability of the
+primary protocol is what the vulnerable secondary one would destroy.
 
-Option 2 is the pragmatic choice if RDP is wanted sooner; option 3 is the
-cleaner supply chain. This is a deliberate decision for the maintainers
-rather than an implementation detail, because it changes what ships in a
-privileged-access product — the same reasoning that kept
-`rsa 0.10.0-rc.x` out of the SSH engine.
+So: `russh` stays current and patched, and `ironrdp` sits on the 0.7
+line. `picky` is pinned to `=7.0.0-rc.17` as well, because
+`ironrdp-connector` 0.7 requires `picky = "7.0.0-rc.17"`, which for a
+prerelease also matches rc.26 — and that newer `picky` no longer compiles
+against the `sspi` version this `ironrdp` expects. Cargo has no
+`[constraints]` section, so an unused `=` dependency is the only way to
+hold it still.
+
+**TODO — revisit when `picky` ships 7.0.0 proper.** At that point the
+dalek conflict disappears, the pin can go, and `ironrdp` can move to the
+current release. Until then RDP runs three minor versions behind, which
+is the cheaper of the two available costs.
 
 Two operational constraints came out of the Phase 2 work and belong on
 the record:

@@ -20,12 +20,17 @@ ssh = ["dep:russh"]
 # Compatibility Mode. Native Direct Streaming sends raw PTY bytes to
 # xterm.js and does not pull this in.
 terminal = ["dep:alacritty_terminal", "dep:fontdue", "dep:image"]
-# NOTE: there is deliberately no `rdp` feature yet. `ironrdp-connector`
-# 0.10 pins `picky = "=7.0.0-rc.25"`, which pins
-# `curve25519-dalek = "=5.0.0-rc.1"`; russh 0.63 requires
-# `curve25519-dalek ^5` and resolves to 5.0.0 stable. Cargo cannot hold
-# two 5.x versions, so ironrdp and russh will not resolve together.
-# See docs/adr/ADR-0015-native-rust-session-engine.md.
+# RDP engine. Replaces FreeRDP: sans-I/O state machine, no hidden threads.
+rdp = [
+    "dep:ironrdp-connector",
+    "dep:ironrdp-session",
+    "dep:ironrdp-tokio",
+    "dep:ironrdp-tls",
+    "dep:ironrdp-pdu",
+    "dep:ironrdp-graphics",
+    "dep:picky",
+    "dep:image",
+]
 # Re-enables RSA host keys and RSA public-key auth.
 #
 # OFF by default, and `cargo deny check advisories` is why: russh's `rsa`
@@ -69,6 +74,16 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # SSH engine (feature `ssh`)
+#
+# Pinned to >=0.60.3 on purpose: RUSTSEC-2026-0153/0154 (CVE-2026-46673)
+# are only patched there. In releases before 0.58 the vulnerable
+# `CryptoVec` growth is reachable from *remote* SSH traffic — transport
+# packet reads and zlib decompression — and can abort the process. This
+# engine runs in-process inside the backend, so that abort would take
+# every RDP session down with it. That rules out the older russh that
+# current `ironrdp` would otherwise force us onto; see the version note
+# on the RDP dependencies below.
+#
 # `ring` rather than the default `aws-lc-rs`: aws-lc is a C library, and
 # removing C from the session tier is the point of this crate. rustls
 # already standardises the workspace on ring.
@@ -85,6 +100,35 @@ fontdue = { version = "0.9", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = [
     "png",
 ] }
+
+# RDP engine (feature `rdp`)
+#
+# TODO(v2): raise to the current ironrdp (0.10/0.11) once `picky` ships
+# 7.0.0 proper. ironrdp 0.8+ pins a `picky` release candidate that pins
+# `curve25519-dalek =5.0.0-rc.1`, which cannot coexist with the stable
+# 5.0.0 that a patched russh requires. The 0.7 line pins an older picky
+# whose dalek is 4.x — a different major — so both engines resolve.
+#
+# The alternative was holding ironrdp current and dropping russh to
+# 0.54, which reintroduces a remotely reachable process abort. Keeping
+# RDP three minor versions back is the cheaper of the two. See
+# docs/adr/ADR-0015-native-rust-session-engine.md.
+ironrdp-connector = { version = "0.7", optional = true }
+ironrdp-session = { version = "0.7", optional = true }
+ironrdp-tokio = { version = "0.7", optional = true }
+# `rustls-ring`, not the default aws-lc-rs: same no-C reasoning as russh,
+# and `deny.toml` bans native-tls outright.
+ironrdp-tls = { version = "0.2", optional = true, default-features = false, features = [
+    "rustls-ring",
+] }
+ironrdp-pdu = { version = "0.6", optional = true }
+ironrdp-graphics = { version = "0.6", optional = true }
+# Not used directly — this is a resolution pin. ironrdp-connector 0.7
+# requires `picky = "7.0.0-rc.17"`, which on a prerelease also matches
+# rc.26; that newer picky no longer compiles against the `sspi` version
+# ironrdp 0.7 expects. Cargo has no `[constraints]` section, so an
+# explicit `=` dependency is the only way to hold it still.
+picky = { version = "=7.0.0-rc.17", optional = true }
 
 # IDs / time
 uuid = { workspace = true }

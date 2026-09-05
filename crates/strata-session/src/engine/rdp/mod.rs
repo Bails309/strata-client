@@ -294,6 +294,13 @@ impl RdpSession {
             domain: config.domain.clone(),
             client_name: config.client_name.clone(),
             keyboard_layout: config.keyboard_layout,
+            // RDP delivers the mouse pointer out of band rather than
+            // drawing it into the framebuffer. Wire Compatibility Mode
+            // has no cursor layer yet, so have ironrdp composite the
+            // pointer into the image instead — without this the operator
+            // sees no cursor at all.
+            enable_server_pointer: true,
+            pointer_software_rendering: true,
             ..default_connector_config()
         };
         // Nothing below may observe the credential.
@@ -358,9 +365,12 @@ impl RdpSession {
             height: u32::from(height),
         });
 
+        let mut stage = ActiveStage::new(connection);
+        stage.set_enable_server_pointer(true);
+
         Ok(Self {
             framed,
-            stage: ActiveStage::new(connection),
+            stage,
             image,
             pending,
             width,

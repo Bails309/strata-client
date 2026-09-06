@@ -64,62 +64,82 @@ const HOST_KEY_PARAM: &str = "host-key-fingerprint";
 const KDC_URL_PARAM: &str = "kdc-url";
 const AUTH_PACKAGE_PARAM: &str = "auth-pkg";
 
-/// Connection parameters the admin panel offers that the native RDP
-/// engine does not act on yet.
+/// Connection parameters naming a feature the native RDP engine does
+/// not implement at all.
 ///
-/// Routing a connection that sets one of these to the native engine
-/// would quietly drop a setting an administrator deliberately chose, so
-/// they are logged loudly at connect time. Device redirection and
-/// RemoteApp are absent rather than disabled, which fails safe; the
-/// display and audio options only cost fidelity.
-const UNSUPPORTED_RDP_PARAMS: &[&str] = &[
+/// guacd does implement these, so a connection asking for one is routed
+/// there instead. Running it natively would drop a setting an
+/// administrator deliberately chose, and a redirected drive or printer
+/// that silently fails to appear is worse than a slower session.
+const RDP_FEATURES_REQUIRING_GUACD: &[&str] = &[
     "enable-drive",
     "enable-printing",
     "enable-sftp",
     "enable-audio-input",
-    "enable-touch",
     "remote-app",
     "initial-program",
     "console",
+    "gateway-hostname",
+    "wol-send-packet",
+    "load-balance-info",
+    "preconnection-id",
+    "preconnection-blob",
+];
+
+/// Recording options that change what the audit trail must contain.
+///
+/// The native actor records outbound frames only, so it records neither
+/// keystrokes nor mouse movement. `recording-exclude-mouse` and
+/// `-exclude-touch` are therefore already satisfied, but these two are
+/// not, and both leave the recording differing from what was
+/// authorised: one captures screen content that was meant to be
+/// excluded, the other omits keystrokes that were meant to be kept.
+/// Neither is acceptable to paper over on an access gateway.
+const RECORDING_OPTIONS_REQUIRING_GUACD: &[&str] =
+    &["recording-exclude-output", "recording-include-keys"];
+
+/// Parameters that cost only fidelity.
+///
+/// The session still works, so these are not worth giving up the native
+/// engine over — but an administrator who set one should be able to
+/// find out why it made no difference.
+const RDP_PARAMS_IGNORED_NATIVELY: &[&str] = &[
     "color-depth",
     "enable-h264",
     "force-lossless",
     "timezone",
-    "load-balance-info",
-    "preconnection-id",
-    "preconnection-blob",
-    "gateway-hostname",
-    "wol-send-packet",
+    "enable-touch",
+    "resize-method",
 ];
+
+/// Whether a parameter is set to something meaningful.
+fn is_set(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty() && value != "false" && value != "0"
+}
+
+/// Which of `keys` this connection actually sets.
+fn params_in_use<'a>(handshake: &HandshakeParams, keys: &[&'a str]) -> Vec<&'a str> {
+    keys.iter()
+        .copied()
+        .filter(|key| handshake.extra.get(*key).is_some_and(|v| is_set(v)))
+        .collect()
+}
 
 /// Warn about admin-configured parameters this engine will not honour.
 fn warn_unsupported_rdp_params(handshake: &HandshakeParams) {
-    let ignored: Vec<&str> = UNSUPPORTED_RDP_PARAMS
-        .iter()
-        .copied()
-        .filter(|key| {
-            handshake
-                .extra
-                .get(*key)
-                .is_some_and(|v| !v.trim().is_empty() && v != "false")
-        })
-        .collect();
+    let ignored = params_in_use(handshake, RDP_PARAMS_IGNORED_NATIVELY);
     if !ignored.is_empty() {
         tracing::warn!(
             params = ?ignored,
             "native rdp engine ignores these connection parameters; \
-             route via guacd if they are required"
+             the session works but will not match how it is configured"
         );
     }
     // `ignore-cert` is the one mismatch that fails open rather than
     // closed: the TLS layer never validates the target certificate, so
     // an administrator who cleared this box is not getting what it says.
-    if handshake
-        .extra
-        .get("ignore-cert")
-        .is_some_and(|v| v == "false")
-        || !handshake.ignore_cert
-    {
+    if !handshake.ignore_cert {
         tracing::warn!(
             "native rdp engine does not validate the target certificate; \
              MITM resistance relies on CredSSP/Kerberos mutual authentication"
@@ -271,6 +291,15 @@ pub async fn resolve_global_kdc(
 
 /// Everything that must be true before a session can run natively.
 fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), String> {
+    // Applies to every protocol: the actor, not the engine, decides
+    // what reaches the recording.
+    let recording = params_in_use(handshake, RECORDING_OPTIONS_REQUIRING_GUACD);
+    if !recording.is_empty() {
+        return Err(format!(
+            "connection sets {}, and the native engine cannot produce that recording",
+            recording.join(", ")
+        ));
+    }
     match protocol {
         Protocol::Ssh => {
             if host_key_fingerprints(handshake).is_empty() {
@@ -284,6 +313,13 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
             Ok(())
         }
         Protocol::Rdp => {
+            let needs_guacd = params_in_use(handshake, RDP_FEATURES_REQUIRING_GUACD);
+            if !needs_guacd.is_empty() {
+                return Err(format!(
+                    "connection uses {}, which the native RDP engine does not implement",
+                    needs_guacd.join(", ")
+                ));
+            }
             let kerberos_only = handshake
                 .extra
                 .get(AUTH_PACKAGE_PARAM)
@@ -781,6 +817,73 @@ mod tests {
     #[test]
     fn rdp_needs_no_pinned_host_key_or_font() {
         assert!(preflight(Protocol::Rdp, &handshake("rdp", None)).is_ok());
+    }
+
+    #[test]
+    fn a_connection_needing_device_redirection_is_left_to_guacd() {
+        let mut params = handshake("rdp", None);
+        params
+            .extra
+            .insert("enable-drive".to_owned(), "true".to_owned());
+        let err = preflight(Protocol::Rdp, &params).unwrap_err();
+        assert!(err.contains("enable-drive"), "{err}");
+    }
+
+    #[test]
+    fn an_unticked_feature_box_does_not_force_guacd() {
+        for value in ["", "false", "0", "   "] {
+            let mut params = handshake("rdp", None);
+            params
+                .extra
+                .insert("enable-printing".to_owned(), value.to_owned());
+            assert!(
+                preflight(Protocol::Rdp, &params).is_ok(),
+                "{value:?} should not count as enabled"
+            );
+        }
+    }
+
+    #[test]
+    fn a_recording_this_engine_cannot_produce_is_left_to_guacd() {
+        for (option, protocol) in [
+            ("recording-exclude-output", Protocol::Rdp),
+            ("recording-include-keys", Protocol::Rdp),
+            ("recording-include-keys", Protocol::Ssh),
+        ] {
+            let mut params = handshake("rdp", Some("SHA256:aaa"));
+            params.extra.insert(option.to_owned(), "true".to_owned());
+            let err = preflight(protocol, &params).unwrap_err();
+            assert!(err.contains(option), "{err}");
+        }
+    }
+
+    #[test]
+    fn recording_exclusions_the_actor_already_honours_run_natively() {
+        // Outbound frames only, so neither is ever recorded anyway.
+        let mut params = handshake("rdp", None);
+        params
+            .extra
+            .insert("recording-exclude-mouse".to_owned(), "true".to_owned());
+        params
+            .extra
+            .insert("recording-exclude-touch".to_owned(), "true".to_owned());
+        assert!(preflight(Protocol::Rdp, &params).is_ok());
+    }
+
+    #[test]
+    fn losing_only_fidelity_still_runs_natively() {
+        let mut params = handshake("rdp", None);
+        params
+            .extra
+            .insert("color-depth".to_owned(), "32".to_owned());
+        params
+            .extra
+            .insert("enable-h264".to_owned(), "true".to_owned());
+        assert!(preflight(Protocol::Rdp, &params).is_ok());
+        assert_eq!(
+            params_in_use(&params, RDP_PARAMS_IGNORED_NATIVELY),
+            vec!["color-depth", "enable-h264"]
+        );
     }
 
     #[test]

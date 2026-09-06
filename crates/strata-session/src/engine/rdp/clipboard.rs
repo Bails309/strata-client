@@ -200,7 +200,10 @@ mod tests {
         match events.try_recv() {
             Ok(ClipboardEvent::RemoteFormats(formats)) => assert_eq!(
                 formats,
-                vec![ClipboardFormatId::CF_TEXT, ClipboardFormatId::CF_UNICODETEXT]
+                vec![
+                    ClipboardFormatId::CF_TEXT,
+                    ClipboardFormatId::CF_UNICODETEXT
+                ]
             ),
             other => panic!("expected a format advert, got {other:?}"),
         }

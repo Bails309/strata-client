@@ -33,6 +33,7 @@ pub mod clipboard;
 pub mod kdc;
 pub mod keycodes;
 pub mod layouts;
+pub mod tls;
 
 use std::collections::VecDeque;
 
@@ -107,6 +108,12 @@ pub struct RdpConfig {
     pub disable_copy: bool,
     /// Never carry the client's clipboard to the target.
     pub disable_paste: bool,
+    /// Verify the target's TLS certificate against the host trust store.
+    ///
+    /// Mirrors the connection's `ignore-cert` box, inverted. Most RDP
+    /// hosts are self-signed, so enabling this needs the signing CA
+    /// installed or the connection will refuse to start.
+    pub verify_certificate: bool,
 }
 
 /// Desktop features the target may enable, mirroring guacd's
@@ -166,6 +173,7 @@ impl Default for RdpConfig {
             read_only: false,
             disable_copy: false,
             disable_paste: false,
+            verify_certificate: false,
         }
     }
 }
@@ -460,12 +468,14 @@ impl RdpSession {
             .map_err(map_connector)?;
 
         let initial = framed.into_inner_no_leftover();
-        let (upgraded_stream, server_cert) = ironrdp_tls::upgrade(initial, &hostname)
-            .await
-            .map_err(EngineError::Transport)?;
+        let (upgraded_stream, server_cert) =
+            tls::upgrade(initial, &hostname, config.verify_certificate)
+                .await
+                .map_err(EngineError::Transport)?;
 
-        // CredSSP binds to the server's public key, which is what makes
-        // the unverified TLS certificate above safe to accept.
+        // CredSSP binds to the server's public key, which is what keeps
+        // an unverified certificate usable when the connection opted out
+        // of checking it.
         let server_public_key = server_cert
             .tbs_certificate
             .subject_public_key_info

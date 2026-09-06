@@ -32,6 +32,8 @@ rdp = [
     "dep:ironrdp-cliprdr",
     "dep:ironrdp-dvc",
     "dep:ironrdp-displaycontrol",
+    "dep:rustls-native-certs",
+    "dep:x509-cert",
     "dep:sspi",
     "dep:picky",
     "dep:image",
@@ -138,6 +140,12 @@ ironrdp-cliprdr = { version = "0.4", optional = true }
 # has to scale the framebuffer, which looks blurry.
 ironrdp-dvc = { version = "0.4", optional = true }
 ironrdp-displaycontrol = { version = "0.4", optional = true }
+# TLS is driven directly rather than through ironrdp-tls, which accepts
+# any certificate and so cannot honour a connection's ignore-cert
+# setting. The tokio-rustls above is the workspace pin, already ring-only
+# so the process keeps a single crypto provider.
+rustls-native-certs = { version = "0.8", optional = true }
+x509-cert = { version = "0.2", optional = true }
 # Needed directly for the KDC network client CredSSP suspends on during
 # Kerberos authentication. Version tracks what ironrdp-connector 0.7 uses.
 # Default features off: only two types are used from it, and the defaults

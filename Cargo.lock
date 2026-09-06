@@ -5323,6 +5323,7 @@ dependencies = [
  "ironrdp-tokio",
  "picky",
  "russh",
+ "rustls-native-certs",
  "secrecy",
  "sspi",
  "strata-protocol",
@@ -5333,6 +5334,7 @@ dependencies = [
  "tracing",
  "uuid",
  "winnow 0.7.15",
+ "x509-cert",
  "zeroize",
 ]
 

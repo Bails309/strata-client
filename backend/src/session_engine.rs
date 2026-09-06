@@ -136,15 +136,6 @@ fn warn_unsupported_rdp_params(handshake: &HandshakeParams) {
              the session works but will not match how it is configured"
         );
     }
-    // `ignore-cert` is the one mismatch that fails open rather than
-    // closed: the TLS layer never validates the target certificate, so
-    // an administrator who cleared this box is not getting what it says.
-    if !handshake.ignore_cert {
-        tracing::warn!(
-            "native rdp engine does not validate the target certificate; \
-             MITM resistance relies on CredSSP/Kerberos mutual authentication"
-        );
-    }
 }
 
 /// Read a checkbox-style parameter using guacd's truthiness rules.
@@ -735,6 +726,7 @@ async fn connect_engine(
                 read_only: flag(handshake, "read-only"),
                 disable_copy: flag(handshake, "disable-copy"),
                 disable_paste: flag(handshake, "disable-paste"),
+                verify_certificate: !handshake.ignore_cert,
                 performance: RdpPerformance {
                     wallpaper: flag(handshake, "enable-wallpaper"),
                     theming: flag(handshake, "enable-theming"),

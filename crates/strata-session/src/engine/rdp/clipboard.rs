@@ -169,6 +169,51 @@ pub fn encode_clipboard(format: ClipboardFormatId, text: &str) -> FormatDataResp
 mod tests {
     use super::*;
 
+    fn backend() -> (
+        SessionClipboard,
+        tokio::sync::mpsc::UnboundedReceiver<ClipboardEvent>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        (SessionClipboard::new(tx), rx)
+    }
+
+    #[test]
+    fn monitor_ready_is_answered_with_a_format_list() {
+        // Windows withholds its own format lists until the client has
+        // sent one, so stubbing this callback stops every copy out of
+        // the session — silently, because nothing is ever advertised.
+        let (mut backend, mut events) = backend();
+        backend.on_request_format_list();
+        assert!(matches!(
+            events.try_recv(),
+            Ok(ClipboardEvent::FormatListRequested)
+        ));
+    }
+
+    #[test]
+    fn a_remote_copy_forwards_every_offered_format() {
+        let (mut backend, mut events) = backend();
+        backend.on_remote_copy(&[
+            ClipboardFormat::new(ClipboardFormatId::CF_TEXT),
+            ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT),
+        ]);
+        match events.try_recv() {
+            Ok(ClipboardEvent::RemoteFormats(formats)) => assert_eq!(
+                formats,
+                vec![ClipboardFormatId::CF_TEXT, ClipboardFormatId::CF_UNICODETEXT]
+            ),
+            other => panic!("expected a format advert, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn file_transfer_is_never_advertised() {
+        // The gateway has an audited file path; a CLIPRDR file stream
+        // would go around it.
+        let (backend, _events) = backend();
+        assert!(backend.client_capabilities().is_empty());
+    }
+
     #[test]
     fn unicode_text_is_preferred_over_ansi() {
         let formats = vec![

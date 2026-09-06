@@ -919,7 +919,18 @@ impl RdpSession {
                     .await?;
             }
             InputEvent::Resize { width, height } => {
+                let (requested_w, requested_h) = (width, height);
                 let (width, height) = (clamp_dimension(width), clamp_dimension(height));
+                if u32::from(width) != requested_w || u32::from(height) != requested_h {
+                    tracing::warn!(
+                        requested_w,
+                        requested_h,
+                        width,
+                        height,
+                        "clamped the requested desktop size; a multi-monitor layout \
+                         will not line up"
+                    );
+                }
                 if (width, height) == (self.width, self.height)
                     || self.requested_size == Some((width, height))
                 {
@@ -1060,8 +1071,14 @@ fn mouse_events(previous: u8, mask: u8, x_position: u16, y_position: u16) -> Vec
 }
 
 /// RDP desktop dimensions are 16-bit and must be even.
+/// RDP desktop dimensions are 16-bit and must be even.
+///
+/// The ceiling is the MS-RDPEDISP maximum. Multi-monitor asks for the
+/// aggregate width of every screen and slices it client side, so a
+/// lower cap silently truncates a three-screen layout the browser then
+/// slices for a width the desktop does not have.
 fn clamp_dimension(value: u32) -> u16 {
-    let clamped = value.clamp(200, 4096) as u16;
+    let clamped = value.clamp(200, 8192) as u16;
     clamped & !1
 }
 
@@ -1128,13 +1145,47 @@ mod tests {
     }
 
     #[test]
+    fn unset_desktop_features_become_explicit_opt_outs() {
+        // The wire format is expressed as DISABLE_ bits, so "off" is not
+        // the absence of a flag and an empty set would turn everything on.
+        let flags = RdpPerformance::default().to_flags();
+        assert!(flags.contains(PerformanceFlags::DISABLE_WALLPAPER));
+        assert!(flags.contains(PerformanceFlags::DISABLE_THEMING));
+        assert!(flags.contains(PerformanceFlags::DISABLE_FULLWINDOWDRAG));
+        assert!(flags.contains(PerformanceFlags::DISABLE_MENUANIMATIONS));
+        assert!(!flags.contains(PerformanceFlags::ENABLE_FONT_SMOOTHING));
+    }
+
+    #[test]
+    fn enabling_a_desktop_feature_clears_its_opt_out() {
+        let flags = RdpPerformance {
+            wallpaper: true,
+            theming: true,
+            font_smoothing: true,
+            desktop_composition: true,
+            ..RdpPerformance::default()
+        }
+        .to_flags();
+        assert!(!flags.contains(PerformanceFlags::DISABLE_WALLPAPER));
+        assert!(!flags.contains(PerformanceFlags::DISABLE_THEMING));
+        assert!(flags.contains(PerformanceFlags::ENABLE_FONT_SMOOTHING));
+        assert!(flags.contains(PerformanceFlags::ENABLE_DESKTOP_COMPOSITION));
+        // Not asked for, so still opted out.
+        assert!(flags.contains(PerformanceFlags::DISABLE_FULLWINDOWDRAG));
+    }
+
+    #[test]
     fn desktop_dimensions_are_clamped_and_even() {
         // RDP rejects odd widths on several codec paths.
         assert_eq!(clamp_dimension(1921), 1920);
         assert_eq!(clamp_dimension(1920), 1920);
-        // Below the RDP minimum, and above what a 16-bit field holds.
+        // Below the RDP minimum, and above what MS-RDPEDISP allows.
         assert_eq!(clamp_dimension(0), 200);
-        assert_eq!(clamp_dimension(100_000), 4096);
+        assert_eq!(clamp_dimension(100_000), 8192);
+        // Aggregate widths multi-monitor asks for must survive intact.
+        assert_eq!(clamp_dimension(3840), 3840);
+        assert_eq!(clamp_dimension(5760), 5760);
+        assert_eq!(clamp_dimension(7680), 7680);
     }
 
     #[test]

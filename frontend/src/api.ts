@@ -1676,6 +1676,9 @@ export interface HistoricalRecording {
   /** Operator's public source IP at the time the recording started.
    *  `null` for recordings created before migration 065. */
   client_ip?: string | null;
+  /** Session engine that served the recording. `null` for recordings
+   *  created before migration 081. */
+  engine?: "guacd" | "native" | null;
 }
 
 export const getRecordings = (

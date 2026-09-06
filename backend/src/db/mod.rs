@@ -190,6 +190,9 @@ pub struct Recording {
     /// resolved from `X-Forwarded-For` with a `ConnectInfo` peer-IP fallback.
     /// `None` for recordings created before migration 065.
     pub client_ip: Option<String>,
+    /// `guacd` or `native`, so a session can be attributed to the engine
+    /// that served it. `None` for recordings predating migration 081.
+    pub engine: Option<String>,
 }
 
 #[cfg(test)]
@@ -273,6 +276,7 @@ mod tests {
             storage_type: "local".into(),
             created_at: chrono::Utc::now(),
             client_ip: None,
+            engine: Some("native".into()),
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["session_id"], "sess-001");
@@ -280,6 +284,7 @@ mod tests {
         assert_eq!(v["username"], "admin");
         assert_eq!(v["duration_secs"], 120);
         assert_eq!(v["storage_type"], "local");
+        assert_eq!(v["engine"], "native");
     }
 
     #[test]
@@ -297,9 +302,12 @@ mod tests {
             storage_type: "azure".into(),
             created_at: chrono::Utc::now(),
             client_ip: None,
+            engine: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert!(v["duration_secs"].is_null());
         assert_eq!(v["storage_type"], "azure");
+        // Predates migration 081, so the engine is genuinely unknown.
+        assert!(v["engine"].is_null());
     }
 }

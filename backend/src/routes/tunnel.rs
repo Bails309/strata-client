@@ -772,8 +772,7 @@ pub async fn ws_tunnel(
     let has_creds = final_password.is_some();
 
     let debug_msg = format!(
-        "Tunnel creds: username={:?}, has_password={}, domain={:?}, protocol={}",
-        &final_username, has_creds, &domain, &protocol
+        "Tunnel creds: username={final_username:?}, has_password={has_creds}, domain={domain:?}, protocol={protocol}"
     );
     tracing::debug!(msg = debug_msg);
 

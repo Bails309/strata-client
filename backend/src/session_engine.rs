@@ -639,8 +639,8 @@ async fn finalize_session(
 
     let duration = (chrono::Utc::now() - ctx.started_at).num_seconds() as i32;
     match sqlx::query(
-        "UPDATE recordings SET duration_secs = $1, bytes_from_guacd = $2, bytes_to_guacd = $3 \
-         WHERE session_id = $4",
+        "UPDATE recordings SET duration_secs = $1, bytes_from_guacd = $2, bytes_to_guacd = $3, \
+         engine = 'native' WHERE session_id = $4",
     )
     .bind(duration)
     .bind(bytes_from)

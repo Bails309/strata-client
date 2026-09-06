@@ -1343,7 +1343,7 @@ async fn handle_guac_handshake(
 
         tokio::spawn(async move {
             match sqlx::query(
-                "UPDATE recordings SET duration_secs = $1, bytes_from_guacd = $2, bytes_to_guacd = $3 WHERE session_id = $4"
+                "UPDATE recordings SET duration_secs = $1, bytes_from_guacd = $2, bytes_to_guacd = $3, engine = 'guacd' WHERE session_id = $4"
             )
                 .bind(duration)
                 .bind(bw_from)

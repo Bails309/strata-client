@@ -564,6 +564,11 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                     )}
                     {isAdmin && (
                       <th className="p-4 text-left text-xs font-semibold uppercase tracking-wider text-txt-tertiary">
+                        Engine
+                      </th>
+                    )}
+                    {isAdmin && (
+                      <th className="p-4 text-left text-xs font-semibold uppercase tracking-wider text-txt-tertiary">
                         Storage
                       </th>
                     )}
@@ -602,6 +607,19 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                           {r.client_ip && r.client_ip !== "unknown" ? (
                             <span className="text-sm font-mono text-txt-primary">
                               {r.client_ip}
+                            </span>
+                          ) : (
+                            <span className="text-sm italic text-txt-tertiary">Unknown</span>
+                          )}
+                        </td>
+                      )}
+                      {isAdmin && (
+                        <td className="p-4">
+                          {r.engine ? (
+                            <span
+                              className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${r.engine === "native" ? "bg-accent-dim text-accent" : "bg-surface-tertiary text-txt-tertiary"}`}
+                            >
+                              {r.engine}
                             </span>
                           ) : (
                             <span className="text-sm italic text-txt-tertiary">Unknown</span>

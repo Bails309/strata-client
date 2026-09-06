@@ -418,7 +418,7 @@ pub fn chromium_command_args(spec: &ChromiumLaunchSpec<'_>) -> Vec<String> {
         // and size, otherwise Chromium opens at ~1024×768 windowed
         // and `--start-fullscreen` doesn't stick on a bare Xvnc with
         // no window manager.
-        format!("--window-position=0,0"),
+        "--window-position=0,0".into(),
         format!("--window-size={},{}", spec.window_width, spec.window_height),
         "--noerrdialogs".into(),
         "--no-first-run".into(),

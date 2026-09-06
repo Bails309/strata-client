@@ -14,9 +14,13 @@
 //!                         └──► audit sink     (tamper-evident recording)
 //! ```
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
+use bytes::Bytes;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::actor::audit::{AuditRecord, AuditSink};
@@ -34,6 +38,11 @@ pub const CLIENT_QUEUE_DEPTH: usize = 256;
 /// allowed to hold memory for the whole session — observation must never
 /// degrade the primary operator's stream.
 pub const OBSERVER_QUEUE_DEPTH: usize = 128;
+
+const SYNC_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Largest clipboard payload accepted from the client.
+pub const MAX_CLIPBOARD_BYTES: usize = 8 * 1024 * 1024;
 
 /// A frame as it left the session, shared with observers and the audit
 /// sink.
@@ -165,6 +174,8 @@ pub struct SessionActor {
     observers: broadcast::Sender<SessionFrame>,
     seq: u64,
     dropped_frames: u64,
+    /// Partially received client clipboard streams, keyed by stream index.
+    clipboard_streams: HashMap<i32, Vec<u8>>,
 }
 
 impl SessionActor {
@@ -193,6 +204,7 @@ impl SessionActor {
             observers,
             seq: 0,
             dropped_frames: 0,
+            clipboard_streams: HashMap::new(),
         };
 
         tokio::spawn(async move {
@@ -206,6 +218,10 @@ impl SessionActor {
     }
 
     async fn run(mut self) -> Result<(), SessionError> {
+        let mut sync_interval = tokio::time::interval(SYNC_INTERVAL);
+        sync_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        sync_interval.tick().await;
+
         let reason = loop {
             tokio::select! {
                 command = self.commands.recv() => {
@@ -224,6 +240,9 @@ impl SessionActor {
                         Some(SessionCommand::Terminate { reason }) => break reason,
                         None => break "client disconnected".to_owned(),
                     }
+                }
+                _ = sync_interval.tick() => {
+                    self.emit_sync().await?;
                 }
                 event = self.engine.next_event() => {
                     match event {
@@ -255,14 +274,29 @@ impl SessionActor {
         let input = match instruction {
             ClientInstruction::Mouse { x, y, mask } => InputEvent::Mouse { x, y, mask },
             ClientInstruction::Key { keysym, pressed } => InputEvent::Key { keysym, pressed },
-            ClientInstruction::Size { width, height, .. } => InputEvent::Resize { width, height },
+            ClientInstruction::Size { width, height } => InputEvent::Resize { width, height },
             ClientInstruction::Disconnect => return Ok(Some("client requested disconnect".into())),
-            // Sync/nop/stream bookkeeping never reaches the target.
+            ClientInstruction::Clipboard { stream, mimetype } => {
+                // Only text crosses the clipboard boundary; anything
+                // else would need the audited file path instead.
+                if mimetype.starts_with("text/") {
+                    self.clipboard_streams.insert(stream, Vec::new());
+                }
+                return Ok(None);
+            }
+            ClientInstruction::Blob { stream, data } => {
+                self.append_clipboard(stream, &data);
+                return Ok(None);
+            }
+            ClientInstruction::End { stream } => {
+                let Some(payload) = self.clipboard_streams.remove(&stream) else {
+                    return Ok(None);
+                };
+                InputEvent::Clipboard(Bytes::from(payload))
+            }
+            // Sync/nop bookkeeping never reaches the target.
             ClientInstruction::Sync { .. }
             | ClientInstruction::Nop
-            | ClientInstruction::Clipboard { .. }
-            | ClientInstruction::Blob { .. }
-            | ClientInstruction::End { .. }
             | ClientInstruction::Unhandled { .. } => return Ok(None),
         };
 
@@ -275,6 +309,25 @@ impl SessionActor {
 
         self.engine.handle_input(input).await?;
         Ok(None)
+    }
+
+    /// Accumulate one `blob` of an in-flight clipboard stream.
+    fn append_clipboard(&mut self, stream: i32, data: &str) {
+        let Some(buffer) = self.clipboard_streams.get_mut(&stream) else {
+            return;
+        };
+        let Ok(decoded) = BASE64.decode(data) else {
+            tracing::debug!(session = %self.id, stream, "discarding malformed clipboard blob");
+            self.clipboard_streams.remove(&stream);
+            return;
+        };
+        // A peer that never sends `end` must not grow this without bound.
+        if buffer.len() + decoded.len() > MAX_CLIPBOARD_BYTES {
+            tracing::warn!(session = %self.id, stream, "clipboard stream too large; discarded");
+            self.clipboard_streams.remove(&stream);
+            return;
+        }
+        buffer.extend_from_slice(&decoded);
     }
 
     async fn on_target_event(&mut self, event: TargetEvent) -> Result<(), SessionError> {
@@ -292,6 +345,17 @@ impl SessionActor {
         self.encoder.encode(&event, &mut frames);
         for frame in frames {
             self.emit(frame, droppable).await?;
+        }
+        self.emit_sync().await?;
+        Ok(())
+    }
+
+    async fn emit_sync(&mut self) -> Result<(), SessionError> {
+        let mut frames = Vec::new();
+        self.encoder
+            .sync(i64::try_from(now_ms()).unwrap_or(i64::MAX), &mut frames);
+        for frame in frames {
+            self.emit(frame, false).await?;
         }
         Ok(())
     }
@@ -451,6 +515,12 @@ mod tests {
             frame,
             ClientFrame::Text(Bytes::from_static(b"4.size,1.0,4.1280,3.720;"))
         );
+
+        let sync = frames.recv().await.unwrap();
+        let ClientFrame::Text(bytes) = sync else {
+            panic!("expected a text sync instruction");
+        };
+        assert!(bytes.starts_with(b"4.sync,"));
     }
 
     #[tokio::test]
@@ -525,7 +595,7 @@ mod tests {
 
         let revoked = Arc::new(Mutex::new(false));
         let (engine, events, _inputs) = MockEngine::new(Protocol::Rdp);
-        let (handle, _frames) = SessionActor::spawn(SessionConfig {
+        let (handle, mut frames) = SessionActor::spawn(SessionConfig {
             id: "revoking".to_owned(),
             engine: Box::new(engine),
             encoder: Box::new(GuacWireEncoder::new()),
@@ -537,13 +607,10 @@ mod tests {
         handle.terminate("test over").await.unwrap();
         drop(events);
 
-        for _ in 0..100 {
-            if *revoked.lock().unwrap() {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
-        panic!("credential was never revoked");
+        // The actor drops its frame sender only after teardown has run,
+        // so a closed channel is a precise signal rather than a race.
+        while frames.recv().await.is_some() {}
+        assert!(*revoked.lock().unwrap(), "credential was never revoked");
     }
 
     #[tokio::test]

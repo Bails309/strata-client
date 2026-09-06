@@ -28,6 +28,11 @@ rdp = [
     "dep:ironrdp-tls",
     "dep:ironrdp-pdu",
     "dep:ironrdp-graphics",
+    "dep:ironrdp-core",
+    "dep:ironrdp-cliprdr",
+    "dep:ironrdp-dvc",
+    "dep:ironrdp-displaycontrol",
+    "dep:sspi",
     "dep:picky",
     "dep:image",
 ]
@@ -124,6 +129,21 @@ ironrdp-tls = { version = "0.2", optional = true, default-features = false, feat
 ] }
 ironrdp-pdu = { version = "0.6", optional = true }
 ironrdp-graphics = { version = "0.6", optional = true }
+ironrdp-core = { version = "0.1", optional = true }
+# Clipboard virtual channel. 0.4 is the release that resolves to a single
+# ironrdp-svc 0.5 alongside connector 0.7.
+ironrdp-cliprdr = { version = "0.4", optional = true }
+# Dynamic virtual channels, and the Display Control channel they carry.
+# Without these the desktop is stuck at its initial size and the browser
+# has to scale the framebuffer, which looks blurry.
+ironrdp-dvc = { version = "0.4", optional = true }
+ironrdp-displaycontrol = { version = "0.4", optional = true }
+# Needed directly for the KDC network client CredSSP suspends on during
+# Kerberos authentication. Version tracks what ironrdp-connector 0.7 uses.
+# Default features off: only two types are used from it, and the defaults
+# drag in a blocking reqwest stack that is both unused and extra attack
+# surface.
+sspi = { version = "0.16", default-features = false, optional = true }
 # Not used directly — this is a resolution pin. ironrdp-connector 0.7
 # requires `picky = "7.0.0-rc.17"`, which on a prerelease also matches
 # rc.26; that newer picky no longer compiles against the `sspi` version

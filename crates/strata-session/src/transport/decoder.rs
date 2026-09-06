@@ -109,6 +109,19 @@ mod tests {
     }
 
     #[test]
+    fn decodes_the_browser_resize_instruction() {
+        let mut decoder = GuacDecoder::default();
+        decoder.extend(b"4.size,4.1920,3.951;");
+        assert_eq!(
+            decoder.next_instruction().unwrap(),
+            Some(ClientInstruction::Size {
+                width: 1920,
+                height: 951,
+            })
+        );
+    }
+
+    #[test]
     fn rejects_an_unterminated_flood() {
         let mut decoder = GuacDecoder::new(64);
         decoder.extend(b"999999.");

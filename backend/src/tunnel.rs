@@ -685,12 +685,15 @@ pub async fn proxy(
     ws: WebSocket,
     guacd_host: &str,
     guacd_port: u16,
-    handshake: HandshakeParams,
+    mut handshake: HandshakeParams,
     nvr: Option<NvrContext>,
     display_timezone: String,
     watchdog_token: Option<String>,
     user_id: uuid::Uuid,
 ) -> Result<(), AppError> {
+    crate::session_engine::resolve_global_kdc(&mut handshake, nvr.as_ref().map(|ctx| &ctx.db_pool))
+        .await;
+
     if let Some(protocol) = crate::session_engine::select_native(&handshake) {
         return crate::session_engine::run_native(
             ws,

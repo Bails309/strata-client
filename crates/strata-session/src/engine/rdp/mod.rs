@@ -29,7 +29,10 @@
 //! lifetime, so its sockets stay registered with the reactor that owns
 //! them.
 
+pub mod clipboard;
+pub mod kdc;
 pub mod keycodes;
+pub mod layouts;
 
 use std::collections::VecDeque;
 
@@ -37,22 +40,40 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ExtendedColorType, ImageEncoder};
+use ironrdp_cliprdr::pdu::{ClipboardFormat, ClipboardFormatId, FormatDataResponse};
+use ironrdp_cliprdr::{Client as CliprdrClientRole, CliprdrClient, CliprdrSvcMessages};
+use ironrdp_connector::connection_activation::{
+    ConnectionActivationSequence, ConnectionActivationState,
+};
+use ironrdp_connector::credssp::KerberosConfig;
 use ironrdp_connector::{ClientConnector, Config as ConnectorConfig, Credentials, DesktopSize};
+use ironrdp_core::{IntoOwned, WriteBuf};
+use ironrdp_displaycontrol::client::DisplayControlClient;
+use ironrdp_dvc::DrdynvcClient;
 use ironrdp_graphics::image_processing::PixelFormat;
-use ironrdp_pdu::geometry::Rectangle as _;
+use ironrdp_graphics::pointer::DecodedPointer;
+use ironrdp_pdu::geometry::{InclusiveRectangle, Rectangle as _};
 use ironrdp_pdu::input::fast_path::{FastPathInputEvent, KeyboardFlags};
 use ironrdp_pdu::input::mouse::PointerFlags;
 use ironrdp_pdu::input::MousePdu;
 use ironrdp_pdu::rdp::client_info::PerformanceFlags;
+use ironrdp_pdu::rdp::headers::ShareDataPdu;
+use ironrdp_pdu::rdp::refresh_rectangle::RefreshRectanglePdu;
 use ironrdp_pdu::Action;
+use ironrdp_session::fast_path::ProcessorBuilder;
 use ironrdp_session::image::DecodedImage;
 use ironrdp_session::{ActiveStage, ActiveStageOutput};
-use ironrdp_tokio::{FramedWrite as _, TokioFramed};
+use ironrdp_tokio::{single_sequence_step, FramedWrite as _, TokioFramed};
 use secrecy::ExposeSecret;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::client::TlsStream;
 
+use crate::engine::rdp::clipboard::{
+    decode_clipboard, encode_clipboard, preferred_text_format, ClipboardEvent, SessionClipboard,
+    MAX_CLIPBOARD_BYTES,
+};
+use crate::engine::rdp::kdc::KdcNetworkClient;
 use crate::engine::rdp::keycodes::keysym_to_scancode;
 use crate::engine::{EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec};
 use crate::error::EngineError;
@@ -72,6 +93,66 @@ pub struct RdpConfig {
     pub keyboard_layout: u32,
     /// Windows domain, when the account is not local to the target.
     pub domain: Option<String>,
+    /// KDC address for Kerberos authentication, e.g. `tcp://dc.corp:88`.
+    ///
+    /// Required by targets whose domain policy refuses NTLM. Without
+    /// it CredSSP can only offer NTLM, and such a target rejects the
+    /// session. Mirrors guacd's `kdc-url` connection parameter.
+    pub kdc_url: Option<String>,
+    /// Desktop eye-candy the target may spend bandwidth on.
+    pub performance: RdpPerformance,
+    /// Drop every keyboard, mouse and paste event from the client.
+    pub read_only: bool,
+    /// Never carry the target's clipboard back to the client.
+    pub disable_copy: bool,
+    /// Never carry the client's clipboard to the target.
+    pub disable_paste: bool,
+}
+
+/// Desktop features the target may enable, mirroring guacd's
+/// `enable-*` connection parameters. All off by default: each one costs
+/// bandwidth, which is why guacd disables them unless asked.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RdpPerformance {
+    /// `enable-wallpaper`.
+    pub wallpaper: bool,
+    /// `enable-theming`.
+    pub theming: bool,
+    /// `enable-font-smoothing`.
+    pub font_smoothing: bool,
+    /// `enable-full-window-drag`.
+    pub full_window_drag: bool,
+    /// `enable-desktop-composition`.
+    pub desktop_composition: bool,
+    /// `enable-menu-animations`.
+    pub menu_animations: bool,
+}
+
+impl RdpPerformance {
+    fn to_flags(self) -> PerformanceFlags {
+        // The wire format is expressed as opt-outs, so an unset option
+        // has to be translated into an explicit DISABLE_ bit.
+        let mut flags = PerformanceFlags::empty();
+        if !self.wallpaper {
+            flags |= PerformanceFlags::DISABLE_WALLPAPER;
+        }
+        if !self.theming {
+            flags |= PerformanceFlags::DISABLE_THEMING;
+        }
+        if !self.full_window_drag {
+            flags |= PerformanceFlags::DISABLE_FULLWINDOWDRAG;
+        }
+        if !self.menu_animations {
+            flags |= PerformanceFlags::DISABLE_MENUANIMATIONS;
+        }
+        if self.font_smoothing {
+            flags |= PerformanceFlags::ENABLE_FONT_SMOOTHING;
+        }
+        if self.desktop_composition {
+            flags |= PerformanceFlags::ENABLE_DESKTOP_COMPOSITION;
+        }
+        flags
+    }
 }
 
 impl Default for RdpConfig {
@@ -80,6 +161,11 @@ impl Default for RdpConfig {
             client_name: "strata".to_owned(),
             keyboard_layout: 0x0409,
             domain: None,
+            kdc_url: None,
+            performance: RdpPerformance::default(),
+            read_only: false,
+            disable_copy: false,
+            disable_paste: false,
         }
     }
 }
@@ -192,6 +278,33 @@ impl ProtocolEngine for RdpEngine {
     }
 }
 
+/// Wheel rotation per notch, as defined by RDP.
+const WHEEL_UNITS: i16 = 120;
+
+/// PNG-encode a server pointer for use as a Guacamole cursor layer.
+fn encode_cursor(pointer: &DecodedPointer) -> Result<TargetEvent, EngineError> {
+    let (width, height) = (u32::from(pointer.width), u32::from(pointer.height));
+
+    let mut png = Vec::new();
+    PngEncoder::new_with_quality(&mut png, CompressionType::Fast, FilterType::Adaptive)
+        .write_image(
+            &pointer.bitmap_data,
+            width,
+            height,
+            ExtendedColorType::Rgba8,
+        )
+        .map_err(|e| EngineError::Protocol(format!("cursor encode failed: {e}")))?;
+
+    Ok(TargetEvent::CursorImage {
+        hotspot_x: u32::from(pointer.hotspot_x),
+        hotspot_y: u32::from(pointer.hotspot_y),
+        width,
+        height,
+        mimetype: "image/png",
+        data: Bytes::from(png),
+    })
+}
+
 /// Owns the non-`Send` `ironrdp` state for one session.
 struct RdpSession {
     framed: TokioFramed<TlsStream<TcpStream>>,
@@ -200,6 +313,23 @@ struct RdpSession {
     pending: VecDeque<TargetEvent>,
     width: u16,
     height: u16,
+    /// Size we last asked the target for, to avoid re-sending it. Kept
+    /// apart from `width`/`height`, which only ever track what the
+    /// target actually activated.
+    requested_size: Option<(u16, u16)>,
+    /// Last Guacamole button mask, needed to derive press/release edges.
+    mouse_mask: u8,
+    clipboard: mpsc::UnboundedReceiver<ClipboardEvent>,
+    /// What the operator last copied, held until the target pastes.
+    local_clipboard: Option<String>,
+    /// Format we last asked the target for, needed to decode its reply.
+    pending_paste: Option<ClipboardFormatId>,
+    /// Drop every keyboard, mouse and paste event from the client.
+    read_only: bool,
+    /// Never carry the target's clipboard back to the client.
+    disable_copy: bool,
+    /// Never carry the client's clipboard to the target.
+    disable_paste: bool,
     finished: bool,
 }
 
@@ -294,13 +424,13 @@ impl RdpSession {
             domain: config.domain.clone(),
             client_name: config.client_name.clone(),
             keyboard_layout: config.keyboard_layout,
-            // RDP delivers the mouse pointer out of band rather than
-            // drawing it into the framebuffer. Wire Compatibility Mode
-            // has no cursor layer yet, so have ironrdp composite the
-            // pointer into the image instead — without this the operator
-            // sees no cursor at all.
+            performance_flags: config.performance.to_flags(),
+            // The pointer is forwarded as its own cursor layer rather
+            // than drawn into the framebuffer: compositing costs an
+            // image update per mouse move and trails wherever one is
+            // missed.
             enable_server_pointer: true,
-            pointer_software_rendering: true,
+            pointer_software_rendering: false,
             ..default_connector_config()
         };
         // Nothing below may observe the credential.
@@ -313,7 +443,17 @@ impl RdpSession {
         // logs it, but ironrdp requires it up front.
         let client_addr = stream.local_addr().map_err(EngineError::Transport)?;
         let mut framed = TokioFramed::new(stream);
-        let mut connector = ClientConnector::new(connector_config, client_addr);
+        let (clipboard_tx, clipboard) = mpsc::unbounded_channel();
+        let mut connector = ClientConnector::new(connector_config, client_addr)
+            .with_static_channel(
+                // Carries MS-RDPEDISP, which lets the desktop follow the
+                // browser window instead of being scaled to fit it.
+                DrdynvcClient::new()
+                    .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new()))),
+            )
+            .with_static_channel(CliprdrClient::new(Box::new(SessionClipboard::new(
+                clipboard_tx,
+            ))));
 
         let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector)
             .await
@@ -339,14 +479,25 @@ impl RdpSession {
         let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
         let mut framed = TokioFramed::new(upgraded_stream);
 
+        let kerberos = config
+            .kdc_url
+            .clone()
+            .map(|kdc_url| KerberosConfig::new(Some(kdc_url), Some(hostname.clone())))
+            .transpose()
+            .map_err(map_connector)?;
+        let mut network_client = KdcNetworkClient;
+        let network_client = kerberos
+            .as_ref()
+            .map(|_| &mut network_client as &mut dyn ironrdp_tokio::AsyncNetworkClient);
+
         let connection = ironrdp_tokio::connect_finalize(
             upgraded,
             &mut framed,
             connector,
             hostname.as_str().into(),
             server_public_key,
-            None,
-            None,
+            network_client,
+            kerberos,
         )
         .await
         .map_err(map_connector)?;
@@ -368,15 +519,25 @@ impl RdpSession {
         let mut stage = ActiveStage::new(connection);
         stage.set_enable_server_pointer(true);
 
-        Ok(Self {
+        let mut session = Self {
             framed,
             stage,
             image,
             pending,
             width,
             height,
+            mouse_mask: 0,
+            clipboard,
+            local_clipboard: None,
+            pending_paste: None,
+            requested_size: None,
+            read_only: config.read_only,
+            disable_copy: config.disable_copy,
+            disable_paste: config.disable_paste,
             finished: false,
-        })
+        };
+        session.request_full_repaint().await?;
+        Ok(session)
     }
 
     /// Turn stage outputs into client events, writing responses back.
@@ -390,6 +551,13 @@ impl RdpSession {
                         .map_err(EngineError::Transport)?;
                 }
                 ActiveStageOutput::GraphicsUpdate(region) => {
+                    tracing::debug!(
+                        left = region.left,
+                        top = region.top,
+                        right = region.right,
+                        bottom = region.bottom,
+                        "rdp graphics update"
+                    );
                     let event = self.encode_region(&region)?;
                     self.pending.push_back(event);
                 }
@@ -399,28 +567,119 @@ impl RdpSession {
                         reason: reason.to_string(),
                     });
                 }
-                ActiveStageOutput::DeactivateAll(_) => {
-                    // A resolution change restarts the activation
-                    // sequence; the next GraphicsUpdate repaints.
-                    tracing::debug!("rdp server deactivated all, awaiting reactivation");
+                ActiveStageOutput::DeactivateAll(activation) => {
+                    self.reactivate(activation).await?;
                 }
-                // Cursor shape and position are a Phase 3 concern: the
-                // Guacamole `cursor` instruction needs the pointer
-                // bitmap uploaded as its own layer.
-                ActiveStageOutput::PointerDefault
-                | ActiveStageOutput::PointerHidden
-                | ActiveStageOutput::PointerPosition { .. }
-                | ActiveStageOutput::PointerBitmap(_) => {}
+                ActiveStageOutput::PointerBitmap(pointer) => {
+                    self.pending.push_back(encode_cursor(&pointer)?);
+                }
+                ActiveStageOutput::PointerHidden => {
+                    self.pending.push_back(TargetEvent::CursorHidden);
+                }
+                // The browser positions its own pointer, and keeps the
+                // last shape until the server sends a new one.
+                ActiveStageOutput::PointerDefault | ActiveStageOutput::PointerPosition { .. } => {}
             }
         }
         Ok(())
     }
 
+    /// Run the Deactivation-Reactivation Sequence the server asked for.
+    ///
+    /// Windows sends this whenever the session's capabilities change —
+    /// notably when the desktop replaces the logon screen. Ignoring it
+    /// leaves both ends disagreeing about the capability set, and the
+    /// server stops painting the desktop.
+    async fn reactivate(
+        &mut self,
+        mut activation: Box<ConnectionActivationSequence>,
+    ) -> Result<(), EngineError> {
+        let mut buf = WriteBuf::new();
+        loop {
+            single_sequence_step(&mut self.framed, &mut *activation, &mut buf)
+                .await
+                .map_err(map_connector)?;
+
+            let ConnectionActivationState::Finalized {
+                io_channel_id,
+                user_channel_id,
+                desktop_size,
+                enable_server_pointer,
+                pointer_software_rendering,
+            } = &activation.state
+            else {
+                continue;
+            };
+
+            let (width, height) = (desktop_size.width, desktop_size.height);
+            self.stage.set_fastpath_processor(
+                ProcessorBuilder {
+                    io_channel_id: *io_channel_id,
+                    user_channel_id: *user_channel_id,
+                    enable_server_pointer: *enable_server_pointer,
+                    pointer_software_rendering: *pointer_software_rendering,
+                }
+                .build(),
+            );
+            self.stage.set_enable_server_pointer(*enable_server_pointer);
+
+            // Rebuilding the framebuffer blanks it, so only do so when
+            // the size actually changed — otherwise a reactivation
+            // would discard a desktop the server believes we still have.
+            let resized = self.width != width || self.height != height;
+            self.requested_size = None;
+            if resized {
+                self.width = width;
+                self.height = height;
+                self.image = DecodedImage::new(PixelFormat::RgbA32, width, height);
+                self.pending.push_back(TargetEvent::Resized {
+                    width: u32::from(width),
+                    height: u32::from(height),
+                });
+            }
+
+            tracing::info!(width, height, resized, "rdp reactivation complete");
+            self.request_full_repaint().await?;
+            return Ok(());
+        }
+    }
+
+    /// Ask the server to redraw the whole desktop.
+    ///
+    /// A server only volunteers the regions it considers damaged, so a
+    /// session attaching to an already-composed desktop would otherwise
+    /// stay black until something on screen happened to move.
+    async fn request_full_repaint(&mut self) -> Result<(), EngineError> {
+        tracing::info!(
+            width = self.width,
+            height = self.height,
+            "requesting full rdp repaint"
+        );
+        let area = InclusiveRectangle {
+            left: 0,
+            top: 0,
+            right: self.width.saturating_sub(1),
+            bottom: self.height.saturating_sub(1),
+        };
+
+        let mut buf = WriteBuf::new();
+        self.stage
+            .encode_static(
+                &mut buf,
+                ShareDataPdu::RefreshRectangle(RefreshRectanglePdu {
+                    areas_to_refresh: vec![area],
+                }),
+            )
+            .map_err(|e| EngineError::Protocol(e.to_string()))?;
+
+        self.framed
+            .write_all(buf.filled())
+            .await
+            .map_err(EngineError::Transport)
+    }
+
     /// Crop the framebuffer to `region` and PNG-encode it.
-    fn encode_region(
-        &self,
-        region: &ironrdp_pdu::geometry::InclusiveRectangle,
-    ) -> Result<TargetEvent, EngineError> {
+    fn encode_region(&self, region: &InclusiveRectangle) -> Result<TargetEvent, EngineError> {
         let bpp = self.image.bytes_per_pixel();
         let stride = usize::from(self.image.width()) * bpp;
         let (left, top) = (usize::from(region.left), usize::from(region.top));
@@ -442,6 +701,7 @@ impl RdpSession {
             };
             cropped.extend_from_slice(slice);
         }
+        make_opaque(&mut cropped);
 
         let mut png = Vec::new();
         PngEncoder::new_with_quality(&mut png, CompressionType::Fast, FilterType::Adaptive)
@@ -461,6 +721,140 @@ impl RdpSession {
         })
     }
 
+    /// Act on everything the clipboard channel produced while decoding.
+    ///
+    /// Drained after each PDU rather than selected on, because the
+    /// backend only ever emits from inside `ActiveStage::process`.
+    async fn drain_clipboard(&mut self) -> Result<(), EngineError> {
+        while let Ok(event) = self.clipboard.try_recv() {
+            match event {
+                ClipboardEvent::RemoteFormats(formats) => {
+                    tracing::debug!(
+                        formats = ?formats.iter().map(|f| f.value()).collect::<Vec<_>>(),
+                        "rdp clipboard: target advertised formats"
+                    );
+                    if self.disable_copy {
+                        // Never ask for the data: what is not requested
+                        // cannot leak if a later guard is missed.
+                        continue;
+                    }
+                    let Some(format) = preferred_text_format(&formats) else {
+                        tracing::debug!("rdp clipboard: no usable text format advertised");
+                        continue;
+                    };
+                    // Formats are only an advert; the data needs asking for.
+                    let messages = self
+                        .cliprdr()?
+                        .initiate_paste(format)
+                        .map_err(|e| EngineError::Protocol(e.to_string()))?;
+                    tracing::debug!(
+                        format = format.value(),
+                        "rdp clipboard: requesting data from target"
+                    );
+                    self.pending_paste = Some(format);
+                    self.write_svc(messages).await?;
+                }
+                ClipboardEvent::RemoteData { is_error, data } => {
+                    tracing::debug!(
+                        is_error,
+                        len = data.len(),
+                        pending = ?self.pending_paste.map(|f| f.value()),
+                        "rdp clipboard: data response from target"
+                    );
+                    if is_error || data.len() > MAX_CLIPBOARD_BYTES {
+                        if data.len() > MAX_CLIPBOARD_BYTES {
+                            tracing::warn!(
+                                bytes = data.len(),
+                                "target clipboard payload too large; dropped"
+                            );
+                        }
+                        continue;
+                    }
+                    let format = self
+                        .pending_paste
+                        .unwrap_or(ClipboardFormatId::CF_UNICODETEXT);
+                    match decode_clipboard(format, &data) {
+                        Some(text) => {
+                            tracing::debug!(
+                                chars = text.len(),
+                                "rdp clipboard: forwarding to client"
+                            );
+                            self.pending.push_back(TargetEvent::Clipboard(text));
+                        }
+                        None => tracing::debug!(
+                            format = format.value(),
+                            "rdp clipboard: could not decode data response"
+                        ),
+                    }
+                }
+                ClipboardEvent::DataRequest(format) => {
+                    tracing::debug!(
+                        format = format.value(),
+                        have_local = self.local_clipboard.is_some(),
+                        "rdp clipboard: target requested our data"
+                    );
+                    let response = match self.local_clipboard.clone() {
+                        Some(text) if !self.disable_paste => encode_clipboard(format, &text),
+                        _ => FormatDataResponse::new_error(),
+                    }
+                    .into_owned();
+                    let messages = self
+                        .cliprdr()?
+                        .submit_format_data(response)
+                        .map_err(|e| EngineError::Protocol(e.to_string()))?;
+                    self.write_svc(messages).await?;
+                }
+                ClipboardEvent::FormatListRequested => {
+                    // MS-RDPECLIP: the server withholds its own format lists
+                    // until the client answers Monitor Ready with one.
+                    self.advertise_local_formats().await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Announce what we can paste into the target.
+    ///
+    /// An empty list is legal and means "nothing to offer yet"; it still
+    /// completes the handshake that unblocks the target's own adverts.
+    async fn advertise_local_formats(&mut self) -> Result<(), EngineError> {
+        let formats = if self.local_clipboard.is_some() {
+            vec![
+                ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT),
+                ClipboardFormat::new(ClipboardFormatId::CF_TEXT),
+            ]
+        } else {
+            Vec::new()
+        };
+        let messages = self
+            .cliprdr()?
+            .initiate_copy(&formats)
+            .map_err(|e| EngineError::Protocol(e.to_string()))?;
+        self.write_svc(messages).await?;
+        Ok(())
+    }
+
+    fn cliprdr(&mut self) -> Result<&CliprdrClient, EngineError> {
+        self.stage
+            .get_svc_processor::<CliprdrClient>()
+            .ok_or_else(|| EngineError::Protocol("clipboard channel is not available".to_owned()))
+    }
+
+    async fn write_svc(
+        &mut self,
+        messages: CliprdrSvcMessages<CliprdrClientRole>,
+    ) -> Result<(), EngineError> {
+        let frame = self
+            .stage
+            .process_svc_processor_messages(messages)
+            .map_err(|e| EngineError::Protocol(e.to_string()))?;
+        self.framed
+            .write_all(&frame)
+            .await
+            .map_err(EngineError::Transport)
+    }
+
     async fn send_input(&mut self, events: &[FastPathInputEvent]) -> Result<(), EngineError> {
         let outputs = self
             .stage
@@ -470,15 +864,45 @@ impl RdpSession {
     }
 
     async fn handle_input(&mut self, input: InputEvent) -> Result<(), EngineError> {
+        // Resize keeps working read-only: it only affects what this
+        // viewer sees, and blocking it would leave the desktop blurred.
+        if self.read_only
+            && matches!(
+                input,
+                InputEvent::Mouse { .. } | InputEvent::Key { .. } | InputEvent::Clipboard(_)
+            )
+        {
+            return Ok(());
+        }
         match input {
             InputEvent::Mouse { x, y, mask } => {
-                let event = FastPathInputEvent::MouseEvent(MousePdu {
-                    flags: pointer_flags(mask),
-                    number_of_wheel_rotation_units: 0,
-                    x_position: clamp_coord(x, self.width),
-                    y_position: clamp_coord(y, self.height),
-                });
-                self.send_input(&[event]).await?;
+                let events = mouse_events(
+                    self.mouse_mask,
+                    mask,
+                    clamp_coord(x, self.width),
+                    clamp_coord(y, self.height),
+                )
+                .into_iter()
+                .map(FastPathInputEvent::MouseEvent)
+                .collect::<Vec<_>>();
+                self.mouse_mask = mask;
+                self.send_input(&events).await?;
+            }
+            InputEvent::Clipboard(data) => {
+                if self.disable_paste {
+                    return Ok(());
+                }
+                if data.len() > MAX_CLIPBOARD_BYTES {
+                    tracing::warn!(bytes = data.len(), "clipboard payload too large; dropped");
+                    return Ok(());
+                }
+                let Ok(text) = String::from_utf8(data.to_vec()) else {
+                    return Ok(());
+                };
+                self.local_clipboard = Some(text);
+                // Delayed rendering: advertise only. The target asks for
+                // the data if and when someone pastes.
+                self.advertise_local_formats().await?;
             }
             InputEvent::Key { keysym, pressed } => {
                 let Some(scancode) = keysym_to_scancode(keysym) else {
@@ -496,7 +920,9 @@ impl RdpSession {
             }
             InputEvent::Resize { width, height } => {
                 let (width, height) = (clamp_dimension(width), clamp_dimension(height));
-                if (width, height) == (self.width, self.height) {
+                if (width, height) == (self.width, self.height)
+                    || self.requested_size == Some((width, height))
+                {
                     return Ok(());
                 }
                 // Only targets that negotiated the Display Control
@@ -511,8 +937,10 @@ impl RdpSession {
                             .write_all(&frame)
                             .await
                             .map_err(EngineError::Transport)?;
-                        self.width = width;
-                        self.height = height;
+                        // Deliberately not touching `self.width`/`height`:
+                        // the target picks the real size and announces it
+                        // through the reactivation sequence.
+                        self.requested_size = Some((width, height));
                     }
                     Some(Err(e)) => return Err(EngineError::Protocol(e.to_string())),
                     None => tracing::debug!("target does not support dynamic resize"),
@@ -524,9 +952,8 @@ impl RdpSession {
                     reason: "client requested disconnect".to_owned(),
                 });
             }
-            // Clipboard needs the CLIPRDR static channel wiring up; raw
-            // text has no meaning to a graphical target.
-            InputEvent::Clipboard(_) | InputEvent::Text(_) => {}
+            // Raw text has no meaning to a graphical target.
+            InputEvent::Text(_) => {}
         }
         Ok(())
     }
@@ -551,7 +978,15 @@ impl RdpSession {
                 .process(&mut self.image, action, &payload)
                 .map_err(|e| EngineError::Protocol(e.to_string()))?,
         };
-        self.absorb(outputs).await
+        self.absorb(outputs).await?;
+        self.drain_clipboard().await
+    }
+}
+
+fn make_opaque(rgba: &mut [u8]) {
+    let (pixels, _) = rgba.as_chunks_mut::<4>();
+    for pixel in pixels {
+        pixel[3] = u8::MAX;
     }
 }
 
@@ -578,19 +1013,50 @@ impl EngineFactory for RdpEngineFactory {
     }
 }
 
-/// Map a Guacamole button mask onto RDP pointer flags.
-fn pointer_flags(mask: u8) -> PointerFlags {
-    let mut flags = PointerFlags::MOVE;
-    if mask & 0x01 != 0 {
-        flags |= PointerFlags::LEFT_BUTTON | PointerFlags::DOWN;
+/// Translate a Guacamole button mask change into RDP pointer events.
+///
+/// Guacamole reports the button state after every change, whereas RDP is
+/// edge-driven: a release is the button flag *without* `DOWN`. Sending
+/// only the state leaves the button held down forever and no click ever
+/// completes.
+fn mouse_events(previous: u8, mask: u8, x_position: u16, y_position: u16) -> Vec<MousePdu> {
+    let at = |flags, units| MousePdu {
+        flags,
+        number_of_wheel_rotation_units: units,
+        x_position,
+        y_position,
+    };
+
+    // Move first so a button lands where the operator released it.
+    let mut events = vec![at(PointerFlags::MOVE, 0)];
+
+    let buttons = [
+        (0x01, PointerFlags::LEFT_BUTTON),
+        (0x02, PointerFlags::MIDDLE_BUTTON_OR_WHEEL),
+        (0x04, PointerFlags::RIGHT_BUTTON),
+    ];
+    for (bit, button) in buttons {
+        let was_down = previous & bit != 0;
+        let is_down = mask & bit != 0;
+        if was_down == is_down {
+            continue;
+        }
+        let flags = if is_down {
+            button | PointerFlags::DOWN
+        } else {
+            button
+        };
+        events.push(at(flags, 0));
     }
-    if mask & 0x04 != 0 {
-        flags |= PointerFlags::RIGHT_BUTTON | PointerFlags::DOWN;
+
+    // The wheel arrives as a transient button press; RDP wants a rotation.
+    for (bit, units) in [(0x08, WHEEL_UNITS), (0x10, -WHEEL_UNITS)] {
+        if mask & bit != 0 && previous & bit == 0 {
+            events.push(at(PointerFlags::VERTICAL_WHEEL, units));
+        }
     }
-    if mask & 0x02 != 0 {
-        flags |= PointerFlags::MIDDLE_BUTTON_OR_WHEEL | PointerFlags::DOWN;
-    }
-    flags
+
+    events
 }
 
 /// RDP desktop dimensions are 16-bit and must be even.
@@ -655,6 +1121,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn desktop_pixels_are_encoded_as_opaque() {
+        let mut pixels = [10, 20, 30, 0, 40, 50, 60, 127];
+        make_opaque(&mut pixels);
+        assert_eq!(pixels, [10, 20, 30, 255, 40, 50, 60, 255]);
+    }
+
+    #[test]
     fn desktop_dimensions_are_clamped_and_even() {
         // RDP rejects odd widths on several codec paths.
         assert_eq!(clamp_dimension(1921), 1920);
@@ -673,24 +1146,56 @@ mod tests {
 
     #[test]
     fn a_bare_move_carries_no_button() {
-        let flags = pointer_flags(0);
-        assert!(flags.contains(PointerFlags::MOVE));
-        assert!(!flags.contains(PointerFlags::DOWN));
-        assert!(!flags.contains(PointerFlags::LEFT_BUTTON));
+        let events = mouse_events(0, 0, 10, 20);
+        assert_eq!(events.len(), 1);
+        assert!(events[0].flags.contains(PointerFlags::MOVE));
+        assert!(!events[0].flags.contains(PointerFlags::DOWN));
     }
 
     #[test]
     fn guacamole_button_bits_map_to_rdp_buttons() {
         // Guacamole: bit 0 left, bit 1 middle, bit 2 right.
-        let left = pointer_flags(0x01);
-        assert!(left.contains(PointerFlags::LEFT_BUTTON | PointerFlags::DOWN));
+        let left = mouse_events(0, 0x01, 0, 0);
+        assert!(left[1]
+            .flags
+            .contains(PointerFlags::LEFT_BUTTON | PointerFlags::DOWN));
 
-        let right = pointer_flags(0x04);
-        assert!(right.contains(PointerFlags::RIGHT_BUTTON | PointerFlags::DOWN));
-        assert!(!right.contains(PointerFlags::LEFT_BUTTON));
+        let right = mouse_events(0, 0x04, 0, 0);
+        assert!(right[1]
+            .flags
+            .contains(PointerFlags::RIGHT_BUTTON | PointerFlags::DOWN));
+        assert!(!right[1].flags.contains(PointerFlags::LEFT_BUTTON));
 
-        let middle = pointer_flags(0x02);
-        assert!(middle.contains(PointerFlags::MIDDLE_BUTTON_OR_WHEEL | PointerFlags::DOWN));
+        let middle = mouse_events(0, 0x02, 0, 0);
+        assert!(middle[1]
+            .flags
+            .contains(PointerFlags::MIDDLE_BUTTON_OR_WHEEL | PointerFlags::DOWN));
+    }
+
+    #[test]
+    fn releasing_a_button_sends_the_button_without_down() {
+        // Without this edge the server never sees the click complete.
+        let events = mouse_events(0x01, 0, 0, 0);
+        assert_eq!(events.len(), 2);
+        assert!(events[1].flags.contains(PointerFlags::LEFT_BUTTON));
+        assert!(!events[1].flags.contains(PointerFlags::DOWN));
+    }
+
+    #[test]
+    fn holding_a_button_while_moving_repeats_no_edge() {
+        let events = mouse_events(0x01, 0x01, 5, 5);
+        assert_eq!(events.len(), 1);
+        assert!(events[0].flags.contains(PointerFlags::MOVE));
+    }
+
+    #[test]
+    fn the_wheel_becomes_a_rotation() {
+        let up = mouse_events(0, 0x08, 0, 0);
+        assert!(up[1].flags.contains(PointerFlags::VERTICAL_WHEEL));
+        assert_eq!(up[1].number_of_wheel_rotation_units, WHEEL_UNITS);
+
+        let down = mouse_events(0, 0x10, 0, 0);
+        assert_eq!(down[1].number_of_wheel_rotation_units, -WHEEL_UNITS);
     }
 
     #[tokio::test]

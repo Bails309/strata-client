@@ -172,6 +172,27 @@ pub enum TargetEvent {
         /// New height in pixels.
         height: u32,
     },
+    /// The mouse cursor changed shape.
+    ///
+    /// Carried as its own event so the client can own the pointer:
+    /// compositing it into the framebuffer instead costs an image update
+    /// per mouse move and leaves a trail wherever an update is missed.
+    CursorImage {
+        /// Hotspot X within the bitmap.
+        hotspot_x: u32,
+        /// Hotspot Y within the bitmap.
+        hotspot_y: u32,
+        /// Bitmap width.
+        width: u32,
+        /// Bitmap height.
+        height: u32,
+        /// Image mimetype, e.g. `image/png`.
+        mimetype: &'static str,
+        /// Encoded image bytes.
+        data: Bytes,
+    },
+    /// The target hid the mouse cursor.
+    CursorHidden,
     /// The session ended.
     Disconnected {
         /// Human-readable reason.

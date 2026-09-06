@@ -29,7 +29,8 @@ use secrecy::SecretString;
 use strata_session::actor::{
     AuditSink, GuacRecordingSink, NullAuditSink, SessionActor, SessionConfig, SessionHandle,
 };
-use strata_session::engine::rdp::{RdpConfig, RdpEngineFactory};
+use strata_session::engine::rdp::layouts::keyboard_layout_id;
+use strata_session::engine::rdp::{RdpConfig, RdpEngineFactory, RdpPerformance};
 use strata_session::engine::ssh::{SshConfig, SshEngineFactory};
 use strata_session::engine::{EngineFactory, Protocol, ProtocolEngine, TargetSpec};
 use strata_session::protocol::ServerInstruction;
@@ -39,6 +40,7 @@ use strata_session::transport::{ClientFrame, GuacDecoder, GuacWireEncoder};
 use uuid::Uuid;
 
 use crate::error::AppError;
+use crate::services::kerberos_realms;
 use crate::tunnel::{HandshakeParams, NvrContext};
 
 /// How often the revocation / duration watchdog runs.
@@ -53,6 +55,85 @@ const MAX_TUNNEL_DURATION: Duration = Duration::from_secs(8 * 60 * 60);
 /// separated. Without it the native SSH engine has nothing to verify
 /// against and the session falls back to `guacd`.
 const HOST_KEY_PARAM: &str = "host-key-fingerprint";
+
+/// Connection parameter naming the KDC for Kerberos authentication.
+///
+/// Shared with the guacd path, whose Kerberos patch reads the same key,
+/// so a connection already configured for Kerberos works unchanged when
+/// routed to the native engine.
+const KDC_URL_PARAM: &str = "kdc-url";
+const AUTH_PACKAGE_PARAM: &str = "auth-pkg";
+
+/// Connection parameters the admin panel offers that the native RDP
+/// engine does not act on yet.
+///
+/// Routing a connection that sets one of these to the native engine
+/// would quietly drop a setting an administrator deliberately chose, so
+/// they are logged loudly at connect time. Device redirection and
+/// RemoteApp are absent rather than disabled, which fails safe; the
+/// display and audio options only cost fidelity.
+const UNSUPPORTED_RDP_PARAMS: &[&str] = &[
+    "enable-drive",
+    "enable-printing",
+    "enable-sftp",
+    "enable-audio-input",
+    "enable-touch",
+    "remote-app",
+    "initial-program",
+    "console",
+    "color-depth",
+    "enable-h264",
+    "force-lossless",
+    "timezone",
+    "load-balance-info",
+    "preconnection-id",
+    "preconnection-blob",
+    "gateway-hostname",
+    "wol-send-packet",
+];
+
+/// Warn about admin-configured parameters this engine will not honour.
+fn warn_unsupported_rdp_params(handshake: &HandshakeParams) {
+    let ignored: Vec<&str> = UNSUPPORTED_RDP_PARAMS
+        .iter()
+        .copied()
+        .filter(|key| {
+            handshake
+                .extra
+                .get(*key)
+                .is_some_and(|v| !v.trim().is_empty() && v != "false")
+        })
+        .collect();
+    if !ignored.is_empty() {
+        tracing::warn!(
+            params = ?ignored,
+            "native rdp engine ignores these connection parameters; \
+             route via guacd if they are required"
+        );
+    }
+    // `ignore-cert` is the one mismatch that fails open rather than
+    // closed: the TLS layer never validates the target certificate, so
+    // an administrator who cleared this box is not getting what it says.
+    if handshake
+        .extra
+        .get("ignore-cert")
+        .is_some_and(|v| v == "false")
+        || !handshake.ignore_cert
+    {
+        tracing::warn!(
+            "native rdp engine does not validate the target certificate; \
+             MITM resistance relies on CredSSP/Kerberos mutual authentication"
+        );
+    }
+}
+
+/// Read a checkbox-style parameter using guacd's truthiness rules.
+fn flag(handshake: &HandshakeParams, key: &str) -> bool {
+    handshake
+        .extra
+        .get(key)
+        .is_some_and(|v| matches!(v.trim(), "true" | "1"))
+}
 
 /// The process-wide rollout policy, read from the environment once.
 pub fn policy() -> &'static RoutingPolicy {
@@ -148,6 +229,46 @@ pub fn select_native(handshake: &HandshakeParams) -> Option<Protocol> {
     Some(protocol)
 }
 
+/// Apply global Kerberos realm settings to an auto-detect RDP connection.
+pub async fn resolve_global_kdc(
+    handshake: &mut HandshakeParams,
+    pool: Option<&sqlx::Pool<sqlx::Postgres>>,
+) {
+    if !handshake.protocol.eq_ignore_ascii_case("rdp")
+        || kdc_url(handshake).is_some()
+        || handshake
+            .extra
+            .get(AUTH_PACKAGE_PARAM)
+            .is_some_and(|value| value.eq_ignore_ascii_case("ntlm"))
+    {
+        return;
+    }
+
+    let (Some(pool), Some(domain)) = (pool, handshake.domain.as_deref()) else {
+        return;
+    };
+
+    match kerberos_realms::find_for_domain(pool, domain).await {
+        Ok(Some(realm)) => {
+            if let Some(kdc) = realm
+                .kdc_servers
+                .split(',')
+                .map(str::trim)
+                .find(|kdc| !kdc.is_empty())
+            {
+                handshake
+                    .extra
+                    .insert(KDC_URL_PARAM.to_owned(), kdc.to_owned());
+                tracing::info!(realm = %realm.realm, kdc, "resolved native RDP KDC from global realm");
+            }
+        }
+        Ok(None) => {}
+        Err(err) => {
+            tracing::warn!(error = %err, %domain, "failed to resolve global Kerberos realm")
+        }
+    }
+}
+
 /// Everything that must be true before a session can run natively.
 fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), String> {
     match protocol {
@@ -162,9 +283,18 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
             TerminalFont::discover(DEFAULT_FONT_SIZE_PX).map_err(|e| e.to_string())?;
             Ok(())
         }
-        // RDP produces image updates itself, so it needs no font, and
-        // CredSSP authenticates the target rather than a pinned key.
-        Protocol::Rdp => Ok(()),
+        Protocol::Rdp => {
+            let kerberos_only = handshake
+                .extra
+                .get(AUTH_PACKAGE_PARAM)
+                .is_some_and(|value| value.eq_ignore_ascii_case("kerberos"));
+            if kerberos_only && kdc_url(handshake).is_none() {
+                return Err(format!(
+                    "Kerberos-only RDP requires a `{KDC_URL_PARAM}` parameter for the native engine"
+                ));
+            }
+            Ok(())
+        }
         other => Err(format!("no native engine for {}", other.as_str())),
     }
 }
@@ -180,6 +310,19 @@ fn host_key_fingerprints(handshake: &HandshakeParams) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn kdc_url(handshake: &HandshakeParams) -> Option<String> {
+    handshake.extra.get(KDC_URL_PARAM).and_then(|raw| {
+        let value = raw.trim();
+        if value.is_empty() {
+            None
+        } else if value.contains("://") {
+            Some(value.to_owned())
+        } else {
+            Some(format!("tcp://{value}:88"))
+        }
+    })
 }
 
 /// Serve one session with the native engine.
@@ -538,9 +681,32 @@ async fn connect_engine(
             )))
         }
         Protocol::Rdp => {
+            warn_unsupported_rdp_params(handshake);
+            let layout = handshake
+                .extra
+                .get("server-layout")
+                .and_then(|name| keyboard_layout_id(name));
             let factory = RdpEngineFactory::new(RdpConfig {
                 domain: handshake.domain.clone(),
-                ..RdpConfig::default()
+                kdc_url: kdc_url(handshake),
+                keyboard_layout: layout.unwrap_or(RdpConfig::default().keyboard_layout),
+                client_name: handshake
+                    .extra
+                    .get("client-name")
+                    .map(|n| n.trim())
+                    .filter(|n| !n.is_empty())
+                    .map_or_else(|| RdpConfig::default().client_name, str::to_owned),
+                read_only: flag(handshake, "read-only"),
+                disable_copy: flag(handshake, "disable-copy"),
+                disable_paste: flag(handshake, "disable-paste"),
+                performance: RdpPerformance {
+                    wallpaper: flag(handshake, "enable-wallpaper"),
+                    theming: flag(handshake, "enable-theming"),
+                    font_smoothing: flag(handshake, "enable-font-smoothing"),
+                    full_window_drag: flag(handshake, "enable-full-window-drag"),
+                    desktop_composition: flag(handshake, "enable-desktop-composition"),
+                    menu_animations: flag(handshake, "enable-menu-animations"),
+                },
             });
             factory
                 .connect(spec)
@@ -614,8 +780,31 @@ mod tests {
 
     #[test]
     fn rdp_needs_no_pinned_host_key_or_font() {
-        // CredSSP authenticates the target, and the engine emits image
-        // updates itself, so neither SSH precondition applies.
         assert!(preflight(Protocol::Rdp, &handshake("rdp", None)).is_ok());
+    }
+
+    #[test]
+    fn kerberos_only_rdp_requires_an_explicit_kdc() {
+        let mut params = handshake("rdp", None);
+        params
+            .extra
+            .insert(AUTH_PACKAGE_PARAM.to_owned(), "kerberos".to_owned());
+
+        let err = preflight(Protocol::Rdp, &params).unwrap_err();
+        assert!(err.contains(KDC_URL_PARAM));
+    }
+
+    #[test]
+    fn a_bare_kdc_host_is_normalised_to_a_tcp_url() {
+        let mut params = handshake("rdp", None);
+        params.extra.insert(
+            KDC_URL_PARAM.to_owned(),
+            "cicsazvm001.capita-ics.co.uk".to_owned(),
+        );
+
+        assert_eq!(
+            kdc_url(&params).as_deref(),
+            Some("tcp://cicsazvm001.capita-ics.co.uk:88")
+        );
     }
 }

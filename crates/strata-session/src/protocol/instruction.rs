@@ -15,8 +15,6 @@ use crate::protocol::guacamole::{encode_instruction, GuacInstruction};
 pub enum ClientInstruction {
     /// The client display was resized.
     Size {
-        /// Layer index (`0` is the default layer).
-        layer: i32,
         /// New width in pixels.
         width: u32,
         /// New height in pixels.
@@ -82,9 +80,8 @@ impl ClientInstruction {
     pub fn from_wire(instruction: &GuacInstruction<'_>) -> Result<Self, WireError> {
         Ok(match instruction.opcode {
             "size" => Self::Size {
-                layer: instruction.arg_int(0)?,
-                width: instruction.arg_int(1)?,
-                height: instruction.arg_int(2)?,
+                width: instruction.arg_int(0)?,
+                height: instruction.arg_int(1)?,
             },
             "mouse" => Self::Mouse {
                 x: instruction.arg_int(0)?,
@@ -403,9 +400,8 @@ mod tests {
     #[test]
     fn decodes_resize_and_sync() {
         assert_eq!(
-            wire(b"4.size,1.0,4.1920,4.1080;"),
+            wire(b"4.size,4.1920,4.1080;"),
             ClientInstruction::Size {
-                layer: 0,
                 width: 1920,
                 height: 1080
             }

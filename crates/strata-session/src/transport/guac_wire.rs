@@ -18,10 +18,27 @@ use crate::transport::{ClientFrame, FrameEncoder, StreamingMode};
 const MAX_BLOB_BYTES: usize = 4536;
 
 /// Compositing mode for an opaque source-over draw.
-const COMPOSITE_OVER: u8 = 12;
+///
+/// Must stay `0xE`. The client maps `0xC` to the canvas `copy` operation,
+/// which clears everything outside the drawn rectangle — a single small
+/// update would blank the rest of the display.
+const COMPOSITE_OVER: u8 = 14;
+
+/// Compositing mode that replaces the destination entirely.
+///
+/// Only safe on a buffer sized exactly to the image. The cursor needs it:
+/// `size` is a no-op when the dimensions are unchanged, so drawing a new
+/// pointer with `COMPOSITE_OVER` would leave it stacked on the old one.
+const COMPOSITE_SRC: u8 = 12;
 
 /// The default layer every engine draws to.
 const DEFAULT_LAYER: i32 = 0;
+
+/// Off-screen buffer holding the cursor bitmap.
+///
+/// Guacamole buffers are negative layer indices; the client copies from
+/// this one into its own pointer.
+const CURSOR_LAYER: i32 = -1;
 
 /// Encodes target events as Guacamole text instructions.
 #[derive(Debug)]
@@ -76,46 +93,77 @@ impl GuacWireEncoder {
         data: &Bytes,
         out: &mut Vec<ClientFrame>,
     ) {
-        let stream = self.allocate_stream();
         let mut buf = BytesMut::new();
+        self.push_image(
+            &mut buf,
+            COMPOSITE_OVER,
+            DEFAULT_LAYER,
+            x,
+            y,
+            mimetype,
+            data,
+        );
+        out.push(ClientFrame::Text(buf.freeze()));
+    }
+
+    /// Append `img` + `blob`s + `end` targeting `layer`.
+    #[allow(clippy::too_many_arguments)]
+    fn push_image(
+        &mut self,
+        buf: &mut BytesMut,
+        mask: u8,
+        layer: i32,
+        x: i32,
+        y: i32,
+        mimetype: &str,
+        data: &Bytes,
+    ) {
+        let stream = self.allocate_stream();
         ServerInstruction::Img {
             stream,
-            mask: COMPOSITE_OVER,
-            layer: DEFAULT_LAYER,
+            mask,
+            layer,
             mimetype: mimetype.to_owned(),
             x,
             y,
         }
-        .encode(&mut buf);
+        .encode(buf);
         for chunk in data.chunks(MAX_BLOB_BYTES) {
             ServerInstruction::Blob {
                 stream,
                 data: BASE64.encode(chunk),
             }
-            .encode(&mut buf);
+            .encode(buf);
         }
-        ServerInstruction::End { stream }.encode(&mut buf);
-        out.push(ClientFrame::Text(buf.freeze()));
+        ServerInstruction::End { stream }.encode(buf);
     }
 
     /// Emit a clipboard stream heading to the client.
+    ///
+    /// One frame per instruction, matching guacd: a multi-megabyte
+    /// clipboard batched into a single frame would spike memory at both
+    /// ends and defeat the point of chunking it into blobs.
     pub fn encode_clipboard(&mut self, data: &Bytes, out: &mut Vec<ClientFrame>) {
         let stream = self.allocate_stream();
-        let mut buf = BytesMut::new();
+        let mut header = BytesMut::new();
         ServerInstruction::Clipboard {
             stream,
             mimetype: "text/plain".to_owned(),
         }
-        .encode(&mut buf);
+        .encode(&mut header);
+        out.push(ClientFrame::Text(header.freeze()));
         for chunk in data.chunks(MAX_BLOB_BYTES) {
+            let mut buf = BytesMut::new();
             ServerInstruction::Blob {
                 stream,
                 data: BASE64.encode(chunk),
             }
             .encode(&mut buf);
+            out.push(ClientFrame::Text(buf.freeze()));
         }
-        ServerInstruction::End { stream }.encode(&mut buf);
-        out.push(ClientFrame::Text(buf.freeze()));
+        let mut tail = BytesMut::new();
+        ServerInstruction::End { stream }.encode(&mut tail);
+        out.push(ClientFrame::Text(tail.freeze()));
     }
 
     /// Emit the control instructions shared by both streaming modes.
@@ -147,6 +195,58 @@ impl GuacWireEncoder {
                 ));
                 true
             }
+            TargetEvent::CursorImage {
+                hotspot_x,
+                hotspot_y,
+                width,
+                height,
+                mimetype,
+                data,
+            } => {
+                let mut buf = BytesMut::new();
+                // Sizing the buffer also clears the previous shape.
+                ServerInstruction::Size {
+                    layer: CURSOR_LAYER,
+                    width: *width,
+                    height: *height,
+                }
+                .encode(&mut buf);
+                self.push_image(&mut buf, COMPOSITE_SRC, CURSOR_LAYER, 0, 0, mimetype, data);
+                ServerInstruction::Cursor {
+                    hotspot_x: *hotspot_x as i32,
+                    hotspot_y: *hotspot_y as i32,
+                    src_layer: CURSOR_LAYER,
+                    src_x: 0,
+                    src_y: 0,
+                    src_width: *width,
+                    src_height: *height,
+                }
+                .encode(&mut buf);
+                out.push(ClientFrame::Text(buf.freeze()));
+                true
+            }
+            TargetEvent::CursorHidden => {
+                let mut buf = BytesMut::new();
+                // A 1x1 empty buffer is the protocol's way to hide it.
+                ServerInstruction::Size {
+                    layer: CURSOR_LAYER,
+                    width: 1,
+                    height: 1,
+                }
+                .encode(&mut buf);
+                ServerInstruction::Cursor {
+                    hotspot_x: 0,
+                    hotspot_y: 0,
+                    src_layer: CURSOR_LAYER,
+                    src_x: 0,
+                    src_y: 0,
+                    src_width: 1,
+                    src_height: 1,
+                }
+                .encode(&mut buf);
+                out.push(ClientFrame::Text(buf.freeze()));
+                true
+            }
             _ => false,
         }
     }
@@ -175,7 +275,10 @@ impl FrameEncoder for GuacWireEncoder {
             TargetEvent::VideoSlice { .. } | TargetEvent::TerminalOutput(_) => {
                 self.unsupported += 1;
             }
-            TargetEvent::Resized { .. } | TargetEvent::Disconnected { .. } => {
+            TargetEvent::Resized { .. }
+            | TargetEvent::Disconnected { .. }
+            | TargetEvent::CursorImage { .. }
+            | TargetEvent::CursorHidden => {
                 unreachable!("control events are handled by encode_control")
             }
         }
@@ -234,9 +337,42 @@ mod tests {
             parsed.iter().map(|(op, _)| op.as_str()).collect::<Vec<_>>(),
             vec!["img", "blob", "end"]
         );
+        // Source-over: anything else blanks the rest of the display.
+        assert_eq!(parsed[0].1[1], "14");
         assert_eq!(parsed[0].1[3], "image/webp");
         assert_eq!(parsed[0].1[4], "16");
         assert_eq!(BASE64.decode(&parsed[1].1[1]).unwrap(), b"RIFFfake");
+    }
+
+    #[test]
+    fn a_cursor_becomes_its_own_buffer_layer() {
+        let mut encoder = GuacWireEncoder::new();
+        let mut out = Vec::new();
+        encoder.encode(
+            &TargetEvent::CursorImage {
+                hotspot_x: 3,
+                hotspot_y: 4,
+                width: 32,
+                height: 32,
+                mimetype: "image/png",
+                data: Bytes::from_static(b"PNGfake"),
+            },
+            &mut out,
+        );
+        let parsed = instructions(&out);
+        assert_eq!(
+            parsed.iter().map(|(op, _)| op.as_str()).collect::<Vec<_>>(),
+            vec!["size", "img", "blob", "end", "cursor"]
+        );
+        // Buffer layers are negative, keeping the cursor off the display.
+        assert_eq!(parsed[0].1[0], "-1");
+        assert_eq!(parsed[1].1[2], "-1");
+        // Replace, or a new shape stacks on top of the previous one.
+        assert_eq!(parsed[1].1[1], "12");
+        let cursor = &parsed[4].1;
+        assert_eq!(cursor[0], "3");
+        assert_eq!(cursor[1], "4");
+        assert_eq!(cursor[2], "-1");
     }
 
     #[test]
@@ -254,6 +390,16 @@ mod tests {
             reassembled.extend(BASE64.decode(&args[1]).unwrap());
         }
         assert_eq!(reassembled, payload.to_vec());
+    }
+
+    #[test]
+    fn a_clipboard_stream_is_spread_over_frames() {
+        let mut encoder = GuacWireEncoder::new();
+        let mut out = Vec::new();
+        let payload = Bytes::from(vec![0xABu8; MAX_BLOB_BYTES * 2 + 7]);
+        encoder.encode_clipboard(&payload, &mut out);
+        // `clipboard`, three `blob`s and `end`, each its own frame.
+        assert_eq!(out.len(), 5);
     }
 
     #[test]

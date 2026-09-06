@@ -98,7 +98,10 @@ impl FrameEncoder for BinaryEncoder {
             // Raster fallbacks still occur on targets without EGFX; they
             // fall through to the text pipeline unchanged.
             TargetEvent::ImageUpdate { .. } => self.control.encode(event, out),
-            TargetEvent::Resized { .. } | TargetEvent::Disconnected { .. } => {
+            TargetEvent::Resized { .. }
+            | TargetEvent::Disconnected { .. }
+            | TargetEvent::CursorImage { .. }
+            | TargetEvent::CursorHidden => {
                 unreachable!("control events are handled by encode_control")
             }
         }

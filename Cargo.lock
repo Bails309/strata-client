@@ -2356,6 +2356,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironrdp-cliprdr"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebcd186e24e01d93a468b153d42ce71ae4dfd942ae06fccb7b89b0c1767ea589"
+dependencies = [
+ "bitflags 2.11.1",
+ "ironrdp-core",
+ "ironrdp-pdu",
+ "ironrdp-svc",
+ "tracing",
+]
+
+[[package]]
 name = "ironrdp-connector"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5298,7 +5311,11 @@ dependencies = [
  "fontdue",
  "futures-util",
  "image",
+ "ironrdp-cliprdr",
  "ironrdp-connector",
+ "ironrdp-core",
+ "ironrdp-displaycontrol",
+ "ironrdp-dvc",
  "ironrdp-graphics",
  "ironrdp-pdu",
  "ironrdp-session",
@@ -5307,6 +5324,7 @@ dependencies = [
  "picky",
  "russh",
  "secrecy",
+ "sspi",
  "strata-protocol",
  "thiserror 2.0.18",
  "tokio",

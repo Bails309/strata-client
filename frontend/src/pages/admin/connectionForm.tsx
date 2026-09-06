@@ -1093,7 +1093,7 @@ export function RdpSections({
                 <input
                   value={ex("kdc-url")}
                   onChange={(e) => setEx("kdc-url", e.target.value)}
-                  placeholder="kdc.example.com"
+                  placeholder="tcp://kdc.example.com:88"
                   title="The URL of the Kerberos Key Distribution Center (KDC). Leave blank to use the KDC from the matching Kerberos realm."
                 />
               </Field>

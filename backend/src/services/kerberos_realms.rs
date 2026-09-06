@@ -55,6 +55,23 @@ pub async fn list_all(pool: &Pool<Postgres>) -> Result<Vec<KerberosRealmRow>, Ap
     Ok(rows)
 }
 
+/// Find the realm matching `domain`, falling back to the configured default.
+pub async fn find_for_domain(
+    pool: &Pool<Postgres>,
+    domain: &str,
+) -> Result<Option<KerberosRealmRow>, AppError> {
+    let row = sqlx::query_as(&format!(
+        "SELECT {SELECT_COLUMNS} FROM kerberos_realms
+         WHERE upper(realm) = upper($1) OR is_default = true
+         ORDER BY (upper(realm) = upper($1)) DESC, is_default DESC
+         LIMIT 1",
+    ))
+    .bind(domain)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 /// Insert a new realm inside a transaction; if `is_default`, clears the
 /// existing default in the same tx for atomicity.
 pub async fn create(

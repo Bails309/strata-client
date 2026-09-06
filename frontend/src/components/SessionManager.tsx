@@ -420,17 +420,42 @@ export function SessionManagerProvider({
         // When the session is in a pop-out window the main window lacks focus
         // so navigator.clipboard.writeText() is denied by the browser. Use
         // the popup window's clipboard API instead since it has focus.
-        const clipNav =
+        const popout =
           session._popout && !session._popout.window.closed
-            ? session._popout.window.navigator
-            : navigator;
-        clipNav.clipboard?.writeText(text).catch((err: unknown) => {
-          // Best-effort copy — don't surface this to users (it spams on
-          // every keystroke in the iframe), but log so devs can spot a
-          // Permissions-Policy or cross-origin clipboard denial.
-          clipboardDiag(sessionId, "in", "local-write-failed", { err: String(err) });
-          console.warn("[session] clipboard write failed:", err);
-        });
+            ? session._popout.window
+            : undefined;
+        const target = popout ?? window;
+        const writer = target.navigator.clipboard;
+        if (!writer) {
+          // Optional chaining here would swallow the whole call, making a
+          // skipped write indistinguishable from a successful one.
+          clipboardDiag(sessionId, "in", "local-write-unavailable", {
+            popout: popout !== undefined,
+            secureContext: target.isSecureContext,
+          });
+          return;
+        }
+        const attempt = (retried: boolean): void => {
+          target.navigator.clipboard?.writeText(text).then(
+            () => {
+              clipboardDiag(sessionId, "in", "local-write-ok", { chars: text.length, retried });
+            },
+            (err: unknown) => {
+              // Best-effort copy — don't surface this to users (it spams on
+              // every keystroke in the iframe), but log so devs can spot a
+              // Permissions-Policy or cross-origin clipboard denial.
+              clipboardDiag(sessionId, "in", "local-write-failed", { err: String(err), retried });
+              console.warn("[session] clipboard write failed:", err);
+              // A denial for lack of focus is recoverable — the document
+              // owning the session usually regains focus moments later.
+              const denied = (err as { name?: string } | null)?.name === "NotAllowedError";
+              if (denied && !retried && !target.closed) {
+                target.addEventListener("focus", () => attempt(true), { once: true });
+              }
+            }
+          );
+        };
+        attempt(false);
       };
 
       const clearStallTimer = (): void => {

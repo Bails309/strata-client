@@ -8,6 +8,9 @@ e2e/
 certs/
 guacd/
 backend/target/
+target/
+target-*/
+backend/target-*/
 frontend/node_modules/
 frontend/dist/
 .env

@@ -138,6 +138,14 @@ services:
       - GUACD_HOST=guacd
       - GUACD_PORT=4822
       - GUACD_INSTANCES=${GUACD_INSTANCES:-}
+      # ── Native session engine (v2.0.0) ──
+      # guacd stays the default and the fallback. A protocol with no
+      # compiled native engine is never routed natively regardless of
+      # what these say. See .env for the rollout switches.
+      - STRATA_SESSION_ENGINE=${STRATA_SESSION_ENGINE:-guacd}
+      - STRATA_SESSION_NATIVE_PERCENT=${STRATA_SESSION_NATIVE_PERCENT:-0}
+      - STRATA_SESSION_NATIVE_HOSTS=${STRATA_SESSION_NATIVE_HOSTS:-}
+      - STRATA_SESSION_NATIVE_PROTOCOLS=${STRATA_SESSION_NATIVE_PROTOCOLS:-}
       - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME:-admin}
       - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-}
       - STRATA_ALLOWED_ORIGINS=${STRATA_ALLOWED_ORIGINS:-}

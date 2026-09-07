@@ -106,7 +106,6 @@ const RECORDING_OPTIONS_REQUIRING_GUACD: &[&str] =
 const RDP_PARAMS_IGNORED_NATIVELY: &[&str] = &[
     "color-depth",
     "enable-h264",
-    "force-lossless",
     "timezone",
     "enable-touch",
     "resize-method",
@@ -284,12 +283,12 @@ pub async fn resolve_global_kdc(
                 .kdc_servers
                 .split(',')
                 .map(str::trim)
-                .find(|kdc| !kdc.is_empty())
+                .find_map(normalise_kdc)
             {
                 handshake
                     .extra
-                    .insert(KDC_URL_PARAM.to_owned(), kdc.to_owned());
-                tracing::info!(realm = %realm.realm, kdc, "resolved native RDP KDC from global realm");
+                    .insert(KDC_URL_PARAM.to_owned(), kdc.clone());
+                tracing::info!(realm = %realm.realm, %kdc, "resolved RDP KDC from global realm");
             }
         }
         Ok(None) => {}
@@ -358,17 +357,29 @@ fn host_key_fingerprints(handshake: &HandshakeParams) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Normalise a KDC address into a URL both engines accept.
+///
+/// A bare hostname is what an administrator naturally types, and what
+/// the realm table stores, but guacd hands the value straight to
+/// FreeRDP's `KerberosKdcUrl` without touching it. Normalising once, at
+/// the point of discovery, keeps the two engines from disagreeing about
+/// what the same connection means.
+fn normalise_kdc(raw: &str) -> Option<String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        None
+    } else if value.contains("://") {
+        Some(value.to_owned())
+    } else {
+        Some(format!("tcp://{value}:88"))
+    }
+}
+
 fn kdc_url(handshake: &HandshakeParams) -> Option<String> {
-    handshake.extra.get(KDC_URL_PARAM).and_then(|raw| {
-        let value = raw.trim();
-        if value.is_empty() {
-            None
-        } else if value.contains("://") {
-            Some(value.to_owned())
-        } else {
-            Some(format!("tcp://{value}:88"))
-        }
-    })
+    handshake
+        .extra
+        .get(KDC_URL_PARAM)
+        .and_then(|raw| normalise_kdc(raw))
 }
 
 /// Serve one session with the native engine.
@@ -755,6 +766,7 @@ async fn connect_engine(
                 read_only: flag(handshake, "read-only"),
                 disable_copy: flag(handshake, "disable-copy"),
                 disable_paste: flag(handshake, "disable-paste"),
+                force_lossless: flag(handshake, "force-lossless"),
                 verify_certificate: !handshake.ignore_cert,
                 performance: RdpPerformance {
                     wallpaper: flag(handshake, "enable-wallpaper"),
@@ -803,6 +815,23 @@ mod tests {
             dpi: 96,
             extra,
         }
+    }
+
+    #[test]
+    fn a_discovered_kdc_is_normalised_for_both_engines() {
+        // guacd passes this straight to FreeRDP without normalising, so
+        // a bare hostname discovered from the realm table must not reach
+        // the handshake unqualified.
+        assert_eq!(
+            normalise_kdc("cicsazvm001.example.co.uk"),
+            Some("tcp://cicsazvm001.example.co.uk:88".to_owned())
+        );
+        // An address that already names a scheme is the admin's choice.
+        assert_eq!(
+            normalise_kdc(" tcp://kdc.example:88 "),
+            Some("tcp://kdc.example:88".to_owned())
+        );
+        assert_eq!(normalise_kdc("   "), None);
     }
 
     #[test]

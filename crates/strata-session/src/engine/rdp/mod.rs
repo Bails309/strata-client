@@ -497,12 +497,14 @@ impl RdpSession {
             client_name: config.client_name.clone(),
             keyboard_layout: config.keyboard_layout,
             performance_flags: config.performance.to_flags(),
-            // Left unset, ironrdp advertises RemoteFX, and the target then
-            // encodes the desktop with a lossy wavelet before we ever see
-            // it. Our PNG output stays lossless but the damage is already
-            // done: glyph edges arrive soft, which is what made text look
-            // worse here than through guacd. Refusing the codec makes the
-            // target send bitmaps we can reproduce exactly.
+            // Left unset, ironrdp advertises RemoteFX, a lossy wavelet, and
+            // the target may then degrade the desktop before our lossless
+            // encoder ever sees it. Measured against this pilot host the
+            // server never took the offer up — bytes per pixel did not move
+            // when it was withdrawn — so this buys fidelity we were already
+            // getting rather than fidelity we had lost. It stays because a
+            // gateway should not offer a lossy path it does not want, not
+            // because it fixed anything observable.
             bitmap: Some(BitmapConfig {
                 lossy_compression: false,
                 color_depth: 32,

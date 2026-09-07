@@ -626,6 +626,116 @@ mod tests {
         panic!("session ended before emitting {needle}");
     }
 
+    /// Spin until the engine has logged `count` inputs, or give up.
+    async fn wait_for_inputs(
+        inputs: &crate::engine::mock::InputLog,
+        count: usize,
+    ) -> Vec<InputEvent> {
+        for _ in 0..10_000 {
+            let snapshot = inputs.lock().unwrap().clone();
+            if snapshot.len() >= count {
+                return snapshot;
+            }
+            tokio::task::yield_now().await;
+        }
+        inputs.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn a_clipboard_stream_reaches_the_target_reassembled() {
+        let (handle, _frames, _events, inputs) = spawn_session();
+        handle
+            .send(ClientInstruction::Clipboard {
+                stream: 3,
+                mimetype: "text/plain".to_owned(),
+            })
+            .await
+            .unwrap();
+        for chunk in [b"hello ".as_slice(), b"world".as_slice()] {
+            handle
+                .send(ClientInstruction::Blob {
+                    stream: 3,
+                    data: BASE64.encode(chunk),
+                })
+                .await
+                .unwrap();
+        }
+        handle
+            .send(ClientInstruction::End { stream: 3 })
+            .await
+            .unwrap();
+
+        let recorded = wait_for_inputs(&inputs, 1).await;
+        assert_eq!(
+            recorded,
+            vec![InputEvent::Clipboard(Bytes::from_static(b"hello world"))]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_clipboard_stream_that_never_ends_cannot_grow_without_bound() {
+        // A peer that opens a stream and keeps sending is the memory
+        // exhaustion case the cap exists for; the stream is dropped
+        // rather than the session, so a bad paste is not a disconnect.
+        let (handle, _frames, _events, inputs) = spawn_session();
+        handle
+            .send(ClientInstruction::Clipboard {
+                stream: 1,
+                mimetype: "text/plain".to_owned(),
+            })
+            .await
+            .unwrap();
+
+        let megabyte = BASE64.encode(vec![b'x'; 1024 * 1024]);
+        for _ in 0..(MAX_CLIPBOARD_BYTES / (1024 * 1024)) + 2 {
+            handle
+                .send(ClientInstruction::Blob {
+                    stream: 1,
+                    data: megabyte.clone(),
+                })
+                .await
+                .unwrap();
+        }
+        handle
+            .send(ClientInstruction::End { stream: 1 })
+            .await
+            .unwrap();
+
+        // The discarded stream has no buffer left to flush on `end`.
+        assert!(
+            wait_for_inputs(&inputs, 1).await.is_empty(),
+            "an oversize clipboard stream still reached the target"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_malformed_clipboard_blob_discards_the_stream() {
+        let (handle, _frames, _events, inputs) = spawn_session();
+        handle
+            .send(ClientInstruction::Clipboard {
+                stream: 7,
+                mimetype: "text/plain".to_owned(),
+            })
+            .await
+            .unwrap();
+        handle
+            .send(ClientInstruction::Blob {
+                stream: 7,
+                data: "not valid base64!!".to_owned(),
+            })
+            .await
+            .unwrap();
+        handle
+            .send(ClientInstruction::End { stream: 7 })
+            .await
+            .unwrap();
+
+        assert!(
+            wait_for_inputs(&inputs, 1).await.is_empty(),
+            "a malformed clipboard blob was forwarded to the target"
+        );
+    }
+
     #[tokio::test]
     async fn a_native_session_writes_a_replayable_recording() {
         // The recording sink was wired to the native path but never

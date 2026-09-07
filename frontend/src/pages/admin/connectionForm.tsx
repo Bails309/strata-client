@@ -2,7 +2,13 @@ import { useState, useEffect } from "react";
 import Select from "../../components/Select";
 import { Field } from "../../components/Field";
 import { getTimezones } from "../../utils/time";
-import { getVdiImages, getTrustedCasForPicker, TrustedCaPickerEntry } from "../../api";
+import {
+  getVdiImages,
+  getTrustedCasForPicker,
+  TrustedCaPickerEntry,
+  discoverHostKey,
+  DiscoveredHostKey,
+} from "../../api";
 import { RDP_KEYBOARD_LAYOUTS } from "./rdpKeyboardLayouts";
 
 // ── Helper: Collapsible Section ─────────────────────────────────────
@@ -1131,10 +1137,31 @@ export function RdpSections({
 export function SshSections({
   ex,
   setEx,
+  connectionId,
 }: {
   ex: (k: string) => string;
   setEx: (k: string, v: string) => void;
+  /** Null while adding: there is no saved host to read a key from yet. */
+  connectionId?: string | null;
 }) {
+  const [probe, setProbe] = useState<DiscoveredHostKey | null>(null);
+  const [probing, setProbing] = useState(false);
+  const [probeError, setProbeError] = useState("");
+
+  async function fetchHostKey() {
+    if (!connectionId) return;
+    setProbing(true);
+    setProbeError("");
+    setProbe(null);
+    try {
+      setProbe(await discoverHostKey(connectionId));
+    } catch (e) {
+      setProbeError(e instanceof Error ? e.message : "Could not read the host key");
+    } finally {
+      setProbing(false);
+    }
+  }
+
   return (
     <>
       <Section title="Authentication" defaultOpen>
@@ -1172,6 +1199,63 @@ export function SshSections({
               placeholder="Server public key (optional)"
               title="The known public key of the SSH server, in OpenSSH format. If provided, the server's identity will be verified against this key."
             />
+            <div className="mt-2 flex flex-col gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  className="btn text-xs"
+                  onClick={fetchHostKey}
+                  disabled={!connectionId || probing}
+                  title={
+                    connectionId
+                      ? "Read the key this server currently presents, so it can be checked and approved."
+                      : "Save the connection first, so there is a host to read a key from."
+                  }
+                >
+                  {probing ? "Reading…" : "Fetch from server"}
+                </button>
+                <span className="text-[0.6rem] text-txt-tertiary italic">
+                  Required by the native engine, which will not connect to an unverified host.
+                </span>
+              </div>
+              {probeError && (
+                <span className="text-[0.65rem]" style={{ color: "#ef4444" }}>
+                  {probeError}
+                </span>
+              )}
+              {probe && (
+                <div
+                  className="rounded-lg px-3 py-2 grid gap-1"
+                  style={{ background: "var(--color-surface-tertiary)" }}
+                >
+                  <span className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
+                    {probe.algorithm} — check this against the host before approving
+                  </span>
+                  <code className="text-[0.7rem] break-all text-txt-primary">
+                    {probe.fingerprint}
+                  </code>
+                  <div className="flex gap-2 mt-1">
+                    <button
+                      type="button"
+                      className="btn-primary text-xs"
+                      onClick={() => {
+                        setEx("host-key", probe.public_key);
+                        setProbe(null);
+                      }}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      type="button"
+                      className="btn text-xs"
+                      onClick={() => setProbe(null)}
+                    >
+                      Discard
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </Field>
         </FieldGrid>
       </Section>

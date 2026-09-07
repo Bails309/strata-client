@@ -1166,6 +1166,23 @@ export const updateConnection = (id: string, data: Omit<Connection, "id">) =>
 export const deleteConnection = (id: string) =>
   request<{ status: string }>(`/admin/connections/${id}`, { method: "DELETE" });
 
+/** A host key read from a server, for an operator to approve or reject. */
+export interface DiscoveredHostKey {
+  algorithm: string;
+  fingerprint: string;
+  public_key: string;
+}
+
+/**
+ * Read the SSH host key the target currently presents.
+ *
+ * Returns it for review rather than saving it: the key arrives over the
+ * same unverified channel it is meant to protect, so a person still has
+ * to decide whether to trust it.
+ */
+export const discoverHostKey = (id: string) =>
+  request<DiscoveredHostKey>(`/admin/connections/${id}/host-key`, { method: "POST" });
+
 // ── Connection Folders ───────────────────────────────────────────────
 
 export interface ConnectionFolder {

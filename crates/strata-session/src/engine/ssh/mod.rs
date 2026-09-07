@@ -23,6 +23,7 @@ use russh::client::{self, Handle, Msg};
 use russh::keys::{HashAlg, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg, Disconnect};
 use secrecy::ExposeSecret;
+use tokio::sync::Mutex;
 
 use crate::engine::ssh::keymap::{keysym_to_bytes, Modifiers};
 use crate::engine::{EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec};
@@ -135,6 +136,84 @@ impl client::Handler for HostKeyChecker {
         tracing::warn!(%fingerprint, "rejecting unknown host key");
         Ok(false)
     }
+}
+
+/// A host key observed on a server, before anyone has decided to trust it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredHostKey {
+    /// Key algorithm, as OpenSSH names it, e.g. `ssh-ed25519`.
+    pub algorithm: String,
+    /// `SHA256:…`, in the form `ssh-keygen -lf` prints.
+    pub fingerprint: String,
+    /// The `<algorithm> <base64>` line, suitable for a known-hosts entry.
+    pub public_key: String,
+}
+
+/// Records the key a server presents instead of judging it.
+struct HostKeyRecorder {
+    seen: Arc<Mutex<Option<DiscoveredHostKey>>>,
+}
+
+impl client::Handler for HostKeyRecorder {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &PublicKeyOrCertificate,
+    ) -> Result<bool, Self::Error> {
+        let key = match server_public_key {
+            PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
+            PublicKeyOrCertificate::Certificate(cert) => cert.public_key().clone().into(),
+        };
+        *self.seen.lock().await = Some(DiscoveredHostKey {
+            algorithm: key.algorithm().to_string(),
+            fingerprint: key.fingerprint(HashAlg::Sha256).to_string(),
+            public_key: key.to_openssh().unwrap_or_default(),
+        });
+        // Refuse regardless. Discovery must never leave a usable session
+        // behind, and nothing here has authenticated anything.
+        Ok(false)
+    }
+}
+
+/// Observe the host key a server presents, without trusting or using it.
+///
+/// Finding a fingerprint by hand does not scale past a handful of hosts,
+/// which is how a gateway ends up with host checking switched off
+/// everywhere. This returns what the server offered so an operator can
+/// approve it, and deliberately returns rather than stores: a key that
+/// arrives over the same unverified channel it is meant to protect is
+/// evidence, not proof.
+///
+/// Only the key that negotiation actually selects is returned, which is
+/// the one a session would go on to use.
+pub async fn discover_host_key(
+    hostname: &str,
+    port: u16,
+    timeout: Duration,
+) -> Result<DiscoveredHostKey, EngineError> {
+    let client_config = Arc::new(client::Config {
+        nodelay: true,
+        ..client::Config::default()
+    });
+    let seen = Arc::new(Mutex::new(None));
+    let handler = HostKeyRecorder {
+        seen: Arc::clone(&seen),
+    };
+
+    // The connect is expected to fail: the handler rejects every key. The
+    // key is read from `seen` either way.
+    let _ = tokio::time::timeout(
+        timeout,
+        client::connect(client_config, (hostname, port), handler),
+    )
+    .await
+    .map_err(|_| {
+        EngineError::Protocol(format!("timed out reading the host key from {hostname}"))
+    })?;
+
+    let discovered = seen.lock().await.clone();
+    discovered.ok_or_else(|| EngineError::Protocol(format!("{hostname} offered no host key")))
 }
 
 /// A live SSH session with an interactive shell on a PTY.

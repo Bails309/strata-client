@@ -1117,7 +1117,9 @@ export default function AccessTab({
             {formCore.protocol === "rdp" && (
               <RdpSections extra={formExtra} setExtra={setFormExtra} ex={ex} setEx={setEx} />
             )}
-            {formCore.protocol === "ssh" && <SshSections ex={ex} setEx={setEx} />}
+            {formCore.protocol === "ssh" && (
+              <SshSections ex={ex} setEx={setEx} connectionId={formId} />
+            )}
             {formCore.protocol === "vnc" && <VncSections ex={ex} setEx={setEx} />}
             {formCore.protocol === "web" && <WebSections ex={ex} setEx={setEx} />}
             {formCore.protocol === "vdi" && <VdiSections ex={ex} setEx={setEx} />}

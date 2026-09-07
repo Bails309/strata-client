@@ -1505,6 +1505,78 @@ pub async fn update_connection(
     Ok(Json(row))
 }
 
+/// What a server presented, for an operator to approve or reject.
+#[derive(serde::Serialize)]
+pub struct DiscoveredHostKeyResponse {
+    pub algorithm: String,
+    pub fingerprint: String,
+    pub public_key: String,
+}
+
+/// `POST /api/admin/connections/{id}/host-key` — read a target's SSH host key.
+///
+/// Obtaining a fingerprint by hand does not scale past a handful of
+/// hosts, and a gateway whose operators cannot get one ends up with host
+/// checking switched off everywhere. This reads what the target offers so
+/// it can be shown and approved.
+///
+/// The result is returned, never stored: a key fetched over the very
+/// channel it is meant to protect is a starting point for a human
+/// decision, not proof of anything. The host and port come from the
+/// stored connection rather than the request, so this cannot be used to
+/// probe arbitrary addresses.
+pub async fn discover_connection_host_key(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<DiscoveredHostKeyResponse>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
+    let db = require_running(&state).await?;
+
+    let row: (String, String, i32) = sqlx::query_as(
+        "SELECT protocol, hostname, port FROM connections \
+         WHERE id = $1 AND soft_deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
+
+    let (protocol, hostname, port) = row;
+    if !protocol.eq_ignore_ascii_case("ssh") {
+        return Err(AppError::Validation(format!(
+            "host keys apply to ssh connections, not {protocol}"
+        )));
+    }
+
+    let port = u16::try_from(port).map_err(|_| AppError::Validation("invalid port".into()))?;
+    let key = strata_session::engine::ssh::discover_host_key(
+        &hostname,
+        port,
+        std::time::Duration::from_secs(10),
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("could not read the host key: {e}")))?;
+
+    audit::log(
+        &db.pool,
+        Some(user.id),
+        "connection.host_key_read",
+        &json!({
+            "id": id.to_string(),
+            "hostname": hostname,
+            "fingerprint": key.fingerprint,
+        }),
+    )
+    .await?;
+
+    Ok(Json(DiscoveredHostKeyResponse {
+        algorithm: key.algorithm,
+        fingerprint: key.fingerprint,
+        public_key: key.public_key,
+    }))
+}
+
 /// When the request targets the `vdi` protocol, parse the image-whitelist
 /// from `system_settings` and reject any image that is not exactly listed.
 /// Emits an `AUDIT_VDI_IMAGE_REJECTED` audit event on rejection so an

@@ -40,7 +40,6 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ExtendedColorType, ImageEncoder};
 use ironrdp_cliprdr::pdu::{ClipboardFormat, ClipboardFormatId, FormatDataResponse};
@@ -110,11 +109,6 @@ pub struct RdpConfig {
     pub disable_copy: bool,
     /// Never carry the client's clipboard to the target.
     pub disable_paste: bool,
-    /// Encode every region losslessly.
-    ///
-    /// Mirrors the connection's `force-lossless` box. Off by default:
-    /// large regions are JPEG, which is what keeps a desktop affordable.
-    pub force_lossless: bool,
     /// Verify the target's TLS certificate against the host trust store.
     ///
     /// Mirrors the connection's `ignore-cert` box, inverted. Most RDP
@@ -180,7 +174,6 @@ impl Default for RdpConfig {
             read_only: false,
             disable_copy: false,
             disable_paste: false,
-            force_lossless: false,
             verify_certificate: false,
         }
     }
@@ -297,17 +290,6 @@ impl ProtocolEngine for RdpEngine {
 /// Wheel rotation per notch, as defined by RDP.
 const WHEEL_UNITS: i16 = 120;
 
-/// Smallest region encoded as JPEG rather than PNG.
-///
-/// Small rectangles are carets, menu items and icons, where PNG is both
-/// compact and lossless. Large ones are window contents and wallpaper,
-/// where PNG pays dearly for photographic detail.
-const JPEG_MIN_PIXELS: usize = 128 * 128;
-
-/// Quality for lossy regions. Deliberately higher than guacd's default:
-/// operators read console text through this.
-const JPEG_QUALITY: u8 = 90;
-
 /// How often the encoder reports what it has been sending.
 const ENCODE_REPORT_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -315,35 +297,32 @@ const ENCODE_REPORT_INTERVAL: Duration = Duration::from_secs(30);
 ///
 /// Bytes per pixel separates the two reasons an engine ships too much:
 /// an expensive codec shows up as a high ratio, redundant damage as a
-/// high pixel count for the same visible work.
+/// high pixel count for the same visible work. Measured here it was the
+/// second, which is why the region codec is not worth tuning.
 #[derive(Debug, Default)]
 struct EncodeStats {
     updates: u64,
-    jpeg_updates: u64,
     pixels: u64,
     bytes: u64,
 }
 
 impl EncodeStats {
-    fn record(&mut self, pixels: usize, bytes: usize, lossy: bool) {
+    fn record(&mut self, pixels: usize, bytes: usize) {
         self.updates += 1;
         self.pixels += pixels as u64;
         self.bytes += bytes as u64;
-        if lossy {
-            self.jpeg_updates += 1;
-        }
     }
 
-    fn report(&self) {
+    fn report(&self, screen_pixels: u64) {
         if self.pixels == 0 {
             return;
         }
         tracing::info!(
             updates = self.updates,
-            jpeg = self.jpeg_updates,
             megapixels = self.pixels as f64 / 1_000_000.0,
             megabytes = self.bytes as f64 / 1_048_576.0,
             bytes_per_pixel = self.bytes as f64 / self.pixels as f64,
+            full_screens = self.pixels as f64 / screen_pixels.max(1) as f64,
             "rdp encoder totals"
         );
     }
@@ -398,8 +377,6 @@ struct RdpSession {
     disable_copy: bool,
     /// Never carry the client's clipboard to the target.
     disable_paste: bool,
-    /// Encode every region losslessly, whatever it costs.
-    force_lossless: bool,
     stats: EncodeStats,
     stats_reported_at: Instant,
     finished: bool,
@@ -608,7 +585,6 @@ impl RdpSession {
             read_only: config.read_only,
             disable_copy: config.disable_copy,
             disable_paste: config.disable_paste,
-            force_lossless: config.force_lossless,
             stats: EncodeStats::default(),
             stats_reported_at: Instant::now(),
             finished: false,
@@ -780,39 +756,30 @@ impl RdpSession {
         }
 
         let pixels = width * height;
-        let lossy = !self.force_lossless && pixels >= JPEG_MIN_PIXELS;
-
         let mut encoded = Vec::new();
-        if lossy {
-            JpegEncoder::new_with_quality(&mut encoded, JPEG_QUALITY)
-                .write_image(
-                    &cropped,
-                    width as u32,
-                    height as u32,
-                    ExtendedColorType::Rgb8,
-                )
-                .map_err(|e| EngineError::Protocol(format!("jpeg encode failed: {e}")))?;
-        } else {
-            PngEncoder::new_with_quality(&mut encoded, CompressionType::Fast, FilterType::Adaptive)
-                .write_image(
-                    &cropped,
-                    width as u32,
-                    height as u32,
-                    ExtendedColorType::Rgb8,
-                )
-                .map_err(|e| EngineError::Protocol(format!("png encode failed: {e}")))?;
-        }
+        // PNG, not JPEG: a desktop is flat UI, which PNG compresses far
+        // better than a DCT codec. Measured on a real session, JPEG at
+        // quality 90 cost more bytes for the same activity.
+        PngEncoder::new_with_quality(&mut encoded, CompressionType::Fast, FilterType::Adaptive)
+            .write_image(
+                &cropped,
+                width as u32,
+                height as u32,
+                ExtendedColorType::Rgb8,
+            )
+            .map_err(|e| EngineError::Protocol(format!("png encode failed: {e}")))?;
 
-        self.stats.record(pixels, encoded.len(), lossy);
+        self.stats.record(pixels, encoded.len());
         if self.stats_reported_at.elapsed() >= ENCODE_REPORT_INTERVAL {
-            self.stats.report();
+            self.stats
+                .report(u64::from(self.width) * u64::from(self.height));
             self.stats_reported_at = Instant::now();
         }
 
         Ok(TargetEvent::ImageUpdate {
             x: i32::from(region.left),
             y: i32::from(region.top),
-            mimetype: if lossy { "image/jpeg" } else { "image/png" },
+            mimetype: "image/png",
             data: Bytes::from(encoded),
         })
     }

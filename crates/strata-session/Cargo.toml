@@ -107,9 +107,6 @@ alacritty_terminal = { version = "0.26", optional = true }
 fontdue = { version = "0.9", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = [
     "png",
-    # Large desktop regions go out as JPEG: PNG is lossless but pays
-    # dearly for photographic detail, and a desktop is mostly that.
-    "jpeg",
 ] }
 
 # RDP engine (feature `rdp`)

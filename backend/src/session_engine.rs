@@ -106,6 +106,7 @@ const RECORDING_OPTIONS_REQUIRING_GUACD: &[&str] =
 const RDP_PARAMS_IGNORED_NATIVELY: &[&str] = &[
     "color-depth",
     "enable-h264",
+    "force-lossless",
     "timezone",
     "enable-touch",
     "resize-method",
@@ -766,7 +767,6 @@ async fn connect_engine(
                 read_only: flag(handshake, "read-only"),
                 disable_copy: flag(handshake, "disable-copy"),
                 disable_paste: flag(handshake, "disable-paste"),
-                force_lossless: flag(handshake, "force-lossless"),
                 verify_certificate: !handshake.ignore_cert,
                 performance: RdpPerformance {
                     wallpaper: flag(handshake, "enable-wallpaper"),

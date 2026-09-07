@@ -156,6 +156,25 @@ pub fn policy() -> &'static RoutingPolicy {
     })
 }
 
+static SHUTDOWN: OnceLock<tokio_util::sync::CancellationToken> = OnceLock::new();
+
+/// Hand the process shutdown signal to the native session loop.
+///
+/// Without it a restart looks to the browser like the *target* hung up,
+/// which is a deliberate end of session and suppresses its automatic
+/// reconnect. guacd never had the problem: it holds the target
+/// connection in its own process, so restarting this one simply dropped
+/// the socket.
+pub fn set_shutdown_token(token: tokio_util::sync::CancellationToken) {
+    let _ = SHUTDOWN.set(token);
+}
+
+/// A token that is never cancelled when none was installed, so tests and
+/// embedded uses behave as before.
+fn shutdown_token() -> tokio_util::sync::CancellationToken {
+    SHUTDOWN.get().cloned().unwrap_or_default()
+}
+
 fn policy_from_env() -> RoutingPolicy {
     let mode = std::env::var("STRATA_SESSION_ENGINE")
         .unwrap_or_default()
@@ -428,9 +447,19 @@ pub async fn run_native(
     let mut watchdog = tokio::time::interval(WATCHDOG_INTERVAL);
     watchdog.tick().await; // consume the immediate first tick
     let started_at = tokio::time::Instant::now();
+    let shutdown = shutdown_token();
 
     let reason = loop {
         tokio::select! {
+            // Gateway shutdown. Drop the socket rather than sending a
+            // disconnect: the engine is about to read EOF from the
+            // target and report it as a deliberate close, which stops
+            // the browser retrying. An abrupt close is the truth here,
+            // and is what the browser retries on.
+            _ = shutdown.cancelled() => {
+                break "gateway shutting down";
+            }
+
             // Administrative kill signal.
             _ = async {
                 match kill_rx {
@@ -774,6 +803,20 @@ mod tests {
             dpi: 96,
             extra,
         }
+    }
+
+    #[test]
+    fn the_installed_shutdown_token_is_visible_to_the_session_loop() {
+        // Sets process-wide state, so it is deliberately the only test
+        // that touches the shutdown token.
+        let token = tokio_util::sync::CancellationToken::new();
+        set_shutdown_token(token.clone());
+        assert!(!shutdown_token().is_cancelled());
+        token.cancel();
+        assert!(
+            shutdown_token().is_cancelled(),
+            "a shutting-down gateway would still report the target hung up"
+        );
     }
 
     #[test]

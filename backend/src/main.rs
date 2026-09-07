@@ -432,6 +432,10 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Listening on {addr} — starting axum::serve");
 
+    // Native sessions close their socket on shutdown instead of telling
+    // the browser the target hung up, which would suppress its retry.
+    session_engine::set_shutdown_token(shutdown.clone());
+
     let shutdown_signal_token = shutdown.clone();
     axum::serve(
         listener,

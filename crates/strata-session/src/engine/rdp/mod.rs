@@ -52,6 +52,7 @@ use ironrdp_connector::{ClientConnector, Config as ConnectorConfig, Credentials,
 use ironrdp_core::{IntoOwned, WriteBuf};
 use ironrdp_displaycontrol::client::DisplayControlClient;
 use ironrdp_dvc::DrdynvcClient;
+use ironrdp_graphics::diff::find_different_rects_sub;
 use ironrdp_graphics::image_processing::PixelFormat;
 use ironrdp_graphics::pointer::DecodedPointer;
 use ironrdp_pdu::geometry::{InclusiveRectangle, Rectangle as _};
@@ -302,6 +303,9 @@ const ENCODE_REPORT_INTERVAL: Duration = Duration::from_secs(30);
 #[derive(Debug, Default)]
 struct EncodeStats {
     updates: u64,
+    /// Pixels the target's damage rectangles covered.
+    offered_pixels: u64,
+    /// Pixels actually encoded after diffing.
     pixels: u64,
     bytes: u64,
 }
@@ -313,6 +317,10 @@ impl EncodeStats {
         self.bytes += bytes as u64;
     }
 
+    fn offer(&mut self, pixels: usize) {
+        self.offered_pixels += pixels as u64;
+    }
+
     fn report(&self, screen_pixels: u64) {
         if self.pixels == 0 {
             return;
@@ -320,6 +328,7 @@ impl EncodeStats {
         tracing::info!(
             updates = self.updates,
             megapixels = self.pixels as f64 / 1_000_000.0,
+            offered_megapixels = self.offered_pixels as f64 / 1_000_000.0,
             megabytes = self.bytes as f64 / 1_048_576.0,
             bytes_per_pixel = self.bytes as f64 / self.pixels as f64,
             full_screens = self.pixels as f64 / screen_pixels.max(1) as f64,
@@ -377,6 +386,8 @@ struct RdpSession {
     disable_copy: bool,
     /// Never carry the client's clipboard to the target.
     disable_paste: bool,
+    /// Previous frame, for narrowing the target's coarse damage rects.
+    shadow: Vec<u8>,
     stats: EncodeStats,
     stats_reported_at: Instant,
     finished: bool,
@@ -585,6 +596,7 @@ impl RdpSession {
             read_only: config.read_only,
             disable_copy: config.disable_copy,
             disable_paste: config.disable_paste,
+            shadow: Vec::new(),
             stats: EncodeStats::default(),
             stats_reported_at: Instant::now(),
             finished: false,
@@ -611,8 +623,10 @@ impl RdpSession {
                         bottom = region.bottom,
                         "rdp graphics update"
                     );
-                    let event = self.encode_region(&region)?;
-                    self.pending.push_back(event);
+                    for rect in self.changed_regions(&region) {
+                        let event = self.encode_region(&rect)?;
+                        self.pending.push_back(event);
+                    }
                 }
                 ActiveStageOutput::Terminate(reason) => {
                     self.finished = true;
@@ -685,6 +699,8 @@ impl RdpSession {
                 self.width = width;
                 self.height = height;
                 self.image = DecodedImage::new(PixelFormat::RgbA32, width, height);
+                // The old frame describes a screen that no longer exists.
+                self.shadow.clear();
                 self.pending.push_back(TargetEvent::Resized {
                     width: u32::from(width),
                     height: u32::from(height),
@@ -732,6 +748,77 @@ impl RdpSession {
     }
 
     /// Crop the framebuffer to `region` and PNG-encode it.
+    /// Narrow a coarse damage rectangle to what actually changed.
+    ///
+    /// ironrdp unions every rectangle in a fast-path PDU into one, so a
+    /// caret top-left and a clock bottom-right arrive as a single
+    /// near-full-screen update. Encoding that verbatim is what made this
+    /// engine send tens of full screens a minute; comparing against the
+    /// previous frame recovers the damage the target actually meant.
+    fn changed_regions(&mut self, region: &InclusiveRectangle) -> Vec<InclusiveRectangle> {
+        let bpp = self.image.bytes_per_pixel();
+        let (image_w, image_h) = (self.image.width(), self.image.height());
+        let stride = usize::from(image_w) * bpp;
+        let (left, top) = (usize::from(region.left), usize::from(region.top));
+        let (width, height) = (usize::from(region.width()), usize::from(region.height()));
+        self.stats.offer(width * height);
+
+        // `shadow` is moved out so the framebuffer can stay borrowed.
+        let mut shadow = std::mem::take(&mut self.shadow);
+        let data = self.image.data();
+
+        // Nothing to compare against on the first frame, or after a
+        // resize replaced the framebuffer.
+        if shadow.len() != data.len() {
+            shadow.clear();
+            shadow.extend_from_slice(data);
+            self.shadow = shadow;
+            return vec![region.clone()];
+        }
+
+        let offset = top * stride + left * bpp;
+        let changed = match data.get(offset..) {
+            Some(current) => find_different_rects_sub::<4>(
+                &shadow,
+                stride,
+                usize::from(image_w),
+                usize::from(image_h),
+                current,
+                stride,
+                width,
+                height,
+                left,
+                top,
+            ),
+            // A malformed rectangle is the encoder's problem to report.
+            None => {
+                self.shadow = shadow;
+                return vec![region.clone()];
+            }
+        };
+
+        // Re-sync the whole advertised area, not just the parts that
+        // differed, or the next comparison runs against stale pixels.
+        for row in 0..height {
+            let start = (top + row) * stride + left * bpp;
+            let end = start + width * bpp;
+            if let (Some(src), Some(dst)) = (data.get(start..end), shadow.get_mut(start..end)) {
+                dst.copy_from_slice(src);
+            }
+        }
+        self.shadow = shadow;
+
+        changed
+            .into_iter()
+            .map(|rect| InclusiveRectangle {
+                left: (left + rect.x) as u16,
+                top: (top + rect.y) as u16,
+                right: (left + rect.x + rect.width - 1) as u16,
+                bottom: (top + rect.y + rect.height - 1) as u16,
+            })
+            .collect()
+    }
+
     fn encode_region(&mut self, region: &InclusiveRectangle) -> Result<TargetEvent, EngineError> {
         let bpp = self.image.bytes_per_pixel();
         let stride = usize::from(self.image.width()) * bpp;

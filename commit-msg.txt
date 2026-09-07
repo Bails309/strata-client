@@ -1,0 +1,25 @@
+perf(rdp): send the damage the target meant, not the union of it
+
+ironrdp unions every rectangle in a fast-path PDU into one before
+handing it over, so a caret top-left and a clock bottom-right arrive as
+a single near-full-screen update. Encoding that verbatim is where the
+bandwidth went: measured over a minute of scrolling, 75.8 megapixels on
+a 1.82 megapixel screen, about 41 full-screen repaints.
+
+That was never a codec problem. At 0.116 bytes per pixel the encoder was
+already achieving roughly 26:1 against raw RGB; it was simply being handed
+far too many pixels. Both earlier attempts missed this, which is why JPEG
+made things worse rather than better.
+
+Each update is now diffed against the previous frame with
+ironrdp-graphics' tile diff, and only the rectangles that actually differ
+are encoded. The whole advertised area is still copied into the shadow
+frame afterwards, or the next comparison would run against stale pixels,
+and the shadow is dropped whenever a reactivation rebuilds the
+framebuffer.
+
+The report gains offered_megapixels alongside megapixels so the
+suppression ratio is visible directly rather than inferred.
+
+Costs one framebuffer of memory, about 7 MB at 1920x950. A tile compare
+is far cheaper than the PNG encode it avoids.

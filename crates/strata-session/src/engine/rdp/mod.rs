@@ -696,7 +696,7 @@ impl RdpSession {
         let width = usize::from(region.width());
         let height = usize::from(region.height());
 
-        let mut cropped = Vec::with_capacity(width * height * bpp);
+        let mut cropped = Vec::with_capacity(width * height * 3);
         let data = self.image.data();
         for row in 0..height {
             let start = (top + row) * stride + left * bpp;
@@ -709,9 +709,8 @@ impl RdpSession {
                     self.image.height()
                 )));
             };
-            cropped.extend_from_slice(slice);
+            push_rgb(slice, &mut cropped);
         }
-        make_opaque(&mut cropped);
 
         let mut png = Vec::new();
         PngEncoder::new_with_quality(&mut png, CompressionType::Fast, FilterType::Adaptive)
@@ -719,7 +718,7 @@ impl RdpSession {
                 &cropped,
                 width as u32,
                 height as u32,
-                ExtendedColorType::Rgba8,
+                ExtendedColorType::Rgb8,
             )
             .map_err(|e| EngineError::Protocol(format!("png encode failed: {e}")))?;
 
@@ -1004,10 +1003,15 @@ impl RdpSession {
     }
 }
 
-fn make_opaque(rgba: &mut [u8]) {
-    let (pixels, _) = rgba.as_chunks_mut::<4>();
+/// Append `rgba` to `out`, dropping the alpha channel.
+///
+/// The desktop is opaque — alpha was previously overwritten with 255
+/// before encoding — so the channel carries nothing and costs the PNG
+/// encoder a quarter of every pixel it reads.
+fn push_rgb(rgba: &[u8], out: &mut Vec<u8>) {
+    let (pixels, _) = rgba.as_chunks::<4>();
     for pixel in pixels {
-        pixel[3] = u8::MAX;
+        out.extend_from_slice(&pixel[..3]);
     }
 }
 
@@ -1148,10 +1152,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desktop_pixels_are_encoded_as_opaque() {
-        let mut pixels = [10, 20, 30, 0, 40, 50, 60, 127];
-        make_opaque(&mut pixels);
-        assert_eq!(pixels, [10, 20, 30, 255, 40, 50, 60, 255]);
+    fn desktop_pixels_are_encoded_without_alpha() {
+        // Whatever the framebuffer holds in the fourth byte, the desktop
+        // is opaque and the channel must not reach the encoder.
+        let mut rgb = Vec::new();
+        push_rgb(&[10, 20, 30, 0, 40, 50, 60, 127], &mut rgb);
+        assert_eq!(rgb, [10, 20, 30, 40, 50, 60]);
     }
 
     #[test]

@@ -48,7 +48,9 @@ use ironrdp_connector::connection_activation::{
     ConnectionActivationSequence, ConnectionActivationState,
 };
 use ironrdp_connector::credssp::KerberosConfig;
-use ironrdp_connector::{ClientConnector, Config as ConnectorConfig, Credentials, DesktopSize};
+use ironrdp_connector::{
+    BitmapConfig, ClientConnector, Config as ConnectorConfig, Credentials, DesktopSize,
+};
 use ironrdp_core::{IntoOwned, WriteBuf};
 use ironrdp_displaycontrol::client::DisplayControlClient;
 use ironrdp_dvc::DrdynvcClient;
@@ -59,6 +61,7 @@ use ironrdp_pdu::geometry::{InclusiveRectangle, Rectangle as _};
 use ironrdp_pdu::input::fast_path::{FastPathInputEvent, KeyboardFlags};
 use ironrdp_pdu::input::mouse::PointerFlags;
 use ironrdp_pdu::input::MousePdu;
+use ironrdp_pdu::rdp::capability_sets::client_codecs_capabilities;
 use ironrdp_pdu::rdp::client_info::PerformanceFlags;
 use ironrdp_pdu::rdp::headers::ShareDataPdu;
 use ironrdp_pdu::rdp::refresh_rectangle::RefreshRectanglePdu;
@@ -494,6 +497,18 @@ impl RdpSession {
             client_name: config.client_name.clone(),
             keyboard_layout: config.keyboard_layout,
             performance_flags: config.performance.to_flags(),
+            // Left unset, ironrdp advertises RemoteFX, and the target then
+            // encodes the desktop with a lossy wavelet before we ever see
+            // it. Our PNG output stays lossless but the damage is already
+            // done: glyph edges arrive soft, which is what made text look
+            // worse here than through guacd. Refusing the codec makes the
+            // target send bitmaps we can reproduce exactly.
+            bitmap: Some(BitmapConfig {
+                lossy_compression: false,
+                color_depth: 32,
+                codecs: client_codecs_capabilities(&["remotefx:off"])
+                    .expect("a fixed codec list cannot fail to parse"),
+            }),
             // The pointer is forwarded as its own cursor layer rather
             // than drawn into the framebuffer: compositing costs an
             // image update per mouse move and trails wherever one is
@@ -1308,6 +1323,19 @@ mod tests {
         let mut rgb = Vec::new();
         push_rgb(&[10, 20, 30, 0, 40, 50, 60, 127], &mut rgb);
         assert_eq!(rgb, [10, 20, 30, 40, 50, 60]);
+    }
+
+    #[test]
+    fn the_target_is_never_offered_a_lossy_codec() {
+        // RemoteFX is a lossy wavelet, and ironrdp advertises it unless
+        // told otherwise. Accepting it costs glyph edges before our own
+        // encoder is ever reached, so no session may offer it.
+        let codecs = client_codecs_capabilities(&["remotefx:off"]).unwrap();
+        assert!(
+            codecs.0.is_empty(),
+            "a codec was advertised that could return lossy pixels: {:?}",
+            codecs.0
+        );
     }
 
     #[test]

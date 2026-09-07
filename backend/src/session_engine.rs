@@ -388,12 +388,20 @@ fn host_key_fingerprints(handshake: &HandshakeParams) -> Vec<String> {
     // no way to produce a SHA256 fingerprint from the admin panel, and
     // requiring one would mean every existing SSH connection had to be
     // re-entered before it could run natively.
+    //
+    // Several keys may be listed: a host usually offers more than one
+    // type and which is used comes out of negotiation, so pinning only
+    // the first would fail whenever the other was chosen.
     handshake
         .extra
         .get(GUACD_HOST_KEY_PARAM)
-        .and_then(|key| fingerprint_openssh_key(key))
-        .into_iter()
-        .collect()
+        .map(|raw| {
+            raw.lines()
+                .flat_map(|line| line.split(','))
+                .filter_map(fingerprint_openssh_key)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Derive the `SHA256:` fingerprint of an OpenSSH public key.
@@ -965,6 +973,27 @@ mod tests {
                 .to_owned(),
         );
         assert_eq!(host_key_fingerprints(&params).len(), 1);
+    }
+
+    #[test]
+    fn every_host_key_offered_is_pinned() {
+        // A host serves more than one key type and negotiation picks one,
+        // so keeping only the first would fail whenever the other was
+        // chosen. Both fingerprints are from ssh-keygen -lf.
+        let mut params = handshake("ssh", None);
+        params.extra.insert(
+            "host-key".to_owned(),
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPRyUXxWUTcu0GBVIFZkukPePhBZFsyyf2f1Jv55toh7\n\
+             ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJk8AhaZaCLPfHOnEqmB6h8gW1jCbCJKzJBAbUX3jIEy"
+                .to_owned(),
+        );
+        assert_eq!(
+            host_key_fingerprints(&params),
+            vec![
+                "SHA256:gS7tXum41YCAi1KzCofSD8Ls5CkbS6bYtJJdc23K/XI".to_owned(),
+                "SHA256:P1lX1ochzqvz3Bx6Hxyabr/NQJfpUMJkcjXQC0mgywA".to_owned(),
+            ]
+        );
     }
 
     #[test]

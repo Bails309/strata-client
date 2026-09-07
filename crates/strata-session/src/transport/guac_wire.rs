@@ -183,33 +183,6 @@ impl GuacWireEncoder {
                 ));
                 true
             }
-            TargetEvent::CopyRegion {
-                src_x,
-                src_y,
-                width,
-                height,
-                dst_x,
-                dst_y,
-            } => {
-                out.push(ClientFrame::Text(
-                    ServerInstruction::Copy {
-                        src_layer: DEFAULT_LAYER,
-                        src_x: *src_x,
-                        src_y: *src_y,
-                        width: *width,
-                        height: *height,
-                        // Source-over would blend the moved pixels with
-                        // whatever they land on; this is a move.
-                        mask: COMPOSITE_SRC,
-                        dst_layer: DEFAULT_LAYER,
-                        dst_x: *dst_x,
-                        dst_y: *dst_y,
-                    }
-                    .to_bytes()
-                    .freeze(),
-                ));
-                true
-            }
             TargetEvent::Disconnected { reason } => {
                 out.push(ClientFrame::Text(
                     ServerInstruction::Error {
@@ -305,7 +278,6 @@ impl FrameEncoder for GuacWireEncoder {
             TargetEvent::Resized { .. }
             | TargetEvent::Disconnected { .. }
             | TargetEvent::CursorImage { .. }
-            | TargetEvent::CopyRegion { .. }
             | TargetEvent::CursorHidden => {
                 unreachable!("control events are handled by encode_control")
             }

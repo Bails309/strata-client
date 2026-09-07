@@ -291,33 +291,6 @@ impl ProtocolEngine for RdpEngine {
 /// Wheel rotation per notch, as defined by RDP.
 const WHEEL_UNITS: i16 = 120;
 
-/// How a piece of a damage rectangle gets onto the client's canvas.
-enum Painted {
-    /// Pixels the client already holds, in a new place.
-    Copy(TargetEvent),
-    /// Pixels that have to be encoded and sent.
-    Encode(InclusiveRectangle),
-}
-
-/// Rows sampled to confirm a candidate scroll before trusting it.
-///
-/// A wrong guess tells the browser to move the wrong pixels, and the
-/// result stays on screen until something else repaints it. Every
-/// sampled row must match exactly.
-const SCROLL_VERIFY_ROWS: usize = 12;
-
-/// Smallest rectangle worth testing for a scroll.
-const SCROLL_MIN_HEIGHT: usize = 64;
-
-impl Drop for RdpSession {
-    fn drop(&mut self) {
-        // The periodic report is no use for a short session: a minute of
-        // testing produced no summary at all.
-        self.stats
-            .report(u64::from(self.width) * u64::from(self.height));
-    }
-}
-
 /// How often the encoder reports what it has been sending.
 const ENCODE_REPORT_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -361,6 +334,15 @@ impl EncodeStats {
             full_screens = self.pixels as f64 / screen_pixels.max(1) as f64,
             "rdp encoder totals"
         );
+    }
+}
+
+impl Drop for RdpSession {
+    fn drop(&mut self) {
+        // The periodic report is no use for a short session: a minute of
+        // measuring produced no summary at all.
+        self.stats
+            .report(u64::from(self.width) * u64::from(self.height));
     }
 }
 
@@ -650,14 +632,9 @@ impl RdpSession {
                         bottom = region.bottom,
                         "rdp graphics update"
                     );
-                    for rect in self.plan_update(&region) {
-                        match rect {
-                            Painted::Copy(event) => self.pending.push_back(event),
-                            Painted::Encode(rect) => {
-                                let event = self.encode_region(&rect)?;
-                                self.pending.push_back(event);
-                            }
-                        }
+                    for rect in self.changed_regions(&region) {
+                        let event = self.encode_region(&rect)?;
+                        self.pending.push_back(event);
                     }
                 }
                 ActiveStageOutput::Terminate(reason) => {
@@ -780,143 +757,6 @@ impl RdpSession {
     }
 
     /// Crop the framebuffer to `region` and PNG-encode it.
-    /// Find a vertical shift that explains this damage rectangle.
-    ///
-    /// A scrolled viewport changes every pixel, so the tile diff cannot
-    /// help: the content is simply somewhere else. Returns the offset
-    /// rows moved by, positive meaning content moved down.
-    fn detect_scroll(&self, region: &InclusiveRectangle, shadow: &[u8]) -> Option<i32> {
-        let bpp = self.image.bytes_per_pixel();
-        let stride = usize::from(self.image.width()) * bpp;
-        let (left, top) = (usize::from(region.left), usize::from(region.top));
-        let (width, height) = (usize::from(region.width()), usize::from(region.height()));
-        if height < SCROLL_MIN_HEIGHT {
-            return None;
-        }
-        let data = self.image.data();
-        let row = |buf: &[u8], y: usize| -> Option<Vec<u8>> {
-            let start = y * stride + left * bpp;
-            buf.get(start..start + width * bpp).map(<[u8]>::to_vec)
-        };
-
-        // Probe with a row that has some variety in it. A uniform row
-        // matches almost anywhere and would invite a false positive.
-        let probe_y = top + height / 2;
-        let probe = row(data, probe_y)?;
-        if probe.chunks_exact(bpp).all(|px| px == &probe[..bpp]) {
-            return None;
-        }
-
-        // Where did that row come from in the previous frame?
-        let candidate = (top..top + height).find(|&y| row(shadow, y).as_deref() == Some(&probe))?;
-        let shift = probe_y as i32 - candidate as i32;
-        if shift == 0 {
-            return None;
-        }
-
-        // Confirm across the rectangle, not just at the probe.
-        let step = (height / SCROLL_VERIFY_ROWS).max(1);
-        let mut checked = 0;
-        for y in (top..top + height).step_by(step) {
-            let source = y as i32 - shift;
-            if source < top as i32 || source >= (top + height) as i32 {
-                continue;
-            }
-            if row(data, y) != row(shadow, source as usize) {
-                return None;
-            }
-            checked += 1;
-        }
-        // Too few overlapping rows to be confident.
-        (checked >= 4).then_some(shift)
-    }
-
-    /// Decide how to repaint a damage rectangle.
-    ///
-    /// A scroll is answered with a move plus the strip it revealed;
-    /// anything else falls back to diffing against the previous frame.
-    fn plan_update(&mut self, region: &InclusiveRectangle) -> Vec<Painted> {
-        let shadow = std::mem::take(&mut self.shadow);
-        let scroll = if shadow.len() == self.image.data().len() {
-            self.detect_scroll(region, &shadow)
-        } else {
-            None
-        };
-        self.shadow = shadow;
-
-        let Some(shift) = scroll else {
-            return self
-                .changed_regions(region)
-                .into_iter()
-                .map(Painted::Encode)
-                .collect();
-        };
-
-        let (left, top) = (region.left, region.top);
-        let (width, height) = (region.width(), region.height());
-        let moved = height.saturating_sub(shift.unsigned_abs() as u16);
-        if moved == 0 {
-            return self
-                .changed_regions(region)
-                .into_iter()
-                .map(Painted::Encode)
-                .collect();
-        }
-
-        // Content moved down: the top strip is new. Moved up: the bottom
-        // strip is new.
-        let (src_y, dst_y, revealed_top) = if shift > 0 {
-            (top, top + shift as u16, top)
-        } else {
-            (top + shift.unsigned_abs() as u16, top, top + moved)
-        };
-
-        tracing::debug!(shift, moved, "rdp scroll detected");
-        let mut plan = vec![Painted::Copy(TargetEvent::CopyRegion {
-            src_x: i32::from(left),
-            src_y: i32::from(src_y),
-            width: i32::from(width),
-            height: i32::from(moved),
-            dst_x: i32::from(left),
-            dst_y: i32::from(dst_y),
-        })];
-
-        // Only the strip the scroll exposed still needs pixels.
-        let strip = InclusiveRectangle {
-            left,
-            top: revealed_top,
-            right: region.right,
-            bottom: revealed_top + shift.unsigned_abs() as u16 - 1,
-        };
-        plan.extend(
-            self.changed_regions(&strip)
-                .into_iter()
-                .map(Painted::Encode),
-        );
-        // The copy left the rest of the rectangle correct on the client,
-        // so the shadow has to agree before the next comparison.
-        self.resync_shadow(region);
-        plan
-    }
-
-    /// Copy the framebuffer contents of `region` into the shadow frame.
-    fn resync_shadow(&mut self, region: &InclusiveRectangle) {
-        let bpp = self.image.bytes_per_pixel();
-        let stride = usize::from(self.image.width()) * bpp;
-        let (left, top) = (usize::from(region.left), usize::from(region.top));
-        let (width, height) = (usize::from(region.width()), usize::from(region.height()));
-        let mut shadow = std::mem::take(&mut self.shadow);
-        let data = self.image.data();
-        for row in 0..height {
-            let start = (top + row) * stride + left * bpp;
-            let end = start + width * bpp;
-            if let (Some(src), Some(dst)) = (data.get(start..end), shadow.get_mut(start..end)) {
-                dst.copy_from_slice(src);
-            }
-        }
-        self.shadow = shadow;
-    }
-
     /// Narrow a coarse damage rectangle to what actually changed.
     ///
     /// ironrdp unions every rectangle in a fast-path PDU into one, so a

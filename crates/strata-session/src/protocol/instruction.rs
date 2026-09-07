@@ -182,27 +182,6 @@ pub enum ServerInstruction {
         /// Destination Y.
         y: i32,
     },
-    /// Move a rectangle the client already holds, sending no pixels.
-    Copy {
-        /// Source layer.
-        src_layer: i32,
-        /// Source X.
-        src_x: i32,
-        /// Source Y.
-        src_y: i32,
-        /// Source width.
-        width: i32,
-        /// Source height.
-        height: i32,
-        /// Compositing mode.
-        mask: u8,
-        /// Destination layer.
-        dst_layer: i32,
-        /// Destination X.
-        dst_x: i32,
-        /// Destination Y.
-        dst_y: i32,
-    },
     /// A chunk of stream data, base64 encoded.
     Blob {
         /// Stream index.
@@ -325,30 +304,6 @@ impl ServerInstruction {
                     y.to_string(),
                 ];
                 encode_str_args(out, "img", &v);
-            }
-            Self::Copy {
-                src_layer,
-                src_x,
-                src_y,
-                width,
-                height,
-                mask,
-                dst_layer,
-                dst_x,
-                dst_y,
-            } => {
-                let v = [
-                    src_layer.to_string(),
-                    src_x.to_string(),
-                    src_y.to_string(),
-                    width.to_string(),
-                    height.to_string(),
-                    mask.to_string(),
-                    dst_layer.to_string(),
-                    dst_x.to_string(),
-                    dst_y.to_string(),
-                ];
-                encode_str_args(out, "copy", &v);
             }
             Self::Blob { stream, data } => {
                 let v = [stream.to_string(), data.clone()];

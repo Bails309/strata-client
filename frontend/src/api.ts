@@ -1845,9 +1845,19 @@ export interface MetricsSummary {
   active_sessions: number;
   /** How many of `active_sessions` the native engine serves. */
   native_sessions: number;
+  /** How many of `active_sessions` guacd serves. */
+  guacd_sessions: number;
   total_bytes_from_guacd: number;
   total_bytes_to_guacd: number;
   sessions_by_protocol: Record<string, number>;
+  /** Bandwidth and protocol mix for guacd-served sessions only. */
+  guacd_bytes_down: number;
+  guacd_bytes_up: number;
+  guacd_by_protocol: Record<string, number>;
+  /** Bandwidth and protocol mix for natively served sessions only. */
+  native_bytes_down: number;
+  native_bytes_up: number;
+  native_by_protocol: Record<string, number>;
   guacd_pool_size: number;
   recommended_per_instance: number;
   system_total_memory: number;

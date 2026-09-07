@@ -21,7 +21,9 @@ function escapeSvgText(s: string): string {
 
 function GuacdCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
   const poolSize = metrics.guacd_pool_size || 1;
-  const activeSessions = metrics.active_sessions;
+  // Sessions the native engine serves cost guacd nothing, so they must not
+  // consume its capacity or appear in its bandwidth.
+  const activeSessions = metrics.guacd_sessions;
   const recPerInstance = metrics.recommended_per_instance || 20;
   const totalCapacity = poolSize * recPerInstance;
   const perInstance = poolSize > 0 ? activeSessions / poolSize : activeSessions;
@@ -34,7 +36,7 @@ function GuacdCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
   const cpuCores = metrics.system_cpu_cores || null;
 
   // Format total live bandwidth
-  const totalBw = metrics.total_bytes_from_guacd + metrics.total_bytes_to_guacd;
+  const totalBw = metrics.guacd_bytes_down + metrics.guacd_bytes_up;
   const fmtBw = (b: number) => {
     if (b < 1024) return `${b} B`;
     if (b < 1_048_576) return `${(b / 1024).toFixed(1)} KB`;
@@ -80,7 +82,7 @@ function GuacdCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
   const offset = circumference - (usagePercent / 100) * circumference;
 
   // Protocol breakdown
-  const protocols = Object.entries(metrics.sessions_by_protocol);
+  const protocols = Object.entries(metrics.guacd_by_protocol);
 
   return (
     <div
@@ -228,7 +230,7 @@ function GuacdCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
                       color: "var(--color-txt-secondary)",
                     }}
                   >
-                    ↓{fmtBw(metrics.total_bytes_from_guacd)} ↑{fmtBw(metrics.total_bytes_to_guacd)}
+                    ↓{fmtBw(metrics.guacd_bytes_down)} ↑{fmtBw(metrics.guacd_bytes_up)}
                   </span>
                 </>
               )}
@@ -371,6 +373,14 @@ function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
   const ramPerSession = metrics.native_ram_per_session_mb;
   const usagePercent = Math.min((activeSessions / totalCapacity) * 100, 100);
 
+  const fmtBw = (b: number) => {
+    if (b < 1024) return `${b} B`;
+    if (b < 1_048_576) return `${(b / 1024).toFixed(1)} KB`;
+    if (b < 1_073_741_824) return `${(b / 1_048_576).toFixed(1)} MB`;
+    return `${(b / 1_073_741_824).toFixed(2)} GB`;
+  };
+  const protocols = Object.entries(metrics.native_by_protocol);
+
   const memGB = metrics.system_total_memory
     ? (metrics.system_total_memory / 1_073_741_824).toFixed(1)
     : null;
@@ -488,7 +498,7 @@ function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
               style={{ background: "var(--color-surface-tertiary)" }}
             >
               <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
-                RAM / Session
+                RAM / Session (est.)
               </p>
               <p className="text-lg font-bold text-txt-primary">{ramPerSession} MB</p>
             </div>
@@ -501,6 +511,41 @@ function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
               </p>
               <p className="text-lg font-bold text-txt-primary">{totalCapacity}</p>
             </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            {protocols.length > 0 && (
+              <>
+                <span className="text-txt-tertiary font-semibold text-[0.6rem] uppercase tracking-wider">
+                  By Protocol:
+                </span>
+                {protocols.map(([proto, count]) => (
+                  <span
+                    key={proto}
+                    className="text-[0.6rem] font-bold tracking-wider px-2 py-0.5 rounded uppercase"
+                    style={{
+                      background: "var(--color-surface-tertiary)",
+                      color: "var(--color-txt-secondary)",
+                    }}
+                  >
+                    {proto} {count}
+                  </span>
+                ))}
+                <span className="text-txt-tertiary">|</span>
+              </>
+            )}
+            <span className="text-txt-tertiary font-semibold text-[0.6rem] uppercase tracking-wider">
+              Live Bandwidth:
+            </span>
+            <span
+              className="text-[0.6rem] font-bold tracking-wider px-2 py-0.5 rounded"
+              style={{
+                background: "var(--color-surface-tertiary)",
+                color: "var(--color-txt-secondary)",
+              }}
+            >
+              ↓{fmtBw(metrics.native_bytes_down)} ↑{fmtBw(metrics.native_bytes_up)}
+            </span>
           </div>
 
           {(cpuCores || memGB) && (

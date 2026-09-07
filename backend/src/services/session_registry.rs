@@ -499,28 +499,57 @@ impl SessionRegistry {
     }
 
     /// Aggregate metrics across all active sessions.
+    ///
+    /// The totals cover every session whatever served it, because they are
+    /// the documented shape of the metrics endpoint. The per-engine figures
+    /// beside them exist because the capacity panels are about one engine
+    /// each: charging a native session's bandwidth to guacd makes both
+    /// panels wrong at once.
     pub async fn metrics(&self) -> MetricsSummary {
         let sessions = self.sessions.read().await;
         let mut total_bytes_in: u64 = 0;
         let mut total_bytes_out: u64 = 0;
         let mut by_protocol: HashMap<String, u32> = HashMap::new();
         let mut native_sessions: u32 = 0;
+        let mut guacd_bytes_down: u64 = 0;
+        let mut guacd_bytes_up: u64 = 0;
+        let mut guacd_by_protocol: HashMap<String, u32> = HashMap::new();
+        let mut native_bytes_down: u64 = 0;
+        let mut native_bytes_up: u64 = 0;
+        let mut native_by_protocol: HashMap<String, u32> = HashMap::new();
 
         for s in sessions.values() {
-            total_bytes_in += s.bytes_from_guacd.load(Ordering::Relaxed);
-            total_bytes_out += s.bytes_to_guacd.load(Ordering::Relaxed);
+            let down = s.bytes_from_guacd.load(Ordering::Relaxed);
+            let up = s.bytes_to_guacd.load(Ordering::Relaxed);
+            total_bytes_in += down;
+            total_bytes_out += up;
             *by_protocol.entry(s.protocol.clone()).or_insert(0) += 1;
+
             if s.is_native() {
                 native_sessions += 1;
+                native_bytes_down += down;
+                native_bytes_up += up;
+                *native_by_protocol.entry(s.protocol.clone()).or_insert(0) += 1;
+            } else {
+                guacd_bytes_down += down;
+                guacd_bytes_up += up;
+                *guacd_by_protocol.entry(s.protocol.clone()).or_insert(0) += 1;
             }
         }
 
         MetricsSummary {
             active_sessions: sessions.len() as u32,
             native_sessions,
+            guacd_sessions: sessions.len() as u32 - native_sessions,
             total_bytes_from_guacd: total_bytes_in,
             total_bytes_to_guacd: total_bytes_out,
             sessions_by_protocol: by_protocol,
+            guacd_bytes_down,
+            guacd_bytes_up,
+            guacd_by_protocol,
+            native_bytes_down,
+            native_bytes_up,
+            native_by_protocol,
             guacd_pool_size: 0, // placeholder — overridden by admin handler
             recommended_per_instance: 20, // placeholder — overridden by admin handler
             system_total_memory: 0,
@@ -537,9 +566,19 @@ pub struct MetricsSummary {
     pub active_sessions: u32,
     /// How many of `active_sessions` the native engine serves.
     pub native_sessions: u32,
+    /// How many of `active_sessions` guacd serves.
+    pub guacd_sessions: u32,
     pub total_bytes_from_guacd: u64,
     pub total_bytes_to_guacd: u64,
     pub sessions_by_protocol: HashMap<String, u32>,
+    /// Bandwidth and protocol mix for guacd-served sessions only.
+    pub guacd_bytes_down: u64,
+    pub guacd_bytes_up: u64,
+    pub guacd_by_protocol: HashMap<String, u32>,
+    /// Bandwidth and protocol mix for natively served sessions only.
+    pub native_bytes_down: u64,
+    pub native_bytes_up: u64,
+    pub native_by_protocol: HashMap<String, u32>,
     pub guacd_pool_size: u32,
     /// Dynamically computed recommended sessions per guacd instance based on
     /// host system resources (CPU + RAM), reserving headroom for other processes.
@@ -717,6 +756,7 @@ mod tests {
         let m = MetricsSummary {
             active_sessions: 3,
             native_sessions: 1,
+            guacd_sessions: 2,
             total_bytes_from_guacd: 1024,
             total_bytes_to_guacd: 512,
             sessions_by_protocol: {
@@ -725,6 +765,12 @@ mod tests {
                 map.insert("vnc".into(), 1);
                 map
             },
+            guacd_bytes_down: 768,
+            guacd_bytes_up: 384,
+            guacd_by_protocol: HashMap::new(),
+            native_bytes_down: 256,
+            native_bytes_up: 128,
+            native_by_protocol: HashMap::new(),
             guacd_pool_size: 5,
             recommended_per_instance: 20,
             system_total_memory: 0,
@@ -788,6 +834,40 @@ mod tests {
         assert_eq!(m.active_sessions, 2);
         assert_eq!(*m.sessions_by_protocol.get("rdp").unwrap(), 1);
         assert_eq!(*m.sessions_by_protocol.get("vnc").unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_native_session_is_never_charged_to_guacd() {
+        let registry = SessionRegistry::new();
+        registry
+            .register(
+                "native".into(),
+                Uuid::new_v4(),
+                "C1".into(),
+                "rdp".into(),
+                Uuid::new_v4(),
+                "u1".into(),
+                "10.0.0.1".into(),
+                "1.1.1.1".into(),
+            )
+            .await;
+        let sess = registry.get("native").await.unwrap();
+        sess.mark_native();
+        sess.bytes_from_guacd.store(900, Ordering::Relaxed);
+        sess.bytes_to_guacd.store(100, Ordering::Relaxed);
+
+        let m = registry.metrics().await;
+        assert_eq!(m.native_sessions, 1);
+        assert_eq!(m.guacd_sessions, 0);
+        assert_eq!(m.native_bytes_down, 900);
+        assert_eq!(m.native_bytes_up, 100);
+        assert_eq!(m.guacd_bytes_down, 0, "guacd is idle, it must read as idle");
+        assert_eq!(m.guacd_bytes_up, 0);
+        assert!(m.guacd_by_protocol.is_empty());
+        assert_eq!(*m.native_by_protocol.get("rdp").unwrap(), 1);
+        // The documented totals still cover every session.
+        assert_eq!(m.active_sessions, 1);
+        assert_eq!(m.total_bytes_from_guacd, 900);
     }
 
     #[test]

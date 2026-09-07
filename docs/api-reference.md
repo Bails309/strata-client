@@ -1054,22 +1054,40 @@ Aggregate metrics across all active tunnel sessions.
 ```json
 {
   "active_sessions": 12,
+  "native_sessions": 4,
+  "guacd_sessions": 8,
   "total_bytes_from_guacd": 629145600,
   "total_bytes_to_guacd": 12582912,
   "sessions_by_protocol": {
     "rdp": 8,
     "ssh": 3,
     "vnc": 1
-  }
+  },
+  "guacd_bytes_down": 419430400,
+  "guacd_bytes_up": 8388608,
+  "guacd_by_protocol": { "ssh": 3, "rdp": 4, "vnc": 1 },
+  "native_bytes_down": 209715200,
+  "native_bytes_up": 4194304,
+  "native_by_protocol": { "rdp": 4 }
 }
 ```
 
 | Field                    | Type    | Description                                                             |
 | ------------------------ | ------- | ----------------------------------------------------------------------- |
-| `active_sessions`        | integer | Total number of active tunnel sessions                                  |
-| `total_bytes_from_guacd` | integer | Cumulative bytes received from guacd across all sessions                |
-| `total_bytes_to_guacd`   | integer | Cumulative bytes sent to guacd across all sessions                      |
+| `active_sessions`        | integer | Total number of active tunnel sessions, whichever engine serves them    |
+| `native_sessions`        | integer | How many of `active_sessions` the native engine serves                  |
+| `guacd_sessions`         | integer | How many of `active_sessions` guacd serves                              |
+| `total_bytes_from_guacd` | integer | Cumulative bytes sent downstream across all sessions                    |
+| `total_bytes_to_guacd`   | integer | Cumulative bytes received upstream across all sessions                  |
 | `sessions_by_protocol`   | object  | Session count grouped by protocol (rdp, ssh, vnc, web, vdi, kubernetes) |
+| `guacd_bytes_down`/`_up` | integer | Bandwidth for guacd-served sessions only                                |
+| `guacd_by_protocol`      | object  | Protocol mix for guacd-served sessions only                             |
+| `native_bytes_down`/`_up`| integer | Bandwidth for natively served sessions only                             |
+| `native_by_protocol`     | object  | Protocol mix for natively served sessions only                          |
+
+The `total_*` and `sessions_by_protocol` fields keep their original meaning
+and count every session. The per-engine fields exist because the two capacity
+panels each describe one engine, and a native session costs guacd nothing.
 
 ---
 

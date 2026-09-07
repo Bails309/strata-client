@@ -23,7 +23,7 @@ use russh::client::{self, Handle, Msg};
 use russh::keys::{HashAlg, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg, Disconnect};
 use secrecy::ExposeSecret;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
 use crate::engine::ssh::keymap::{keysym_to_bytes, Modifiers};
 use crate::engine::{EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec};
@@ -216,15 +216,134 @@ pub async fn discover_host_key(
     discovered.ok_or_else(|| EngineError::Protocol(format!("{hostname} offered no host key")))
 }
 
+/// Which credential the login prompt is still waiting for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Awaiting {
+    Username,
+    Password,
+}
+
+/// How many times a login may be retried before the session gives up.
+///
+/// Matches what a stock sshd allows, so a typo costs a retry rather than
+/// the whole session.
+const MAX_LOGIN_ATTEMPTS: u8 = 3;
+
+/// What feeding one byte to the login prompt produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Typed {
+    /// Nothing the client needs to see.
+    Ignored,
+    /// Write this to the terminal.
+    Echo(String),
+    /// The username is in; ask for the password.
+    NeedPassword,
+    /// Both halves are collected; try them.
+    Ready,
+    /// The user abandoned the attempt; ask again from the top.
+    Restarted,
+}
+
+/// An interactive login for a connection that stores no credential.
+///
+/// guacd prompts in the terminal when a username or password is missing,
+/// and connections are routinely configured that way rather than with
+/// stored credentials. Without this the engine authenticates with empty
+/// strings and the target rejects it.
+struct Login {
+    username: Option<String>,
+    /// Held only until it is handed to the server, and never logged.
+    password: Option<String>,
+    awaiting: Awaiting,
+    typed: String,
+    attempts: u8,
+}
+
+impl Login {
+    /// Advance the prompt by one typed byte.
+    ///
+    /// Kept free of I/O so the echo rules — in particular that a password
+    /// is never echoed — can be asserted directly.
+    fn feed(&mut self, byte: u8) -> Typed {
+        match byte {
+            b'\r' | b'\n' => {
+                let value = std::mem::take(&mut self.typed);
+                match self.awaiting {
+                    // An empty username would be rejected anyway; ask
+                    // again rather than spend one of the attempts.
+                    Awaiting::Username if value.is_empty() => Typed::Restarted,
+                    Awaiting::Username => {
+                        self.username = Some(value);
+                        self.awaiting = Awaiting::Password;
+                        Typed::NeedPassword
+                    }
+                    Awaiting::Password => {
+                        self.password = Some(value);
+                        self.attempts += 1;
+                        Typed::Ready
+                    }
+                }
+            }
+            // Both DEL and BS arrive, depending on the client.
+            0x7f | 0x08 => {
+                let removed = self.typed.pop().is_some();
+                // Only the username is echoed, so only it can be erased.
+                if removed && self.awaiting == Awaiting::Username {
+                    Typed::Echo("\u{8} \u{8}".to_owned())
+                } else {
+                    Typed::Ignored
+                }
+            }
+            // Ctrl+C abandons the login, not the connection.
+            0x03 => {
+                self.typed.clear();
+                self.username = None;
+                self.password = None;
+                self.awaiting = Awaiting::Username;
+                Typed::Restarted
+            }
+            // Other control characters mean nothing at a prompt.
+            0x00..=0x1f => Typed::Ignored,
+            printable => {
+                self.typed.push(printable as char);
+                if self.awaiting == Awaiting::Username {
+                    Typed::Echo((printable as char).to_string())
+                } else {
+                    Typed::Ignored
+                }
+            }
+        }
+    }
+}
+
+/// What the engine is currently doing.
+enum Stage {
+    /// Collecting credentials; no channel exists yet.
+    Login(Login),
+    /// Authenticated, with an interactive shell on a PTY.
+    Shell(Channel<Msg>),
+}
+
 /// A live SSH session with an interactive shell on a PTY.
 pub struct SshEngine {
     session: Handle<HostKeyChecker>,
-    channel: Channel<Msg>,
+    stage: Stage,
     config: Arc<SshConfig>,
     modifiers: Modifiers,
     cols: u32,
     rows: u32,
+    /// Kept so a PTY can be sized once login completes.
+    width: u32,
+    height: u32,
     exit_status: Option<u32>,
+    /// Terminal output produced before a channel exists.
+    ///
+    /// An mpsc rather than a queue because `next_event` is dropped by the
+    /// actor's `select!` whenever client input arrives, and `recv` is
+    /// cancellation-safe where re-polling a bare queue would need a
+    /// wakeup primitive that is not.
+    prompt_tx: mpsc::UnboundedSender<TargetEvent>,
+    prompt_rx: mpsc::UnboundedReceiver<TargetEvent>,
 }
 
 impl SshEngine {
@@ -245,10 +364,9 @@ impl SshEngine {
             policy: config.host_keys.clone(),
         };
 
-        let mut session =
-            client::connect(client_config, (spec.hostname.as_str(), spec.port), handler)
-                .await
-                .map_err(map_russh)?;
+        let session = client::connect(client_config, (spec.hostname.as_str(), spec.port), handler)
+            .await
+            .map_err(map_russh)?;
 
         let TargetSpec {
             username,
@@ -258,34 +376,173 @@ impl SshEngine {
             ..
         } = spec;
 
-        let outcome = session
-            .authenticate_password(username, secret.expose_secret())
-            .await;
-        // Nothing below this line may observe the credential.
-        drop(secret);
-
-        match outcome.map_err(map_russh)? {
-            russh::client::AuthResult::Success => {}
-            russh::client::AuthResult::Failure { .. } => return Err(EngineError::AuthRejected),
-        }
-
-        let channel = session.channel_open_session().await.map_err(map_russh)?;
+        let (prompt_tx, prompt_rx) = mpsc::unbounded_channel();
         let (cols, rows) = config.cell.to_grid(width, height);
-        channel
-            .request_pty(true, &config.term, cols, rows, width, height, &[])
-            .await
-            .map_err(map_russh)?;
-        channel.request_shell(true).await.map_err(map_russh)?;
-
-        Ok(Self {
+        let mut engine = Self {
             session,
-            channel,
+            // Replaced by `Stage::Shell` the moment authentication lands.
+            stage: Stage::Login(Login {
+                username: None,
+                password: None,
+                awaiting: Awaiting::Username,
+                typed: String::new(),
+                attempts: 0,
+            }),
             config,
             modifiers: Modifiers::default(),
             cols,
             rows,
+            width,
+            height,
             exit_status: None,
-        })
+            prompt_tx,
+            prompt_rx,
+        };
+
+        let password = secret.expose_secret().to_owned();
+        // Nothing below this line may observe the original credential.
+        drop(secret);
+
+        if username.is_empty() || password.is_empty() {
+            // Anything the connection did supply is kept, so only the
+            // missing half is asked for.
+            let Stage::Login(login) = &mut engine.stage else {
+                unreachable!("just constructed as Login")
+            };
+            if !username.is_empty() {
+                login.username = Some(username);
+                login.awaiting = Awaiting::Password;
+            }
+            if !password.is_empty() {
+                login.password = Some(password);
+            }
+            engine.show_prompt();
+            return Ok(engine);
+        }
+
+        match engine
+            .session
+            .authenticate_password(username, password)
+            .await
+            .map_err(map_russh)?
+        {
+            russh::client::AuthResult::Success => {}
+            russh::client::AuthResult::Failure { .. } => return Err(EngineError::AuthRejected),
+        }
+        engine.open_shell().await?;
+        Ok(engine)
+    }
+
+    /// Queue terminal output for the client while there is no channel.
+    fn emit(&self, text: &str) {
+        let _ = self
+            .prompt_tx
+            .send(TargetEvent::TerminalOutput(Bytes::from(text.to_owned())));
+    }
+
+    /// Write whichever prompt the login is waiting on.
+    fn show_prompt(&self) {
+        let Stage::Login(login) = &self.stage else {
+            return;
+        };
+        match login.awaiting {
+            Awaiting::Username => self.emit("Login as: "),
+            Awaiting::Password => self.emit("Password: "),
+        }
+    }
+
+    /// Open the PTY and shell once authentication has succeeded.
+    async fn open_shell(&mut self) -> Result<(), EngineError> {
+        let channel = self
+            .session
+            .channel_open_session()
+            .await
+            .map_err(map_russh)?;
+        let (cols, rows) = self.config.cell.to_grid(self.width, self.height);
+        channel
+            .request_pty(
+                true,
+                &self.config.term,
+                cols,
+                rows,
+                self.width,
+                self.height,
+                &[],
+            )
+            .await
+            .map_err(map_russh)?;
+        channel.request_shell(true).await.map_err(map_russh)?;
+        self.cols = cols;
+        self.rows = rows;
+        self.stage = Stage::Shell(channel);
+        Ok(())
+    }
+
+    /// Feed typed bytes into the login prompt.
+    ///
+    /// Returns an error only when the session cannot continue; a rejected
+    /// password re-prompts instead, because losing the whole session to a
+    /// typo is not how any other SSH client behaves.
+    async fn type_into_login(&mut self, bytes: &[u8]) -> Result<(), EngineError> {
+        for &byte in bytes {
+            let Stage::Login(login) = &mut self.stage else {
+                return Ok(());
+            };
+            match login.feed(byte) {
+                Typed::Ignored => {}
+                Typed::Echo(text) => self.emit(&text),
+                Typed::Restarted => {
+                    self.emit("\r\n");
+                    self.show_prompt();
+                }
+                Typed::NeedPassword => {
+                    self.emit("\r\n");
+                    self.show_prompt();
+                }
+                Typed::Ready => {
+                    self.emit("\r\n");
+                    self.attempt_login().await?;
+                    if matches!(self.stage, Stage::Shell(_)) {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Try the collected credentials, re-prompting on rejection.
+    async fn attempt_login(&mut self) -> Result<(), EngineError> {
+        let Stage::Login(login) = &mut self.stage else {
+            return Ok(());
+        };
+        let username = login.username.clone().unwrap_or_default();
+        let password = login.password.take().unwrap_or_default();
+        let attempts = login.attempts;
+
+        let outcome = self
+            .session
+            .authenticate_password(username, password)
+            .await
+            .map_err(map_russh)?;
+
+        match outcome {
+            russh::client::AuthResult::Success => self.open_shell().await,
+            russh::client::AuthResult::Failure { .. } if attempts < MAX_LOGIN_ATTEMPTS => {
+                let Stage::Login(login) = &mut self.stage else {
+                    return Ok(());
+                };
+                // Start again from the username: the wrong one is as
+                // likely as the wrong password, and the user cannot tell
+                // which the server objected to.
+                login.username = None;
+                login.awaiting = Awaiting::Username;
+                self.emit("Permission denied, please try again.\r\n");
+                self.show_prompt();
+                Ok(())
+            }
+            russh::client::AuthResult::Failure { .. } => Err(EngineError::AuthRejected),
+        }
     }
 
     /// Exit status reported by the remote shell, once it has exited.
@@ -295,7 +552,12 @@ impl SshEngine {
     }
 
     async fn write(&mut self, data: impl Into<Bytes>) -> Result<(), EngineError> {
-        self.channel.data_bytes(data).await.map_err(map_russh)
+        let bytes: Bytes = data.into();
+        match &mut self.stage {
+            Stage::Shell(channel) => channel.data_bytes(bytes).await.map_err(map_russh),
+            // Before authentication the same keystrokes drive the prompt.
+            Stage::Login(_) => self.type_into_login(&bytes.clone()).await,
+        }
     }
 }
 
@@ -318,18 +580,24 @@ impl ProtocolEngine for SshEngine {
             // A paste is just typed input as far as the PTY is concerned.
             InputEvent::Text(data) | InputEvent::Clipboard(data) => self.write(data).await?,
             InputEvent::Resize { width, height } => {
+                self.width = width;
+                self.height = height;
                 let (cols, rows) = self.config.cell.to_grid(width, height);
                 if (cols, rows) != (self.cols, self.rows) {
-                    self.channel
-                        .window_change(cols, rows, width, height)
-                        .await
-                        .map_err(map_russh)?;
+                    if let Stage::Shell(channel) = &mut self.stage {
+                        channel
+                            .window_change(cols, rows, width, height)
+                            .await
+                            .map_err(map_russh)?;
+                    }
                     self.cols = cols;
                     self.rows = rows;
                 }
             }
             InputEvent::Disconnect => {
-                self.channel.eof().await.map_err(map_russh)?;
+                if let Stage::Shell(channel) = &mut self.stage {
+                    channel.eof().await.map_err(map_russh)?;
+                }
             }
             // A PTY without mouse reporting has nothing to do with this.
             InputEvent::Mouse { .. } => {}
@@ -339,9 +607,21 @@ impl ProtocolEngine for SshEngine {
 
     async fn next_event(&mut self) -> Result<Option<TargetEvent>, EngineError> {
         loop {
+            // Anything the prompt produced outranks the channel, and while
+            // logging in there is no channel to read from at all.
+            if let Ok(event) = self.prompt_rx.try_recv() {
+                return Ok(Some(event));
+            }
+            let channel = match &mut self.stage {
+                Stage::Shell(channel) => channel,
+                // `recv` is cancellation-safe, which matters because the
+                // actor drops this future whenever client input arrives.
+                Stage::Login(_) => return Ok(self.prompt_rx.recv().await),
+            };
+
             // `Channel::wait` is an mpsc receive, so dropping this future
             // inside the actor's `select!` loses nothing.
-            match self.channel.wait().await {
+            match channel.wait().await {
                 Some(ChannelMsg::Data { data }) => {
                     return Ok(Some(TargetEvent::TerminalOutput(data)));
                 }
@@ -378,8 +658,10 @@ impl ProtocolEngine for SshEngine {
     async fn shutdown(&mut self) -> Result<(), EngineError> {
         // Best effort: a target that has already vanished must not stop
         // the session tearing down cleanly.
-        if let Err(err) = self.channel.close().await {
-            tracing::debug!(error = %err, "ssh channel close failed");
+        if let Stage::Shell(channel) = &mut self.stage {
+            if let Err(err) = channel.close().await {
+                tracing::debug!(error = %err, "ssh channel close failed");
+            }
         }
         if let Err(err) = self
             .session
@@ -435,6 +717,122 @@ fn map_russh(err: russh::Error) -> EngineError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn login() -> Login {
+        Login {
+            username: None,
+            password: None,
+            awaiting: Awaiting::Username,
+            typed: String::new(),
+            attempts: 0,
+        }
+    }
+
+    /// Type `text` and collect everything the prompt would echo.
+    fn type_str(login: &mut Login, text: &str) -> String {
+        let mut echoed = String::new();
+        for byte in text.bytes() {
+            if let Typed::Echo(s) = login.feed(byte) {
+                echoed.push_str(&s);
+            }
+        }
+        echoed
+    }
+
+    #[test]
+    fn a_password_is_never_echoed() {
+        // The whole point of the second prompt. An echo here would put
+        // the credential on the screen, into any recording of it, and in
+        // front of anyone observing the session.
+        let mut login = login();
+        type_str(&mut login, "alice");
+        assert_eq!(login.feed(b'\r'), Typed::NeedPassword);
+
+        let echoed = type_str(&mut login, "hunter2");
+        assert_eq!(echoed, "", "the password must not reach the terminal");
+        assert_eq!(login.feed(b'\r'), Typed::Ready);
+        assert_eq!(login.username.as_deref(), Some("alice"));
+        assert_eq!(login.password.as_deref(), Some("hunter2"));
+    }
+
+    #[test]
+    fn a_username_is_echoed_so_it_can_be_read_back() {
+        let mut login = login();
+        assert_eq!(type_str(&mut login, "alice"), "alice");
+    }
+
+    #[test]
+    fn backspace_erases_the_username_but_reveals_nothing_of_the_password() {
+        let mut login = login();
+        type_str(&mut login, "alicf");
+        assert_eq!(login.feed(0x7f), Typed::Echo("\u{8} \u{8}".to_owned()));
+        type_str(&mut login, "e");
+        assert_eq!(login.feed(b'\r'), Typed::NeedPassword);
+        assert_eq!(login.username.as_deref(), Some("alice"));
+
+        type_str(&mut login, "pw");
+        // Erasing a password character must not tell an onlooker its length.
+        assert_eq!(login.feed(0x7f), Typed::Ignored);
+        assert_eq!(login.feed(b'\r'), Typed::Ready);
+        assert_eq!(login.password.as_deref(), Some("p"));
+    }
+
+    #[test]
+    fn an_empty_username_asks_again_rather_than_spending_an_attempt() {
+        // Sending an empty username to the server wastes one of the few
+        // tries it allows before dropping the connection.
+        let mut login = login();
+        assert_eq!(login.feed(b'\r'), Typed::Restarted);
+        assert_eq!(login.attempts, 0);
+        assert!(login.username.is_none());
+    }
+
+    #[test]
+    fn ctrl_c_abandons_the_credentials_rather_than_the_session() {
+        let mut login = login();
+        type_str(&mut login, "alice");
+        login.feed(b'\r');
+        type_str(&mut login, "secret");
+
+        assert_eq!(login.feed(0x03), Typed::Restarted);
+        assert!(
+            login.username.is_none(),
+            "a half-typed login must not persist"
+        );
+        assert!(login.password.is_none());
+        assert_eq!(login.awaiting, Awaiting::Username);
+        assert_eq!(login.typed, "");
+    }
+
+    #[test]
+    fn each_completed_pair_counts_as_one_attempt() {
+        // The count gates how many times a rejection re-prompts, so an
+        // off-by-one here either locks a user out early or never stops.
+        let mut login = login();
+        for _ in 0..MAX_LOGIN_ATTEMPTS {
+            type_str(&mut login, "alice");
+            login.feed(b'\r');
+            type_str(&mut login, "wrong");
+            assert_eq!(login.feed(b'\r'), Typed::Ready);
+            // What the engine does on rejection.
+            login.username = None;
+            login.awaiting = Awaiting::Username;
+        }
+        assert_eq!(login.attempts, MAX_LOGIN_ATTEMPTS);
+    }
+
+    #[test]
+    fn control_characters_do_not_land_in_a_credential() {
+        // Arrow keys and the like arrive as escape sequences; letting
+        // them through would put invisible bytes in the password.
+        let mut login = login();
+        for byte in [0x1b, b'[', b'A'] {
+            login.feed(byte);
+        }
+        // The escape byte is dropped; the printable remainder is not, which
+        // is why an editing prompt is not what this is.
+        assert_eq!(login.typed, "[A");
+    }
 
     #[test]
     fn pixel_geometry_converts_to_a_sane_grid() {

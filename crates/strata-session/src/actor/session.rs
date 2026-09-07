@@ -613,6 +613,81 @@ mod tests {
         assert!(*revoked.lock().unwrap(), "credential was never revoked");
     }
 
+    /// Drain frames until one carries `needle`, so a test never races the
+    /// periodic sync.
+    async fn recv_until(frames: &mut mpsc::Receiver<ClientFrame>, needle: &str) {
+        while let Some(frame) = frames.recv().await {
+            if let ClientFrame::Text(bytes) = frame {
+                if String::from_utf8_lossy(&bytes).contains(needle) {
+                    return;
+                }
+            }
+        }
+        panic!("session ended before emitting {needle}");
+    }
+
+    #[tokio::test]
+    async fn a_native_session_writes_a_replayable_recording() {
+        // The recording sink was wired to the native path but never
+        // exercised end to end, so nothing proved a session routed here
+        // still leaves the audit trail the guacd path produced.
+        let dir = std::env::temp_dir().join(format!("strata-rec-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("session.guac");
+        let sink = crate::actor::audit::GuacRecordingSink::create(&path)
+            .await
+            .unwrap();
+
+        let (engine, events, _inputs) = MockEngine::new(Protocol::Rdp);
+        let (handle, mut frames) = SessionActor::spawn(SessionConfig {
+            id: "recorded".to_owned(),
+            engine: Box::new(engine),
+            encoder: Box::new(GuacWireEncoder::new()),
+            audit: Box::new(sink),
+            moderator: None,
+            credential: None,
+        });
+
+        events
+            .send(TargetEvent::Resized {
+                width: 1024,
+                height: 768,
+            })
+            .unwrap();
+        events
+            .send(TargetEvent::Clipboard(Bytes::from_static(b"copied")))
+            .unwrap();
+        // Terminate arrives on the control channel, which the actor may
+        // select ahead of these. Waiting for a frame count would race the
+        // periodic sync, so wait for the instruction itself.
+        recv_until(&mut frames, "clipboard").await;
+
+        handle.terminate("test over").await.unwrap();
+        drop(events);
+        while frames.recv().await.is_some() {}
+
+        let written = String::from_utf8(tokio::fs::read(&path).await.unwrap()).unwrap();
+        // A raw instruction stream, exactly as guacd would have written:
+        // any framing or timestamps here would break existing players.
+        assert!(
+            written.contains("4.size,"),
+            "no size instruction: {written}"
+        );
+        assert!(
+            written.contains("4.1024"),
+            "desktop size missing: {written}"
+        );
+        assert!(
+            written.contains("9.clipboard,"),
+            "clipboard was not recorded: {written}"
+        );
+        assert!(
+            written.ends_with(';'),
+            "recording ends mid-instruction: {written}"
+        );
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     #[tokio::test]
     async fn a_target_disconnect_ends_the_session() {
         let (handle, mut frames, events, _inputs) = spawn_session();

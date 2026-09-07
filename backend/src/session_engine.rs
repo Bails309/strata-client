@@ -146,6 +146,21 @@ fn flag(handshake: &HandshakeParams, key: &str) -> bool {
         .is_some_and(|v| matches!(v.trim(), "true" | "1"))
 }
 
+/// Read a checkbox-style parameter that is not off when absent.
+///
+/// [`crate::tunnel::HandshakeParams::full_param_map`] fills in defaults
+/// before guacd sees a connection, so an unset parameter does not mean the
+/// same thing on the two paths. Reading `extra` raw here made the native
+/// engine disable ClearType on every connection that had never set it,
+/// while guacd was being told to enable it — the two engines rendered the
+/// same desktop differently for no reason an administrator could see.
+fn flag_or(handshake: &HandshakeParams, key: &str, default: bool) -> bool {
+    handshake
+        .extra
+        .get(key)
+        .map_or(default, |v| matches!(v.trim(), "true" | "1"))
+}
+
 /// The process-wide rollout policy, read from the environment once.
 pub fn policy() -> &'static RoutingPolicy {
     static POLICY: OnceLock<RoutingPolicy> = OnceLock::new();
@@ -329,6 +344,17 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
                     "connection uses {}, which the native RDP engine does not implement",
                     needs_guacd.join(", ")
                 ));
+            }
+            // Audio playback is the one feature that is on unless switched
+            // off, so its absence is what disqualifies a connection rather
+            // than its presence. The native engine has no RDPSND client, and
+            // a session that silently loses sound is exactly the kind of
+            // quiet downgrade the list above exists to prevent.
+            if !flag(handshake, "disable-audio") {
+                return Err(
+                    "connection allows audio playback, which the native RDP engine cannot carry"
+                        .to_owned(),
+                );
             }
             let kerberos_only = handshake
                 .extra
@@ -776,7 +802,9 @@ async fn connect_engine(
                 performance: RdpPerformance {
                     wallpaper: flag(handshake, "enable-wallpaper"),
                     theming: flag(handshake, "enable-theming"),
-                    font_smoothing: flag(handshake, "enable-font-smoothing"),
+                    // Matches the guacd default, so the two engines render
+                    // glyphs the same way.
+                    font_smoothing: flag_or(handshake, "enable-font-smoothing", true),
                     full_window_drag: flag(handshake, "enable-full-window-drag"),
                     desktop_composition: flag(handshake, "enable-desktop-composition"),
                     menu_animations: flag(handshake, "enable-menu-animations"),
@@ -803,6 +831,9 @@ mod tests {
         if let Some(fp) = fingerprint {
             extra.insert(HOST_KEY_PARAM.to_owned(), fp.to_owned());
         }
+        // Audio off, so these fixtures exercise the gate under test rather
+        // than tripping the audio one first.
+        extra.insert("disable-audio".to_owned(), "true".to_owned());
         HandshakeParams {
             protocol: protocol.to_owned(),
             hostname: "host.internal".to_owned(),
@@ -910,6 +941,38 @@ mod tests {
                 "{value:?} should not count as enabled"
             );
         }
+    }
+
+    #[test]
+    fn a_connection_that_can_still_play_audio_is_left_to_guacd() {
+        // Audio is opt-out, and our own guacd defaults set disable-audio to
+        // "false", so a connection that never mentions it still has sound.
+        for value in [None, Some("false"), Some("")] {
+            let mut params = handshake("rdp", None);
+            match value {
+                Some(v) => params
+                    .extra
+                    .insert("disable-audio".to_owned(), v.to_owned()),
+                None => params.extra.remove("disable-audio"),
+            };
+            let err = preflight(Protocol::Rdp, &params).unwrap_err();
+            assert!(err.contains("audio"), "{value:?} should keep guacd: {err}");
+        }
+    }
+
+    #[test]
+    fn font_smoothing_is_on_unless_an_admin_turns_it_off() {
+        // guacd is handed enable-font-smoothing=true when the connection
+        // leaves it unset, so the native engine must not read the same
+        // silence as "off" and render glyphs differently.
+        let params = handshake("rdp", None);
+        assert!(flag_or(&params, "enable-font-smoothing", true));
+        assert!(!flag(&params, "enable-font-smoothing"));
+
+        let mut off = handshake("rdp", None);
+        off.extra
+            .insert("enable-font-smoothing".to_owned(), "false".to_owned());
+        assert!(!flag_or(&off, "enable-font-smoothing", true));
     }
 
     #[test]

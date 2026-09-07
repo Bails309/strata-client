@@ -56,6 +56,13 @@ const MAX_TUNNEL_DURATION: Duration = Duration::from_secs(8 * 60 * 60);
 /// against and the session falls back to `guacd`.
 const HOST_KEY_PARAM: &str = "host-key-fingerprint";
 
+/// guacd's own host key parameter, holding a full OpenSSH public key.
+///
+/// Read as a fallback so a connection configured for guacd verifies the
+/// same host when it is routed natively, matching how [`KDC_URL_PARAM`]
+/// is shared between the two engines.
+const GUACD_HOST_KEY_PARAM: &str = "host-key";
+
 /// Connection parameter naming the KDC for Kerberos authentication.
 ///
 /// Shared with the guacd path, whose Kerberos patch reads the same key,
@@ -363,16 +370,54 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
 }
 
 fn host_key_fingerprints(handshake: &HandshakeParams) -> Vec<String> {
-    handshake
+    let explicit = handshake
         .extra
         .get(HOST_KEY_PARAM)
         .map(|raw| {
             raw.split(',')
                 .map(|f| f.trim().to_owned())
                 .filter(|f| !f.is_empty())
-                .collect()
+                .collect::<Vec<_>>()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if !explicit.is_empty() {
+        return explicit;
+    }
+
+    // Fall back to the key guacd is already given. An administrator has
+    // no way to produce a SHA256 fingerprint from the admin panel, and
+    // requiring one would mean every existing SSH connection had to be
+    // re-entered before it could run natively.
+    handshake
+        .extra
+        .get(GUACD_HOST_KEY_PARAM)
+        .and_then(|key| fingerprint_openssh_key(key))
+        .into_iter()
+        .collect()
+}
+
+/// Derive the `SHA256:` fingerprint of an OpenSSH public key.
+///
+/// The fingerprint covers the base64 key blob, which is the middle field
+/// of `<type> <blob> <comment>`. Returns `None` rather than a wrong
+/// fingerprint for anything that does not parse, so a malformed entry
+/// fails preflight and the session stays on guacd instead of connecting
+/// to a host nobody verified.
+fn fingerprint_openssh_key(key: &str) -> Option<String> {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let blob = key.split_whitespace().find_map(|field| {
+        base64::engine::general_purpose::STANDARD
+            .decode(field)
+            .ok()
+            .filter(|decoded| decoded.len() > 4)
+    })?;
+    let digest = sha2::Sha256::digest(&blob);
+    Some(format!(
+        "SHA256:{}",
+        base64::engine::general_purpose::STANDARD_NO_PAD.encode(digest)
+    ))
 }
 
 /// Normalise a KDC address into a URL both engines accept.
@@ -894,6 +939,55 @@ mod tests {
             host_key_fingerprints(&params),
             vec!["SHA256:aaa".to_owned(), "SHA256:bbb".to_owned()]
         );
+    }
+
+    #[test]
+    fn a_guacd_host_key_verifies_the_same_host_natively() {
+        // Expected value from `ssh-keygen -lf`, not from this code: a
+        // fingerprint computed a different way would silently pin a
+        // different host, and a self-derived expectation would not catch it.
+        let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJk8AhaZaCLPfHOnEqmB6h8gW1jCbCJKzJBAbUX3jIEy admin@example";
+        assert_eq!(
+            fingerprint_openssh_key(key).as_deref(),
+            Some("SHA256:P1lX1ochzqvz3Bx6Hxyabr/NQJfpUMJkcjXQC0mgywA")
+        );
+    }
+
+    #[test]
+    fn an_ssh_connection_configured_for_guacd_needs_no_re_entry() {
+        // The admin panel offers only guacd's OpenSSH-format field, so
+        // requiring a SHA256 fingerprint would leave native SSH
+        // unreachable through the product.
+        let mut params = handshake("ssh", None);
+        params.extra.insert(
+            "host-key".to_owned(),
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJk8AhaZaCLPfHOnEqmB6h8gW1jCbCJKzJBAbUX3jIEy"
+                .to_owned(),
+        );
+        assert_eq!(host_key_fingerprints(&params).len(), 1);
+    }
+
+    #[test]
+    fn an_explicit_fingerprint_wins_over_the_derived_one() {
+        let mut params = handshake("ssh", Some("SHA256:pinned"));
+        params
+            .extra
+            .insert("host-key".to_owned(), "ssh-ed25519 AAAAC3NzaC1l".to_owned());
+        assert_eq!(host_key_fingerprints(&params), vec!["SHA256:pinned"]);
+    }
+
+    #[test]
+    fn a_host_key_that_does_not_parse_leaves_the_session_on_guacd() {
+        // Guessing a fingerprint here would pin a host nobody verified.
+        for junk in ["", "not-a-key", "ssh-rsa !!!!", "ssh-rsa AAA"] {
+            let mut params = handshake("ssh", None);
+            params.extra.insert("host-key".to_owned(), junk.to_owned());
+            assert!(
+                host_key_fingerprints(&params).is_empty(),
+                "{junk:?} must not produce a fingerprint"
+            );
+            assert!(preflight(Protocol::Ssh, &params).is_err());
+        }
     }
 
     #[test]

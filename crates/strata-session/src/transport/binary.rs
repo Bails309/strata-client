@@ -101,6 +101,7 @@ impl FrameEncoder for BinaryEncoder {
             TargetEvent::Resized { .. }
             | TargetEvent::Disconnected { .. }
             | TargetEvent::CursorImage { .. }
+            | TargetEvent::CopyRegion { .. }
             | TargetEvent::CursorHidden => {
                 unreachable!("control events are handled by encode_control")
             }

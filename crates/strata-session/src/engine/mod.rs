@@ -147,6 +147,25 @@ pub enum TargetEvent {
         /// Encoded image bytes.
         data: Bytes,
     },
+    /// Move a rectangle the client already holds.
+    ///
+    /// A scrolled viewport changes every pixel in it, so diffing cannot
+    /// help; the content is merely somewhere else. Telling the client to
+    /// move what it has costs no pixels at all.
+    CopyRegion {
+        /// Source X.
+        src_x: i32,
+        /// Source Y.
+        src_y: i32,
+        /// Width of the moved rectangle.
+        width: i32,
+        /// Height of the moved rectangle.
+        height: i32,
+        /// Destination X.
+        dst_x: i32,
+        /// Destination Y.
+        dst_y: i32,
+    },
     /// A compressed video slice lifted straight off the target.
     ///
     /// This is the payload that makes Native Direct Streaming Mode worth

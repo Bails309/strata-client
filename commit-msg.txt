@@ -1,25 +1,23 @@
-perf(rdp): send the damage the target meant, not the union of it
+perf(rdp): move a scrolled region instead of repainting it
 
-ironrdp unions every rectangle in a fast-path PDU into one before
-handing it over, so a caret top-left and a clock bottom-right arrive as
-a single near-full-screen update. Encoding that verbatim is where the
-bandwidth went: measured over a minute of scrolling, 75.8 megapixels on
-a 1.82 megapixel screen, about 41 full-screen repaints.
+Diffing halved the traffic, 7.7 MB to 3.9 MB, but it cannot help a
+scroll: every pixel in the viewport really does change, so the diff
+correctly reports all of it and we encode all of it. That is the whole
+of the remaining gap to guacd, whose advantage here is not its codec but
+that it never sends those pixels at all.
 
-That was never a codec problem. At 0.116 bytes per pixel the encoder was
-already achieving roughly 26:1 against raw RGB; it was simply being handed
-far too many pixels. Both earlier attempts missed this, which is why JPEG
-made things worse rather than better.
+A damage rectangle is now tested for a vertical shift against the
+previous frame. When one is found the client is told to move what it
+already holds, and only the strip the scroll revealed is encoded.
 
-Each update is now diffed against the previous frame with
-ironrdp-graphics' tile diff, and only the rectangles that actually differ
-are encoded. The whole advertised area is still copied into the shadow
-frame afterwards, or the next comparison would run against stale pixels,
-and the shadow is dropped whenever a reactivation rebuilds the
-framebuffer.
+Accepting a shift that is not really there would tell the browser to
+move the wrong pixels, and the result would stay on screen until
+something else repainted it. The guard against that is deliberately
+strict: the probe row must not be a single flat colour, the shift must
+be an exact row match, and at least four sampled rows across the
+rectangle must match exactly before it is trusted. A rejected candidate
+costs one comparison and falls back to diffing.
 
-The report gains offered_megapixels alongside megapixels so the
-suppression ratio is visible directly rather than inferred.
-
-Costs one framebuffer of memory, about 7 MB at 1920x950. A tile compare
-is far cheaper than the PNG encode it avoids.
+Also reports encoder totals on drop. The periodic report is useless for
+a short session: a minute of measuring produced no summary at all, and
+the figures had to be reconstructed from raw log lines.

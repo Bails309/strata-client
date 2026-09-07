@@ -2484,6 +2484,29 @@ pub async fn get_metrics(
     let total_recommended = by_mem.min(by_cpu).max(1);
     metrics.recommended_per_instance = (total_recommended / pool_size).max(1);
 
+    // ── Native engine capacity ──
+    //
+    // The native engine's footprint is known rather than estimated: a
+    // session holds two framebuffers, the live one and the previous
+    // frame used to narrow the target's damage rectangles, at four bytes
+    // a pixel. Everything else — decoder state, channel buffers, the
+    // encode scratch — is small beside that.
+    //
+    // guacd cannot be costed this way. It is a separate process per
+    // pool instance carrying FreeRDP, cairo surfaces and a worker thread
+    // per core, which is why its figure above is a blended estimate.
+    const NATIVE_FRAMEBUFFERS_PER_SESSION: f64 = 2.0;
+    const NATIVE_OVERHEAD_MB: f64 = 8.0;
+    let framebuffer_mb = (1920.0 * 1080.0 * 4.0) / 1_048_576.0;
+    let native_ram_per_session =
+        framebuffer_mb * NATIVE_FRAMEBUFFERS_PER_SESSION + NATIVE_OVERHEAD_MB;
+    metrics.native_ram_per_session_mb = native_ram_per_session.ceil() as u32;
+
+    // Same headroom and the same CPU bound as guacd, so the two numbers
+    // differ only where the engines genuinely differ.
+    let native_by_mem = (usable_mem_mb / native_ram_per_session) as u32;
+    metrics.native_recommended = native_by_mem.min(by_cpu).max(1);
+
     Ok(Json(metrics))
 }
 

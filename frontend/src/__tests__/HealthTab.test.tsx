@@ -34,6 +34,7 @@ const health = (over: Partial<ServiceHealth> = {}): ServiceHealth => ({
 
 const metrics = (over: Partial<MetricsSummary> = {}): MetricsSummary => ({
   active_sessions: 2,
+  native_sessions: 0,
   total_bytes_from_guacd: 0,
   total_bytes_to_guacd: 0,
   sessions_by_protocol: { ssh: 2 },
@@ -41,6 +42,8 @@ const metrics = (over: Partial<MetricsSummary> = {}): MetricsSummary => ({
   recommended_per_instance: 8,
   system_total_memory: 8 * 1024 * 1024 * 1024,
   system_cpu_cores: 4,
+  native_ram_per_session_mb: 24,
+  native_recommended: 90,
   ...over,
 });
 

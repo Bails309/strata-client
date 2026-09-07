@@ -282,6 +282,10 @@ pub struct ActiveSession {
     pub bytes_from_guacd: AtomicU64,
     /// Bytes sent to guacd (client → server direction)
     pub bytes_to_guacd: AtomicU64,
+    /// Set when the native engine serves this session rather than guacd.
+    /// A flag rather than a constructor argument so the two very
+    /// different call sites do not both grow another parameter.
+    native: std::sync::atomic::AtomicBool,
     pub remote_host: String,
     pub client_ip: String,
     pub kill_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
@@ -301,6 +305,17 @@ pub struct ActiveSession {
 }
 
 impl ActiveSession {
+    /// Record that the native engine, not guacd, serves this session.
+    pub fn mark_native(&self) {
+        self.native
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether the native engine serves this session.
+    pub fn is_native(&self) -> bool {
+        self.native.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Mark the session as ended and wake every task currently awaiting
     /// [`Self::ended()`]. Idempotent — calling it multiple times is
     /// safe. Tasks that start awaiting *after* the first call return
@@ -402,6 +417,7 @@ impl SessionRegistry {
             broadcast_tx: tx.clone(),
             bytes_from_guacd: AtomicU64::new(0),
             bytes_to_guacd: AtomicU64::new(0),
+            native: std::sync::atomic::AtomicBool::new(false),
             remote_host,
             client_ip,
             kill_tx: Arc::new(tokio::sync::Mutex::new(Some(kill_tx))),
@@ -488,15 +504,20 @@ impl SessionRegistry {
         let mut total_bytes_in: u64 = 0;
         let mut total_bytes_out: u64 = 0;
         let mut by_protocol: HashMap<String, u32> = HashMap::new();
+        let mut native_sessions: u32 = 0;
 
         for s in sessions.values() {
             total_bytes_in += s.bytes_from_guacd.load(Ordering::Relaxed);
             total_bytes_out += s.bytes_to_guacd.load(Ordering::Relaxed);
             *by_protocol.entry(s.protocol.clone()).or_insert(0) += 1;
+            if s.is_native() {
+                native_sessions += 1;
+            }
         }
 
         MetricsSummary {
             active_sessions: sessions.len() as u32,
+            native_sessions,
             total_bytes_from_guacd: total_bytes_in,
             total_bytes_to_guacd: total_bytes_out,
             sessions_by_protocol: by_protocol,
@@ -504,6 +525,8 @@ impl SessionRegistry {
             recommended_per_instance: 20, // placeholder — overridden by admin handler
             system_total_memory: 0,
             system_cpu_cores: 0,
+            native_ram_per_session_mb: 0, // placeholder — overridden by admin handler
+            native_recommended: 0,        // placeholder — overridden by admin handler
         }
     }
 }
@@ -512,6 +535,8 @@ impl SessionRegistry {
 #[derive(Serialize, Clone)]
 pub struct MetricsSummary {
     pub active_sessions: u32,
+    /// How many of `active_sessions` the native engine serves.
+    pub native_sessions: u32,
     pub total_bytes_from_guacd: u64,
     pub total_bytes_to_guacd: u64,
     pub sessions_by_protocol: HashMap<String, u32>,
@@ -523,6 +548,11 @@ pub struct MetricsSummary {
     pub system_total_memory: u64,
     /// Number of logical CPU cores (for display).
     pub system_cpu_cores: u32,
+    /// Memory one native session costs, from what it actually allocates
+    /// rather than the blended estimate guacd capacity uses.
+    pub native_ram_per_session_mb: u32,
+    /// Sessions this host could serve if every one ran natively.
+    pub native_recommended: u32,
 }
 
 #[cfg(test)]
@@ -686,6 +716,7 @@ mod tests {
     fn metrics_summary_serializes() {
         let m = MetricsSummary {
             active_sessions: 3,
+            native_sessions: 1,
             total_bytes_from_guacd: 1024,
             total_bytes_to_guacd: 512,
             sessions_by_protocol: {
@@ -698,10 +729,14 @@ mod tests {
             recommended_per_instance: 20,
             system_total_memory: 0,
             system_cpu_cores: 0,
+            native_ram_per_session_mb: 24,
+            native_recommended: 40,
         };
         let json = serde_json::to_value(&m).unwrap();
         assert_eq!(json["active_sessions"], 3);
         assert_eq!(json["guacd_pool_size"], 5);
+        assert_eq!(json["native_sessions"], 1);
+        assert_eq!(json["native_recommended"], 40);
     }
 
     #[test]

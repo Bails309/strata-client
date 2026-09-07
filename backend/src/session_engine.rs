@@ -434,6 +434,11 @@ pub async fn run_native(
                 kill_rx = Some(kill);
                 shared_input_rx = Some(input);
                 bandwidth = ctx.registry.get(&ctx.session_id).await;
+                // Capacity reporting distinguishes the two engines: the
+                // native one's footprint is known, guacd's is estimated.
+                if let Some(sess) = bandwidth.as_ref() {
+                    sess.mark_native();
+                }
             }
             None => {
                 tracing::error!("Session limit reached — rejecting native tunnel");

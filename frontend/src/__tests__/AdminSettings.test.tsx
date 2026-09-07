@@ -174,6 +174,7 @@ const healthDown = {
 
 const metricsOk = {
   active_sessions: 7,
+  native_sessions: 2,
   total_bytes_from_guacd: 1024,
   total_bytes_to_guacd: 512,
   sessions_by_protocol: { rdp: 4, ssh: 3 },
@@ -181,6 +182,8 @@ const metricsOk = {
   recommended_per_instance: 18,
   system_total_memory: 8589934592,
   system_cpu_cores: 4,
+  native_ram_per_session_mb: 24,
+  native_recommended: 90,
 };
 
 const defaultUser: import("../api").MeResponse = {

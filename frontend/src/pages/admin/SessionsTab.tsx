@@ -365,6 +365,243 @@ function GuacdCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
   );
 }
 
+function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
+  const activeSessions = metrics.native_sessions;
+  const totalCapacity = metrics.native_recommended || 1;
+  const ramPerSession = metrics.native_ram_per_session_mb;
+  const usagePercent = Math.min((activeSessions / totalCapacity) * 100, 100);
+
+  const memGB = metrics.system_total_memory
+    ? (metrics.system_total_memory / 1_073_741_824).toFixed(1)
+    : null;
+  const cpuCores = metrics.system_cpu_cores || null;
+
+  // How much further this host stretches without a guacd process per
+  // pool instance behind every session.
+  const guacdCapacity = (metrics.guacd_pool_size || 1) * (metrics.recommended_per_instance || 20);
+  const headroom = guacdCapacity > 0 ? totalCapacity / guacdCapacity : 0;
+
+  const color = usagePercent >= 80 ? "#ef4444" : usagePercent >= 60 ? "#f59e0b" : "#22c55e";
+
+  const radius = 70;
+  const strokeWidth = 12;
+  const circumference = Math.PI * radius;
+  const offset = circumference - (usagePercent / 100) * circumference;
+
+  return (
+    <div
+      className="rounded-xl p-5"
+      style={{
+        background: "var(--color-surface-secondary)",
+        border: "1px solid var(--color-glass-border)",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.15), inset 0 1px 0 var(--color-glass-highlight)",
+      }}
+    >
+      <div className="flex items-center gap-2 mb-4">
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="var(--color-accent)"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M12 2L2 7l10 5 10-5-10-5z" />
+          <path d="M2 17l10 5 10-5" />
+          <path d="M2 12l10 5 10-5" />
+        </svg>
+        <h3 className="text-sm font-bold" style={{ color: "var(--color-accent)" }}>
+          Native Engine Capacity
+        </h3>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-[auto_1fr] gap-6 items-center">
+        <div className="flex flex-col items-center">
+          <svg width="180" height="105" viewBox="0 0 180 105">
+            <path
+              d={`M ${90 - radius} 95 A ${radius} ${radius} 0 0 1 ${90 + radius} 95`}
+              fill="none"
+              stroke="var(--color-border)"
+              strokeWidth={strokeWidth}
+              strokeLinecap="round"
+            />
+            <path
+              d={`M ${90 - radius} 95 A ${radius} ${radius} 0 0 1 ${90 + radius} 95`}
+              fill="none"
+              stroke={color}
+              strokeWidth={strokeWidth}
+              strokeLinecap="round"
+              strokeDasharray={circumference}
+              strokeDashoffset={offset}
+              style={{ transition: "stroke-dashoffset 0.6s ease, stroke 0.4s ease" }}
+            />
+            <text
+              x="90"
+              y="78"
+              textAnchor="middle"
+              fill={color}
+              fontSize="28"
+              fontWeight="bold"
+              fontFamily="system-ui"
+            >
+              {Math.round(usagePercent)}%
+            </text>
+            <text
+              x="90"
+              y="96"
+              textAnchor="middle"
+              fill="var(--color-txt-tertiary)"
+              fontSize="10"
+              fontFamily="system-ui"
+            >
+              capacity used
+            </text>
+          </svg>
+        </div>
+
+        <div className="grid gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div
+              className="rounded-lg px-3 py-2"
+              style={{ background: "var(--color-surface-tertiary)" }}
+            >
+              <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
+                Native Sessions
+              </p>
+              <p className="text-lg font-bold" style={{ color }}>
+                {activeSessions}
+              </p>
+            </div>
+            <div
+              className="rounded-lg px-3 py-2"
+              style={{ background: "var(--color-surface-tertiary)" }}
+            >
+              <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
+                Processes
+              </p>
+              <p className="text-lg font-bold text-txt-primary">0</p>
+            </div>
+            <div
+              className="rounded-lg px-3 py-2"
+              style={{ background: "var(--color-surface-tertiary)" }}
+            >
+              <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
+                RAM / Session
+              </p>
+              <p className="text-lg font-bold text-txt-primary">{ramPerSession} MB</p>
+            </div>
+            <div
+              className="rounded-lg px-3 py-2"
+              style={{ background: "var(--color-surface-tertiary)" }}
+            >
+              <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
+                Max Recommended
+              </p>
+              <p className="text-lg font-bold text-txt-primary">{totalCapacity}</p>
+            </div>
+          </div>
+
+          {(cpuCores || memGB) && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
+                Host Resources:
+              </span>
+              {cpuCores && (
+                <span
+                  className="text-[0.6rem] font-bold tracking-wider px-2 py-0.5 rounded"
+                  style={{
+                    background: "var(--color-surface-tertiary)",
+                    color: "var(--color-txt-secondary)",
+                  }}
+                >
+                  {cpuCores} vCPUs
+                </span>
+              )}
+              {memGB && (
+                <span
+                  className="text-[0.6rem] font-bold tracking-wider px-2 py-0.5 rounded"
+                  style={{
+                    background: "var(--color-surface-tertiary)",
+                    color: "var(--color-txt-secondary)",
+                  }}
+                >
+                  {memGB} GB RAM
+                </span>
+              )}
+              <span className="text-[0.55rem] text-txt-tertiary italic">
+                (in-process, no sidecar per session)
+              </span>
+            </div>
+          )}
+
+          <div>
+            <div className="flex justify-between text-[0.6rem] text-txt-tertiary mb-1">
+              <span>0</span>
+              <span
+                className="font-semibold"
+                style={{ color: usagePercent >= 75 ? "#f59e0b" : "var(--color-txt-tertiary)" }}
+              >
+                {Math.round(totalCapacity * 0.75)} (scale threshold)
+              </span>
+              <span>{totalCapacity}</span>
+            </div>
+            <div
+              className="relative h-3 rounded-full overflow-hidden"
+              style={{ background: "var(--color-surface-tertiary)" }}
+            >
+              <div
+                className="absolute top-0 bottom-0 w-px"
+                style={{ left: "75%", background: "#f59e0b", opacity: 0.6, zIndex: 2 }}
+              />
+              <div
+                className="h-full rounded-full"
+                style={{
+                  width: `${usagePercent}%`,
+                  background: `linear-gradient(90deg, #22c55e, ${usagePercent > 60 ? "#f59e0b" : "#22c55e"}, ${usagePercent > 80 ? "#ef4444" : usagePercent > 60 ? "#f59e0b" : "#22c55e"})`,
+                  transition: "width 0.6s ease",
+                }}
+              />
+            </div>
+          </div>
+
+          {headroom > 1.1 && (
+            <div
+              className="flex items-start gap-2 rounded-lg px-3 py-2 text-xs"
+              style={{
+                background: "rgba(34,197,94,0.08)",
+                border: "1px solid rgba(34,197,94,0.15)",
+              }}
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="shrink-0 mt-0.5"
+                stroke="#22c55e"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 16v-4" />
+                <path d="M12 8h.01" />
+              </svg>
+              <span style={{ color: "#22c55e" }}>
+                {headroom.toFixed(1)}× the sessions guacd fits on this host. A native session holds
+                two framebuffers rather than a decoder process, so the figure is measured from what
+                it allocates, not estimated.
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SessionsTab() {
   const { formatDateTime } = useSettings();
   const [stats, setStats] = useState<SessionStats | null>(null);
@@ -1037,6 +1274,7 @@ export default function SessionsTab() {
 
       {/* guacd Capacity Gauge */}
       {metrics && <GuacdCapacityGauge metrics={metrics} />}
+      {metrics && <NativeCapacityGauge metrics={metrics} />}
     </div>
   );
 }

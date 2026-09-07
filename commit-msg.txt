@@ -1,23 +1,21 @@
-perf(rdp): move a scrolled region instead of repainting it
+feat(metrics): show what the native engine costs to run
 
-Diffing halved the traffic, 7.7 MB to 3.9 MB, but it cannot help a
-scroll: every pixel in the viewport really does change, so the diff
-correctly reports all of it and we encode all of it. That is the whole
-of the remaining gap to guacd, whose advantage here is not its codec but
-that it never sends those pixels at all.
+The Sessions blade sized the host on guacd's terms only, so there was
+nothing to show for moving the work in-process.
 
-A damage rectangle is now tested for a vertical shift against the
-previous frame. When one is found the client is told to move what it
-already holds, and only the strip the scroll revealed is encoded.
+A native session's footprint is known rather than estimated: two
+framebuffers at four bytes a pixel, the live one and the previous frame
+used to narrow the target's damage rectangles, plus a small fixed
+overhead. guacd cannot be costed that way, which is why its figure stays
+a blended estimate across RDP, VNC and SSH; a pool instance carries
+FreeRDP, cairo surfaces and a worker thread per core whoever is
+connected.
 
-Accepting a shift that is not really there would tell the browser to
-move the wrong pixels, and the result would stay on screen until
-something else repainted it. The guard against that is deliberately
-strict: the probe row must not be a single flat colour, the shift must
-be an exact row match, and at least four sampled rows across the
-rectangle must match exactly before it is trusted. A rejected candidate
-costs one comparison and falls back to diffing.
+Sessions now record which engine serves them, via a flag rather than a
+tenth argument to register, and the metrics endpoint reports the native
+count alongside the memory each one costs and how many this host would
+fit. Both gauges use the same 30 percent reserve and the same CPU bound,
+so the two numbers differ only where the engines genuinely differ.
 
-Also reports encoder totals on drop. The periodic report is useless for
-a short session: a minute of measuring produced no summary at all, and
-the figures had to be reconstructed from raw log lines.
+The headroom note is rendered from the ratio rather than asserted, so it
+disappears if the advantage ever does.

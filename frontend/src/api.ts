@@ -1843,6 +1843,8 @@ export async function buildUserNvrObserveUrl(
 
 export interface MetricsSummary {
   active_sessions: number;
+  /** How many of `active_sessions` the native engine serves. */
+  native_sessions: number;
   total_bytes_from_guacd: number;
   total_bytes_to_guacd: number;
   sessions_by_protocol: Record<string, number>;
@@ -1850,6 +1852,10 @@ export interface MetricsSummary {
   recommended_per_instance: number;
   system_total_memory: number;
   system_cpu_cores: number;
+  /** Memory one native session costs, from what it allocates. */
+  native_ram_per_session_mb: number;
+  /** Sessions this host could serve if every one ran natively. */
+  native_recommended: number;
 }
 
 export const getMetrics = () => request<MetricsSummary>("/admin/metrics");

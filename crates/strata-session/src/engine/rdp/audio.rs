@@ -22,7 +22,7 @@ pub const BITS_PER_SAMPLE: u16 = 16;
 
 /// The Guacamole mimetype describing [`SAMPLE_RATE`], [`CHANNELS`] and
 /// [`BITS_PER_SAMPLE`].
-pub const MIMETYPE: &str = "audio/L16;rate=44100,channels=2";
+pub use crate::transport::guac_wire::AUDIO_MIMETYPE as MIMETYPE;
 
 /// How many wave packets may queue before the oldest are dropped.
 ///

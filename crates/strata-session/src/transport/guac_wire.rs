@@ -40,6 +40,13 @@ const DEFAULT_LAYER: i32 = 0;
 /// this one into its own pointer.
 const CURSOR_LAYER: i32 = -1;
 
+/// Mimetype declared on the audio stream.
+///
+/// Lives here rather than with the RDP engine because it describes what
+/// this encoder puts on the wire, and the transport is compiled whether
+/// or not that engine is.
+pub const AUDIO_MIMETYPE: &str = "audio/L16;rate=44100,channels=2";
+
 /// Encodes target events as Guacamole text instructions.
 #[derive(Debug)]
 pub struct GuacWireEncoder {
@@ -188,7 +195,7 @@ impl GuacWireEncoder {
                 let mut header = BytesMut::new();
                 ServerInstruction::Audio {
                     stream,
-                    mimetype: crate::engine::rdp::audio::MIMETYPE.to_owned(),
+                    mimetype: AUDIO_MIMETYPE.to_owned(),
                 }
                 .encode(&mut header);
                 out.push(ClientFrame::Text(header.freeze()));

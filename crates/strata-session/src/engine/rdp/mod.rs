@@ -338,9 +338,6 @@ struct RdpSession {
     disable_copy: bool,
     /// Never carry the client's clipboard to the target.
     disable_paste: bool,
-    /// Rectangle and pixel fingerprint of the last update sent, so an
-    /// identical repaint is not encoded and shipped twice.
-    last_region: Option<(u16, u16, u16, u16, u64)>,
     finished: bool,
 }
 
@@ -547,7 +544,6 @@ impl RdpSession {
             read_only: config.read_only,
             disable_copy: config.disable_copy,
             disable_paste: config.disable_paste,
-            last_region: None,
             finished: false,
         };
         session.request_full_repaint().await?;
@@ -572,9 +568,8 @@ impl RdpSession {
                         bottom = region.bottom,
                         "rdp graphics update"
                     );
-                    if let Some(event) = self.encode_region(&region)? {
-                        self.pending.push_back(event);
-                    }
+                    let event = self.encode_region(&region)?;
+                    self.pending.push_back(event);
                 }
                 ActiveStageOutput::Terminate(reason) => {
                     self.finished = true;
@@ -647,9 +642,6 @@ impl RdpSession {
                 self.width = width;
                 self.height = height;
                 self.image = DecodedImage::new(PixelFormat::RgbA32, width, height);
-                // The blanked framebuffer makes any earlier fingerprint
-                // a lie: the client is about to be repainted in full.
-                self.last_region = None;
                 self.pending.push_back(TargetEvent::Resized {
                     width: u32::from(width),
                     height: u32::from(height),
@@ -697,18 +689,7 @@ impl RdpSession {
     }
 
     /// Crop the framebuffer to `region` and PNG-encode it.
-    /// Encode a damaged region, or `None` when it would repaint what the
-    /// client already has.
-    ///
-    /// The target re-sends a rectangle whenever it believes the area is
-    /// dirty, which includes redraws that land on identical pixels.
-    /// Suppressing those is only safe because image updates are never
-    /// dropped under backpressure, so the client is known to still hold
-    /// the previous copy.
-    fn encode_region(
-        &mut self,
-        region: &InclusiveRectangle,
-    ) -> Result<Option<TargetEvent>, EngineError> {
+    fn encode_region(&self, region: &InclusiveRectangle) -> Result<TargetEvent, EngineError> {
         let bpp = self.image.bytes_per_pixel();
         let stride = usize::from(self.image.width()) * bpp;
         let (left, top) = (usize::from(region.left), usize::from(region.top));
@@ -731,30 +712,6 @@ impl RdpSession {
             push_rgb(slice, &mut cropped);
         }
 
-        // Only consecutive repeats are tracked: that is the pattern the
-        // target actually produces, and it needs no eviction policy.
-        let fingerprint = {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            std::hash::Hash::hash(&cropped, &mut hasher);
-            std::hash::Hasher::finish(&hasher)
-        };
-        let key = (
-            region.left,
-            region.top,
-            region.right,
-            region.bottom,
-            fingerprint,
-        );
-        if self.last_region == Some(key) {
-            tracing::debug!(
-                left = region.left,
-                top = region.top,
-                "skipping an unchanged rdp graphics update"
-            );
-            return Ok(None);
-        }
-        self.last_region = Some(key);
-
         let mut png = Vec::new();
         PngEncoder::new_with_quality(&mut png, CompressionType::Fast, FilterType::Adaptive)
             .write_image(
@@ -765,12 +722,12 @@ impl RdpSession {
             )
             .map_err(|e| EngineError::Protocol(format!("png encode failed: {e}")))?;
 
-        Ok(Some(TargetEvent::ImageUpdate {
+        Ok(TargetEvent::ImageUpdate {
             x: i32::from(region.left),
             y: i32::from(region.top),
             mimetype: "image/png",
             data: Bytes::from(png),
-        }))
+        })
     }
 
     /// Act on everything the clipboard channel produced while decoding.

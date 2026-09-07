@@ -163,6 +163,9 @@ pub enum TargetEvent {
     },
     /// Raw terminal output from a character-oriented target.
     TerminalOutput(Bytes),
+    /// Desktop audio from the target, as the PCM described by
+    /// [`crate::engine::rdp::audio::MIMETYPE`].
+    Audio(Bytes),
     /// The target's clipboard changed.
     Clipboard(Bytes),
     /// The target's display resolution changed.

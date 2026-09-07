@@ -95,6 +95,10 @@ impl FrameEncoder for BinaryEncoder {
             TargetEvent::Clipboard(data) => {
                 self.push_envelope(StreamType::ClipboardSync, 0, data, out);
             }
+            // No envelope discriminant for audio yet, so it takes the same
+            // text path as the raster fallback below rather than being
+            // dropped into a stream type that means something else.
+            TargetEvent::Audio(_) => self.control.encode(event, out),
             // Raster fallbacks still occur on targets without EGFX; they
             // fall through to the text pipeline unchanged.
             TargetEvent::ImageUpdate { .. } => self.control.encode(event, out),

@@ -29,6 +29,7 @@
 //! lifetime, so its sockets stay registered with the reactor that owns
 //! them.
 
+pub mod audio;
 pub mod clipboard;
 pub mod kdc;
 pub mod keycodes;
@@ -66,6 +67,7 @@ use ironrdp_pdu::rdp::client_info::PerformanceFlags;
 use ironrdp_pdu::rdp::headers::ShareDataPdu;
 use ironrdp_pdu::rdp::refresh_rectangle::RefreshRectanglePdu;
 use ironrdp_pdu::Action;
+use ironrdp_rdpsnd::client::Rdpsnd;
 use ironrdp_session::fast_path::ProcessorBuilder;
 use ironrdp_session::image::DecodedImage;
 use ironrdp_session::{ActiveStage, ActiveStageOutput};
@@ -75,6 +77,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::client::TlsStream;
 
+use crate::engine::rdp::audio::SessionAudio;
 use crate::engine::rdp::clipboard::{
     decode_clipboard, encode_clipboard, preferred_text_format, ClipboardEvent, SessionClipboard,
     MAX_CLIPBOARD_BYTES,
@@ -388,6 +391,9 @@ struct RdpSession {
     /// Last Guacamole button mask, needed to derive press/release edges.
     mouse_mask: u8,
     clipboard: mpsc::UnboundedReceiver<ClipboardEvent>,
+    /// Wave packets from the target, bounded so a stalled browser cannot
+    /// grow the session.
+    audio: mpsc::Receiver<Bytes>,
     /// What the operator last copied, held until the target pastes.
     local_clipboard: Option<String>,
     /// Format we last asked the target for, needed to decode its reply.
@@ -530,6 +536,7 @@ impl RdpSession {
         let client_addr = stream.local_addr().map_err(EngineError::Transport)?;
         let mut framed = TokioFramed::new(stream);
         let (clipboard_tx, clipboard) = mpsc::unbounded_channel();
+        let (audio_tx, audio) = audio::channel();
         let mut connector = ClientConnector::new(connector_config, client_addr)
             .with_static_channel(
                 // Carries MS-RDPEDISP, which lets the desktop follow the
@@ -539,7 +546,8 @@ impl RdpSession {
             )
             .with_static_channel(CliprdrClient::new(Box::new(SessionClipboard::new(
                 clipboard_tx,
-            ))));
+            ))))
+            .with_static_channel(Rdpsnd::new(Box::new(SessionAudio::new(audio_tx))));
 
         let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector)
             .await
@@ -616,6 +624,7 @@ impl RdpSession {
             height,
             mouse_mask: 0,
             clipboard,
+            audio,
             local_clipboard: None,
             pending_paste: None,
             requested_size: None,
@@ -897,6 +906,17 @@ impl RdpSession {
         })
     }
 
+    /// Queue whatever audio arrived while decoding the last PDU.
+    ///
+    /// Drained rather than selected on for the same reason as the
+    /// clipboard: the backend only emits from inside
+    /// `ActiveStage::process`.
+    fn drain_audio(&mut self) {
+        while let Ok(wave) = self.audio.try_recv() {
+            self.pending.push_back(TargetEvent::Audio(wave));
+        }
+    }
+
     /// Act on everything the clipboard channel produced while decoding.
     ///
     /// Drained after each PDU rather than selected on, because the
@@ -1166,6 +1186,7 @@ impl RdpSession {
                 .map_err(|e| EngineError::Protocol(e.to_string()))?,
         };
         self.absorb(outputs).await?;
+        self.drain_audio();
         self.drain_clipboard().await
     }
 }

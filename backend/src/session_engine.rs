@@ -345,17 +345,8 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
                     needs_guacd.join(", ")
                 ));
             }
-            // Audio playback is the one feature that is on unless switched
-            // off, so its absence is what disqualifies a connection rather
-            // than its presence. The native engine has no RDPSND client, and
-            // a session that silently loses sound is exactly the kind of
-            // quiet downgrade the list above exists to prevent.
-            if !flag(handshake, "disable-audio") {
-                return Err(
-                    "connection allows audio playback, which the native RDP engine cannot carry"
-                        .to_owned(),
-                );
-            }
+            // Audio playback is carried over RDPSND, so a connection that
+            // allows it no longer has to leave the native engine.
             let kerberos_only = handshake
                 .extra
                 .get(AUTH_PACKAGE_PARAM)
@@ -831,9 +822,6 @@ mod tests {
         if let Some(fp) = fingerprint {
             extra.insert(HOST_KEY_PARAM.to_owned(), fp.to_owned());
         }
-        // Audio off, so these fixtures exercise the gate under test rather
-        // than tripping the audio one first.
-        extra.insert("disable-audio".to_owned(), "true".to_owned());
         HandshakeParams {
             protocol: protocol.to_owned(),
             hostname: "host.internal".to_owned(),
@@ -944,10 +932,11 @@ mod tests {
     }
 
     #[test]
-    fn a_connection_that_can_still_play_audio_is_left_to_guacd() {
-        // Audio is opt-out, and our own guacd defaults set disable-audio to
-        // "false", so a connection that never mentions it still has sound.
-        for value in [None, Some("false"), Some("")] {
+    fn audio_no_longer_costs_a_connection_the_native_engine() {
+        // RDPSND carries playback now. This briefly gated to guacd
+        // instead, which meant a connection left at its defaults could
+        // not run natively at all.
+        for value in [None, Some("false"), Some("true")] {
             let mut params = handshake("rdp", None);
             match value {
                 Some(v) => params
@@ -955,8 +944,10 @@ mod tests {
                     .insert("disable-audio".to_owned(), v.to_owned()),
                 None => params.extra.remove("disable-audio"),
             };
-            let err = preflight(Protocol::Rdp, &params).unwrap_err();
-            assert!(err.contains("audio"), "{value:?} should keep guacd: {err}");
+            assert!(
+                preflight(Protocol::Rdp, &params).is_ok(),
+                "{value:?} should still run natively"
+            );
         }
     }
 

@@ -32,6 +32,7 @@ rdp = [
     "dep:ironrdp-cliprdr",
     "dep:ironrdp-dvc",
     "dep:ironrdp-displaycontrol",
+    "dep:ironrdp-rdpsnd",
     "dep:rustls-native-certs",
     "dep:x509-cert",
     "dep:sspi",
@@ -140,6 +141,11 @@ ironrdp-cliprdr = { version = "0.4", optional = true }
 # has to scale the framebuffer, which looks blurry.
 ironrdp-dvc = { version = "0.4", optional = true }
 ironrdp-displaycontrol = { version = "0.4", optional = true }
+# Audio output. 0.6 is the only nearby release that resolves to a single
+# ironrdp-svc 0.5: 0.4 and 0.5 drag in svc 0.3/0.4 beside it and 0.9 drags
+# in 0.8, all of which resolve happily and then fail to typecheck against
+# connector 0.7's channel traits.
+ironrdp-rdpsnd = { version = "0.6", optional = true }
 # TLS is driven directly rather than through ironrdp-tls, which accepts
 # any certificate and so cannot honour a connection's ignore-cert
 # setting. The tokio-rustls above is the workspace pin, already ring-only

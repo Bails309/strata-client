@@ -45,6 +45,12 @@ const CURSOR_LAYER: i32 = -1;
 pub struct GuacWireEncoder {
     next_stream: i32,
     unsupported: u64,
+    /// The audio stream, opened on the first wave packet.
+    ///
+    /// One stream lasts the session: the player treats a stream as a
+    /// continuous timeline and re-opening one per packet would restart
+    /// its clock on every packet.
+    audio_stream: Option<i32>,
 }
 
 impl Default for GuacWireEncoder {
@@ -60,6 +66,7 @@ impl GuacWireEncoder {
         Self {
             next_stream: 1,
             unsupported: 0,
+            audio_stream: None,
         }
     }
 
@@ -166,6 +173,39 @@ impl GuacWireEncoder {
         out.push(ClientFrame::Text(tail.freeze()));
     }
 
+    /// Emit desktop audio, opening the stream on first use.
+    ///
+    /// The stream is never closed while the session lives. `end` would
+    /// tell the player the sound had finished and make it tear down its
+    /// buffer, so a pause between packets must look like silence, not a
+    /// completed stream.
+    pub fn encode_audio(&mut self, data: &Bytes, out: &mut Vec<ClientFrame>) {
+        let stream = match self.audio_stream {
+            Some(stream) => stream,
+            None => {
+                let stream = self.allocate_stream();
+                self.audio_stream = Some(stream);
+                let mut header = BytesMut::new();
+                ServerInstruction::Audio {
+                    stream,
+                    mimetype: crate::engine::rdp::audio::MIMETYPE.to_owned(),
+                }
+                .encode(&mut header);
+                out.push(ClientFrame::Text(header.freeze()));
+                stream
+            }
+        };
+        for chunk in data.chunks(MAX_BLOB_BYTES) {
+            let mut buf = BytesMut::new();
+            ServerInstruction::Blob {
+                stream,
+                data: BASE64.encode(chunk),
+            }
+            .encode(&mut buf);
+            out.push(ClientFrame::Text(buf.freeze()));
+        }
+    }
+
     /// Emit the control instructions shared by both streaming modes.
     ///
     /// Returns `true` when `event` was handled.
@@ -269,6 +309,7 @@ impl FrameEncoder for GuacWireEncoder {
                 data,
             } => self.encode_image(*x, *y, mimetype, data, out),
             TargetEvent::Clipboard(data) => self.encode_clipboard(data, out),
+            TargetEvent::Audio(data) => self.encode_audio(data, out),
             // Compressed video and raw PTY bytes have no text
             // representation: reaching them requires a server-side
             // rasteriser (Phase 2). Count rather than silently drop.
@@ -400,6 +441,49 @@ mod tests {
         encoder.encode_clipboard(&payload, &mut out);
         // `clipboard`, three `blob`s and `end`, each its own frame.
         assert_eq!(out.len(), 5);
+    }
+
+    #[test]
+    fn audio_opens_one_stream_and_keeps_feeding_it() {
+        // Re-announcing the stream per packet would restart the player's
+        // timeline, and ending it would tear the buffer down between
+        // sounds. Neither may happen while the session lives.
+        let mut encoder = GuacWireEncoder::new();
+        let mut out = Vec::new();
+        let packet = Bytes::from(vec![0x7Fu8; 64]);
+        encoder.encode_audio(&packet, &mut out);
+        encoder.encode_audio(&packet, &mut out);
+        encoder.encode_audio(&packet, &mut out);
+
+        let text: Vec<String> = out
+            .iter()
+            .map(|f| match f {
+                ClientFrame::Text(b) => String::from_utf8_lossy(b).into_owned(),
+                ClientFrame::Binary(_) => String::new(),
+            })
+            .collect();
+        let joined = text.join("");
+        assert_eq!(
+            joined.matches("5.audio").count(),
+            1,
+            "the stream must be announced exactly once: {joined}"
+        );
+        assert_eq!(
+            joined.matches("3.end").count(),
+            0,
+            "ending the stream would stop playback: {joined}"
+        );
+        assert_eq!(text.iter().filter(|t| t.contains("4.blob")).count(), 3);
+    }
+
+    #[test]
+    fn a_long_wave_packet_is_split_into_blobs() {
+        let mut encoder = GuacWireEncoder::new();
+        let mut out = Vec::new();
+        let packet = Bytes::from(vec![0x11u8; MAX_BLOB_BYTES * 2 + 5]);
+        encoder.encode_audio(&packet, &mut out);
+        // One `audio` announcement plus three blobs.
+        assert_eq!(out.len(), 4);
     }
 
     #[test]

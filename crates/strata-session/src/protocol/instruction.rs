@@ -237,6 +237,15 @@ pub enum ServerInstruction {
         /// Declared mimetype.
         mimetype: String,
     },
+    /// Audio stream heading to the client.
+    Audio {
+        /// Stream index.
+        stream: i32,
+        /// Declared mimetype, which must describe the samples exactly:
+        /// the player takes the rate and channel count from here rather
+        /// than from the data.
+        mimetype: String,
+    },
 }
 
 impl ServerInstruction {
@@ -350,6 +359,10 @@ impl ServerInstruction {
             Self::Clipboard { stream, mimetype } => {
                 let v = [stream.to_string(), mimetype.clone()];
                 encode_str_args(out, "clipboard", &v);
+            }
+            Self::Audio { stream, mimetype } => {
+                let v = [stream.to_string(), mimetype.clone()];
+                encode_str_args(out, "audio", &v);
             }
         }
     }

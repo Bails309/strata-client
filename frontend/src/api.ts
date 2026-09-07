@@ -1939,6 +1939,8 @@ export interface SessionStats {
   avg_duration_mins: number;
   median_duration_mins: number;
   total_bandwidth_bytes: number;
+  /** Everything but `active_now` comes from recordings, so this says whether they can be non-zero. */
+  recording_enabled: boolean;
   top_connections: TopConnection[];
   top_users: TopUser[];
   daily_trend: DailyTrend[];

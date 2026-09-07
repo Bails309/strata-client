@@ -693,7 +693,14 @@ export default function SessionsTab() {
   return (
     <div className="grid gap-5">
       {/* Stat Cards */}
-      <p className="text-xs text-txt-tertiary italic">Showing data from the last 30 days</p>
+      {stats && !stats.recording_enabled ? (
+        <p className="text-xs italic" style={{ color: "#f59e0b" }}>
+          Session recording is disabled, so these figures are all zero regardless of how busy the
+          gateway has been. Only “Active Now” is measured live. Enable recording to populate them.
+        </p>
+      ) : (
+        <p className="text-xs text-txt-tertiary italic">Showing data from the last 30 days</p>
+      )}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div
           className="rounded-xl px-4 py-3 flex items-center gap-3"

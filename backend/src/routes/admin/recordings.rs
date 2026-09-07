@@ -23,6 +23,9 @@ pub struct SessionStats {
     pub avg_duration_mins: f64,
     pub median_duration_mins: f64,
     pub total_bandwidth_bytes: i64,
+    /// Every figure above bar `active_now` is derived from the recordings
+    /// table, so with recording off they read zero however busy the gateway is.
+    pub recording_enabled: bool,
     pub top_connections: Vec<TopConnection>,
     pub top_users: Vec<TopUser>,
     pub daily_trend: Vec<DailyTrend>,
@@ -105,6 +108,11 @@ pub async fn session_stats(
 
     let top_users = crate::services::recordings::fetch_top_users(&db.pool).await?;
 
+    let recording_enabled = crate::services::recordings::get_config(&db.pool)
+        .await
+        .map(|c| c.enabled)
+        .unwrap_or(false);
+
     Ok(Json(SessionStats {
         total_sessions,
         total_hours: (total_hours * 10.0).round() / 10.0,
@@ -113,6 +121,7 @@ pub async fn session_stats(
         avg_duration_mins: (avg_duration_mins * 10.0).round() / 10.0,
         median_duration_mins: (median_duration_mins * 10.0).round() / 10.0,
         total_bandwidth_bytes,
+        recording_enabled,
         top_connections: top_connections
             .into_iter()
             .map(|r| TopConnection {

@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use russh::client::{self, Handle, Msg};
+use russh::client::{self, Handle, KeyboardInteractiveAuthResponse, Msg};
 use russh::keys::{HashAlg, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg, Disconnect};
 use secrecy::{ExposeSecret, SecretString};
@@ -508,17 +508,68 @@ impl SshEngine {
             return Ok(engine);
         }
 
-        match engine
-            .session
-            .authenticate_password(username, password)
-            .await
-            .map_err(map_russh)?
-        {
-            russh::client::AuthResult::Success => {}
-            russh::client::AuthResult::Failure { .. } => return Err(EngineError::AuthRejected),
+        if !engine.try_password(&username, &password).await? {
+            return Err(EngineError::AuthRejected);
         }
         engine.open_shell().await?;
         Ok(engine)
+    }
+
+    /// Try a password, over keyboard-interactive if that is all the
+    /// target offers.
+    ///
+    /// A PAM-configured host commonly advertises only
+    /// keyboard-interactive, and answering its single hidden prompt with
+    /// the password is what every other client does. Without this such a
+    /// host rejects a correct password with no way to tell why.
+    async fn try_password(&mut self, username: &str, password: &str) -> Result<bool, EngineError> {
+        let outcome = self
+            .session
+            .authenticate_password(username, password)
+            .await
+            .map_err(map_russh)?;
+        if matches!(outcome, russh::client::AuthResult::Success) {
+            return Ok(true);
+        }
+
+        let mut response = self
+            .session
+            .authenticate_keyboard_interactive_start(username.to_owned(), None)
+            .await
+            .map_err(map_russh)?;
+        loop {
+            match response {
+                KeyboardInteractiveAuthResponse::Success => return Ok(true),
+                KeyboardInteractiveAuthResponse::Failure { .. } => return Ok(false),
+                KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
+                    let answers = match prompts.as_slice() {
+                        // Some servers send an empty round purely to
+                        // display a banner.
+                        [] => Vec::new(),
+                        [only] if !only.echo => vec![password.to_owned()],
+                        // More than one prompt, or one the user is meant
+                        // to see, means the host wants something other
+                        // than the password — a one-time code, most
+                        // likely. Sending the password would answer the
+                        // wrong question and put it somewhere it does not
+                        // belong.
+                        other => {
+                            tracing::info!(
+                                prompts = other.len(),
+                                "target asked for something other than a password; \
+                                 keyboard-interactive not attempted"
+                            );
+                            return Ok(false);
+                        }
+                    };
+                    response = self
+                        .session
+                        .authenticate_keyboard_interactive_respond(answers)
+                        .await
+                        .map_err(map_russh)?;
+                }
+            }
+        }
     }
 
     /// Offer the configured private key.
@@ -655,29 +706,25 @@ impl SshEngine {
         let password = login.password.take().unwrap_or_default();
         let attempts = login.attempts;
 
-        let outcome = self
-            .session
-            .authenticate_password(username, password)
-            .await
-            .map_err(map_russh)?;
+        let accepted = self.try_password(&username, &password).await?;
 
-        match outcome {
-            russh::client::AuthResult::Success => self.open_shell().await,
-            russh::client::AuthResult::Failure { .. } if attempts < MAX_LOGIN_ATTEMPTS => {
-                let Stage::Login(login) = &mut self.stage else {
-                    return Ok(());
-                };
-                // Start again from the username: the wrong one is as
-                // likely as the wrong password, and the user cannot tell
-                // which the server objected to.
-                login.username = None;
-                login.awaiting = Awaiting::Username;
-                self.emit("Permission denied, please try again.\r\n");
-                self.show_prompt();
-                Ok(())
-            }
-            russh::client::AuthResult::Failure { .. } => Err(EngineError::AuthRejected),
+        if accepted {
+            return self.open_shell().await;
         }
+        if attempts < MAX_LOGIN_ATTEMPTS {
+            let Stage::Login(login) = &mut self.stage else {
+                return Ok(());
+            };
+            // Start again from the username: the wrong one is as likely
+            // as the wrong password, and the user cannot tell which the
+            // server objected to.
+            login.username = None;
+            login.awaiting = Awaiting::Username;
+            self.emit("Permission denied, please try again.\r\n");
+            self.show_prompt();
+            return Ok(());
+        }
+        Err(EngineError::AuthRejected)
     }
 
     /// Exit status reported by the remote shell, once it has exited.

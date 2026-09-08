@@ -90,7 +90,6 @@ const RDP_FEATURES_REQUIRING_GUACD: &[&str] = &[
     "enable-audio-input",
     "remote-app",
     "gateway-hostname",
-    "load-balance-info",
 ];
 
 /// Connection parameters naming an SSH feature the native engine does
@@ -1036,6 +1035,12 @@ async fn connect_engine(
                     desktop_composition: flag(handshake, "enable-desktop-composition"),
                     menu_animations: flag(handshake, "enable-menu-animations"),
                 },
+                load_balance_info: handshake
+                    .extra
+                    .get("load-balance-info")
+                    .map(|t| t.trim())
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_owned),
             });
             factory
                 .connect(spec)

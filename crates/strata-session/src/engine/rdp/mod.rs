@@ -62,6 +62,7 @@ use ironrdp_pdu::geometry::{InclusiveRectangle, Rectangle as _};
 use ironrdp_pdu::input::fast_path::{FastPathInputEvent, KeyboardFlags};
 use ironrdp_pdu::input::mouse::PointerFlags;
 use ironrdp_pdu::input::MousePdu;
+use ironrdp_pdu::nego::NegoRequestData;
 use ironrdp_pdu::rdp::capability_sets::client_codecs_capabilities;
 use ironrdp_pdu::rdp::client_info::PerformanceFlags;
 use ironrdp_pdu::rdp::headers::ShareDataPdu;
@@ -110,6 +111,9 @@ pub struct RdpConfig {
     pub kdc_url: Option<String>,
     /// Desktop eye-candy the target may spend bandwidth on.
     pub performance: RdpPerformance,
+    /// Routing token for a load-balanced RDS farm, as guacd's
+    /// `load-balance-info` parameter holds it.
+    pub load_balance_info: Option<String>,
     /// Drop every keyboard, mouse and paste event from the client.
     pub read_only: bool,
     /// Never carry the target's clipboard back to the client.
@@ -178,6 +182,7 @@ impl Default for RdpConfig {
             domain: None,
             kdc_url: None,
             performance: RdpPerformance::default(),
+            load_balance_info: None,
             read_only: false,
             disable_copy: false,
             disable_paste: false,
@@ -523,6 +528,15 @@ impl RdpSession {
             // missed.
             enable_server_pointer: true,
             pointer_software_rendering: false,
+            // A load-balanced RDS farm reads this from the X.224
+            // connection request and redirects to the session host
+            // holding the user's disconnected session. Without it the
+            // broker hands out whichever host it likes and a
+            // reconnecting user gets a new desktop instead of theirs.
+            request_data: config
+                .load_balance_info
+                .as_ref()
+                .map(|token| NegoRequestData::routing_token(token.clone())),
             ..default_connector_config()
         };
         // Nothing below may observe the credential.

@@ -182,7 +182,6 @@ impl HandshakeParams {
                 .or_insert_with(|| "false".into());
             m.entry("enable-printing".into())
                 .or_insert_with(|| "false".into());
-            m.entry("console".into()).or_insert_with(|| "false".into());
             m.entry("read-only".into())
                 .or_insert_with(|| "false".into());
             m.entry("disable-auth".into())
@@ -326,8 +325,6 @@ fn is_allowed_guacd_param(name: &str) -> bool {
             | "clipboard-buffer-size"
             | "resize-method"
             | "server-layout"
-            | "console"
-            | "initial-program"
             | "timezone"
             | "client-name"
             | "enable-audio"
@@ -2180,8 +2177,6 @@ mod tests {
             "enable-menu-animations",
             "enable-printing",
             "server-layout",
-            "console",
-            "initial-program",
             "timezone",
             "client-name",
             "enable-audio",

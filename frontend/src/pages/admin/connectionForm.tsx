@@ -194,33 +194,6 @@ export function RdpSections({
               title="The name of the client to present to the RDP server. Typically not required."
             />
           </Field>
-          <Field
-            label="Initial Program"
-            title="The full path to the program to run immediately upon connecting. Not needed for normal desktop sessions."
-          >
-            <input
-              value={ex("initial-program")}
-              onChange={(e) => setEx("initial-program", e.target.value)}
-              title="The full path to the program to run immediately upon connecting. Not needed for normal desktop sessions."
-            />
-          </Field>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Connect to the administrator console (Session 0) of the RDP server. This is the physical console session."
-            >
-              <input
-                type="checkbox"
-                checked={ex("console") === "true"}
-                onChange={(e) => setEx("console", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Administrator console
-            </label>
-          </div>
           <div className="form-group !mb-0">
             <span className="block" aria-hidden="true">
               &nbsp;
@@ -783,7 +756,7 @@ export function RdpSections({
         </FieldGrid>
       </Section>
 
-      <Section title="Load Balancing / Preconnection">
+      <Section title="Load Balancing">
         <FieldGrid>
           <Field
             label="Load Balance Info"
@@ -793,27 +766,6 @@ export function RdpSections({
               value={ex("load-balance-info")}
               onChange={(e) => setEx("load-balance-info", e.target.value)}
               title="The load balancing info or token to send to the RDP server. Used when connecting to a load-balanced RDS farm."
-            />
-          </Field>
-          <Field
-            label="Preconnection ID"
-            title="The numeric ID of the RDP source. Used with Hyper-V and other systems that support preconnection PDUs."
-          >
-            <input
-              type="number"
-              value={ex("preconnection-id")}
-              onChange={(e) => setEx("preconnection-id", e.target.value)}
-              title="The numeric ID of the RDP source. Used with Hyper-V and other systems that support preconnection PDUs."
-            />
-          </Field>
-          <Field
-            label="Preconnection BLOB"
-            title="A text value identifying the RDP source to connect to. Used with Hyper-V or other systems supporting preconnection PDUs."
-          >
-            <input
-              value={ex("preconnection-blob")}
-              onChange={(e) => setEx("preconnection-blob", e.target.value)}
-              title="A text value identifying the RDP source to connect to. Used with Hyper-V or other systems supporting preconnection PDUs."
             />
           </Field>
         </FieldGrid>

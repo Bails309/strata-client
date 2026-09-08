@@ -89,12 +89,8 @@ const RDP_FEATURES_REQUIRING_GUACD: &[&str] = &[
     "enable-sftp",
     "enable-audio-input",
     "remote-app",
-    "initial-program",
-    "console",
     "gateway-hostname",
     "load-balance-info",
-    "preconnection-id",
-    "preconnection-blob",
 ];
 
 /// Connection parameters naming an SSH feature the native engine does

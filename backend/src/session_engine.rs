@@ -40,6 +40,7 @@ use strata_session::protocol::ServerInstruction;
 use strata_session::routing::{RoutingPolicy, SessionBackend};
 use strata_session::terminal::{RasterisingEngine, TerminalFont, DEFAULT_FONT_SIZE_PX};
 use strata_session::transport::{ClientFrame, GuacDecoder, GuacWireEncoder};
+use strata_session::wol;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -90,7 +91,6 @@ const RDP_FEATURES_REQUIRING_GUACD: &[&str] = &[
     "initial-program",
     "console",
     "gateway-hostname",
-    "wol-send-packet",
     "load-balance-info",
     "preconnection-id",
     "preconnection-blob",
@@ -118,13 +118,10 @@ const RECORDING_OPTIONS_REQUIRING_GUACD: &[&str] =
 const SSH_FEATURES_REQUIRING_GUACD: &[&str] = &[
     // File transfer over the session.
     "enable-sftp",
-    // Runs a command instead of an interactive shell.
-    "command",
     // Agent forwarding.
     "enable-agent",
     // Server-side typescript of the session.
     "typescript-path",
-    "wol-send-packet",
 ];
 
 /// SSH parameters that cost only fidelity.
@@ -161,7 +158,6 @@ const VNC_FEATURES_REQUIRING_GUACD: &[&str] = &[
     // UTF-8. Identical for ASCII, mojibake otherwise — and an
     // administrator only sets this because their server needed it.
     "clipboard-encoding",
-    "wol-send-packet",
 ];
 
 /// VNC parameters that cost only fidelity.
@@ -956,6 +952,8 @@ async fn connect_engine(
     protocol: Protocol,
     handshake: &HandshakeParams,
 ) -> Result<Box<dyn ProtocolEngine>, AppError> {
+    wake_target(handshake).await;
+
     let spec = TargetSpec {
         protocol,
         hostname: handshake.hostname.clone(),
@@ -986,7 +984,8 @@ async fn connect_engine(
                     .with_terminal(
                         handshake.extra.get("terminal-type").cloned(),
                         handshake.extra.get("timezone").cloned(),
-                    ),
+                    )
+                    .with_command(handshake.extra.get("command").cloned()),
             );
             let engine = factory
                 .connect(spec)
@@ -1099,8 +1098,44 @@ async fn connect_engine(
     }
 }
 
-/// The command to exec, split the way a shell would split it.
+/// Wake the target first if the connection asks for it.
 ///
+/// Failure is logged but never fatal: the target is usually already
+/// awake, and refusing to connect because a magic packet did not send
+/// would break a working connection to fix one that was not.
+async fn wake_target(handshake: &HandshakeParams) {
+    if !flag(handshake, "wol-send-packet") {
+        return;
+    }
+    let Some(mac) = handshake.extra.get("wol-mac-addr").map(|m| m.trim()) else {
+        tracing::warn!("connection asks to send a wake packet but names no MAC address");
+        return;
+    };
+    let broadcast = handshake
+        .extra
+        .get("wol-broadcast-addr")
+        .map(|b| b.trim())
+        .filter(|b| !b.is_empty())
+        .unwrap_or(wol::DEFAULT_BROADCAST);
+    let port = handshake
+        .extra
+        .get("wol-udp-port")
+        .and_then(|p| p.trim().parse().ok())
+        .unwrap_or(wol::DEFAULT_PORT);
+    let settle = Duration::from_secs(
+        handshake
+            .extra
+            .get("wol-wait-time")
+            .and_then(|w| w.trim().parse().ok())
+            .unwrap_or(0),
+    );
+
+    if let Err(err) = wol::wake(mac, broadcast, port, settle).await {
+        tracing::warn!(error = %err, "could not wake the target; connecting anyway");
+    }
+}
+
+/// The command to exec, split the way a shell would split it.///
 /// guacd defaults to a plain shell when the parameter is absent, and a
 /// session that drops the operator somewhere other than where guacd
 /// would is a surprise worth avoiding.

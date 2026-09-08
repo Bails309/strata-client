@@ -57,6 +57,8 @@ pub struct SshConfig {
     pub host_keys: HostKeyPolicy,
     /// `TERM` value announced to the remote shell.
     pub term: String,
+    /// Command to run instead of an interactive shell.
+    pub command: Option<String>,
     /// Value for `TZ` on the channel, so timestamps match the operator
     /// rather than the gateway.
     pub timezone: Option<String>,
@@ -101,6 +103,7 @@ impl SshConfig {
         Self {
             host_keys: HostKeyPolicy::Fingerprints(fingerprints),
             term: "xterm-256color".to_owned(),
+            command: None,
             timezone: None,
             cell: CellSize::default(),
             keepalive: Duration::from_secs(30),
@@ -129,6 +132,13 @@ impl SshConfig {
             self.term = term;
         }
         self.timezone = timezone.filter(|t| !t.trim().is_empty());
+        self
+    }
+
+    /// Run `command` instead of an interactive shell.
+    #[must_use]
+    pub fn with_command(mut self, command: Option<String>) -> Self {
+        self.command = command.filter(|c| !c.trim().is_empty());
         self
     }
 }
@@ -627,7 +637,14 @@ impl SshEngine {
             )
             .await
             .map_err(map_russh)?;
-        channel.request_shell(true).await.map_err(map_russh)?;
+        // guacd's `command` parameter: run this instead of a login shell.
+        // Still on a PTY, so a command that draws a full-screen interface
+        // behaves the way it would for the operator running it directly.
+        match &self.config.command {
+            Some(command) => channel.exec(true, command.as_bytes()).await,
+            None => channel.request_shell(true).await,
+        }
+        .map_err(map_russh)?;
         self.cols = cols;
         self.rows = rows;
         self.stage = Stage::Shell(channel);

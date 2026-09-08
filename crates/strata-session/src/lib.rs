@@ -59,5 +59,6 @@ pub mod terminal;
 #[cfg(any(feature = "rdp", feature = "kubernetes"))]
 pub(crate) mod tls;
 pub mod transport;
+pub mod wol;
 
 pub use error::{EngineError, SessionError, WireError};

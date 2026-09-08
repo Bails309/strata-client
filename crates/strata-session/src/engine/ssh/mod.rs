@@ -144,8 +144,8 @@ impl SshConfig {
 }
 
 /// Verifies the target's host key against the configured policy.
-struct HostKeyChecker {
-    policy: HostKeyPolicy,
+pub(crate) struct HostKeyChecker {
+    pub(crate) policy: HostKeyPolicy,
 }
 
 impl client::Handler for HostKeyChecker {
@@ -905,7 +905,7 @@ impl EngineFactory for SshEngineFactory {
     }
 }
 
-fn map_russh(err: russh::Error) -> EngineError {
+pub(crate) fn map_russh(err: russh::Error) -> EngineError {
     match err {
         russh::Error::IO(io) => EngineError::Transport(io),
         russh::Error::NotAuthenticated | russh::Error::NoAuthMethod => EngineError::AuthRejected,

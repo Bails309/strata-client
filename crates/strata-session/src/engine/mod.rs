@@ -26,6 +26,9 @@ pub mod kube;
 #[cfg(feature = "rdp")]
 pub mod rdp;
 
+#[cfg(feature = "sftp")]
+pub mod sftp;
+
 #[cfg(feature = "ssh")]
 pub mod ssh;
 

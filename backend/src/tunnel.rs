@@ -112,23 +112,7 @@ impl HandshakeParams {
         let mut m: std::collections::HashMap<String, String> =
             base.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
 
-        // RDP virtual drive — enables file transfer via RDPDR channel.
-        // Only enable when the admin has explicitly set `enable-drive=true` in
-        // the connection's extras.  The admin form's checkbox renders as
-        // unchecked for both absent and non-"true" values, so treating absent
-        // as "enabled" would diverge from what the admin sees in the UI.
         if self.protocol == "rdp" {
-            let drive_enabled = self.extra.get("enable-drive").map(String::as_str) == Some("true");
-            if drive_enabled {
-                m.insert("enable-drive".into(), "true".into());
-                m.entry("drive-path".into())
-                    .or_insert_with(|| "/var/lib/guacamole/drive".into());
-                m.entry("drive-name".into())
-                    .or_insert_with(|| "Guacamole".into());
-                m.entry("create-drive-path".into())
-                    .or_insert_with(|| "true".into());
-            }
-
             // FreeRDP 3 GFX pipeline — enables H.264 hardware/software encoding
             // for significantly lower bandwidth usage on modern RDP hosts.
             // `enable-h264` is added by guacd patch 004-h264-display-worker, and
@@ -179,8 +163,6 @@ impl HandshakeParams {
             m.entry("disable-audio".into())
                 .or_insert_with(|| "false".into());
             m.entry("enable-audio-input".into())
-                .or_insert_with(|| "false".into());
-            m.entry("enable-printing".into())
                 .or_insert_with(|| "false".into());
             m.entry("read-only".into())
                 .or_insert_with(|| "false".into());
@@ -319,7 +301,6 @@ fn is_allowed_guacd_param(name: &str) -> bool {
             | "enable-full-window-drag"
             | "enable-desktop-composition"
             | "enable-menu-animations"
-            | "enable-printing"
             | "enable-gfx"
             | "enable-h264"
             | "clipboard-buffer-size"
@@ -1677,8 +1658,10 @@ mod tests {
         assert_eq!(m["disable-paste"], "false");
     }
 
+    /// Drive redirection was dropped when the native RDP engine replaced
+    /// guacd: file transfer runs over SFTP for every protocol now.
     #[test]
-    fn full_param_map_rdp_drive_enabled_via_extras() {
+    fn full_param_map_rdp_never_asks_for_a_drive() {
         let mut extras = std::collections::HashMap::new();
         extras.insert("enable-drive".to_string(), "true".to_string());
         let hp = HandshakeParams {
@@ -1699,8 +1682,8 @@ mod tests {
             extra: extras,
         };
         let m = hp.full_param_map();
-        assert_eq!(m["enable-drive"], "true");
-        assert_eq!(m["drive-path"], "/var/lib/guacamole/drive");
+        assert!(!m.contains_key("enable-drive"));
+        assert!(!m.contains_key("drive-path"));
     }
 
     #[test]
@@ -2175,7 +2158,6 @@ mod tests {
             "enable-full-window-drag",
             "enable-desktop-composition",
             "enable-menu-animations",
-            "enable-printing",
             "server-layout",
             "timezone",
             "client-name",

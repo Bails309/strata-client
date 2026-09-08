@@ -84,8 +84,6 @@ const AUTH_PACKAGE_PARAM: &str = "auth-pkg";
 /// administrator deliberately chose, and a redirected drive or printer
 /// that silently fails to appear is worse than a slower session.
 const RDP_FEATURES_REQUIRING_GUACD: &[&str] = &[
-    "enable-drive",
-    "enable-printing",
     "enable-sftp",
     "enable-audio-input",
     "remote-app",
@@ -1445,13 +1443,13 @@ mod tests {
     }
 
     #[test]
-    fn a_connection_needing_device_redirection_is_left_to_guacd() {
+    fn a_connection_needing_file_transfer_is_left_to_guacd() {
         let mut params = handshake("rdp", None);
         params
             .extra
-            .insert("enable-drive".to_owned(), "true".to_owned());
+            .insert("enable-sftp".to_owned(), "true".to_owned());
         let err = preflight(Protocol::Rdp, &params).unwrap_err();
-        assert!(err.contains("enable-drive"), "{err}");
+        assert!(err.contains("enable-sftp"), "{err}");
     }
 
     #[test]
@@ -1460,7 +1458,7 @@ mod tests {
             let mut params = handshake("rdp", None);
             params
                 .extra
-                .insert("enable-printing".to_owned(), value.to_owned());
+                .insert("enable-sftp".to_owned(), value.to_owned());
             assert!(
                 preflight(Protocol::Rdp, &params).is_ok(),
                 "{value:?} should not count as enabled"

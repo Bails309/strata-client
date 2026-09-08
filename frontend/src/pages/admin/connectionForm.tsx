@@ -416,93 +416,9 @@ export function RdpSections({
               Enable audio input (microphone)
             </label>
           </div>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Enables printer redirection. PDF documents sent to the redirected printer will be available for download via the Guacamole menu."
-            >
-              <input
-                type="checkbox"
-                checked={ex("enable-printing") === "true"}
-                onChange={(e) => setEx("enable-printing", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Enable printing
-            </label>
-          </div>
-          <Field
-            label="Printer Name"
-            title="The name of the redirected printer device. This will be the name of the printer as it appears on the remote desktop."
-          >
-            <input
-              value={ex("printer-name")}
-              onChange={(e) => setEx("printer-name", e.target.value)}
-              placeholder="Strata Printer"
-              title="The name of the redirected printer device. This will be the name of the printer as it appears on the remote desktop."
-            />
-          </Field>
         </FieldGrid>
         <hr className="border-0 border-t border-border my-3" />
         <FieldGrid>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Enables file transfer over a virtual drive. Files can be transferred to/from the remote desktop using the Guacamole menu."
-            >
-              <input
-                type="checkbox"
-                checked={ex("enable-drive") === "true"}
-                onChange={(e) => setEx("enable-drive", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Enable drive / file transfer
-            </label>
-          </div>
-          <Field
-            label="Drive Name"
-            title="The name of the filesystem used for transferred files. This is the name the virtual drive will have within the remote desktop."
-          >
-            <input
-              value={ex("drive-name")}
-              onChange={(e) => setEx("drive-name", e.target.value)}
-              placeholder="Shared Drive"
-              title="The name of the filesystem used for transferred files. This is the name the virtual drive will have within the remote desktop."
-            />
-          </Field>
-          <Field
-            label="Drive Path"
-            title="The directory on the guacd server in which transferred files should be stored."
-          >
-            <input
-              value={ex("drive-path")}
-              onChange={(e) => setEx("drive-path", e.target.value)}
-              placeholder="/var/lib/guacamole/drive"
-              title="The directory on the guacd server in which transferred files should be stored."
-            />
-          </Field>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Automatically creates the drive path directory if it does not already exist on the guacd server."
-            >
-              <input
-                type="checkbox"
-                checked={ex("create-drive-path") === "true"}
-                onChange={(e) => setEx("create-drive-path", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Auto-create drive path
-            </label>
-          </div>
           <div className="form-group !mb-0">
             <span className="block" aria-hidden="true">
               &nbsp;

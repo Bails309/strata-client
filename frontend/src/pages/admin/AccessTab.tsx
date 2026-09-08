@@ -440,12 +440,10 @@ export default function AccessTab({
 
   // Keys whose "false" / "" state must be persisted verbatim so the backend
   // can distinguish "admin disabled it" from "legacy connection, key never set".
-  // Without this, unchecking e.g. `enable-drive` would strip the key and the
-  // tunnel layer would re-apply the RDP default of enabling the drive channel.
+  // Without this, unchecking e.g. `enable-sftp` would strip the key and the
+  // tunnel layer would re-apply the protocol default.
   const PRESERVE_FALSE_KEYS = new Set([
-    "enable-drive",
     "enable-sftp",
-    "enable-printing",
     "enable-wallpaper",
     "enable-theming",
     "enable-font-smoothing",

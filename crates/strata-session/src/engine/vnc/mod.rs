@@ -181,7 +181,7 @@ impl VncEngine {
                 // A zero-sized cursor is how RFB says "hide the pointer".
                 if rect.width == 0 || rect.height == 0 {
                     self.pending.push_back(TargetEvent::CursorHidden);
-                } else if let Some(png) = encode_png(rect.width, rect.height, &data) {
+                } else if let Some(png) = encode_cursor_png(rect.width, rect.height, &data) {
                     self.pending.push_back(TargetEvent::CursorImage {
                         hotspot_x: u32::from(rect.x),
                         hotspot_y: u32::from(rect.y),
@@ -281,16 +281,18 @@ impl ProtocolEngine for VncEngine {
             }
 
             let event = self.client.recv_event().await.map_err(map_vnc)?;
-            let wants_more = matches!(
-                event,
-                VncEvent::RawImage(..) | VncEvent::JpegImage(..) | VncEvent::Copy(..)
-            );
             self.absorb(event);
+            // Take whatever else already arrived rather than asking again
+            // per rectangle.
+            while let Some(event) = self.client.poll_event().await.map_err(map_vnc)? {
+                self.absorb(event);
+            }
 
-            // Keep a request outstanding. Without this the server has
-            // nothing to answer and the session looks frozen after the
-            // first paint.
-            if wants_more {
+            // Exactly one request per batch. Asking only after an image
+            // rectangle stalls the session for good the first time an
+            // update carries nothing but a cursor change, which is what
+            // happens the moment the pointer crosses a link.
+            if !self.finished {
                 self.client
                     .input(X11Event::Refresh)
                     .await
@@ -309,30 +311,55 @@ impl ProtocolEngine for VncEngine {
     }
 }
 
-/// PNG-encode an RGBA rectangle.
+/// PNG-encode a framebuffer rectangle.
+///
+/// The fourth byte of each pixel is padding, not alpha: the negotiated
+/// format is 32 bits per pixel at a depth of 24. Encoding it as alpha
+/// makes the whole desktop transparent, which reaches the browser as a
+/// blank page rather than as an error.
 ///
 /// Returns `None` rather than erroring: one rectangle that will not
 /// encode is a dropped update, not a dead session.
-fn encode_png(width: u16, height: u16, rgba: &[u8]) -> Option<Bytes> {
+fn encode_png(width: u16, height: u16, pixels: &[u8]) -> Option<Bytes> {
+    let expected = rect_len(width, height, pixels)?;
+    let (pixels, _) = pixels[..expected].as_chunks::<4>();
+    let mut rgb = Vec::with_capacity(pixels.len() * 3);
+    for pixel in pixels {
+        rgb.extend_from_slice(&pixel[..3]);
+    }
+    encode(&rgb, width, height, ColorType::Rgb8)
+}
+
+/// PNG-encode a cursor rectangle.
+///
+/// Unlike the framebuffer, a cursor really does carry alpha: the decoder
+/// expands the RFB bitmask into the fourth byte, and it is what makes
+/// the pointer the right shape instead of a rectangle.
+fn encode_cursor_png(width: u16, height: u16, rgba: &[u8]) -> Option<Bytes> {
+    let expected = rect_len(width, height, rgba)?;
+    encode(&rgba[..expected], width, height, ColorType::Rgba8)
+}
+
+/// Byte length of a rectangle, or `None` if the buffer is short.
+fn rect_len(width: u16, height: u16, pixels: &[u8]) -> Option<usize> {
     let expected = usize::from(width) * usize::from(height) * 4;
-    if width == 0 || height == 0 || rgba.len() < expected {
+    if width == 0 || height == 0 || pixels.len() < expected {
         tracing::warn!(
             width,
             height,
-            got = rgba.len(),
+            got = pixels.len(),
             expected,
             "vnc rectangle was smaller than its dimensions claim"
         );
         return None;
     }
+    Some(expected)
+}
+
+fn encode(pixels: &[u8], width: u16, height: u16, colour: ColorType) -> Option<Bytes> {
     let mut out = Vec::new();
     PngEncoder::new_with_quality(&mut out, CompressionType::Fast, FilterType::Adaptive)
-        .write_image(
-            &rgba[..expected],
-            u32::from(width),
-            u32::from(height),
-            ColorType::Rgba8.into(),
-        )
+        .write_image(pixels, u32::from(width), u32::from(height), colour.into())
         .ok()?;
     Some(Bytes::from(out))
 }
@@ -367,8 +394,31 @@ mod tests {
 
     #[test]
     fn a_full_rectangle_encodes() {
-        let png = encode_png(2, 2, &[255u8; 16]).expect("2x2 rgba should encode");
+        let png = encode_png(2, 2, &[255u8; 16]).expect("2x2 should encode");
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "not a png: {png:?}");
+    }
+
+    /// The fourth byte is padding and servers leave it at zero. Treating
+    /// it as alpha encoded the entire desktop as transparent, which
+    /// reached the browser as a blank white page.
+    #[test]
+    fn a_framebuffer_rectangle_is_opaque() {
+        let pixels = [0u8; 16];
+        let png = encode_png(2, 2, &pixels).expect("2x2 should encode");
+        let decoded = image::load_from_memory(&png).expect("should decode");
+        assert_eq!(decoded.color(), image::ColorType::Rgb8);
+        assert_eq!(decoded.to_rgba8().pixels().next().unwrap()[3], 255);
+    }
+
+    /// A cursor's fourth byte really is alpha, and dropping it would draw
+    /// the pointer as an opaque block.
+    #[test]
+    fn a_cursor_keeps_its_transparency() {
+        let mut pixels = [255u8; 16];
+        pixels[3] = 0;
+        let png = encode_cursor_png(2, 2, &pixels).expect("2x2 should encode");
+        let decoded = image::load_from_memory(&png).expect("should decode");
+        assert_eq!(decoded.to_rgba8().pixels().next().unwrap()[3], 0);
     }
 
     #[test]

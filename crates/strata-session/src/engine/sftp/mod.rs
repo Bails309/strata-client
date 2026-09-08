@@ -23,9 +23,7 @@ use secrecy::{ExposeSecret, SecretString};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::engine::ssh::{map_russh, HostKeyChecker, HostKeyPolicy};
-use crate::engine::{
-    FileEvent, FileRequest, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec,
-};
+use crate::engine::{FileEvent, FileRequest, InputEvent, Protocol, ProtocolEngine, TargetEvent};
 use crate::error::EngineError;
 
 /// Mimetype marking a directory listing rather than a file.
@@ -128,7 +126,6 @@ impl SftpEngine {
     /// Attach file transfer to `inner`.
     pub async fn attach(
         inner: Box<dyn ProtocolEngine>,
-        spec: &TargetSpec,
         config: Arc<SftpConfig>,
     ) -> Result<Self, EngineError> {
         let checker = HostKeyChecker {
@@ -151,7 +148,6 @@ impl SftpEngine {
             .await
             .map_err(|e| EngineError::Protocol(format!("sftp subsystem: {e}")))?;
 
-        let _ = spec;
         let mut pending = VecDeque::new();
         // Announced up front so the browser shows the filesystem as soon
         // as the session opens, rather than after the first request.

@@ -44,6 +44,13 @@ pub enum HostKeyPolicy {
 }
 
 impl HostKeyPolicy {
+    /// Whether this policy would admit no host at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        let Self::Fingerprints(allowed) = self;
+        allowed.is_empty()
+    }
+
     fn accepts(&self, fingerprint: &str) -> bool {
         let Self::Fingerprints(allowed) = self;
         allowed.iter().any(|f| f == fingerprint)

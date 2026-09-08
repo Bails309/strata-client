@@ -34,7 +34,8 @@ use strata_session::engine::keymap::CellSize;
 use strata_session::engine::kube::{KubeConfig, KubeEngineFactory};
 use strata_session::engine::rdp::layouts::keyboard_layout_id;
 use strata_session::engine::rdp::{RdpConfig, RdpEngineFactory, RdpPerformance};
-use strata_session::engine::ssh::{SshConfig, SshEngineFactory};
+use strata_session::engine::sftp::{SftpConfig, SftpEngine};
+use strata_session::engine::ssh::{HostKeyPolicy, SshConfig, SshEngineFactory};
 use strata_session::engine::vnc::{VncConfig, VncEngineFactory};
 use strata_session::engine::{EngineFactory, Protocol, ProtocolEngine, TargetSpec};
 use strata_session::protocol::ServerInstruction;
@@ -83,12 +84,8 @@ const AUTH_PACKAGE_PARAM: &str = "auth-pkg";
 /// there instead. Running it natively would drop a setting an
 /// administrator deliberately chose, and a redirected drive or printer
 /// that silently fails to appear is worse than a slower session.
-const RDP_FEATURES_REQUIRING_GUACD: &[&str] = &[
-    "enable-sftp",
-    "enable-audio-input",
-    "remote-app",
-    "gateway-hostname",
-];
+const RDP_FEATURES_REQUIRING_GUACD: &[&str] =
+    &["enable-audio-input", "remote-app", "gateway-hostname"];
 
 /// Connection parameters naming an SSH feature the native engine does
 /// not implement.
@@ -98,8 +95,6 @@ const RDP_FEATURES_REQUIRING_GUACD: &[&str] = &[
 /// before anyone noticed. Everything here is a feature an administrator
 /// deliberately turned on and would not otherwise see disappear.
 const SSH_FEATURES_REQUIRING_GUACD: &[&str] = &[
-    // File transfer over the session.
-    "enable-sftp",
     // Agent forwarding.
     "enable-agent",
     // Server-side typescript of the session.
@@ -127,8 +122,6 @@ const SSH_PARAMS_IGNORED_NATIVELY: &[&str] = &[
 const VNC_FEATURES_REQUIRING_GUACD: &[&str] = &[
     // Audio arrives over a separate PulseAudio connection, not over RFB.
     "enable-audio",
-    // File transfer runs over SSH alongside the VNC session.
-    "enable-sftp",
     // A VNC repeater: the real target is named in these, and connecting
     // to the repeater itself would open somebody else's desktop.
     "dest-host",
@@ -436,6 +429,18 @@ pub async fn resolve_global_kdc(
 
 /// Everything that must be true before a session can run natively.
 fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), String> {
+    // Applies to every protocol: file transfer dials its own SSH
+    // connection, and the native engines do not connect to a host
+    // nobody has verified.
+    if flag(handshake, "enable-sftp")
+        && sftp_config(handshake).is_none_or(|c| c.host_keys.is_empty())
+    {
+        return Err(
+            "connection enables SFTP but pins no host key for it; set `sftp-host-key`, \
+             or use the same host as the session so its key applies"
+                .to_owned(),
+        );
+    }
     match protocol {
         Protocol::Ssh => {
             let needs_guacd = params_in_use(handshake, SSH_FEATURES_REQUIRING_GUACD);
@@ -523,6 +528,23 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
             Ok(())
         }
     }
+}
+
+/// Read fingerprints from a parameter holding either `SHA256:` values or
+/// OpenSSH public keys.
+fn fingerprints_from(raw: &str) -> Vec<String> {
+    let explicit: Vec<String> = raw
+        .split(',')
+        .map(|f| f.trim().to_owned())
+        .filter(|f| f.starts_with("SHA256:"))
+        .collect();
+    if !explicit.is_empty() {
+        return explicit;
+    }
+    raw.lines()
+        .flat_map(|line| line.split(','))
+        .filter_map(fingerprint_openssh_key)
+        .collect()
 }
 
 fn host_key_fingerprints(handshake: &HandshakeParams) -> Vec<String> {
@@ -949,6 +971,7 @@ async fn forward_instructions(
     }
 }
 
+/// Connect to the target, and attach file transfer if it was asked for.
 async fn connect_engine(
     protocol: Protocol,
     handshake: &HandshakeParams,
@@ -965,6 +988,83 @@ async fn connect_engine(
         height: handshake.height,
     };
 
+    let engine = connect_target(protocol, handshake, spec).await?;
+
+    let Some(config) = sftp_config(handshake) else {
+        return Ok(engine);
+    };
+    // A failure here loses file transfer, not the session: the operator
+    // is already connected to the target, and dropping them for a
+    // secondary channel would be a worse trade than doing without it.
+    match SftpEngine::attach(engine, Arc::new(config)).await {
+        Ok(engine) => Ok(Box::new(engine)),
+        Err(err) => Err(AppError::Internal(format!("native sftp connect: {err}"))),
+    }
+}
+
+/// Port used when the connection names no SFTP port of its own.
+const DEFAULT_SSH_PORT: u16 = 22;
+
+/// Settings for the file-transfer connection, when one was configured.
+fn sftp_config(handshake: &HandshakeParams) -> Option<SftpConfig> {
+    if !flag(handshake, "enable-sftp") {
+        return None;
+    }
+    let get = |key: &str| {
+        handshake
+            .extra
+            .get(key)
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+    };
+
+    let hostname = get("sftp-hostname").unwrap_or_else(|| handshake.hostname.clone());
+    let port = get("sftp-port")
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(DEFAULT_SSH_PORT);
+    let username = get("sftp-username")
+        .or_else(|| handshake.username.clone())
+        .unwrap_or_default();
+
+    let mut config = SftpConfig::new(hostname.clone(), port, username);
+    config.password = get("sftp-password")
+        .map(SecretString::from)
+        .or_else(|| handshake.password.clone().map(SecretString::from));
+    config.private_key = get("sftp-private-key").map(SecretString::from);
+    config.passphrase = get("sftp-passphrase").map(SecretString::from);
+    config.root = get("sftp-root-directory").unwrap_or_else(|| "/".to_owned());
+    config.disable_download = flag(handshake, "sftp-disable-download");
+    config.disable_upload = flag(handshake, "sftp-disable-upload");
+    config.name = get("sftp-directory").unwrap_or_else(|| "Files".to_owned());
+    config.host_keys =
+        HostKeyPolicy::Fingerprints(sftp_host_key_fingerprints(handshake, &hostname));
+    Some(config)
+}
+
+/// Fingerprints the file-transfer host is allowed to present.
+///
+/// An explicit `sftp-host-key` wins. Otherwise the session's own pinned
+/// key is reused, but only when the transfer goes to the same host —
+/// trusting it for a different one would pin the wrong server.
+fn sftp_host_key_fingerprints(handshake: &HandshakeParams, sftp_host: &str) -> Vec<String> {
+    if let Some(raw) = handshake.extra.get("sftp-host-key") {
+        let explicit = fingerprints_from(raw);
+        if !explicit.is_empty() {
+            return explicit;
+        }
+    }
+    if sftp_host == handshake.hostname {
+        return host_key_fingerprints(handshake);
+    }
+    Vec::new()
+}
+
+async fn connect_target(
+    protocol: Protocol,
+    handshake: &HandshakeParams,
+    spec: TargetSpec,
+) -> Result<Box<dyn ProtocolEngine>, AppError> {
     match protocol {
         Protocol::Ssh => {
             warn_ignored_params(handshake, SSH_PARAMS_IGNORED_NATIVELY, "ssh");
@@ -1442,14 +1542,46 @@ mod tests {
         assert!(preflight(Protocol::Rdp, &handshake("rdp", None)).is_ok());
     }
 
+    /// File transfer dials its own SSH connection, so it needs a pinned
+    /// key just as the session does.
     #[test]
-    fn a_connection_needing_file_transfer_is_left_to_guacd() {
+    fn file_transfer_without_a_pinned_host_key_is_refused() {
         let mut params = handshake("rdp", None);
         params
             .extra
             .insert("enable-sftp".to_owned(), "true".to_owned());
+        params
+            .extra
+            .insert("sftp-hostname".to_owned(), "files.internal".to_owned());
         let err = preflight(Protocol::Rdp, &params).unwrap_err();
-        assert!(err.contains("enable-sftp"), "{err}");
+        assert!(err.contains("sftp-host-key"), "{err}");
+    }
+
+    #[test]
+    fn file_transfer_with_a_pinned_host_key_runs_natively() {
+        let mut params = handshake("rdp", None);
+        params
+            .extra
+            .insert("enable-sftp".to_owned(), "true".to_owned());
+        params
+            .extra
+            .insert("sftp-host-key".to_owned(), "SHA256:aaa".to_owned());
+        assert!(preflight(Protocol::Rdp, &params).is_ok());
+    }
+
+    /// The session's own key covers file transfer only when both go to
+    /// the same host; reusing it elsewhere would pin the wrong server.
+    #[test]
+    fn the_sessions_host_key_does_not_vouch_for_a_different_host() {
+        let mut params = handshake("ssh", Some("SHA256:aaa"));
+        params
+            .extra
+            .insert("enable-sftp".to_owned(), "true".to_owned());
+        assert_eq!(
+            sftp_host_key_fingerprints(&params, &params.hostname.clone()),
+            vec!["SHA256:aaa".to_owned()]
+        );
+        assert!(sftp_host_key_fingerprints(&params, "elsewhere.internal").is_empty());
     }
 
     #[test]

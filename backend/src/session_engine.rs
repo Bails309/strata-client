@@ -36,7 +36,9 @@ use strata_session::engine::rdp::layouts::keyboard_layout_id;
 use strata_session::engine::rdp::{RdpConfig, RdpEngineFactory, RdpPerformance};
 use strata_session::engine::sftp::{SftpConfig, SftpEngine};
 use strata_session::engine::ssh::{HostKeyPolicy, SshConfig, SshEngineFactory};
-use strata_session::engine::vnc::{VncConfig, VncEngineFactory, DEFAULT_LISTEN_TIMEOUT};
+use strata_session::engine::vnc::{
+    ClipboardEncoding, VncConfig, VncEngineFactory, DEFAULT_LISTEN_TIMEOUT,
+};
 use strata_session::engine::{EngineFactory, Protocol, ProtocolEngine, TargetSpec};
 use strata_session::protocol::ServerInstruction;
 use strata_session::routing::{RoutingPolicy, SessionBackend};
@@ -120,11 +122,25 @@ const SSH_PARAMS_IGNORED_NATIVELY: &[&str] = &[
 const VNC_FEATURES_REQUIRING_GUACD: &[&str] = &[
     // Audio arrives over a separate PulseAudio connection, not over RFB.
     "enable-audio",
-    // The RFB spec puts the clipboard in Latin-1 and the crate writes
-    // UTF-8. Identical for ASCII, mojibake otherwise — and an
-    // administrator only sets this because their server needed it.
-    "clipboard-encoding",
 ];
+
+/// Clipboard encodings the native VNC engine cannot put on the wire.
+///
+/// Its `CopyText` takes a `String`, so every byte it writes is valid
+/// UTF-8 by construction. ISO8859-1 and UTF-8 are handled; the rest need
+/// arbitrary bytes and stay on guacd.
+const VNC_CLIPBOARD_ENCODINGS_REQUIRING_GUACD: &[&str] = &["UTF-16", "CP1252", "MacRoman"];
+
+/// Read the connection's clipboard encoding.
+///
+/// Anything unrecognised falls back to the RFB default, which is what
+/// guacd does rather than failing the connection.
+fn clipboard_encoding(handshake: &HandshakeParams) -> ClipboardEncoding {
+    match handshake.extra.get("clipboard-encoding").map(|e| e.trim()) {
+        Some("UTF-8") => ClipboardEncoding::Utf8,
+        _ => ClipboardEncoding::Latin1,
+    }
+}
 
 /// VNC parameters that cost only fidelity.
 ///
@@ -476,6 +492,17 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
                 return Err(format!(
                     "connection uses {}, which the native VNC engine does not implement",
                     needs_guacd.join(", ")
+                ));
+            }
+            if let Some(encoding) = handshake
+                .extra
+                .get("clipboard-encoding")
+                .map(|e| e.trim())
+                .filter(|e| VNC_CLIPBOARD_ENCODINGS_REQUIRING_GUACD.contains(e))
+            {
+                return Err(format!(
+                    "connection asks for {encoding} clipboard text, which the native VNC \
+                     engine cannot put on the wire"
                 ));
             }
             // The engine speaks the two security types in the RFB spec:
@@ -1187,6 +1214,7 @@ async fn connect_target(
                     .get("listen-timeout")
                     .and_then(|t| t.trim().parse().ok())
                     .map_or(DEFAULT_LISTEN_TIMEOUT, Duration::from_secs),
+                clipboard_encoding: clipboard_encoding(handshake),
             });
             factory
                 .connect(spec)
@@ -1571,6 +1599,42 @@ mod tests {
                 "{param} should not force guacd"
             );
         }
+    }
+
+    /// The two encodings the engine can represent must run natively; the
+    /// three it cannot must not be silently mangled.
+    #[test]
+    fn only_representable_clipboard_encodings_run_natively() {
+        for encoding in ["ISO8859-1", "UTF-8"] {
+            let mut params = handshake("vnc", None);
+            params.username = None;
+            params
+                .extra
+                .insert("clipboard-encoding".to_owned(), encoding.to_owned());
+            assert!(
+                preflight(Protocol::Vnc, &params).is_ok(),
+                "{encoding} should run natively"
+            );
+        }
+        for encoding in VNC_CLIPBOARD_ENCODINGS_REQUIRING_GUACD {
+            let mut params = handshake("vnc", None);
+            params.username = None;
+            params
+                .extra
+                .insert("clipboard-encoding".to_owned(), (*encoding).to_owned());
+            let err = preflight(Protocol::Vnc, &params)
+                .expect_err(&format!("{encoding} must not run natively"));
+            assert!(err.contains(encoding), "{err}");
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_clipboard_encoding_falls_back_to_the_rfb_default() {
+        let mut params = handshake("vnc", None);
+        params
+            .extra
+            .insert("clipboard-encoding".to_owned(), "KOI8-R".to_owned());
+        assert_eq!(clipboard_encoding(&params), ClipboardEncoding::Latin1);
     }
 
     #[test]

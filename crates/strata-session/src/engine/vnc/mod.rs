@@ -48,6 +48,42 @@ pub struct VncConfig {
     pub reverse_connect: bool,
     /// How long to wait for that inbound connection.
     pub listen_timeout: Duration,
+    /// Encoding for clipboard text sent to the target.
+    pub clipboard_encoding: ClipboardEncoding,
+}
+
+/// Encodings this engine can put on the wire.
+///
+/// guacd also offers UTF-16, CP1252 and MacRoman. None of those can be
+/// expressed here: the crate's `CopyText` takes a `String`, so every byte
+/// it writes is valid UTF-8 by construction, and producing arbitrary
+/// bytes would need either an upstream change or undefined behaviour.
+/// Connections asking for one stay on guacd.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ClipboardEncoding {
+    /// What the RFB specification mandates, and guacd's default.
+    #[default]
+    Latin1,
+    /// What guacd sends when an administrator asks for UTF-8.
+    Utf8,
+}
+
+/// Render clipboard text for the wire.
+///
+/// For Latin-1 only the ASCII subset can be produced, because bytes
+/// above 0x7F cannot appear in a Rust `String` on their own. Characters
+/// outside it become `?` rather than their UTF-8 bytes: a server reading
+/// Latin-1 would otherwise render `é` as `Ã©`, and silently pasting two
+/// wrong characters into a shell is worse than pasting an obviously
+/// missing one.
+fn encode_clipboard(text: &str, encoding: ClipboardEncoding) -> String {
+    match encoding {
+        ClipboardEncoding::Utf8 => text.to_owned(),
+        ClipboardEncoding::Latin1 => text
+            .chars()
+            .map(|c| if c.is_ascii() { c } else { '?' })
+            .collect(),
+    }
 }
 
 /// Bytes a repeater expects, and the field is fixed-width.
@@ -266,12 +302,12 @@ impl ProtocolEngine for VncEngine {
                 if self.config.disable_paste {
                     return Ok(());
                 }
-                // RFB carries Latin-1 only. Anything outside it would be
-                // truncated by the server, so it is replaced here where
-                // the substitution is at least visible.
-                let text = String::from_utf8_lossy(&data).into_owned();
+                let text = String::from_utf8_lossy(&data);
                 self.client
-                    .input(X11Event::CopyText(text))
+                    .input(X11Event::CopyText(encode_clipboard(
+                        &text,
+                        self.config.clipboard_encoding,
+                    )))
                     .await
                     .map_err(map_vnc)?;
             }
@@ -575,6 +611,33 @@ mod tests {
             .await
             .expect_err("should have timed out");
         assert!(err.to_string().contains("reverse VNC"), "{err}");
+    }
+
+    /// A server reading Latin-1 renders UTF-8 bytes as mojibake, and two
+    /// wrong characters pasted into a shell are worse than one obviously
+    /// missing one.
+    #[test]
+    fn latin1_replaces_what_it_cannot_represent() {
+        assert_eq!(encode_clipboard("cafe", ClipboardEncoding::Latin1), "cafe");
+        assert_eq!(encode_clipboard("café", ClipboardEncoding::Latin1), "caf?");
+        assert_eq!(encode_clipboard("→", ClipboardEncoding::Latin1), "?");
+    }
+
+    #[test]
+    fn utf8_is_passed_through_unchanged() {
+        for text in ["café", "→", "日本語", "plain"] {
+            assert_eq!(encode_clipboard(text, ClipboardEncoding::Utf8), text);
+        }
+    }
+
+    /// ASCII is the same in both, so the common case must not be touched.
+    #[test]
+    fn ascii_is_identical_under_either_encoding() {
+        let text = "sudo systemctl restart nginx";
+        assert_eq!(
+            encode_clipboard(text, ClipboardEncoding::Latin1),
+            encode_clipboard(text, ClipboardEncoding::Utf8)
+        );
     }
 
     #[tokio::test]

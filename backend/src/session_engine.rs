@@ -32,6 +32,7 @@ use strata_session::actor::{
 use strata_session::engine::rdp::layouts::keyboard_layout_id;
 use strata_session::engine::rdp::{RdpConfig, RdpEngineFactory, RdpPerformance};
 use strata_session::engine::ssh::{SshConfig, SshEngineFactory};
+use strata_session::engine::vnc::{VncConfig, VncEngineFactory};
 use strata_session::engine::{EngineFactory, Protocol, ProtocolEngine, TargetSpec};
 use strata_session::protocol::ServerInstruction;
 use strata_session::routing::{RoutingPolicy, SessionBackend};
@@ -135,6 +136,46 @@ const SSH_PARAMS_IGNORED_NATIVELY: &[&str] = &[
     "font-size",
     "scrollback",
     "backspace",
+];
+
+/// Connection parameters naming a VNC feature the native engine does
+/// not implement.
+///
+/// Written alongside the engine rather than after a user reported a
+/// broken session, which is how the SSH list came about.
+const VNC_FEATURES_REQUIRING_GUACD: &[&str] = &[
+    // Audio arrives over a separate PulseAudio connection, not over RFB.
+    "enable-audio",
+    // File transfer runs over SSH alongside the VNC session.
+    "enable-sftp",
+    // A VNC repeater: the real target is named in these, and connecting
+    // to the repeater itself would open somebody else's desktop.
+    "dest-host",
+    "dest-port",
+    // guacd listens and the server dials in. The native engine only
+    // dials out, so nothing would ever arrive.
+    "reverse-connect",
+    // The RFB spec puts the clipboard in Latin-1 and the crate writes
+    // UTF-8. Identical for ASCII, mojibake otherwise — and an
+    // administrator only sets this because their server needed it.
+    "clipboard-encoding",
+    "wol-send-packet",
+];
+
+/// VNC parameters that cost only fidelity.
+///
+/// Encoding and quality settings tune a negotiation the engine already
+/// makes for itself: it asks for Tight, ZRLE, TRLE, `CopyRect` and Raw and
+/// takes whichever the server picks.
+const VNC_PARAMS_IGNORED_NATIVELY: &[&str] = &[
+    "color-depth",
+    "swap-red-blue",
+    "cursor",
+    "encodings",
+    "compress-level",
+    "quality-level",
+    "autoretry",
+    "force-lossless",
 ];
 
 /// Parameters that cost only fidelity.
@@ -414,6 +455,32 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
                 return Err(format!(
                     "Kerberos-only RDP requires a `{KDC_URL_PARAM}` parameter for the native engine"
                 ));
+            }
+            Ok(())
+        }
+        Protocol::Vnc => {
+            let needs_guacd = params_in_use(handshake, VNC_FEATURES_REQUIRING_GUACD);
+            if !needs_guacd.is_empty() {
+                return Err(format!(
+                    "connection uses {}, which the native VNC engine does not implement",
+                    needs_guacd.join(", ")
+                ));
+            }
+            // The engine speaks the two security types in the RFB spec:
+            // none, and the DES password challenge. Neither carries a
+            // username, so one being set means the server wants UltraVNC
+            // MS-Logon or VeNCrypt, and a login the administrator
+            // configured would simply be dropped.
+            if handshake
+                .username
+                .as_deref()
+                .is_some_and(|u| !u.trim().is_empty())
+            {
+                return Err(
+                    "connection sets a username, and the native VNC engine implements only \
+                     the password security types from the RFB specification"
+                        .to_owned(),
+                );
             }
             Ok(())
         }
@@ -928,6 +995,18 @@ async fn connect_engine(
                 .await
                 .map_err(|e| AppError::Internal(format!("native rdp connect: {e}")))
         }
+        Protocol::Vnc => {
+            warn_ignored_params(handshake, VNC_PARAMS_IGNORED_NATIVELY, "vnc");
+            let factory = VncEngineFactory::new(VncConfig {
+                read_only: flag(handshake, "read-only"),
+                disable_copy: flag(handshake, "disable-copy"),
+                disable_paste: flag(handshake, "disable-paste"),
+            });
+            factory
+                .connect(spec)
+                .await
+                .map_err(|e| AppError::Internal(format!("native vnc connect: {e}")))
+        }
         other => Err(AppError::Internal(format!(
             "no native engine for {}",
             other.as_str()
@@ -1090,8 +1169,53 @@ mod tests {
 
     #[test]
     fn protocols_without_an_engine_fail_preflight() {
-        let err = preflight(Protocol::Vnc, &handshake("vnc", Some("SHA256:aaa"))).unwrap_err();
-        assert!(err.contains("vnc"));
+        let err = preflight(Protocol::KubeExec, &handshake("kubernetes", None)).unwrap_err();
+        assert!(err.contains("no native engine"), "{err}");
+    }
+
+    #[test]
+    fn vnc_needs_no_pinned_host_key_or_font() {
+        let mut params = handshake("vnc", None);
+        params.username = None;
+        assert!(preflight(Protocol::Vnc, &params).is_ok());
+    }
+
+    /// Neither RFB security type carries a username, so honouring one
+    /// would mean silently not honouring it.
+    #[test]
+    fn vnc_with_a_username_stays_on_guacd() {
+        let params = handshake("vnc", None);
+        let err = preflight(Protocol::Vnc, &params).unwrap_err();
+        assert!(err.contains("username"), "{err}");
+    }
+
+    #[test]
+    fn every_gated_vnc_feature_leaves_the_native_engine() {
+        for feature in VNC_FEATURES_REQUIRING_GUACD {
+            let mut params = handshake("vnc", None);
+            params.username = None;
+            params
+                .extra
+                .insert((*feature).to_owned(), "true".to_owned());
+            let err = preflight(Protocol::Vnc, &params)
+                .expect_err(&format!("{feature} must not run natively"));
+            assert!(err.contains(feature), "{err}");
+        }
+    }
+
+    /// Fidelity-only parameters must not cost a session the native
+    /// engine, or the gate list grows until nothing routes natively.
+    #[test]
+    fn ignored_vnc_params_still_run_natively() {
+        for param in VNC_PARAMS_IGNORED_NATIVELY {
+            let mut params = handshake("vnc", None);
+            params.username = None;
+            params.extra.insert((*param).to_owned(), "true".to_owned());
+            assert!(
+                preflight(Protocol::Vnc, &params).is_ok(),
+                "{param} should not force guacd"
+            );
+        }
     }
 
     #[test]

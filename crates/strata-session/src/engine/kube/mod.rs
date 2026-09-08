@@ -152,7 +152,8 @@ pub struct KubeEngine {
 }
 
 impl KubeEngine {
-    async fn connect(spec: TargetSpec, config: Arc<KubeConfig>) -> Result<Self, EngineError> {
+    /// Open an exec session against the pod named in `config`.
+    pub async fn connect(spec: TargetSpec, config: Arc<KubeConfig>) -> Result<Self, EngineError> {
         let (cols, rows) = config.cell.to_grid(spec.width, spec.height);
         let scheme = if config.use_ssl { "wss" } else { "ws" };
         let url = format!(

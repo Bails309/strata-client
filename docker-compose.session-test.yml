@@ -34,6 +34,41 @@ services:
     networks:
       - session-test
 
+  # A real Kubernetes API server. The exec endpoint's channel framing and
+  # its refusal to accept stderr alongside a TTY are the two things a mock
+  # would happily get wrong, so the engine is tested against the real one.
+  #
+  # Privileged because k3s runs containerd; it is a disposable test node
+  # on an isolated network with no published ports.
+  k3s:
+    image: rancher/k3s:v1.31.4-k3s1
+    container_name: strata-kube-target
+    privileged: true
+    command:
+      - server
+      # Nothing here needs an ingress, metrics or storage, and each one
+      # is another image to pull before the node is ready.
+      - --disable=traefik,metrics-server,servicelb,local-storage
+      # The certificate must be valid for the name the tests dial, not
+      # just for localhost.
+      - --tls-san=strata-kube-target
+    environment:
+      K3S_KUBECONFIG_OUTPUT: /output/kubeconfig.yaml
+      # Read by the test container, which runs as a different user.
+      K3S_KUBECONFIG_MODE: "666"
+    volumes:
+      # Anything dropped here is applied automatically once the API
+      # server is up, which saves the tests needing kubectl.
+      - ./crates/strata-session/tests/k3s/exec-target.yaml:/var/lib/rancher/k3s/server/manifests/exec-target.yaml:ro
+      - k3s-output:/output
+    networks:
+      - session-test
+
+volumes:
+  # Carries the generated kubeconfig, and with it the CA and client
+  # certificate the tests authenticate with.
+  k3s-output:
+
 networks:
   session-test:
     name: strata-session-test-net

@@ -64,6 +64,8 @@ pub struct KubeConfig {
     pub client_cert: Option<String>,
     /// PEM private key for `client_cert`.
     pub client_key: Option<SecretString>,
+    /// Password protecting `client_key`, when it is encrypted.
+    pub client_key_password: Option<SecretString>,
     /// Cell geometry for pixel-to-grid conversion.
     pub cell: CellSize,
     /// Drop every keystroke from the client.
@@ -86,6 +88,7 @@ impl Default for KubeConfig {
             ca_cert: None,
             client_cert: None,
             client_key: None,
+            client_key_password: None,
             cell: CellSize::default(),
             read_only: false,
             disable_copy: false,
@@ -417,11 +420,45 @@ fn tls_config(config: &KubeConfig) -> Result<ClientConfig, EngineError> {
     let certs = CertificateDer::pem_slice_iter(cert.as_bytes())
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| EngineError::Protocol(format!("client certificate is not valid PEM: {e}")))?;
-    let key = PrivateKeyDer::from_pem_slice(key.expose_secret().as_bytes())
-        .map_err(|e| EngineError::Protocol(format!("client key is not valid PEM: {e}")))?;
+    let key = read_private_key(key, config.client_key_password.as_ref())?;
     builder
         .with_client_auth_cert(certs, key)
         .map_err(|e| EngineError::Protocol(format!("client certificate rejected: {e}")))
+}
+
+/// Read the client key, decrypting it when a password was supplied.
+///
+/// An encrypted key is not detected by sniffing the PEM label: a
+/// password being configured is the administrator saying the key needs
+/// one, and honouring that is what makes the failure legible when it is
+/// wrong.
+fn read_private_key(
+    key: &SecretString,
+    password: Option<&SecretString>,
+) -> Result<PrivateKeyDer<'static>, EngineError> {
+    let Some(password) = password else {
+        return PrivateKeyDer::from_pem_slice(key.expose_secret().as_bytes())
+            .map_err(|e| EngineError::Protocol(format!("client key is not valid PEM: {e}")));
+    };
+
+    let document = pkcs8::SecretDocument::from_pem(key.expose_secret())
+        .map_err(|e| EngineError::Protocol(format!("client key is not valid PEM: {e}")))?
+        .1;
+    let encrypted = pkcs8::EncryptedPrivateKeyInfoRef::try_from(document.as_bytes())
+        .map_err(|e| EngineError::Protocol(format!("client key is not an encrypted key: {e}")))?;
+
+    let decrypted = encrypted
+        .decrypt(password.expose_secret().as_bytes())
+        .map_err(|_| {
+            // Deliberately not passing the library's message through: it
+            // distinguishes a wrong password from an unsupported cipher,
+            // and that difference is an oracle.
+            EngineError::Protocol(
+                "client key could not be decrypted with the configured password".to_owned(),
+            )
+        })?;
+
+    Ok(PrivateKeyDer::Pkcs8(decrypted.as_bytes().to_vec().into()))
 }
 
 /// Trust anchors for the API server: the connection's CA if it has one,
@@ -530,5 +567,58 @@ mod tests {
         let printed = format!("{config:?}");
         assert!(!printed.contains("BEGIN PRIVATE KEY"), "{printed}");
         assert!(printed.contains("redacted"), "{printed}");
+    }
+
+    /// A real Ed25519 key, generated with:
+    ///   openssl genpkey -algorithm ED25519 -out k.pem
+    ///   openssl pkcs8 -topk8 -in k.pem -passout pass:strata-test
+    /// and verified to decrypt with `openssl pkey -passin pass:strata-test`.
+    const ENCRYPTED_KEY: &str = concat!(
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----\n",
+        "MIGjMF8GCSqGSIb3DQEFDTBSMDEGCSqGSIb3DQEFDDAkBBDsYEwNkeed5dim0i80\n",
+        "X08MAgIIADAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBKgQQi5WD9pgx+Pne8gcK\n",
+        "Jx+UqQRA1yGt5IrDv0kbIZAKqrMiSdc+Sf4EC398mJ8GHBt3lNDw0hjzwAtkD1g8\n",
+        "gXTFyyC3HXy/LGesLMsED0vaaKnXcQ==\n",
+        "-----END ENCRYPTED PRIVATE KEY-----\n"
+    );
+
+    const KEY_PASSWORD: &str = "strata-test";
+
+    #[test]
+    fn an_encrypted_key_is_decrypted_with_its_password() {
+        let key = read_private_key(
+            &SecretString::from(ENCRYPTED_KEY.to_owned()),
+            Some(&SecretString::from(KEY_PASSWORD.to_owned())),
+        )
+        .expect("the key should decrypt");
+        assert!(
+            matches!(key, PrivateKeyDer::Pkcs8(_)),
+            "expected a PKCS#8 key"
+        );
+    }
+
+    /// A wrong password must not be distinguishable from an unsupported
+    /// cipher: the difference is an oracle.
+    #[test]
+    fn a_decryption_failure_does_not_say_why() {
+        let err = read_private_key(
+            &SecretString::from(ENCRYPTED_KEY.to_owned()),
+            Some(&SecretString::from("wrong".to_owned())),
+        )
+        .expect_err("the wrong password must not decrypt");
+        let message = err.to_string();
+        assert!(
+            !message.contains("password") || !message.contains("cipher"),
+            "error distinguishes the cause: {message}"
+        );
+    }
+
+    /// Without a password the key is read as-is, so an unencrypted key
+    /// keeps working exactly as before.
+    #[test]
+    fn an_unencrypted_key_needs_no_password() {
+        let err = read_private_key(&SecretString::from("not a key".to_owned()), None)
+            .expect_err("garbage must not parse");
+        assert!(err.to_string().contains("not valid PEM"), "{err}");
     }
 }

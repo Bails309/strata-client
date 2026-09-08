@@ -158,14 +158,6 @@ const VNC_PARAMS_IGNORED_NATIVELY: &[&str] = &[
     "force-lossless",
 ];
 
-/// Connection parameters naming a Kubernetes feature the native engine
-/// does not implement.
-const KUBE_FEATURES_REQUIRING_GUACD: &[&str] = &[
-    // An encrypted client key. rustls reads PEM but will not decrypt it,
-    // and a connection that authenticates today must keep working.
-    "client-key-password",
-];
-
 /// Kubernetes parameters that cost only fidelity.
 ///
 /// The terminal is drawn by the client, and the exec API has no say in
@@ -524,13 +516,7 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
             Ok(())
         }
         Protocol::KubeExec => {
-            let needs_guacd = params_in_use(handshake, KUBE_FEATURES_REQUIRING_GUACD);
-            if !needs_guacd.is_empty() {
-                return Err(format!(
-                    "connection uses {}, which the native Kubernetes engine does not implement",
-                    needs_guacd.join(", ")
-                ));
-            }
+            // Nothing about a Kubernetes exec session needs guacd now.
             // Without a pod there is nothing to attach to, and the API
             // server would answer with a 404 the operator cannot read.
             if !handshake.extra.get("pod").is_some_and(|p| is_set(p)) {
@@ -1246,6 +1232,11 @@ async fn connect_target(
                     .get("client-key")
                     .filter(|k| !k.trim().is_empty())
                     .map(|k| SecretString::from(k.clone())),
+                client_key_password: handshake
+                    .extra
+                    .get("client-key-password")
+                    .filter(|p| !p.is_empty())
+                    .map(|p| SecretString::from(p.clone())),
                 cell: CellSize::default(),
                 read_only: flag(handshake, "read-only"),
                 disable_copy: flag(handshake, "disable-copy"),
@@ -1512,17 +1503,15 @@ mod tests {
         params
     }
 
+    /// Nothing about a Kubernetes exec session needs guacd now, which
+    /// includes the encrypted client key that used to.
     #[test]
-    fn every_gated_kubernetes_feature_leaves_the_native_engine() {
-        for feature in KUBE_FEATURES_REQUIRING_GUACD {
-            let mut params = kube_handshake();
-            params
-                .extra
-                .insert((*feature).to_owned(), "true".to_owned());
-            let err = preflight(Protocol::KubeExec, &params)
-                .expect_err(&format!("{feature} must not run natively"));
-            assert!(err.contains(feature), "{err}");
-        }
+    fn no_kubernetes_parameter_forces_guacd() {
+        let mut params = kube_handshake();
+        params
+            .extra
+            .insert("client-key-password".to_owned(), "hunter2".to_owned());
+        assert!(preflight(Protocol::KubeExec, &params).is_ok());
     }
 
     #[test]

@@ -105,6 +105,42 @@ const RDP_FEATURES_REQUIRING_GUACD: &[&str] = &[
 const RECORDING_OPTIONS_REQUIRING_GUACD: &[&str] =
     &["recording-exclude-output", "recording-include-keys"];
 
+/// Connection parameters naming an SSH feature the native engine does
+/// not implement.
+///
+/// RDP has had such a list since the engine was written; SSH had none,
+/// and three separate gaps reached a user as "authentication rejected"
+/// before anyone noticed. Everything here is a feature an administrator
+/// deliberately turned on and would not otherwise see disappear.
+const SSH_FEATURES_REQUIRING_GUACD: &[&str] = &[
+    // File transfer over the session.
+    "enable-sftp",
+    // Runs a command instead of an interactive shell.
+    "command",
+    // Agent forwarding.
+    "enable-agent",
+    // Server-side typescript of the session.
+    "typescript-path",
+    "wol-send-packet",
+];
+
+/// SSH parameters that cost only fidelity.
+///
+/// `timezone` is the one most likely to be noticed: guacd sets `TZ` on
+/// the channel, and the native engine has no `setenv` at all, so
+/// timestamps in the session come out in the host's zone.
+const SSH_PARAMS_IGNORED_NATIVELY: &[&str] = &[
+    "timezone",
+    "locale",
+    // The engine always announces xterm-256color.
+    "terminal-type",
+    "color-scheme",
+    "font-name",
+    "font-size",
+    "scrollback",
+    "backspace",
+];
+
 /// Parameters that cost only fidelity.
 ///
 /// The session still works, so these are not worth giving up the native
@@ -131,6 +167,19 @@ fn params_in_use<'a>(handshake: &HandshakeParams, keys: &[&'a str]) -> Vec<&'a s
         .copied()
         .filter(|key| handshake.extra.get(*key).is_some_and(|v| is_set(v)))
         .collect()
+}
+
+/// Warn about admin-configured parameters this engine will not honour.
+fn warn_ignored_params(handshake: &HandshakeParams, keys: &[&str], protocol: &str) {
+    let ignored = params_in_use(handshake, keys);
+    if !ignored.is_empty() {
+        tracing::warn!(
+            %protocol,
+            params = ?ignored,
+            "native engine ignores these connection parameters; \
+             the session runs but does not honour them"
+        );
+    }
 }
 
 /// Warn about admin-configured parameters this engine will not honour.
@@ -334,6 +383,13 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
     }
     match protocol {
         Protocol::Ssh => {
+            let needs_guacd = params_in_use(handshake, SSH_FEATURES_REQUIRING_GUACD);
+            if !needs_guacd.is_empty() {
+                return Err(format!(
+                    "connection uses {}, which the native SSH engine does not implement",
+                    needs_guacd.join(", ")
+                ));
+            }
             if host_key_fingerprints(handshake).is_empty() {
                 return Err(format!(
                     "connection has no `{HOST_KEY_PARAM}` parameter, and the native SSH \
@@ -805,6 +861,7 @@ async fn connect_engine(
 
     match protocol {
         Protocol::Ssh => {
+            warn_ignored_params(handshake, SSH_PARAMS_IGNORED_NATIVELY, "ssh");
             let factory = SshEngineFactory::new(
                 SshConfig::with_fingerprints(host_key_fingerprints(handshake)).with_private_key(
                     handshake
@@ -1098,6 +1155,49 @@ mod tests {
         off.extra
             .insert("enable-font-smoothing".to_owned(), "false".to_owned());
         assert!(!flag_or(&off, "enable-font-smoothing", true));
+    }
+
+    #[test]
+    fn an_ssh_feature_this_engine_lacks_is_left_to_guacd() {
+        // SSH had no such list at all, which is why a missing credential,
+        // a private key and the clipboard each reached a user as an
+        // unexplained failure rather than a routing decision.
+        for feature in SSH_FEATURES_REQUIRING_GUACD {
+            let mut params = handshake("ssh", Some("SHA256:aaa"));
+            params
+                .extra
+                .insert((*feature).to_owned(), "true".to_owned());
+            let err = preflight(Protocol::Ssh, &params).unwrap_err();
+            assert!(err.contains(feature), "{feature} should keep guacd: {err}");
+        }
+    }
+
+    #[test]
+    fn an_ssh_feature_left_off_does_not_force_guacd() {
+        for value in ["", "false", "0"] {
+            let mut params = handshake("ssh", Some("SHA256:aaa"));
+            params
+                .extra
+                .insert("enable-sftp".to_owned(), value.to_owned());
+            assert!(
+                preflight(Protocol::Ssh, &params).is_ok(),
+                "{value:?} should not count as enabled"
+            );
+        }
+    }
+
+    #[test]
+    fn ssh_fidelity_losses_do_not_cost_the_native_engine() {
+        // These change how the session looks or what TZ it reports, not
+        // whether it works, so they warn rather than reroute.
+        for param in SSH_PARAMS_IGNORED_NATIVELY {
+            let mut params = handshake("ssh", Some("SHA256:aaa"));
+            params.extra.insert((*param).to_owned(), "value".to_owned());
+            assert!(
+                preflight(Protocol::Ssh, &params).is_ok(),
+                "{param} should still run natively"
+            );
+        }
     }
 
     #[test]

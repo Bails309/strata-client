@@ -162,8 +162,6 @@ impl HandshakeParams {
                 .or_insert_with(|| "false".into());
             m.entry("disable-audio".into())
                 .or_insert_with(|| "false".into());
-            m.entry("enable-audio-input".into())
-                .or_insert_with(|| "false".into());
             m.entry("read-only".into())
                 .or_insert_with(|| "false".into());
             m.entry("disable-auth".into())
@@ -309,7 +307,6 @@ fn is_allowed_guacd_param(name: &str) -> bool {
             | "timezone"
             | "client-name"
             | "enable-audio"
-            | "enable-audio-input"
             | "disable-audio"
             | "disable-copy"
             | "disable-paste"
@@ -2162,7 +2159,6 @@ mod tests {
             "timezone",
             "client-name",
             "enable-audio",
-            "enable-audio-input",
             "disable-audio",
             "enable-touch",
             "swap-red-blue",

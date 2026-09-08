@@ -451,7 +451,6 @@ export default function AccessTab({
     "enable-desktop-composition",
     "enable-menu-animations",
     "enable-audio",
-    "enable-audio-input",
     "disable-audio",
     "disable-copy",
     "disable-paste",

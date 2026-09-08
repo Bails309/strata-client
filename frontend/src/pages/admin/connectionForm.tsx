@@ -340,23 +340,6 @@ export function RdpSections({
               Disable audio playback
             </label>
           </div>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Enables audio input (microphone) support, allowing the user's local microphone to be used within the remote desktop session."
-            >
-              <input
-                type="checkbox"
-                checked={ex("enable-audio-input") === "true"}
-                onChange={(e) => setEx("enable-audio-input", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Enable audio input (microphone)
-            </label>
-          </div>
         </FieldGrid>
         <hr className="border-0 border-t border-border my-3" />
         <FieldGrid>
@@ -579,37 +562,6 @@ export function RdpSections({
               Enable graphics pipeline (GFX)
             </label>
           </div>
-        </FieldGrid>
-      </Section>
-
-      <Section title="RemoteApp">
-        <FieldGrid>
-          <Field
-            label="Program"
-            title="The name of the RemoteApp to launch. Use '||' prefix for publishing (e.g. '||notepad'). The application must be registered as a RemoteApp on the server."
-          >
-            <input
-              value={ex("remote-app")}
-              onChange={(e) => setEx("remote-app", e.target.value)}
-              placeholder="||notepad"
-              title="The name of the RemoteApp to launch. Use '||' prefix for publishing (e.g. '||notepad'). The application must be registered as a RemoteApp on the server."
-            />
-          </Field>
-          <Field label="Working Directory" title="The working directory for the RemoteApp, if any.">
-            <input
-              value={ex("remote-app-dir")}
-              onChange={(e) => setEx("remote-app-dir", e.target.value)}
-              placeholder="C:\Users\user"
-              title="The working directory for the RemoteApp, if any."
-            />
-          </Field>
-          <Field label="Parameters" title="Command-line parameters to pass to the RemoteApp.">
-            <input
-              value={ex("remote-app-args")}
-              onChange={(e) => setEx("remote-app-args", e.target.value)}
-              title="Command-line parameters to pass to the RemoteApp."
-            />
-          </Field>
         </FieldGrid>
       </Section>
 

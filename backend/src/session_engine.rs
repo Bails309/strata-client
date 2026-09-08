@@ -86,8 +86,6 @@ const AUTH_PACKAGE_PARAM: &str = "auth-pkg";
 /// there instead. Running it natively would drop a setting an
 /// administrator deliberately chose, and a redirected drive or printer
 /// that silently fails to appear is worse than a slower session.
-const RDP_FEATURES_REQUIRING_GUACD: &[&str] = &["enable-audio-input", "remote-app"];
-
 /// Connection parameters naming an SSH feature the native engine does
 /// not implement.
 ///
@@ -457,14 +455,8 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
             Ok(())
         }
         Protocol::Rdp => {
-            let needs_guacd = params_in_use(handshake, RDP_FEATURES_REQUIRING_GUACD);
-            if !needs_guacd.is_empty() {
-                return Err(format!(
-                    "connection uses {}, which the native RDP engine does not implement",
-                    needs_guacd.join(", ")
-                ));
-            }
-            // Audio playback is carried over RDPSND, so a connection that
+            // Nothing about an RDP session needs guacd now. Audio
+            // playback is carried over RDPSND, so a connection that
             // allows it no longer has to leave the native engine.
             let kerberos_only = handshake
                 .extra

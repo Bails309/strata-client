@@ -87,6 +87,9 @@ pub struct SshConfig {
     pub host_keys: HostKeyPolicy,
     /// `TERM` value announced to the remote shell.
     pub term: String,
+    /// Value for `TZ` on the channel, so timestamps match the operator
+    /// rather than the gateway.
+    pub timezone: Option<String>,
     /// Cell geometry for pixel-to-grid conversion.
     pub cell: CellSize,
     /// Idle interval before a keepalive is sent.
@@ -128,6 +131,7 @@ impl SshConfig {
         Self {
             host_keys: HostKeyPolicy::Fingerprints(fingerprints),
             term: "xterm-256color".to_owned(),
+            timezone: None,
             cell: CellSize::default(),
             keepalive: Duration::from_secs(30),
             inactivity_timeout: Duration::from_secs(3600),
@@ -145,6 +149,16 @@ impl SshConfig {
     ) -> Self {
         self.private_key = key;
         self.passphrase = passphrase;
+        self
+    }
+
+    /// Apply the terminal settings a connection asked for.
+    #[must_use]
+    pub fn with_terminal(mut self, term: Option<String>, timezone: Option<String>) -> Self {
+        if let Some(term) = term.filter(|t| !t.trim().is_empty()) {
+            self.term = term;
+        }
+        self.timezone = timezone.filter(|t| !t.trim().is_empty());
         self
     }
 }
@@ -569,6 +583,16 @@ impl SshEngine {
             .channel_open_session()
             .await
             .map_err(map_russh)?;
+
+        // Sent without waiting for a reply: a server with a restrictive
+        // AcceptEnv refuses it, and losing the session over a clock
+        // preference would be a poor trade.
+        if let Some(tz) = &self.config.timezone {
+            if let Err(err) = channel.set_env(false, "TZ", tz.clone()).await {
+                tracing::debug!(error = %err, "target would not accept TZ");
+            }
+        }
+
         let (cols, rows) = self.config.cell.to_grid(self.width, self.height);
         channel
             .request_pty(
@@ -977,6 +1001,24 @@ mod tests {
         // The escape byte is dropped; the printable remainder is not, which
         // is why an editing prompt is not what this is.
         assert_eq!(login.typed, "[A");
+    }
+
+    #[test]
+    fn terminal_settings_a_connection_asks_for_are_carried() {
+        let config = SshConfig::with_fingerprints(vec![])
+            .with_terminal(Some("vt220".to_owned()), Some("Europe/London".to_owned()));
+        assert_eq!(config.term, "vt220");
+        assert_eq!(config.timezone.as_deref(), Some("Europe/London"));
+    }
+
+    #[test]
+    fn a_blank_terminal_setting_leaves_the_default_alone() {
+        // An empty string in the admin form means "unset", not "announce
+        // an empty TERM", which some daemons refuse outright.
+        let config = SshConfig::with_fingerprints(vec![])
+            .with_terminal(Some("   ".to_owned()), Some(String::new()));
+        assert_eq!(config.term, "xterm-256color");
+        assert!(config.timezone.is_none());
     }
 
     #[test]

@@ -126,14 +126,10 @@ const SSH_FEATURES_REQUIRING_GUACD: &[&str] = &[
 
 /// SSH parameters that cost only fidelity.
 ///
-/// `timezone` is the one most likely to be noticed: guacd sets `TZ` on
-/// the channel, and the native engine has no `setenv` at all, so
-/// timestamps in the session come out in the host's zone.
+/// The terminal's appearance is decided by the client, which renders it,
+/// so guacd's font and colour parameters have nothing to act on here.
 const SSH_PARAMS_IGNORED_NATIVELY: &[&str] = &[
-    "timezone",
     "locale",
-    // The engine always announces xterm-256color.
-    "terminal-type",
     "color-scheme",
     "font-name",
     "font-size",
@@ -863,18 +859,23 @@ async fn connect_engine(
         Protocol::Ssh => {
             warn_ignored_params(handshake, SSH_PARAMS_IGNORED_NATIVELY, "ssh");
             let factory = SshEngineFactory::new(
-                SshConfig::with_fingerprints(host_key_fingerprints(handshake)).with_private_key(
-                    handshake
-                        .extra
-                        .get("private-key")
-                        .filter(|k| !k.trim().is_empty())
-                        .map(|k| SecretString::from(k.clone())),
-                    handshake
-                        .extra
-                        .get("passphrase")
-                        .filter(|p| !p.is_empty())
-                        .map(|p| SecretString::from(p.clone())),
-                ),
+                SshConfig::with_fingerprints(host_key_fingerprints(handshake))
+                    .with_private_key(
+                        handshake
+                            .extra
+                            .get("private-key")
+                            .filter(|k| !k.trim().is_empty())
+                            .map(|k| SecretString::from(k.clone())),
+                        handshake
+                            .extra
+                            .get("passphrase")
+                            .filter(|p| !p.is_empty())
+                            .map(|p| SecretString::from(p.clone())),
+                    )
+                    .with_terminal(
+                        handshake.extra.get("terminal-type").cloned(),
+                        handshake.extra.get("timezone").cloned(),
+                    ),
             );
             let engine = factory
                 .connect(spec)

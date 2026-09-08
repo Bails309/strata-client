@@ -102,6 +102,8 @@ impl RoutingPolicy {
         set.insert(Protocol::Ssh);
         #[cfg(feature = "rdp")]
         set.insert(Protocol::Rdp);
+        #[cfg(feature = "vnc")]
+        set.insert(Protocol::Vnc);
         set
     }
 

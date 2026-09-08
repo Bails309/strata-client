@@ -2,12 +2,46 @@
 //!
 //! The browser sends `key` instructions carrying X11 keysyms, because
 //! that is what the Guacamole protocol speaks. A PTY wants bytes. This
-//! module is the bridge, and it is the part of an SSH engine most likely
-//! to be subtly wrong, so it is kept pure and tested exhaustively rather
-//! than buried in the connection code.
+//! module is the bridge, and it is the part of a terminal engine most
+//! likely to be subtly wrong, so it is kept pure and tested exhaustively
+//! rather than buried in the connection code.
+//!
+//! Shared by every PTY-backed engine rather than owned by SSH: nothing
+//! here is protocol-specific, and a Kubernetes exec session needs
+//! exactly the same translation.
 //!
 //! Sequences follow xterm's default behaviour, which is what `TERM=xterm-256color`
 //! promises the remote shell.
+
+/// Character cell dimensions, used to convert the client's pixel
+/// geometry into the rows and columns a PTY wants.
+#[derive(Debug, Clone, Copy)]
+pub struct CellSize {
+    /// Cell width in pixels.
+    pub width: u32,
+    /// Cell height in pixels.
+    pub height: u32,
+}
+
+impl Default for CellSize {
+    fn default() -> Self {
+        Self {
+            width: 8,
+            height: 16,
+        }
+    }
+}
+
+impl CellSize {
+    /// Convert a pixel geometry to `(columns, rows)`, never returning
+    /// zero in either axis.
+    #[must_use]
+    pub fn to_grid(self, width_px: u32, height_px: u32) -> (u32, u32) {
+        let cols = width_px / self.width.max(1);
+        let rows = height_px / self.height.max(1);
+        (cols.max(1), rows.max(1))
+    }
+}
 
 /// Modifier keys held down.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

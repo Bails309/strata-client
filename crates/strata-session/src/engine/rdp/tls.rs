@@ -15,11 +15,10 @@ use std::io;
 use std::sync::Arc;
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _};
-use tokio_rustls::rustls::client::danger::{
-    HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
-};
 use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::{self, DigitallySignedStruct, SignatureScheme};
+use tokio_rustls::rustls::{self};
+
+use crate::tls::{native_roots, NoCertificateVerification};
 
 /// A TLS-wrapped transport carrying the RDP connection.
 pub type TlsStream<S> = tokio_rustls::client::TlsStream<S>;
@@ -71,80 +70,6 @@ where
     };
 
     Ok((tls_stream, certificate))
-}
-
-/// Trust anchors from the host, so an operator adds their internal CA
-/// the same way they would for anything else in the image.
-fn native_roots() -> io::Result<rustls::RootCertStore> {
-    let loaded = rustls_native_certs::load_native_certs();
-    let mut roots = rustls::RootCertStore::empty();
-    for certificate in loaded.certs {
-        // A single unparsable anchor must not fail the whole store.
-        let _ = roots.add(certificate);
-    }
-    if roots.is_empty() {
-        // Failing closed: continuing here would verify against nothing
-        // and report success, which is worse than not verifying at all.
-        return Err(io::Error::other(format!(
-            "certificate verification is enabled for this connection but no trusted \
-             roots could be loaded ({} error(s)); install the CA that signed the \
-             target, or tick \"ignore certificate\" on the connection",
-            loaded.errors.len()
-        )));
-    }
-    Ok(roots)
-}
-
-#[derive(Debug)]
-struct NoCertificateVerification;
-
-impl ServerCertVerifier for NoCertificateVerification {
-    fn verify_server_cert(
-        &self,
-        _: &rustls::pki_types::CertificateDer<'_>,
-        _: &[rustls::pki_types::CertificateDer<'_>],
-        _: &ServerName<'_>,
-        _: &[u8],
-        _: rustls::pki_types::UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _: &[u8],
-        _: &rustls::pki_types::CertificateDer<'_>,
-        _: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _: &[u8],
-        _: &rustls::pki_types::CertificateDer<'_>,
-        _: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![
-            SignatureScheme::RSA_PKCS1_SHA1,
-            SignatureScheme::ECDSA_SHA1_Legacy,
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-            SignatureScheme::ECDSA_NISTP521_SHA512,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::ED25519,
-            SignatureScheme::ED448,
-        ]
-    }
 }
 
 #[cfg(test)]

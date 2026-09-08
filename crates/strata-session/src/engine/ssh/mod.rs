@@ -12,7 +12,7 @@
 //! rasteriser; that lands separately and will consume the same
 //! [`TargetEvent::TerminalOutput`] stream.
 
-pub mod keymap;
+pub use crate::engine::keymap;
 
 use std::fmt;
 use std::sync::Arc;
@@ -26,7 +26,7 @@ use russh::{Channel, ChannelMsg, Disconnect};
 use secrecy::{ExposeSecret, SecretString};
 use tokio::sync::{mpsc, Mutex};
 
-use crate::engine::ssh::keymap::{keysym_to_bytes, Modifiers};
+use crate::engine::keymap::{keysym_to_bytes, CellSize, Modifiers};
 use crate::engine::{EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec};
 use crate::error::EngineError;
 
@@ -47,36 +47,6 @@ impl HostKeyPolicy {
     fn accepts(&self, fingerprint: &str) -> bool {
         let Self::Fingerprints(allowed) = self;
         allowed.iter().any(|f| f == fingerprint)
-    }
-}
-
-/// Character cell dimensions, used to convert the client's pixel
-/// geometry into the rows and columns a PTY wants.
-#[derive(Debug, Clone, Copy)]
-pub struct CellSize {
-    /// Cell width in pixels.
-    pub width: u32,
-    /// Cell height in pixels.
-    pub height: u32,
-}
-
-impl Default for CellSize {
-    fn default() -> Self {
-        Self {
-            width: 8,
-            height: 16,
-        }
-    }
-}
-
-impl CellSize {
-    /// Convert a pixel geometry to `(columns, rows)`, never returning
-    /// zero in either axis.
-    #[must_use]
-    pub fn to_grid(self, width_px: u32, height_px: u32) -> (u32, u32) {
-        let cols = width_px / self.width.max(1);
-        let rows = height_px / self.height.max(1);
-        (cols.max(1), rows.max(1))
     }
 }
 

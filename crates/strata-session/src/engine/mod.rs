@@ -18,6 +18,11 @@ use crate::error::EngineError;
 
 pub mod mock;
 
+pub mod keymap;
+
+#[cfg(feature = "kubernetes")]
+pub mod kube;
+
 #[cfg(feature = "rdp")]
 pub mod rdp;
 

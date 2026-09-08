@@ -104,6 +104,8 @@ impl RoutingPolicy {
         set.insert(Protocol::Rdp);
         #[cfg(feature = "vnc")]
         set.insert(Protocol::Vnc);
+        #[cfg(feature = "kubernetes")]
+        set.insert(Protocol::KubeExec);
         set
     }
 

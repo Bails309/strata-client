@@ -29,6 +29,8 @@ use secrecy::SecretString;
 use strata_session::actor::{
     AuditSink, GuacRecordingSink, NullAuditSink, SessionActor, SessionConfig, SessionHandle,
 };
+use strata_session::engine::keymap::CellSize;
+use strata_session::engine::kube::{KubeConfig, KubeEngineFactory};
 use strata_session::engine::rdp::layouts::keyboard_layout_id;
 use strata_session::engine::rdp::{RdpConfig, RdpEngineFactory, RdpPerformance};
 use strata_session::engine::ssh::{SshConfig, SshEngineFactory};
@@ -176,6 +178,29 @@ const VNC_PARAMS_IGNORED_NATIVELY: &[&str] = &[
     "quality-level",
     "autoretry",
     "force-lossless",
+];
+
+/// Connection parameters naming a Kubernetes feature the native engine
+/// does not implement.
+const KUBE_FEATURES_REQUIRING_GUACD: &[&str] = &[
+    // An encrypted client key. rustls reads PEM but will not decrypt it,
+    // and a connection that authenticates today must keep working.
+    "client-key-password",
+    // Server-side typescript of the session.
+    "typescript-path",
+];
+
+/// Kubernetes parameters that cost only fidelity.
+///
+/// The terminal is drawn by the client, and the exec API has no say in
+/// how it looks.
+const KUBE_PARAMS_IGNORED_NATIVELY: &[&str] = &[
+    "color-scheme",
+    "font-name",
+    "font-size",
+    "scrollback",
+    "backspace",
+    "terminal-type",
 ];
 
 /// Parameters that cost only fidelity.
@@ -484,7 +509,26 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
             }
             Ok(())
         }
-        other => Err(format!("no native engine for {}", other.as_str())),
+        Protocol::KubeExec => {
+            let needs_guacd = params_in_use(handshake, KUBE_FEATURES_REQUIRING_GUACD);
+            if !needs_guacd.is_empty() {
+                return Err(format!(
+                    "connection uses {}, which the native Kubernetes engine does not implement",
+                    needs_guacd.join(", ")
+                ));
+            }
+            // Without a pod there is nothing to attach to, and the API
+            // server would answer with a 404 the operator cannot read.
+            if !handshake.extra.get("pod").is_some_and(|p| is_set(p)) {
+                return Err(
+                    "connection has no `pod` parameter, so there is nothing to attach to"
+                        .to_owned(),
+                );
+            }
+            // Only the terminal engines need the rasteriser.
+            TerminalFont::discover(DEFAULT_FONT_SIZE_PX).map_err(|e| e.to_string())?;
+            Ok(())
+        }
     }
 }
 
@@ -1007,11 +1051,69 @@ async fn connect_engine(
                 .await
                 .map_err(|e| AppError::Internal(format!("native vnc connect: {e}")))
         }
-        other => Err(AppError::Internal(format!(
-            "no native engine for {}",
-            other.as_str()
-        ))),
+        Protocol::KubeExec => {
+            warn_ignored_params(handshake, KUBE_PARAMS_IGNORED_NATIVELY, "kubernetes");
+            let factory = KubeEngineFactory::new(KubeConfig {
+                namespace: handshake
+                    .extra
+                    .get("namespace")
+                    .map(|n| n.trim())
+                    .filter(|n| !n.is_empty())
+                    .map_or_else(|| "default".to_owned(), str::to_owned),
+                pod: handshake.extra.get("pod").cloned().unwrap_or_default(),
+                container: handshake.extra.get("container").cloned(),
+                command: exec_command(handshake),
+                // guacd treats the parameter as on unless explicitly "false".
+                use_ssl: handshake
+                    .extra
+                    .get("use-ssl")
+                    .is_none_or(|v| v.trim() != "false"),
+                verify_certificate: !handshake.ignore_cert && !flag(handshake, "ignore-cert"),
+                ca_cert: handshake.extra.get("ca-cert").cloned(),
+                client_cert: handshake.extra.get("client-cert").cloned(),
+                client_key: handshake
+                    .extra
+                    .get("client-key")
+                    .filter(|k| !k.trim().is_empty())
+                    .map(|k| SecretString::from(k.clone())),
+                cell: CellSize::default(),
+                read_only: flag(handshake, "read-only"),
+                disable_copy: flag(handshake, "disable-copy"),
+                disable_paste: flag(handshake, "disable-paste"),
+            });
+            let engine = factory
+                .connect(spec)
+                .await
+                .map_err(|e| AppError::Internal(format!("native kubernetes connect: {e}")))?;
+
+            let font = TerminalFont::discover(DEFAULT_FONT_SIZE_PX)
+                .map_err(|e| AppError::Internal(format!("terminal font: {e}")))?;
+
+            Ok(Box::new(RasterisingEngine::new(
+                engine,
+                font,
+                handshake.width,
+                handshake.height,
+            )))
+        }
     }
+}
+
+/// The command to exec, split the way a shell would split it.
+///
+/// guacd defaults to a plain shell when the parameter is absent, and a
+/// session that drops the operator somewhere other than where guacd
+/// would is a surprise worth avoiding.
+fn exec_command(handshake: &HandshakeParams) -> Vec<String> {
+    handshake
+        .extra
+        .get("exec-command")
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+        .map_or_else(
+            || vec!["/bin/sh".to_owned()],
+            |c| c.split_whitespace().map(str::to_owned).collect(),
+        )
 }
 
 #[cfg(test)]
@@ -1168,9 +1270,59 @@ mod tests {
     }
 
     #[test]
-    fn protocols_without_an_engine_fail_preflight() {
+    fn a_connection_with_no_pod_fails_preflight() {
         let err = preflight(Protocol::KubeExec, &handshake("kubernetes", None)).unwrap_err();
-        assert!(err.contains("no native engine"), "{err}");
+        assert!(err.contains("pod"), "{err}");
+    }
+
+    fn kube_handshake() -> HandshakeParams {
+        let mut params = handshake("kubernetes", None);
+        params.extra.insert("pod".to_owned(), "web-0".to_owned());
+        params
+    }
+
+    #[test]
+    fn every_gated_kubernetes_feature_leaves_the_native_engine() {
+        for feature in KUBE_FEATURES_REQUIRING_GUACD {
+            let mut params = kube_handshake();
+            params
+                .extra
+                .insert((*feature).to_owned(), "true".to_owned());
+            let err = preflight(Protocol::KubeExec, &params)
+                .expect_err(&format!("{feature} must not run natively"));
+            assert!(err.contains(feature), "{err}");
+        }
+    }
+
+    #[test]
+    fn ignored_kubernetes_params_still_run_natively() {
+        for param in KUBE_PARAMS_IGNORED_NATIVELY {
+            let mut params = kube_handshake();
+            params.extra.insert((*param).to_owned(), "true".to_owned());
+            assert!(
+                preflight(Protocol::KubeExec, &params).is_ok(),
+                "{param} should not force guacd"
+            );
+        }
+    }
+
+    /// guacd drops the operator in a shell when the parameter is absent;
+    /// landing somewhere else would be a surprise.
+    #[test]
+    fn an_unset_exec_command_is_a_shell() {
+        assert_eq!(exec_command(&kube_handshake()), vec!["/bin/sh".to_owned()]);
+    }
+
+    #[test]
+    fn an_exec_command_is_split_into_arguments() {
+        let mut params = kube_handshake();
+        params
+            .extra
+            .insert("exec-command".to_owned(), "  /bin/bash -l  ".to_owned());
+        assert_eq!(
+            exec_command(&params),
+            vec!["/bin/bash".to_owned(), "-l".to_owned()]
+        );
     }
 
     #[test]

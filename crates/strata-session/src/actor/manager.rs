@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 
 use crate::actor::audit::AuditSink;
 use crate::actor::session::{
-    CredentialGuard, InputModerator, SessionActor, SessionConfig, SessionHandle,
+    CredentialGuard, InputModerator, RecordingPolicy, SessionActor, SessionConfig, SessionHandle,
 };
 use crate::engine::{EngineFactory, TargetSpec};
 use crate::error::SessionError;
@@ -27,6 +27,8 @@ pub struct SessionOptions {
     pub encoder: Box<dyn FrameEncoder>,
     /// Recording sink.
     pub audit: Box<dyn AuditSink>,
+    /// What that recording must contain.
+    pub recording: RecordingPolicy,
     /// Optional dual-control gate.
     pub moderator: Option<Box<dyn InputModerator>>,
     /// Optional credential to revoke on teardown.
@@ -83,6 +85,7 @@ impl SessionManager {
             engine,
             encoder: options.encoder,
             audit: options.audit,
+            recording: options.recording,
             moderator: options.moderator,
             credential: options.credential,
         });
@@ -171,6 +174,7 @@ mod tests {
             id: id.to_owned(),
             encoder: Box::new(GuacWireEncoder::new()),
             audit: Box::new(NullAuditSink),
+            recording: RecordingPolicy::default(),
             moderator: None,
             credential: None,
         }

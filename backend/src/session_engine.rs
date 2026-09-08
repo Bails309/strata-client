@@ -27,7 +27,8 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use secrecy::SecretString;
 use strata_session::actor::{
-    AuditSink, GuacRecordingSink, NullAuditSink, SessionActor, SessionConfig, SessionHandle,
+    AuditSink, GuacRecordingSink, NullAuditSink, RecordingPolicy, SessionActor, SessionConfig,
+    SessionHandle,
 };
 use strata_session::engine::keymap::CellSize;
 use strata_session::engine::kube::{KubeConfig, KubeEngineFactory};
@@ -95,18 +96,6 @@ const RDP_FEATURES_REQUIRING_GUACD: &[&str] = &[
     "preconnection-id",
     "preconnection-blob",
 ];
-
-/// Recording options that change what the audit trail must contain.
-///
-/// The native actor records outbound frames only, so it records neither
-/// keystrokes nor mouse movement. `recording-exclude-mouse` and
-/// `-exclude-touch` are therefore already satisfied, but these two are
-/// not, and both leave the recording differing from what was
-/// authorised: one captures screen content that was meant to be
-/// excluded, the other omits keystrokes that were meant to be kept.
-/// Neither is acceptable to paper over on an access gateway.
-const RECORDING_OPTIONS_REQUIRING_GUACD: &[&str] =
-    &["recording-exclude-output", "recording-include-keys"];
 
 /// Connection parameters naming an SSH feature the native engine does
 /// not implement.
@@ -430,15 +419,6 @@ pub async fn resolve_global_kdc(
 
 /// Everything that must be true before a session can run natively.
 fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), String> {
-    // Applies to every protocol: the actor, not the engine, decides
-    // what reaches the recording.
-    let recording = params_in_use(handshake, RECORDING_OPTIONS_REQUIRING_GUACD);
-    if !recording.is_empty() {
-        return Err(format!(
-            "connection sets {}, and the native engine cannot produce that recording",
-            recording.join(", ")
-        ));
-    }
     match protocol {
         Protocol::Ssh => {
             let needs_guacd = params_in_use(handshake, SSH_FEATURES_REQUIRING_GUACD);
@@ -683,6 +663,10 @@ pub async fn run_native(
         engine,
         encoder: Box::new(GuacWireEncoder::new()),
         audit,
+        recording: RecordingPolicy {
+            exclude_output: flag(&handshake, "recording-exclude-output"),
+            include_keys: flag(&handshake, "recording-include-keys"),
+        },
         moderator: None,
         credential: None,
     });
@@ -1512,8 +1496,10 @@ mod tests {
         }
     }
 
+    /// The actor honours both of these now, so neither may cost a
+    /// connection the native engine.
     #[test]
-    fn a_recording_this_engine_cannot_produce_is_left_to_guacd() {
+    fn a_recording_the_actor_can_shape_runs_natively() {
         for (option, protocol) in [
             ("recording-exclude-output", Protocol::Rdp),
             ("recording-include-keys", Protocol::Rdp),
@@ -1521,8 +1507,10 @@ mod tests {
         ] {
             let mut params = handshake("rdp", Some("SHA256:aaa"));
             params.extra.insert(option.to_owned(), "true".to_owned());
-            let err = preflight(protocol, &params).unwrap_err();
-            assert!(err.contains(option), "{err}");
+            assert!(
+                preflight(protocol, &params).is_ok(),
+                "{option} should no longer force guacd"
+            );
         }
     }
 

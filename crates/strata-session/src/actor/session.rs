@@ -20,12 +20,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::actor::audit::{AuditRecord, AuditSink};
 use crate::engine::{InputEvent, ProtocolEngine, TargetEvent};
 use crate::error::SessionError;
+use crate::protocol::guacamole::encode_instruction;
 use crate::protocol::ClientInstruction;
 use crate::transport::{ClientFrame, FrameEncoder};
 
@@ -145,6 +146,19 @@ impl SessionHandle {
     }
 }
 
+/// What the session recording is required to contain.
+///
+/// The native actor records what it sends the client, so it already
+/// omits mouse and touch. These two are the settings that would
+/// otherwise leave the recording differing from what was authorised.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RecordingPolicy {
+    /// Keep graphical output out of the recording.
+    pub exclude_output: bool,
+    /// Record the operator's keystrokes.
+    pub include_keys: bool,
+}
+
 /// Everything a [`SessionActor`] needs to run.
 pub struct SessionConfig {
     /// Session identifier, used in logs and audit records.
@@ -155,6 +169,8 @@ pub struct SessionConfig {
     pub encoder: Box<dyn FrameEncoder>,
     /// Where the session recording goes.
     pub audit: Box<dyn AuditSink>,
+    /// What that recording must contain.
+    pub recording: RecordingPolicy,
     /// Optional dual-control gate on operator input.
     pub moderator: Option<Box<dyn InputModerator>>,
     /// Optional credential to revoke on teardown.
@@ -167,6 +183,7 @@ pub struct SessionActor {
     engine: Box<dyn ProtocolEngine>,
     encoder: Box<dyn FrameEncoder>,
     audit: Box<dyn AuditSink>,
+    recording: RecordingPolicy,
     moderator: Option<Box<dyn InputModerator>>,
     credential: Option<Box<dyn CredentialGuard>>,
     commands: mpsc::Receiver<SessionCommand>,
@@ -176,6 +193,29 @@ pub struct SessionActor {
     dropped_frames: u64,
     /// Partially received client clipboard streams, keyed by stream index.
     clipboard_streams: HashMap<i32, Vec<u8>>,
+}
+
+/// Whether an event paints something.
+///
+/// `recording-exclude-output` turns on for a reason — a screen showing
+/// data the recording was not authorised to keep — so anything that puts
+/// pixels on the canvas counts, including the cursor and the layer
+/// geometry that would otherwise leak the desktop's shape.
+fn is_graphical_output(event: &TargetEvent) -> bool {
+    match event {
+        TargetEvent::ImageUpdate { .. }
+        | TargetEvent::VideoSlice { .. }
+        | TargetEvent::TerminalOutput(_)
+        | TargetEvent::CopyRegion { .. }
+        | TargetEvent::Resized { .. }
+        | TargetEvent::CursorImage { .. }
+        | TargetEvent::CursorHidden => true,
+        // Not pixels: audio has its own exclusion, and the rest is
+        // session bookkeeping the recording needs to stay readable.
+        TargetEvent::Audio(_) | TargetEvent::Clipboard(_) | TargetEvent::Disconnected { .. } => {
+            false
+        }
+    }
 }
 
 impl SessionActor {
@@ -197,6 +237,7 @@ impl SessionActor {
             engine: config.engine,
             encoder: config.encoder,
             audit: config.audit,
+            recording: config.recording,
             moderator: config.moderator,
             credential: config.credential,
             commands: command_rx,
@@ -307,8 +348,36 @@ impl SessionActor {
             }
         }
 
+        // Recorded after moderation, so the recording shows what reached
+        // the target rather than what was attempted and refused.
+        if self.recording.include_keys {
+            if let InputEvent::Key { keysym, pressed } = input {
+                self.record_key(keysym, pressed).await?;
+            }
+        }
+
         self.engine.handle_input(input).await?;
         Ok(None)
+    }
+
+    /// Write one keystroke into the recording.
+    ///
+    /// Emitted as the client's own `key` instruction so existing players
+    /// and `guacenc` read it without being taught a new opcode.
+    async fn record_key(&mut self, keysym: u32, pressed: bool) -> Result<(), SessionError> {
+        let mut out = BytesMut::new();
+        encode_instruction(
+            &mut out,
+            "key",
+            &[&keysym.to_string(), if pressed { "1" } else { "0" }],
+        );
+        let record = AuditRecord {
+            seq: self.seq,
+            timestamp_ms: now_ms(),
+            frame: ClientFrame::Text(out.freeze()),
+        };
+        self.seq += 1;
+        self.audit.record(record).await
     }
 
     /// Accumulate one `blob` of an in-flight clipboard stream.
@@ -343,8 +412,9 @@ impl SessionActor {
 
         let mut frames = Vec::new();
         self.encoder.encode(&event, &mut frames);
+        let output = is_graphical_output(&event);
         for frame in frames {
-            self.emit(frame, droppable).await?;
+            self.emit(frame, droppable, output).await?;
         }
         self.emit_sync().await?;
         Ok(())
@@ -355,12 +425,19 @@ impl SessionActor {
         self.encoder
             .sync(i64::try_from(now_ms()).unwrap_or(i64::MAX), &mut frames);
         for frame in frames {
-            self.emit(frame, false).await?;
+            // Timing, not content: a recording without it cannot be
+            // replayed at the speed it happened.
+            self.emit(frame, false, false).await?;
         }
         Ok(())
     }
 
-    async fn emit(&mut self, frame: ClientFrame, droppable: bool) -> Result<(), SessionError> {
+    async fn emit(
+        &mut self,
+        frame: ClientFrame,
+        droppable: bool,
+        output: bool,
+    ) -> Result<(), SessionError> {
         let record = SessionFrame {
             seq: self.seq,
             timestamp_ms: now_ms(),
@@ -368,13 +445,15 @@ impl SessionActor {
         };
         self.seq += 1;
 
-        self.audit
-            .record(AuditRecord {
-                seq: record.seq,
-                timestamp_ms: record.timestamp_ms,
-                frame: record.frame.clone(),
-            })
-            .await?;
+        if !(output && self.recording.exclude_output) {
+            self.audit
+                .record(AuditRecord {
+                    seq: record.seq,
+                    timestamp_ms: record.timestamp_ms,
+                    frame: record.frame.clone(),
+                })
+                .await?;
+        }
 
         // No observers is the normal case, and a lagging observer is
         // that observer's problem — neither may stall the operator.
@@ -450,10 +529,147 @@ mod tests {
             engine: Box::new(engine),
             encoder: Box::new(GuacWireEncoder::new()),
             audit: Box::new(NullAuditSink),
+            recording: RecordingPolicy::default(),
             moderator: None,
             credential: None,
         });
         (handle, frames, events, inputs)
+    }
+
+    /// Collects everything written to the recording so a test can assert
+    /// on what an auditor would actually read back.
+    #[derive(Clone, Default)]
+    struct SpyAuditSink(Arc<Mutex<Vec<u8>>>);
+
+    #[async_trait::async_trait]
+    impl crate::actor::audit::AuditSink for SpyAuditSink {
+        async fn record(&mut self, record: AuditRecord) -> Result<(), SessionError> {
+            if let ClientFrame::Text(bytes) = &record.frame {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+            }
+            Ok(())
+        }
+        async fn finalize(&mut self) -> Result<(), SessionError> {
+            Ok(())
+        }
+    }
+
+    impl SpyAuditSink {
+        fn recorded(&self) -> String {
+            String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+        }
+    }
+
+    fn spawn_recorded(
+        recording: RecordingPolicy,
+    ) -> (
+        SessionHandle,
+        mpsc::Receiver<ClientFrame>,
+        mpsc::UnboundedSender<TargetEvent>,
+        SpyAuditSink,
+    ) {
+        let (engine, events, _inputs) = MockEngine::new(Protocol::Rdp);
+        let spy = SpyAuditSink::default();
+        let (handle, frames) = SessionActor::spawn(SessionConfig {
+            id: "recorded-session".to_owned(),
+            engine: Box::new(engine),
+            encoder: Box::new(GuacWireEncoder::new()),
+            audit: Box::new(spy.clone()),
+            recording,
+            moderator: None,
+            credential: None,
+        });
+        (handle, frames, events, spy)
+    }
+
+    async fn settle() {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    }
+
+    #[tokio::test]
+    async fn a_recording_holds_the_screen_by_default() {
+        let (_handle, _frames, events, spy) = spawn_recorded(RecordingPolicy::default());
+        events
+            .send(TargetEvent::Resized {
+                width: 800,
+                height: 600,
+            })
+            .expect("send");
+        settle().await;
+        assert!(spy.recorded().contains("size"), "{:?}", spy.recorded());
+    }
+
+    /// The whole point of the option: a screen the recording was not
+    /// authorised to keep must not reach the file.
+    #[tokio::test]
+    async fn excluding_output_keeps_the_screen_out_of_the_recording() {
+        let (_handle, _frames, events, spy) = spawn_recorded(RecordingPolicy {
+            exclude_output: true,
+            ..RecordingPolicy::default()
+        });
+        events
+            .send(TargetEvent::Resized {
+                width: 800,
+                height: 600,
+            })
+            .expect("send");
+        events
+            .send(TargetEvent::ImageUpdate {
+                x: 0,
+                y: 0,
+                mimetype: "image/png",
+                data: Bytes::from_static(b"not-really-a-png"),
+            })
+            .expect("send");
+        settle().await;
+
+        let recorded = spy.recorded();
+        for graphical in ["size", "img", "blob"] {
+            assert!(
+                !recorded.contains(graphical),
+                "`{graphical}` survived exclusion: {recorded:?}"
+            );
+        }
+        // Timing must survive, or the recording cannot be replayed at the
+        // speed it happened.
+        assert!(recorded.contains("sync"), "{recorded:?}");
+    }
+
+    #[tokio::test]
+    async fn keystrokes_stay_out_of_the_recording_unless_asked_for() {
+        let (handle, _frames, _events, spy) = spawn_recorded(RecordingPolicy::default());
+        handle
+            .send(ClientInstruction::Key {
+                keysym: 0x41,
+                pressed: true,
+            })
+            .await
+            .expect("send");
+        settle().await;
+        assert!(!spy.recorded().contains("key"), "{:?}", spy.recorded());
+    }
+
+    #[tokio::test]
+    async fn including_keys_records_them_as_the_client_sent_them() {
+        let (handle, _frames, _events, spy) = spawn_recorded(RecordingPolicy {
+            include_keys: true,
+            ..RecordingPolicy::default()
+        });
+        handle
+            .send(ClientInstruction::Key {
+                keysym: 0x41,
+                pressed: true,
+            })
+            .await
+            .expect("send");
+        settle().await;
+        // `3.key,2.65,1.1;` — the client's own opcode, so existing
+        // players need no new instruction.
+        assert!(
+            spy.recorded().contains("3.key,2.65,1.1;"),
+            "{:?}",
+            spy.recorded()
+        );
     }
 
     #[tokio::test]
@@ -558,6 +774,7 @@ mod tests {
             engine: Box::new(engine),
             encoder: Box::new(GuacWireEncoder::new()),
             audit: Box::new(NullAuditSink),
+            recording: RecordingPolicy::default(),
             moderator: Some(Box::new(DenyAll)),
             credential: None,
         });
@@ -600,6 +817,7 @@ mod tests {
             engine: Box::new(engine),
             encoder: Box::new(GuacWireEncoder::new()),
             audit: Box::new(NullAuditSink),
+            recording: RecordingPolicy::default(),
             moderator: None,
             credential: Some(Box::new(Guard(Arc::clone(&revoked)))),
         });
@@ -753,6 +971,7 @@ mod tests {
             engine: Box::new(engine),
             encoder: Box::new(GuacWireEncoder::new()),
             audit: Box::new(sink),
+            recording: RecordingPolicy::default(),
             moderator: None,
             credential: None,
         });

@@ -86,23 +86,18 @@ const AUTH_PACKAGE_PARAM: &str = "auth-pkg";
 /// there instead. Running it natively would drop a setting an
 /// administrator deliberately chose, and a redirected drive or printer
 /// that silently fails to appear is worse than a slower session.
-/// Connection parameters naming an SSH feature the native engine does
-/// not implement.
-///
-/// RDP has had such a list since the engine was written; SSH had none,
-/// and three separate gaps reached a user as "authentication rejected"
-/// before anyone noticed. Everything here is a feature an administrator
-/// deliberately turned on and would not otherwise see disappear.
-const SSH_FEATURES_REQUIRING_GUACD: &[&str] = &[
-    // Agent forwarding.
-    "enable-agent",
-];
-
 /// SSH parameters that cost only fidelity.
 ///
 /// The terminal's appearance is decided by the client, which renders it,
 /// so guacd's font and colour parameters have nothing to act on here.
 const SSH_PARAMS_IGNORED_NATIVELY: &[&str] = &[
+    // Agent forwarding, deliberately not implemented: forwarding an
+    // agent lets anyone with root on the target authenticate as the
+    // operator elsewhere, which is the opposite of what a privileged
+    // access gateway is for. This guacd does not advertise the parameter
+    // either, so routing to it would decline the request just as loudly
+    // and cost the native engine as well.
+    "enable-agent",
     "locale",
     "color-scheme",
     "font-name",
@@ -111,30 +106,24 @@ const SSH_PARAMS_IGNORED_NATIVELY: &[&str] = &[
     "backspace",
 ];
 
-/// Connection parameters naming a VNC feature the native engine does
-/// not implement.
-///
-/// Written alongside the engine rather than after a user reported a
-/// broken session, which is how the SSH list came about.
-const VNC_FEATURES_REQUIRING_GUACD: &[&str] = &[
-    // Audio arrives over a separate PulseAudio connection, not over RFB.
-    "enable-audio",
-];
-
-/// Clipboard encodings the native VNC engine cannot put on the wire.
-///
-/// Its `CopyText` takes a `String`, so every byte it writes is valid
-/// UTF-8 by construction. ISO8859-1 and UTF-8 are handled; the rest need
-/// arbitrary bytes and stay on guacd.
-const VNC_CLIPBOARD_ENCODINGS_REQUIRING_GUACD: &[&str] = &["UTF-16", "CP1252", "MacRoman"];
-
 /// Read the connection's clipboard encoding.
 ///
-/// Anything unrecognised falls back to the RFB default, which is what
-/// guacd does rather than failing the connection.
+/// UTF-16, CP1252 and MacRoman cannot be produced: `CopyText` takes a
+/// `String`, so every byte the engine writes is valid UTF-8 by
+/// construction. They fall back to the RFB default with a warning rather
+/// than failing the connection, which is what guacd does with a value it
+/// does not recognise.
 fn clipboard_encoding(handshake: &HandshakeParams) -> ClipboardEncoding {
     match handshake.extra.get("clipboard-encoding").map(|e| e.trim()) {
         Some("UTF-8") => ClipboardEncoding::Utf8,
+        Some(other) if !other.is_empty() && other != "ISO8859-1" => {
+            tracing::warn!(
+                encoding = %other,
+                "native vnc engine cannot produce this clipboard encoding; \
+                 using ISO8859-1, the RFB default"
+            );
+            ClipboardEncoding::Latin1
+        }
         _ => ClipboardEncoding::Latin1,
     }
 }
@@ -145,6 +134,11 @@ fn clipboard_encoding(handshake: &HandshakeParams) -> ClipboardEncoding {
 /// makes for itself: it asks for Tight, ZRLE, TRLE, `CopyRect` and Raw and
 /// takes whichever the server picks.
 const VNC_PARAMS_IGNORED_NATIVELY: &[&str] = &[
+    // Audio would arrive over a separate PulseAudio connection rather
+    // than over RFB. guacd does implement it, but nothing in this
+    // deployment runs a PulseAudio server for it to read from.
+    "enable-audio",
+    "audio-servername",
     "color-depth",
     "swap-red-blue",
     "cursor",
@@ -437,13 +431,6 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
     }
     match protocol {
         Protocol::Ssh => {
-            let needs_guacd = params_in_use(handshake, SSH_FEATURES_REQUIRING_GUACD);
-            if !needs_guacd.is_empty() {
-                return Err(format!(
-                    "connection uses {}, which the native SSH engine does not implement",
-                    needs_guacd.join(", ")
-                ));
-            }
             if host_key_fingerprints(handshake).is_empty() {
                 return Err(format!(
                     "connection has no `{HOST_KEY_PARAM}` parameter, and the native SSH \
@@ -470,24 +457,6 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
             Ok(())
         }
         Protocol::Vnc => {
-            let needs_guacd = params_in_use(handshake, VNC_FEATURES_REQUIRING_GUACD);
-            if !needs_guacd.is_empty() {
-                return Err(format!(
-                    "connection uses {}, which the native VNC engine does not implement",
-                    needs_guacd.join(", ")
-                ));
-            }
-            if let Some(encoding) = handshake
-                .extra
-                .get("clipboard-encoding")
-                .map(|e| e.trim())
-                .filter(|e| VNC_CLIPBOARD_ENCODINGS_REQUIRING_GUACD.contains(e))
-            {
-                return Err(format!(
-                    "connection asks for {encoding} clipboard text, which the native VNC \
-                     engine cannot put on the wire"
-                ));
-            }
             // The engine speaks the two security types in the RFB spec:
             // none, and the DES password challenge. Neither carries a
             // username, so one being set means the server wants UltraVNC
@@ -1552,20 +1521,6 @@ mod tests {
         assert!(err.contains("username"), "{err}");
     }
 
-    #[test]
-    fn every_gated_vnc_feature_leaves_the_native_engine() {
-        for feature in VNC_FEATURES_REQUIRING_GUACD {
-            let mut params = handshake("vnc", None);
-            params.username = None;
-            params
-                .extra
-                .insert((*feature).to_owned(), "true".to_owned());
-            let err = preflight(Protocol::Vnc, &params)
-                .expect_err(&format!("{feature} must not run natively"));
-            assert!(err.contains(feature), "{err}");
-        }
-    }
-
     /// Fidelity-only parameters must not cost a session the native
     /// engine, or the gate list grows until nothing routes natively.
     #[test]
@@ -1581,11 +1536,19 @@ mod tests {
         }
     }
 
-    /// The two encodings the engine can represent must run natively; the
-    /// three it cannot must not be silently mangled.
+    /// An encoding the engine cannot produce falls back to the RFB
+    /// default rather than refusing the session, which is what guacd
+    /// does with a value it does not recognise.
     #[test]
-    fn only_representable_clipboard_encodings_run_natively() {
-        for encoding in ["ISO8859-1", "UTF-8"] {
+    fn every_clipboard_encoding_runs_natively() {
+        for encoding in [
+            "ISO8859-1",
+            "UTF-8",
+            "UTF-16",
+            "CP1252",
+            "MacRoman",
+            "KOI8-R",
+        ] {
             let mut params = handshake("vnc", None);
             params.username = None;
             params
@@ -1593,18 +1556,29 @@ mod tests {
                 .insert("clipboard-encoding".to_owned(), encoding.to_owned());
             assert!(
                 preflight(Protocol::Vnc, &params).is_ok(),
-                "{encoding} should run natively"
+                "{encoding} should not force guacd"
             );
         }
-        for encoding in VNC_CLIPBOARD_ENCODINGS_REQUIRING_GUACD {
+    }
+
+    #[test]
+    fn only_utf8_is_carried_as_utf8() {
+        let mut params = handshake("vnc", None);
+        params
+            .extra
+            .insert("clipboard-encoding".to_owned(), "UTF-8".to_owned());
+        assert_eq!(clipboard_encoding(&params), ClipboardEncoding::Utf8);
+
+        for encoding in ["ISO8859-1", "UTF-16", "CP1252", "MacRoman", "KOI8-R"] {
             let mut params = handshake("vnc", None);
-            params.username = None;
             params
                 .extra
-                .insert("clipboard-encoding".to_owned(), (*encoding).to_owned());
-            let err = preflight(Protocol::Vnc, &params)
-                .expect_err(&format!("{encoding} must not run natively"));
-            assert!(err.contains(encoding), "{err}");
+                .insert("clipboard-encoding".to_owned(), encoding.to_owned());
+            assert_eq!(
+                clipboard_encoding(&params),
+                ClipboardEncoding::Latin1,
+                "{encoding} should fall back to the RFB default"
+            );
         }
     }
 
@@ -1713,19 +1687,17 @@ mod tests {
         assert!(!flag_or(&off, "enable-font-smoothing", true));
     }
 
+    /// Agent forwarding is declined rather than routed away: this guacd
+    /// does not advertise the parameter either, so rerouting would
+    /// decline it just as firmly and lose the native engine as well.
     #[test]
-    fn an_ssh_feature_this_engine_lacks_is_left_to_guacd() {
-        // SSH had no such list at all, which is why a missing credential,
-        // a private key and the clipboard each reached a user as an
-        // unexplained failure rather than a routing decision.
-        for feature in SSH_FEATURES_REQUIRING_GUACD {
-            let mut params = handshake("ssh", Some("SHA256:aaa"));
-            params
-                .extra
-                .insert((*feature).to_owned(), "true".to_owned());
-            let err = preflight(Protocol::Ssh, &params).unwrap_err();
-            assert!(err.contains(feature), "{feature} should keep guacd: {err}");
-        }
+    fn agent_forwarding_is_declined_without_leaving_the_native_engine() {
+        let mut params = handshake("ssh", Some("SHA256:aaa"));
+        params
+            .extra
+            .insert("enable-agent".to_owned(), "true".to_owned());
+        assert!(preflight(Protocol::Ssh, &params).is_ok());
+        assert!(SSH_PARAMS_IGNORED_NATIVELY.contains(&"enable-agent"));
     }
 
     #[test]

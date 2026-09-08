@@ -144,7 +144,10 @@ async fn a_directory_listing_is_the_shape_the_browser_parses() {
     assert!(parsed.is_object(), "listing must be an object: {parsed}");
     for (path, mimetype) in parsed.as_object().expect("object") {
         assert!(path.starts_with('/'), "path must be absolute: {path}");
-        assert!(mimetype.is_string(), "mimetype must be a string: {mimetype}");
+        assert!(
+            mimetype.is_string(),
+            "mimetype must be a string: {mimetype}"
+        );
     }
     assert!(
         events.iter().any(|e| matches!(e, FileEvent::End { .. })),
@@ -212,11 +215,7 @@ async fn a_file_survives_being_uploaded_and_read_back() {
     // The client acks `body` before any data, and each chunk after.
     let mut received = Vec::new();
     loop {
-        send(
-            &mut engine,
-            FileRequest::Ack { stream, status: 0 },
-        )
-        .await;
+        send(&mut engine, FileRequest::Ack { stream, status: 0 }).await;
         let events = drain(&mut engine).await;
         let mut finished = false;
         for event in events {

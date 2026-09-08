@@ -36,7 +36,7 @@ use strata_session::engine::rdp::layouts::keyboard_layout_id;
 use strata_session::engine::rdp::{RdpConfig, RdpEngineFactory, RdpPerformance};
 use strata_session::engine::sftp::{SftpConfig, SftpEngine};
 use strata_session::engine::ssh::{HostKeyPolicy, SshConfig, SshEngineFactory};
-use strata_session::engine::vnc::{VncConfig, VncEngineFactory};
+use strata_session::engine::vnc::{VncConfig, VncEngineFactory, DEFAULT_LISTEN_TIMEOUT};
 use strata_session::engine::{EngineFactory, Protocol, ProtocolEngine, TargetSpec};
 use strata_session::protocol::ServerInstruction;
 use strata_session::routing::{RoutingPolicy, SessionBackend};
@@ -122,13 +122,6 @@ const SSH_PARAMS_IGNORED_NATIVELY: &[&str] = &[
 const VNC_FEATURES_REQUIRING_GUACD: &[&str] = &[
     // Audio arrives over a separate PulseAudio connection, not over RFB.
     "enable-audio",
-    // A VNC repeater: the real target is named in these, and connecting
-    // to the repeater itself would open somebody else's desktop.
-    "dest-host",
-    "dest-port",
-    // guacd listens and the server dials in. The native engine only
-    // dials out, so nothing would ever arrive.
-    "reverse-connect",
     // The RFB spec puts the clipboard in Latin-1 and the crate writes
     // UTF-8. Identical for ASCII, mojibake otherwise — and an
     // administrator only sets this because their server needed it.
@@ -1151,6 +1144,22 @@ async fn connect_target(
                 read_only: flag(handshake, "read-only"),
                 disable_copy: flag(handshake, "disable-copy"),
                 disable_paste: flag(handshake, "disable-paste"),
+                dest_host: handshake
+                    .extra
+                    .get("dest-host")
+                    .map(|h| h.trim())
+                    .filter(|h| !h.is_empty())
+                    .map(str::to_owned),
+                dest_port: handshake
+                    .extra
+                    .get("dest-port")
+                    .and_then(|p| p.trim().parse().ok()),
+                reverse_connect: flag(handshake, "reverse-connect"),
+                listen_timeout: handshake
+                    .extra
+                    .get("listen-timeout")
+                    .and_then(|t| t.trim().parse().ok())
+                    .map_or(DEFAULT_LISTEN_TIMEOUT, Duration::from_secs),
             });
             factory
                 .connect(spec)

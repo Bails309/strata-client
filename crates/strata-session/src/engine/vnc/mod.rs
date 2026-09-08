@@ -10,14 +10,17 @@
 //! then appears frozen.
 
 use std::collections::VecDeque;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ColorType, ImageEncoder};
 use secrecy::ExposeSecret;
-use tokio::net::TcpStream;
+use tokio::io::AsyncWriteExt;
+use tokio::net::{TcpListener, TcpStream};
 // The crate is published as `vnc-rs` but its lib target is `vnc`.
 use vnc::{
     ClientKeyEvent, ClientMouseEvent, PixelFormat, VncClient, VncConnector, VncEncoding, VncEvent,
@@ -36,7 +39,22 @@ pub struct VncConfig {
     pub disable_copy: bool,
     /// Never carry the client's clipboard to the target.
     pub disable_paste: bool,
+    /// Real target behind a VNC repeater, which the engine names to the
+    /// repeater rather than dialling directly.
+    pub dest_host: Option<String>,
+    /// Port of the real target behind the repeater.
+    pub dest_port: Option<u16>,
+    /// Wait for the server to dial in instead of dialling out.
+    pub reverse_connect: bool,
+    /// How long to wait for that inbound connection.
+    pub listen_timeout: Duration,
 }
+
+/// Bytes a repeater expects, and the field is fixed-width.
+const REPEATER_TOKEN_BYTES: usize = 250;
+
+/// Default wait for a reverse connection, matching guacd.
+pub const DEFAULT_LISTEN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Builds [`VncEngine`]s from a shared configuration.
 pub struct VncEngineFactory {
@@ -76,9 +94,7 @@ pub struct VncEngine {
 impl VncEngine {
     /// Connect and authenticate.
     async fn connect(spec: TargetSpec, config: Arc<VncConfig>) -> Result<Self, EngineError> {
-        let stream = TcpStream::connect((spec.hostname.as_str(), spec.port))
-            .await
-            .map_err(EngineError::Transport)?;
+        let stream = open_socket(&spec, &config).await?;
 
         // VNC authentication is a password with no username, and the
         // callback is a future rather than a closure, so the credential is
@@ -313,6 +329,69 @@ impl ProtocolEngine for VncEngine {
     }
 }
 
+/// Obtain the socket the RFB handshake will run over.
+///
+/// Three shapes: dial the target, dial a repeater and name the target to
+/// it, or wait for the target to dial us.
+async fn open_socket(spec: &TargetSpec, config: &VncConfig) -> Result<TcpStream, EngineError> {
+    if config.reverse_connect {
+        return accept_reverse(spec.port, config.listen_timeout).await;
+    }
+
+    let mut stream = TcpStream::connect((spec.hostname.as_str(), spec.port))
+        .await
+        .map_err(EngineError::Transport)?;
+
+    if let Some(host) = config.dest_host.as_ref().filter(|h| !h.trim().is_empty()) {
+        let port = config.dest_port.unwrap_or(spec.port);
+        // The repeater reads a fixed-width field before anything else; a
+        // short write leaves it waiting and the session simply hangs.
+        stream
+            .write_all(&repeater_token(host, port))
+            .await
+            .map_err(EngineError::Transport)?;
+    }
+    Ok(stream)
+}
+
+/// Wait for the target to connect to us.
+async fn accept_reverse(port: u16, timeout: Duration) -> Result<TcpStream, EngineError> {
+    let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port))
+        .await
+        .map_err(EngineError::Transport)?;
+    tracing::info!(port, "waiting for a reverse vnc connection");
+
+    match tokio::time::timeout(timeout, listener.accept()).await {
+        Ok(Ok((stream, peer))) => {
+            tracing::info!(%peer, "accepted a reverse vnc connection");
+            Ok(stream)
+        }
+        Ok(Err(err)) => Err(EngineError::Transport(err)),
+        Err(_) => Err(EngineError::Protocol(format!(
+            "no reverse VNC connection arrived on port {port} within {}s",
+            timeout.as_secs()
+        ))),
+    }
+}
+
+/// Build the fixed-width field naming the real target to a repeater.
+///
+/// Truncated rather than refused when it will not fit: the field has no
+/// length prefix, so writing more than 250 bytes would push the excess
+/// into the RFB handshake and desynchronise it.
+fn repeater_token(host: &str, port: u16) -> [u8; REPEATER_TOKEN_BYTES] {
+    let mut token = [0u8; REPEATER_TOKEN_BYTES];
+    let target = format!("{host}:{port}");
+    let bytes = target.as_bytes();
+    // One byte short of the field so the value always stays terminated.
+    let len = bytes.len().min(REPEATER_TOKEN_BYTES - 1);
+    if len < bytes.len() {
+        tracing::warn!(%host, port, "repeater target was truncated to fit the field");
+    }
+    token[..len].copy_from_slice(&bytes[..len]);
+    token
+}
+
 /// PNG-encode a framebuffer rectangle.
 ///
 /// The fourth byte of each pixel is padding, not alpha: the negotiated
@@ -431,5 +510,95 @@ mod tests {
         assert_eq!(clamp_coord(0), 0);
         assert_eq!(clamp_coord(1920), 1920);
         assert_eq!(clamp_coord(i32::MAX), u16::MAX);
+    }
+
+    /// The field has no length prefix, so its width is the protocol.
+    #[test]
+    fn a_repeater_token_is_exactly_the_field_width() {
+        let token = repeater_token("desktop.internal", 5901);
+        assert_eq!(token.len(), REPEATER_TOKEN_BYTES);
+        assert!(token.starts_with(b"desktop.internal:5901\0"));
+        assert!(token[21..].iter().all(|b| *b == 0), "field is not padded");
+    }
+
+    /// An over-long name must not push its tail into the RFB handshake.
+    #[test]
+    fn an_oversized_repeater_target_is_truncated_not_overflowed() {
+        let token = repeater_token(&"a".repeat(400), 5900);
+        assert_eq!(token.len(), REPEATER_TOKEN_BYTES);
+        assert_eq!(token[REPEATER_TOKEN_BYTES - 1], 0, "value is unterminated");
+    }
+
+    /// Asserts what actually reaches the repeater, not just what the
+    /// helper returns: the bytes are read back off a real socket.
+    #[tokio::test]
+    async fn the_repeater_is_told_the_target_before_anything_else() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+
+        let received = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut buf = [0u8; REPEATER_TOKEN_BYTES];
+            tokio::io::AsyncReadExt::read_exact(&mut stream, &mut buf)
+                .await
+                .expect("read token");
+            buf
+        });
+
+        let spec = TargetSpec {
+            protocol: Protocol::Vnc,
+            hostname: "127.0.0.1".to_owned(),
+            port,
+            username: String::new(),
+            secret: secrecy::SecretString::from(String::new()),
+            width: 800,
+            height: 600,
+        };
+        let config = VncConfig {
+            dest_host: Some("behind.repeater".to_owned()),
+            dest_port: Some(5905),
+            ..VncConfig::default()
+        };
+        let _stream = open_socket(&spec, &config).await.expect("connect");
+
+        let token = received.await.expect("join");
+        assert!(token.starts_with(b"behind.repeater:5905\0"), "{token:?}");
+    }
+
+    /// A reverse connection that never arrives must fail with a reason,
+    /// not hang the session for the rest of its life.
+    #[tokio::test]
+    async fn a_reverse_connection_that_never_arrives_times_out() {
+        let err = accept_reverse(0, Duration::from_millis(50))
+            .await
+            .expect_err("should have timed out");
+        assert!(err.to_string().contains("reverse VNC"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_reverse_connection_is_accepted() {
+        // Port 0 lets the OS choose, so the test cannot collide with
+        // anything already listening.
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        drop(listener);
+
+        let dialler = tokio::spawn(async move {
+            for _ in 0..50 {
+                if let Ok(stream) = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await {
+                    return Some(stream);
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            None
+        });
+
+        let accepted = accept_reverse(port, Duration::from_secs(5)).await;
+        assert!(accepted.is_ok(), "{:?}", accepted.err());
+        assert!(dialler.await.expect("join").is_some());
     }
 }

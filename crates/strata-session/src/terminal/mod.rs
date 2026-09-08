@@ -16,6 +16,7 @@
 
 pub mod font;
 pub mod palette;
+pub mod typescript;
 
 use std::collections::VecDeque;
 
@@ -34,6 +35,7 @@ use crate::error::EngineError;
 
 pub use font::{CellMetrics, TerminalFont};
 pub use palette::{Palette, Pixel};
+pub use typescript::Typescript;
 
 /// Default font size for the rendered grid.
 pub const DEFAULT_FONT_SIZE_PX: f32 = 16.0;
@@ -524,6 +526,8 @@ pub struct RasterisingEngine {
     inner: Box<dyn ProtocolEngine>,
     renderer: TerminalRenderer,
     pending: VecDeque<TargetEvent>,
+    /// Server-side record of the raw output, when one was configured.
+    typescript: Option<Typescript>,
 }
 
 impl RasterisingEngine {
@@ -553,7 +557,15 @@ impl RasterisingEngine {
             inner,
             renderer,
             pending,
+            typescript: None,
         }
+    }
+
+    /// Record raw terminal output to `typescript` as well as rendering it.
+    #[must_use]
+    pub fn with_typescript(mut self, typescript: Typescript) -> Self {
+        self.typescript = Some(typescript);
+        self
     }
 
     /// Grid dimensions currently rendered.
@@ -595,6 +607,14 @@ impl ProtocolEngine for RasterisingEngine {
             };
             match event {
                 TargetEvent::TerminalOutput(bytes) => {
+                    if let Some(typescript) = self.typescript.as_mut() {
+                        // A recording failure must not end the session:
+                        // the operator is mid-task and losing the shell
+                        // is worse than losing the transcript.
+                        if let Err(err) = typescript.write(&bytes).await {
+                            tracing::warn!(error = %err, "typescript write failed");
+                        }
+                    }
                     self.pending.extend(self.renderer.advance(&bytes)?);
                 }
                 other => self.pending.push_back(other),
@@ -603,6 +623,11 @@ impl ProtocolEngine for RasterisingEngine {
     }
 
     async fn shutdown(&mut self) -> Result<(), EngineError> {
+        if let Some(typescript) = self.typescript.as_mut() {
+            if let Err(err) = typescript.finish().await {
+                tracing::warn!(error = %err, "typescript could not be closed");
+            }
+        }
         self.inner.shutdown().await
     }
 }

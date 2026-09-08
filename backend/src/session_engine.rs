@@ -40,7 +40,7 @@ use strata_session::engine::vnc::{VncConfig, VncEngineFactory, DEFAULT_LISTEN_TI
 use strata_session::engine::{EngineFactory, Protocol, ProtocolEngine, TargetSpec};
 use strata_session::protocol::ServerInstruction;
 use strata_session::routing::{RoutingPolicy, SessionBackend};
-use strata_session::terminal::{RasterisingEngine, TerminalFont, DEFAULT_FONT_SIZE_PX};
+use strata_session::terminal::{RasterisingEngine, TerminalFont, Typescript, DEFAULT_FONT_SIZE_PX};
 use strata_session::transport::{ClientFrame, GuacDecoder, GuacWireEncoder};
 use strata_session::wol;
 use uuid::Uuid;
@@ -97,8 +97,6 @@ const RDP_FEATURES_REQUIRING_GUACD: &[&str] =
 const SSH_FEATURES_REQUIRING_GUACD: &[&str] = &[
     // Agent forwarding.
     "enable-agent",
-    // Server-side typescript of the session.
-    "typescript-path",
 ];
 
 /// SSH parameters that cost only fidelity.
@@ -150,8 +148,6 @@ const KUBE_FEATURES_REQUIRING_GUACD: &[&str] = &[
     // An encrypted client key. rustls reads PEM but will not decrypt it,
     // and a connection that authenticates today must keep working.
     "client-key-password",
-    // Server-side typescript of the session.
-    "typescript-path",
 ];
 
 /// Kubernetes parameters that cost only fidelity.
@@ -1053,6 +1049,37 @@ fn sftp_host_key_fingerprints(handshake: &HandshakeParams, sftp_host: &str) -> V
     Vec::new()
 }
 
+/// Open the server-side typescript a connection asked for.
+///
+/// Returns `None` when none was configured. A failure to create one is
+/// fatal: it is an audit record an administrator deliberately turned on,
+/// and running the session without it would be a silent downgrade.
+async fn open_typescript(handshake: &HandshakeParams) -> Result<Option<Typescript>, AppError> {
+    let Some(path) = handshake
+        .extra
+        .get("typescript-path")
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+    else {
+        return Ok(None);
+    };
+    let name = handshake
+        .extra
+        .get("typescript-name")
+        .map(|n| n.trim())
+        .filter(|n| !n.is_empty())
+        .unwrap_or("typescript");
+
+    Typescript::create(
+        std::path::Path::new(path),
+        name,
+        flag(handshake, "create-typescript-path"),
+    )
+    .await
+    .map(Some)
+    .map_err(|e| AppError::Internal(format!("typescript {path}/{name}: {e}")))
+}
+
 async fn connect_target(
     protocol: Protocol,
     handshake: &HandshakeParams,
@@ -1089,12 +1116,12 @@ async fn connect_target(
             let font = TerminalFont::discover(DEFAULT_FONT_SIZE_PX)
                 .map_err(|e| AppError::Internal(format!("terminal font: {e}")))?;
 
-            Ok(Box::new(RasterisingEngine::new(
-                engine,
-                font,
-                handshake.width,
-                handshake.height,
-            )))
+            let mut rasteriser =
+                RasterisingEngine::new(engine, font, handshake.width, handshake.height);
+            if let Some(typescript) = open_typescript(handshake).await? {
+                rasteriser = rasteriser.with_typescript(typescript);
+            }
+            Ok(Box::new(rasteriser))
         }
         Protocol::Rdp => {
             warn_unsupported_rdp_params(handshake);
@@ -1204,12 +1231,12 @@ async fn connect_target(
             let font = TerminalFont::discover(DEFAULT_FONT_SIZE_PX)
                 .map_err(|e| AppError::Internal(format!("terminal font: {e}")))?;
 
-            Ok(Box::new(RasterisingEngine::new(
-                engine,
-                font,
-                handshake.width,
-                handshake.height,
-            )))
+            let mut rasteriser =
+                RasterisingEngine::new(engine, font, handshake.width, handshake.height);
+            if let Some(typescript) = open_typescript(handshake).await? {
+                rasteriser = rasteriser.with_typescript(typescript);
+            }
+            Ok(Box::new(rasteriser))
         }
     }
 }

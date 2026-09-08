@@ -39,6 +39,9 @@ rdp = [
     "dep:picky",
     "dep:image",
 ]
+# VNC engine. Also the transport behind `web`, which runs a browser in a
+# container and exposes it over RFB.
+vnc = ["dep:vnc-rs", "dep:image"]
 # Re-enables RSA host keys and RSA public-key auth.
 #
 # OFF by default, and `cargo deny check advisories` is why: russh's `rsa`
@@ -146,6 +149,9 @@ ironrdp-displaycontrol = { version = "0.4", optional = true }
 # in 0.8, all of which resolve happily and then fail to typecheck against
 # connector 0.7's channel traits.
 ironrdp-rdpsnd = { version = "0.6", optional = true }
+# VNC/RFB client. Pure Rust with no `-sys` crate anywhere in its tree,
+# which is the same reason FreeRDP was replaced rather than wrapped.
+vnc-rs = { version = "0.5", optional = true }
 # TLS is driven directly rather than through ironrdp-tls, which accepts
 # any certificate and so cannot honour a connection's ignore-cert
 # setting. The tokio-rustls above is the workspace pin, already ring-only

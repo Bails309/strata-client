@@ -24,6 +24,9 @@ pub mod rdp;
 #[cfg(feature = "ssh")]
 pub mod ssh;
 
+#[cfg(feature = "vnc")]
+pub mod vnc;
+
 /// Which remote-access protocol an engine speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Protocol {
@@ -166,6 +169,25 @@ pub enum TargetEvent {
     /// Desktop audio from the target, as the PCM described by
     /// [`crate::engine::rdp::audio::MIMETYPE`].
     Audio(Bytes),
+    /// A region of the display moved, rather than being repainted.
+    ///
+    /// RFB's CopyRect says so explicitly, which is why this exists: the
+    /// equivalent for RDP had to be inferred from consecutive frames and
+    /// never once matched.
+    CopyRegion {
+        /// Left edge of the source, in pixels.
+        src_x: i32,
+        /// Top edge of the source, in pixels.
+        src_y: i32,
+        /// Width of the moved region.
+        width: u32,
+        /// Height of the moved region.
+        height: u32,
+        /// Left edge of the destination.
+        dst_x: i32,
+        /// Top edge of the destination.
+        dst_y: i32,
+    },
     /// The target's clipboard changed.
     Clipboard(Bytes),
     /// The target's display resolution changed.

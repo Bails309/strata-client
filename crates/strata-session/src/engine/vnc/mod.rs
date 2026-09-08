@@ -1,0 +1,383 @@
+//! VNC engine, replacing guacd's libvncclient path.
+//!
+//! Also the transport behind the `web` protocol, which runs a browser in
+//! a container and exposes it over RFB, so this engine covers two of the
+//! protocols that kept guacd in the deployment.
+//!
+//! RFB is request-driven in a way RDP is not: the server sends nothing
+//! until asked, so the engine keeps a framebuffer request outstanding.
+//! Forgetting that produces a session that connects, paints once, and
+//! then appears frozen.
+
+use std::collections::VecDeque;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use image::{ColorType, ImageEncoder};
+use secrecy::ExposeSecret;
+use tokio::net::TcpStream;
+// The crate is published as `vnc-rs` but its lib target is `vnc`.
+use vnc::{
+    ClientKeyEvent, ClientMouseEvent, PixelFormat, VncClient, VncConnector, VncEncoding, VncEvent,
+    X11Event,
+};
+
+use crate::engine::{EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec};
+use crate::error::EngineError;
+
+/// Per-connection VNC settings.
+#[derive(Debug, Clone, Default)]
+pub struct VncConfig {
+    /// Drop every keyboard and pointer event from the client.
+    pub read_only: bool,
+    /// Never carry the target's clipboard back to the client.
+    pub disable_copy: bool,
+    /// Never carry the client's clipboard to the target.
+    pub disable_paste: bool,
+}
+
+/// Builds [`VncEngine`]s from a shared configuration.
+pub struct VncEngineFactory {
+    config: Arc<VncConfig>,
+}
+
+impl VncEngineFactory {
+    /// Create a factory with the given configuration.
+    #[must_use]
+    pub fn new(config: VncConfig) -> Self {
+        Self {
+            config: Arc::new(config),
+        }
+    }
+}
+
+#[async_trait]
+impl EngineFactory for VncEngineFactory {
+    async fn connect(&self, spec: TargetSpec) -> Result<Box<dyn ProtocolEngine>, EngineError> {
+        let engine = VncEngine::connect(spec, Arc::clone(&self.config)).await?;
+        Ok(Box::new(engine))
+    }
+}
+
+/// A live VNC session.
+pub struct VncEngine {
+    client: VncClient,
+    config: Arc<VncConfig>,
+    /// Events produced while decoding one server update.
+    pending: VecDeque<TargetEvent>,
+    width: u16,
+    height: u16,
+    /// Set once the session has ended, so the actor is told exactly once.
+    finished: bool,
+}
+
+impl VncEngine {
+    /// Connect and authenticate.
+    async fn connect(spec: TargetSpec, config: Arc<VncConfig>) -> Result<Self, EngineError> {
+        let stream = TcpStream::connect((spec.hostname.as_str(), spec.port))
+            .await
+            .map_err(EngineError::Transport)?;
+
+        // VNC authentication is a password with no username, and the
+        // callback is a future rather than a closure, so the credential is
+        // moved in and dropped with it.
+        let password = spec.secret.expose_secret().to_owned();
+        let client = VncConnector::new(stream)
+            .set_auth_method(async move { Ok(password) })
+            .allow_shared(true)
+            // RGBA so a rect can go to the PNG encoder without a swizzle.
+            .set_pixel_format(PixelFormat::rgba())
+            // Ordered by preference. Tight and ZRLE cost the target some
+            // CPU and save a great deal of bandwidth; Raw is the fallback
+            // every server implements.
+            .add_encoding(VncEncoding::Tight)
+            .add_encoding(VncEncoding::Zrle)
+            .add_encoding(VncEncoding::Trle)
+            .add_encoding(VncEncoding::CopyRect)
+            .add_encoding(VncEncoding::Raw)
+            // The pointer is drawn by the client rather than composited
+            // into the framebuffer, for the same reason as RDP: otherwise
+            // every mouse move costs an image update.
+            .add_encoding(VncEncoding::CursorPseudo)
+            .add_encoding(VncEncoding::DesktopSizePseudo)
+            .build()
+            .map_err(map_vnc)?
+            .try_start()
+            .await
+            .map_err(map_vnc)?
+            .finish()
+            .map_err(map_vnc)?;
+
+        let engine = Self {
+            client,
+            config,
+            pending: VecDeque::new(),
+            width: 0,
+            height: 0,
+            finished: false,
+        };
+
+        // Nothing arrives until the first request, and it must be a full
+        // one: an incremental update against a framebuffer the client has
+        // never seen returns nothing at all.
+        engine
+            .client
+            .input(X11Event::FullRefresh)
+            .await
+            .map_err(map_vnc)?;
+        Ok(engine)
+    }
+
+    /// Turn one server event into client events.
+    fn absorb(&mut self, event: VncEvent) {
+        match event {
+            VncEvent::SetResolution(screen) => {
+                self.width = screen.width;
+                self.height = screen.height;
+                self.pending.push_back(TargetEvent::Resized {
+                    width: u32::from(screen.width),
+                    height: u32::from(screen.height),
+                });
+            }
+            // Advisory: the format was requested at connect time and the
+            // decoder already honours it.
+            VncEvent::SetPixelFormat(_) => {}
+            VncEvent::RawImage(rect, data) => {
+                if let Some(png) = encode_png(rect.width, rect.height, &data) {
+                    self.pending.push_back(TargetEvent::ImageUpdate {
+                        x: i32::from(rect.x),
+                        y: i32::from(rect.y),
+                        mimetype: "image/png",
+                        data: png,
+                    });
+                }
+            }
+            // Already compressed by the target, so it is forwarded as it
+            // arrived. Decoding it here only to re-encode would cost CPU
+            // and quality for nothing.
+            VncEvent::JpegImage(rect, data) => {
+                self.pending.push_back(TargetEvent::ImageUpdate {
+                    x: i32::from(rect.x),
+                    y: i32::from(rect.y),
+                    mimetype: "image/jpeg",
+                    data: Bytes::from(data),
+                });
+            }
+            // The server said explicitly that this region moved, which is
+            // the case the RDP engine could only have guessed at.
+            VncEvent::Copy(dst, src) => {
+                self.pending.push_back(TargetEvent::CopyRegion {
+                    src_x: i32::from(src.x),
+                    src_y: i32::from(src.y),
+                    width: u32::from(src.width),
+                    height: u32::from(src.height),
+                    dst_x: i32::from(dst.x),
+                    dst_y: i32::from(dst.y),
+                });
+            }
+            VncEvent::SetCursor(rect, data) => {
+                // A zero-sized cursor is how RFB says "hide the pointer".
+                if rect.width == 0 || rect.height == 0 {
+                    self.pending.push_back(TargetEvent::CursorHidden);
+                } else if let Some(png) = encode_png(rect.width, rect.height, &data) {
+                    self.pending.push_back(TargetEvent::CursorImage {
+                        hotspot_x: u32::from(rect.x),
+                        hotspot_y: u32::from(rect.y),
+                        width: u32::from(rect.width),
+                        height: u32::from(rect.height),
+                        mimetype: "image/png",
+                        data: png,
+                    });
+                }
+            }
+            VncEvent::Text(text) => {
+                if !self.config.disable_copy {
+                    self.pending
+                        .push_back(TargetEvent::Clipboard(Bytes::from(text)));
+                }
+            }
+            // An audible bell has nowhere to go in the Guacamole protocol.
+            VncEvent::Bell => {}
+            VncEvent::Error(message) => {
+                self.pending
+                    .push_back(TargetEvent::Disconnected { reason: message });
+                self.finished = true;
+            }
+            // The event type is non-exhaustive, so a newer decoder can
+            // produce something this engine predates. Logged rather than
+            // dropped silently, because the symptom would be a region
+            // that never repaints.
+            other => tracing::debug!(?other, "unhandled vnc event"),
+        }
+    }
+}
+
+#[async_trait]
+impl ProtocolEngine for VncEngine {
+    fn protocol(&self) -> Protocol {
+        Protocol::Vnc
+    }
+
+    async fn handle_input(&mut self, input: InputEvent) -> Result<(), EngineError> {
+        if self.config.read_only
+            && !matches!(input, InputEvent::Disconnect | InputEvent::Resize { .. })
+        {
+            return Ok(());
+        }
+        match input {
+            InputEvent::Key { keysym, pressed } => {
+                self.client
+                    .input(X11Event::KeyEvent(ClientKeyEvent {
+                        keycode: keysym,
+                        down: pressed,
+                    }))
+                    .await
+                    .map_err(map_vnc)?;
+            }
+            InputEvent::Mouse { x, y, mask } => {
+                self.client
+                    .input(X11Event::PointerEvent(ClientMouseEvent {
+                        position_x: clamp_coord(x),
+                        position_y: clamp_coord(y),
+                        bottons: mask,
+                    }))
+                    .await
+                    .map_err(map_vnc)?;
+            }
+            InputEvent::Clipboard(data) | InputEvent::Text(data) => {
+                if self.config.disable_paste {
+                    return Ok(());
+                }
+                // RFB carries Latin-1 only. Anything outside it would be
+                // truncated by the server, so it is replaced here where
+                // the substitution is at least visible.
+                let text = String::from_utf8_lossy(&data).into_owned();
+                self.client
+                    .input(X11Event::CopyText(text))
+                    .await
+                    .map_err(map_vnc)?;
+            }
+            // The desktop size is the server's to choose. RFB has an
+            // extension for asking, which this client does not expose, so
+            // the browser scales instead.
+            InputEvent::Resize { .. } => {}
+            InputEvent::Disconnect => {
+                self.finished = true;
+                let _ = self.client.close().await;
+            }
+        }
+        Ok(())
+    }
+
+    async fn next_event(&mut self) -> Result<Option<TargetEvent>, EngineError> {
+        loop {
+            if let Some(event) = self.pending.pop_front() {
+                return Ok(Some(event));
+            }
+            if self.finished {
+                return Ok(None);
+            }
+
+            let event = self.client.recv_event().await.map_err(map_vnc)?;
+            let wants_more = matches!(
+                event,
+                VncEvent::RawImage(..) | VncEvent::JpegImage(..) | VncEvent::Copy(..)
+            );
+            self.absorb(event);
+
+            // Keep a request outstanding. Without this the server has
+            // nothing to answer and the session looks frozen after the
+            // first paint.
+            if wants_more {
+                self.client
+                    .input(X11Event::Refresh)
+                    .await
+                    .map_err(map_vnc)?;
+            }
+        }
+    }
+
+    async fn shutdown(&mut self) -> Result<(), EngineError> {
+        // Best effort: a target that has already gone must not stop the
+        // session tearing down.
+        if let Err(err) = self.client.close().await {
+            tracing::debug!(error = %err, "vnc close failed");
+        }
+        Ok(())
+    }
+}
+
+/// PNG-encode an RGBA rectangle.
+///
+/// Returns `None` rather than erroring: one rectangle that will not
+/// encode is a dropped update, not a dead session.
+fn encode_png(width: u16, height: u16, rgba: &[u8]) -> Option<Bytes> {
+    let expected = usize::from(width) * usize::from(height) * 4;
+    if width == 0 || height == 0 || rgba.len() < expected {
+        tracing::warn!(
+            width,
+            height,
+            got = rgba.len(),
+            expected,
+            "vnc rectangle was smaller than its dimensions claim"
+        );
+        return None;
+    }
+    let mut out = Vec::new();
+    PngEncoder::new_with_quality(&mut out, CompressionType::Fast, FilterType::Adaptive)
+        .write_image(
+            &rgba[..expected],
+            u32::from(width),
+            u32::from(height),
+            ColorType::Rgba8.into(),
+        )
+        .ok()?;
+    Some(Bytes::from(out))
+}
+
+/// Clamp a pointer coordinate into the range RFB can carry.
+///
+/// Coordinates are unsigned 16-bit on the wire, and a negative one from a
+/// pointer dragged off the top-left would otherwise wrap to the far edge.
+fn clamp_coord(value: i32) -> u16 {
+    u16::try_from(value.clamp(0, i32::from(u16::MAX))).unwrap_or(0)
+}
+
+fn map_vnc(err: vnc::VncError) -> EngineError {
+    EngineError::Protocol(err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_rectangle_shorter_than_its_dimensions_is_dropped() {
+        // A truncated rect would otherwise index past the buffer.
+        assert!(encode_png(4, 4, &[0u8; 8]).is_none());
+    }
+
+    #[test]
+    fn an_empty_rectangle_is_dropped() {
+        assert!(encode_png(0, 0, &[]).is_none());
+        assert!(encode_png(4, 0, &[]).is_none());
+    }
+
+    #[test]
+    fn a_full_rectangle_encodes() {
+        let png = encode_png(2, 2, &[255u8; 16]).expect("2x2 rgba should encode");
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "not a png: {png:?}");
+    }
+
+    #[test]
+    fn a_pointer_dragged_off_screen_does_not_wrap() {
+        // Casting a negative coordinate would land it at the far edge and
+        // the target would see the pointer jump rather than stop.
+        assert_eq!(clamp_coord(-5), 0);
+        assert_eq!(clamp_coord(0), 0);
+        assert_eq!(clamp_coord(1920), 1920);
+        assert_eq!(clamp_coord(i32::MAX), u16::MAX);
+    }
+}

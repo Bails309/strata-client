@@ -246,6 +246,27 @@ pub enum ServerInstruction {
         /// than from the data.
         mimetype: String,
     },
+    /// Move a region of a layer, rather than redrawing it.
+    Copy {
+        /// Layer read from.
+        src_layer: i32,
+        /// Left edge of the source.
+        src_x: i32,
+        /// Top edge of the source.
+        src_y: i32,
+        /// Width of the moved region.
+        width: u32,
+        /// Height of the moved region.
+        height: u32,
+        /// Compositing mode.
+        mask: u8,
+        /// Layer written to.
+        dst_layer: i32,
+        /// Left edge of the destination.
+        dst_x: i32,
+        /// Top edge of the destination.
+        dst_y: i32,
+    },
 }
 
 impl ServerInstruction {
@@ -363,6 +384,30 @@ impl ServerInstruction {
             Self::Audio { stream, mimetype } => {
                 let v = [stream.to_string(), mimetype.clone()];
                 encode_str_args(out, "audio", &v);
+            }
+            Self::Copy {
+                src_layer,
+                src_x,
+                src_y,
+                width,
+                height,
+                mask,
+                dst_layer,
+                dst_x,
+                dst_y,
+            } => {
+                let v = [
+                    src_layer.to_string(),
+                    src_x.to_string(),
+                    src_y.to_string(),
+                    width.to_string(),
+                    height.to_string(),
+                    mask.to_string(),
+                    dst_layer.to_string(),
+                    dst_x.to_string(),
+                    dst_y.to_string(),
+                ];
+                encode_str_args(out, "copy", &v);
             }
         }
     }

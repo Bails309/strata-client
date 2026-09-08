@@ -218,6 +218,33 @@ impl GuacWireEncoder {
     /// Returns `true` when `event` was handled.
     pub fn encode_control(&mut self, event: &TargetEvent, out: &mut Vec<ClientFrame>) -> bool {
         match event {
+            // Moving a region costs nine integers where repainting it
+            // costs a PNG of the whole area.
+            TargetEvent::CopyRegion {
+                src_x,
+                src_y,
+                width,
+                height,
+                dst_x,
+                dst_y,
+            } => {
+                out.push(ClientFrame::Text(
+                    ServerInstruction::Copy {
+                        src_layer: DEFAULT_LAYER,
+                        src_x: *src_x,
+                        src_y: *src_y,
+                        width: *width,
+                        height: *height,
+                        mask: COMPOSITE_OVER,
+                        dst_layer: DEFAULT_LAYER,
+                        dst_x: *dst_x,
+                        dst_y: *dst_y,
+                    }
+                    .to_bytes()
+                    .freeze(),
+                ));
+                true
+            }
             TargetEvent::Resized { width, height } => {
                 out.push(ClientFrame::Text(
                     ServerInstruction::Size {
@@ -317,6 +344,8 @@ impl FrameEncoder for GuacWireEncoder {
             } => self.encode_image(*x, *y, mimetype, data, out),
             TargetEvent::Clipboard(data) => self.encode_clipboard(data, out),
             TargetEvent::Audio(data) => self.encode_audio(data, out),
+            // Handled by `encode_control` above, which runs first.
+            TargetEvent::CopyRegion { .. } => {}
             // Compressed video and raw PTY bytes have no text
             // representation: reaching them requires a server-side
             // rasteriser (Phase 2). Count rather than silently drop.

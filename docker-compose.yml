@@ -208,8 +208,11 @@ services:
           cpus: "2"
           memory: 2G
     depends_on:
+      # Not required: with STRATA_SESSION_ENGINE=native-only there is no
+      # guacd to wait for, and the backend must still start.
       guacd:
         condition: service_healthy
+        required: false
       vault:
         condition: service_healthy
       postgres-local:

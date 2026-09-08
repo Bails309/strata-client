@@ -706,6 +706,15 @@ pub async fn proxy(
         .await;
     }
 
+    if !crate::session_engine::guacd_available() {
+        return Err(AppError::Validation(format!(
+            "This connection cannot be served by the native engine, and this deployment \
+             runs without guacd. See the backend log for the parameter responsible \
+             (protocol `{}`).",
+            handshake.protocol
+        )));
+    }
+
     // Connect to guacd
     let addr = format!("{guacd_host}:{guacd_port}");
     let stream = TcpStream::connect(&addr)

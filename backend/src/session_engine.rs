@@ -300,13 +300,8 @@ fn policy_from_env() -> RoutingPolicy {
 
     // Anything unrecognised means guacd. A typo in this variable must
     // not silently enable the new engine.
-    let percent = match mode.as_str() {
-        "native" => 100,
-        "canary" => std::env::var("STRATA_SESSION_NATIVE_PERCENT")
-            .ok()
-            .and_then(|v| v.trim().parse::<u8>().ok())
-            .unwrap_or(0),
-        _ => return RoutingPolicy::disabled(),
+    let Some(percent) = rollout_percent(&mode) else {
+        return RoutingPolicy::disabled();
     };
 
     let available = RoutingPolicy::compiled_protocols();
@@ -325,6 +320,35 @@ fn policy_from_env() -> RoutingPolicy {
         .with_eligible_protocols(eligible)
         .with_pinned_hosts(hosts)
         .with_rollout_percent(percent)
+}
+
+/// Whether this deployment still has a guacd to fall back to.
+///
+/// `native-only` is what makes the daemon actually removable: without
+/// it a connection the native engine cannot serve is quietly handed to
+/// a guacd that is not running, and the operator sees a connection
+/// timeout rather than the reason.
+pub fn guacd_available() -> bool {
+    fallback_available(&std::env::var("STRATA_SESSION_ENGINE").unwrap_or_default())
+}
+
+fn fallback_available(mode: &str) -> bool {
+    !mode.trim().eq_ignore_ascii_case("native-only")
+}
+
+/// Share of sessions this mode sends to the native engine, or `None`
+/// when the mode does not enable it at all.
+fn rollout_percent(mode: &str) -> Option<u8> {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "native" | "native-only" => Some(100),
+        "canary" => Some(
+            std::env::var("STRATA_SESSION_NATIVE_PERCENT")
+                .ok()
+                .and_then(|v| v.trim().parse::<u8>().ok())
+                .unwrap_or(0),
+        ),
+        _ => None,
+    }
 }
 
 /// Map a connection's protocol column onto the engine's protocol enum.
@@ -1292,6 +1316,31 @@ mod tests {
     fn a_connection_with_no_pod_fails_preflight() {
         let err = preflight(Protocol::KubeExec, &handshake("kubernetes", None)).unwrap_err();
         assert!(err.contains("pod"), "{err}");
+    }
+
+    /// The whole point of the mode: a deployment that removed guacd must
+    /// not silently route to it. Every other value keeps the fallback,
+    /// including anything unrecognised.
+    #[test]
+    fn only_native_only_removes_the_fallback() {
+        assert!(fallback_available("guacd"));
+        assert!(fallback_available("canary"));
+        assert!(fallback_available("native"));
+        assert!(fallback_available(""));
+        assert!(fallback_available("nativeonly"));
+        assert!(!fallback_available("native-only"));
+        assert!(!fallback_available("  NATIVE-Only "));
+    }
+
+    /// `native-only` must still turn the engine on, not just turn the
+    /// fallback off.
+    #[test]
+    fn native_only_is_a_full_rollout() {
+        for mode in ["native", "native-only"] {
+            assert_eq!(rollout_percent(mode), Some(100), "{mode}");
+        }
+        assert_eq!(rollout_percent("guacd"), None);
+        assert_eq!(rollout_percent("typo"), None);
     }
 
     fn kube_handshake() -> HandshakeParams {

@@ -160,6 +160,10 @@ pub fn build_router(state: SharedState) -> Router {
             post(admin::discover_connection_host_key),
         )
         .route(
+            "/api/admin/connections/host-keys",
+            post(admin::survey_ssh_host_keys).put(admin::approve_ssh_host_keys),
+        )
+        .route(
             "/api/admin/connection-folders",
             get(admin::list_connection_folders),
         )

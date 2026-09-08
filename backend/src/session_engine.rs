@@ -61,7 +61,7 @@ const HOST_KEY_PARAM: &str = "host-key-fingerprint";
 /// Read as a fallback so a connection configured for guacd verifies the
 /// same host when it is routed natively, matching how [`KDC_URL_PARAM`]
 /// is shared between the two engines.
-const GUACD_HOST_KEY_PARAM: &str = "host-key";
+pub(crate) const GUACD_HOST_KEY_PARAM: &str = "host-key";
 
 /// Connection parameter naming the KDC for Kerberos authentication.
 ///
@@ -463,7 +463,7 @@ fn host_key_fingerprints(handshake: &HandshakeParams) -> Vec<String> {
 /// fingerprint for anything that does not parse, so a malformed entry
 /// fails preflight and the session stays on guacd instead of connecting
 /// to a host nobody verified.
-fn fingerprint_openssh_key(key: &str) -> Option<String> {
+pub(crate) fn fingerprint_openssh_key(key: &str) -> Option<String> {
     use base64::Engine as _;
     use sha2::Digest as _;
 

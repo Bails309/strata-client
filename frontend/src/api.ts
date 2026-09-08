@@ -1183,6 +1183,36 @@ export interface DiscoveredHostKey {
 export const discoverHostKey = (id: string) =>
   request<DiscoveredHostKey>(`/admin/connections/${id}/host-key`, { method: "POST" });
 
+/** One SSH connection, and how its stored key compares to the live one. */
+export interface HostKeySurveyRow {
+  id: string;
+  name: string;
+  hostname: string;
+  port: number;
+  /** `missing`, `matches`, `differs`, or `unreachable`. */
+  status: "missing" | "matches" | "differs" | "unreachable";
+  algorithm: string | null;
+  fingerprint: string | null;
+  public_key: string | null;
+  error: string | null;
+}
+
+/**
+ * Read the host key every SSH target currently presents.
+ *
+ * Stores nothing. `differs` is the row that matters once keys are
+ * approved: the host is either rebuilt or being impersonated.
+ */
+export const surveySshHostKeys = () =>
+  request<HostKeySurveyRow[]>("/admin/connections/host-keys", { method: "POST" });
+
+/** Store host keys an operator has decided to trust. */
+export const approveSshHostKeys = (keys: { id: string; public_key: string }[]) =>
+  request<{ approved: number }>("/admin/connections/host-keys", {
+    method: "PUT",
+    body: JSON.stringify(keys),
+  });
+
 // ── Connection Folders ───────────────────────────────────────────────
 
 export interface ConnectionFolder {

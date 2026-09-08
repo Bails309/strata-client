@@ -1505,6 +1505,202 @@ pub async fn update_connection(
     Ok(Json(row))
 }
 
+/// One SSH connection, and how its stored key compares to the live one.
+#[derive(serde::Serialize)]
+pub struct HostKeySurveyRow {
+    pub id: Uuid,
+    pub name: String,
+    pub hostname: String,
+    pub port: i32,
+    /// `missing`, `matches`, `differs`, or `unreachable`.
+    pub status: &'static str,
+    pub algorithm: Option<String>,
+    pub fingerprint: Option<String>,
+    pub public_key: Option<String>,
+    pub error: Option<String>,
+}
+
+/// How many hosts are read at once.
+///
+/// Each is a TCP connection and a key exchange, so an estate of a few
+/// hundred would otherwise open a few hundred sockets at once and look
+/// indistinguishable from a scan.
+const HOST_KEY_SURVEY_CONCURRENCY: usize = 16;
+
+/// `POST /api/admin/connections/host-keys` — read every SSH host's key.
+///
+/// Answers two questions an operator otherwise cannot: which connections
+/// have no key yet, and which now present a different one from the key
+/// that was approved. The second matters more over time — a key that has
+/// changed is either a rebuilt host or something worth stopping for.
+///
+/// Nothing is stored. The result is a list to review.
+pub async fn survey_ssh_host_keys(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<Vec<HostKeySurveyRow>>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
+    let db = require_running(&state).await?;
+
+    let rows: Vec<(Uuid, String, String, i32, serde_json::Value)> = sqlx::query_as(
+        "SELECT id, name, hostname, port, extra FROM connections \
+         WHERE protocol = 'ssh' AND soft_deleted_at IS NULL ORDER BY name",
+    )
+    .fetch_all(&db.pool)
+    .await?;
+
+    let limit = std::sync::Arc::new(tokio::sync::Semaphore::new(HOST_KEY_SURVEY_CONCURRENCY));
+    let mut tasks = Vec::with_capacity(rows.len());
+    for (id, name, hostname, port, extra) in rows {
+        let limit = std::sync::Arc::clone(&limit);
+        tasks.push(tokio::spawn(async move {
+            // Held for the probe only; the permit is released on drop.
+            let _permit = limit.acquire().await;
+            let stored = extra
+                .get(crate::session_engine::GUACD_HOST_KEY_PARAM)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+
+            let Ok(port) = u16::try_from(port) else {
+                return HostKeySurveyRow {
+                    id,
+                    name,
+                    hostname,
+                    port,
+                    status: "unreachable",
+                    algorithm: None,
+                    fingerprint: None,
+                    public_key: None,
+                    error: Some("invalid port".to_owned()),
+                };
+            };
+
+            match strata_session::engine::ssh::discover_host_key(
+                &hostname,
+                port,
+                std::time::Duration::from_secs(10),
+            )
+            .await
+            {
+                Ok(key) => {
+                    let approved: Vec<String> = stored
+                        .lines()
+                        .flat_map(|line| line.split(','))
+                        .filter_map(crate::session_engine::fingerprint_openssh_key)
+                        .collect();
+                    let status = if approved.is_empty() {
+                        "missing"
+                    } else if approved.contains(&key.fingerprint) {
+                        "matches"
+                    } else {
+                        "differs"
+                    };
+                    HostKeySurveyRow {
+                        id,
+                        name,
+                        hostname,
+                        port: i32::from(port),
+                        status,
+                        algorithm: Some(key.algorithm),
+                        fingerprint: Some(key.fingerprint),
+                        public_key: Some(key.public_key),
+                        error: None,
+                    }
+                }
+                Err(err) => HostKeySurveyRow {
+                    id,
+                    name,
+                    hostname,
+                    port: i32::from(port),
+                    status: "unreachable",
+                    algorithm: None,
+                    fingerprint: None,
+                    public_key: None,
+                    error: Some(err.to_string()),
+                },
+            }
+        }));
+    }
+
+    let mut survey = Vec::with_capacity(tasks.len());
+    for task in tasks {
+        match task.await {
+            Ok(row) => survey.push(row),
+            Err(err) => tracing::warn!(error = %err, "host key probe panicked"),
+        }
+    }
+
+    audit::log(
+        &db.pool,
+        Some(user.id),
+        "connection.host_keys_surveyed",
+        &json!({
+            "count": survey.len(),
+            "differs": survey.iter().filter(|r| r.status == "differs").count(),
+        }),
+    )
+    .await?;
+
+    Ok(Json(survey))
+}
+
+/// One key an operator has decided to trust.
+#[derive(serde::Deserialize)]
+pub struct ApproveHostKey {
+    pub id: Uuid,
+    pub public_key: String,
+}
+
+/// `PUT /api/admin/connections/host-keys` — store approved host keys.
+///
+/// Separate from the survey on purpose: reading a key and trusting it are
+/// different acts, and only the second one is a decision.
+pub async fn approve_ssh_host_keys(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<Vec<ApproveHostKey>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
+    let db = require_running(&state).await?;
+
+    let mut approved = 0usize;
+    for entry in body {
+        // A key that does not parse would be stored and then silently
+        // fail to verify anything at connect time.
+        let Some(fingerprint) = crate::session_engine::fingerprint_openssh_key(&entry.public_key)
+        else {
+            return Err(AppError::Validation(format!(
+                "the key offered for {} is not an OpenSSH public key",
+                entry.id
+            )));
+        };
+
+        let updated = sqlx::query(
+            "UPDATE connections \
+             SET extra = jsonb_set(extra, '{host-key}', to_jsonb($2::text)), updated_at = now() \
+             WHERE id = $1 AND protocol = 'ssh' AND soft_deleted_at IS NULL",
+        )
+        .bind(entry.id)
+        .bind(entry.public_key.trim())
+        .execute(&db.pool)
+        .await?;
+
+        if updated.rows_affected() > 0 {
+            approved += 1;
+            audit::log(
+                &db.pool,
+                Some(user.id),
+                "connection.host_key_approved",
+                &json!({ "id": entry.id.to_string(), "fingerprint": fingerprint }),
+            )
+            .await?;
+        }
+    }
+
+    Ok(Json(json!({ "approved": approved })))
+}
+
 /// What a server presented, for an operator to approve or reject.
 #[derive(serde::Serialize)]
 pub struct DiscoveredHostKeyResponse {

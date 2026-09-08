@@ -787,6 +787,8 @@ impl ProtocolEngine for SshEngine {
                     self.rows = rows;
                 }
             }
+            // Handled by the SFTP decorator, which sits above this engine.
+            InputEvent::File(_) => {}
             InputEvent::Disconnect => {
                 if let Stage::Shell(channel) = &mut self.stage {
                     channel.eof().await.map_err(map_russh)?;

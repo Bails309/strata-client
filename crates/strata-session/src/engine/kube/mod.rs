@@ -277,6 +277,8 @@ impl ProtocolEngine for KubeEngine {
                     return self.paste().await;
                 }
             }
+            // Handled by the SFTP decorator, which sits above this engine.
+            InputEvent::File(_) => {}
             InputEvent::Disconnect => {
                 self.finished = true;
                 let _ = self.socket.close(None).await;

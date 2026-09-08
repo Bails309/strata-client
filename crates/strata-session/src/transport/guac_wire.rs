@@ -9,7 +9,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use bytes::{Bytes, BytesMut};
 
-use crate::engine::TargetEvent;
+use crate::engine::{FileEvent, TargetEvent};
 use crate::protocol::ServerInstruction;
 use crate::transport::{ClientFrame, FrameEncoder, StreamingMode};
 
@@ -213,6 +213,56 @@ impl GuacWireEncoder {
         }
     }
 
+    /// Emit a file-transfer event.
+    ///
+    /// Stream indices come from the SFTP engine rather than this
+    /// encoder's allocator: the client names them back in `ack` and
+    /// `put`, so both ends must agree on who assigns them.
+    pub fn encode_file(&mut self, event: &FileEvent, out: &mut Vec<ClientFrame>) {
+        let instruction = match event {
+            FileEvent::Filesystem { object, name } => ServerInstruction::Filesystem {
+                object: *object,
+                name: name.clone(),
+            },
+            FileEvent::Body {
+                object,
+                stream,
+                mimetype,
+                name,
+            } => ServerInstruction::Body {
+                object: *object,
+                stream: *stream,
+                mimetype: mimetype.clone(),
+                name: name.clone(),
+            },
+            FileEvent::Data { stream, data } => {
+                for chunk in data.chunks(MAX_BLOB_BYTES) {
+                    let mut buf = BytesMut::new();
+                    ServerInstruction::Blob {
+                        stream: *stream,
+                        data: BASE64.encode(chunk),
+                    }
+                    .encode(&mut buf);
+                    out.push(ClientFrame::Text(buf.freeze()));
+                }
+                return;
+            }
+            FileEvent::End { stream } => ServerInstruction::End { stream: *stream },
+            FileEvent::Ack {
+                stream,
+                message,
+                status,
+            } => ServerInstruction::Ack {
+                stream: *stream,
+                message: message.clone(),
+                status: *status,
+            },
+        };
+        let mut buf = BytesMut::new();
+        instruction.encode(&mut buf);
+        out.push(ClientFrame::Text(buf.freeze()));
+    }
+
     /// Emit the control instructions shared by both streaming modes.
     ///
     /// Returns `true` when `event` was handled.
@@ -344,6 +394,7 @@ impl FrameEncoder for GuacWireEncoder {
             } => self.encode_image(*x, *y, mimetype, data, out),
             TargetEvent::Clipboard(data) => self.encode_clipboard(data, out),
             TargetEvent::Audio(data) => self.encode_audio(data, out),
+            TargetEvent::File(event) => self.encode_file(event, out),
             // Handled by `encode_control` above, which runs first.
             TargetEvent::CopyRegion { .. } => {}
             // Compressed video and raw PTY bytes have no text

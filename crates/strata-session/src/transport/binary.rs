@@ -99,6 +99,10 @@ impl FrameEncoder for BinaryEncoder {
             // text path as the raster fallback below rather than being
             // dropped into a stream type that means something else.
             TargetEvent::Audio(_) => self.control.encode(event, out),
+            // File transfer has no binary envelope: it is a Guacamole
+            // stream in both modes, and the browser reads it with the
+            // same object API either way.
+            TargetEvent::File(_) => self.control.encode(event, out),
             // Handled by `encode_control` above, which runs first.
             TargetEvent::CopyRegion { .. } => {}
             // Raster fallbacks still occur on targets without EGFX; they

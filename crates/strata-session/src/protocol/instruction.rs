@@ -60,6 +60,34 @@ pub enum ClientInstruction {
         /// Client timestamp in milliseconds.
         timestamp: i64,
     },
+    /// The client is asking to read a file or directory from a
+    /// filesystem object the session announced.
+    Get {
+        /// Object index, as announced by `filesystem`.
+        object: i32,
+        /// Absolute path within that object.
+        name: String,
+    },
+    /// The client is opening a stream to write a file.
+    Put {
+        /// Object index, as announced by `filesystem`.
+        object: i32,
+        /// Stream index the client will send `blob`s on.
+        stream: i32,
+        /// Declared mimetype of the upload.
+        mimetype: String,
+        /// Absolute destination path within that object.
+        name: String,
+    },
+    /// The client acknowledged a stream the session opened.
+    Ack {
+        /// Stream index being acknowledged.
+        stream: i32,
+        /// Human-readable message; empty on success.
+        message: String,
+        /// Guacamole status code, 0 for success.
+        status: i32,
+    },
     /// Keep-alive.
     Nop,
     /// The client asked to end the session.
@@ -118,6 +146,21 @@ impl ClientInstruction {
             "sync" => Self::Sync {
                 timestamp: instruction.arg_int(0)?,
             },
+            "get" => Self::Get {
+                object: instruction.arg_int(0)?,
+                name: required_arg(instruction, "get", 1)?,
+            },
+            "put" => Self::Put {
+                object: instruction.arg_int(0)?,
+                stream: instruction.arg_int(1)?,
+                mimetype: required_arg(instruction, "put", 2)?,
+                name: required_arg(instruction, "put", 3)?,
+            },
+            "ack" => Self::Ack {
+                stream: instruction.arg_int(0)?,
+                message: instruction.arg(1).unwrap_or_default().to_owned(),
+                status: instruction.arg_int(2).unwrap_or(0),
+            },
             "nop" => Self::Nop,
             "disconnect" => Self::Disconnect,
             other => Self::Unhandled {
@@ -125,6 +168,21 @@ impl ClientInstruction {
             },
         })
     }
+}
+
+/// Read an argument that the opcode cannot do without.
+fn required_arg(
+    instruction: &GuacInstruction<'_>,
+    opcode: &str,
+    index: usize,
+) -> Result<String, WireError> {
+    instruction
+        .arg(index)
+        .map(str::to_owned)
+        .ok_or_else(|| WireError::MissingArgument {
+            opcode: opcode.to_owned(),
+            index,
+        })
 }
 
 /// An instruction sent from the session engine towards the client.
@@ -267,6 +325,39 @@ pub enum ServerInstruction {
         /// Top edge of the destination.
         dst_y: i32,
     },
+    /// Announces a filesystem the client may browse.
+    Filesystem {
+        /// Object index the client will name in `get` and `put`.
+        object: i32,
+        /// Human-readable name shown in the file browser.
+        name: String,
+    },
+    /// Opens a stream carrying the contents of a file or directory the
+    /// client asked for with `get`.
+    Body {
+        /// Object the stream belongs to.
+        object: i32,
+        /// Stream index the `blob`s will follow on.
+        stream: i32,
+        /// Mimetype; directories use the stream-index type.
+        mimetype: String,
+        /// Path this stream corresponds to.
+        name: String,
+    },
+    /// Acknowledges a client stream, or reports why it failed.
+    Ack {
+        /// Stream index being acknowledged.
+        stream: i32,
+        /// Human-readable message; empty on success.
+        message: String,
+        /// Guacamole status code, 0 for success.
+        status: i32,
+    },
+    /// Withdraws a filesystem object, e.g. when the session ends.
+    Undefine {
+        /// Object index being withdrawn.
+        object: i32,
+    },
 }
 
 impl ServerInstruction {
@@ -408,6 +499,36 @@ impl ServerInstruction {
                     dst_y.to_string(),
                 ];
                 encode_str_args(out, "copy", &v);
+            }
+            Self::Filesystem { object, name } => {
+                let v = [object.to_string(), name.clone()];
+                encode_str_args(out, "filesystem", &v);
+            }
+            Self::Body {
+                object,
+                stream,
+                mimetype,
+                name,
+            } => {
+                let v = [
+                    object.to_string(),
+                    stream.to_string(),
+                    mimetype.clone(),
+                    name.clone(),
+                ];
+                encode_str_args(out, "body", &v);
+            }
+            Self::Ack {
+                stream,
+                message,
+                status,
+            } => {
+                let v = [stream.to_string(), message.clone(), status.to_string()];
+                encode_str_args(out, "ack", &v);
+            }
+            Self::Undefine { object } => {
+                let v = [object.to_string()];
+                encode_str_args(out, "undefine", &v);
             }
         }
     }

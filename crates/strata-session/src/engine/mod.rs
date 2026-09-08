@@ -125,8 +125,56 @@ pub enum InputEvent {
     Clipboard(Bytes),
     /// Raw bytes for a character-oriented target (SSH PTY input).
     Text(Bytes),
+    /// File transfer, which only the SFTP decorator acts on.
+    ///
+    /// Nested rather than flattened into this enum: every engine has to
+    /// match it exhaustively, and five more variants would mean five
+    /// more arms in each of them for something none of them handle.
+    File(FileRequest),
     /// The client asked to end the session.
     Disconnect,
+}
+
+/// A file-transfer request from the client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileRequest {
+    /// Read a file, or list a directory.
+    Get {
+        /// Filesystem object the path belongs to.
+        object: i32,
+        /// Absolute path within that object.
+        name: String,
+    },
+    /// Begin writing a file.
+    Put {
+        /// Filesystem object the path belongs to.
+        object: i32,
+        /// Stream the client will send data on.
+        stream: i32,
+        /// Declared mimetype.
+        mimetype: String,
+        /// Absolute destination path.
+        name: String,
+    },
+    /// A chunk of an upload.
+    Data {
+        /// Stream the chunk belongs to.
+        stream: i32,
+        /// Decoded bytes.
+        data: Bytes,
+    },
+    /// An upload is complete.
+    End {
+        /// Stream that finished.
+        stream: i32,
+    },
+    /// The client consumed a chunk the session sent, and will take more.
+    Ack {
+        /// Stream being acknowledged.
+        stream: i32,
+        /// Guacamole status code, 0 for success.
+        status: i32,
+    },
 }
 
 /// Video codec carried by [`TargetEvent::VideoSlice`].
@@ -223,10 +271,56 @@ pub enum TargetEvent {
     },
     /// The target hid the mouse cursor.
     CursorHidden,
+    /// File transfer, produced only by the SFTP decorator.
+    File(FileEvent),
     /// The session ended.
     Disconnected {
         /// Human-readable reason.
         reason: String,
+    },
+}
+
+/// A file-transfer event heading for the client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileEvent {
+    /// Announce a filesystem the client may browse.
+    Filesystem {
+        /// Object index the client will name in later requests.
+        object: i32,
+        /// Name shown in the file browser.
+        name: String,
+    },
+    /// Open a stream carrying a file or a directory listing.
+    Body {
+        /// Object the stream belongs to.
+        object: i32,
+        /// Stream index the data will follow on.
+        stream: i32,
+        /// Mimetype; directories use the stream-index type.
+        mimetype: String,
+        /// Path this stream corresponds to.
+        name: String,
+    },
+    /// A chunk of a download.
+    Data {
+        /// Stream the chunk belongs to.
+        stream: i32,
+        /// Raw bytes, base64-encoded by the wire encoder.
+        data: Bytes,
+    },
+    /// A download is complete.
+    End {
+        /// Stream that finished.
+        stream: i32,
+    },
+    /// Acknowledge a client upload stream, or report why it failed.
+    Ack {
+        /// Stream being acknowledged.
+        stream: i32,
+        /// Human-readable message; empty on success.
+        message: String,
+        /// Guacamole status code, 0 for success.
+        status: i32,
     },
 }
 

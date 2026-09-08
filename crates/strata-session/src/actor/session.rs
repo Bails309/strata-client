@@ -14,7 +14,7 @@
 //!                         └──► audit sink     (tamper-evident recording)
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -24,7 +24,7 @@ use bytes::{Bytes, BytesMut};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::actor::audit::{AuditRecord, AuditSink};
-use crate::engine::{InputEvent, ProtocolEngine, TargetEvent};
+use crate::engine::{FileRequest, InputEvent, ProtocolEngine, TargetEvent};
 use crate::error::SessionError;
 use crate::protocol::guacamole::encode_instruction;
 use crate::protocol::ClientInstruction;
@@ -193,6 +193,9 @@ pub struct SessionActor {
     dropped_frames: u64,
     /// Partially received client clipboard streams, keyed by stream index.
     clipboard_streams: HashMap<i32, Vec<u8>>,
+    /// Stream indices the client opened with `put`, so a `blob` on one
+    /// is routed to the filesystem rather than to the clipboard.
+    upload_streams: HashSet<i32>,
 }
 
 /// Whether an event paints something.
@@ -211,10 +214,13 @@ fn is_graphical_output(event: &TargetEvent) -> bool {
         | TargetEvent::CursorImage { .. }
         | TargetEvent::CursorHidden => true,
         // Not pixels: audio has its own exclusion, and the rest is
-        // session bookkeeping the recording needs to stay readable.
-        TargetEvent::Audio(_) | TargetEvent::Clipboard(_) | TargetEvent::Disconnected { .. } => {
-            false
-        }
+        // session bookkeeping the recording needs to stay readable. A
+        // file transfer is emphatically not screen content — it is the
+        // part of a session an auditor most wants kept.
+        TargetEvent::Audio(_)
+        | TargetEvent::Clipboard(_)
+        | TargetEvent::File(_)
+        | TargetEvent::Disconnected { .. } => false,
     }
 }
 
@@ -246,6 +252,7 @@ impl SessionActor {
             seq: 0,
             dropped_frames: 0,
             clipboard_streams: HashMap::new(),
+            upload_streams: HashSet::new(),
         };
 
         tokio::spawn(async move {
@@ -326,14 +333,51 @@ impl SessionActor {
                 return Ok(None);
             }
             ClientInstruction::Blob { stream, data } => {
-                self.append_clipboard(stream, &data);
-                return Ok(None);
+                // `blob` is shared between clipboard and upload streams,
+                // so the opcode alone does not say where it belongs.
+                if self.upload_streams.contains(&stream) {
+                    let Ok(decoded) = BASE64.decode(&data) else {
+                        tracing::debug!(session = %self.id, stream, "discarding malformed upload blob");
+                        return Ok(None);
+                    };
+                    InputEvent::File(FileRequest::Data {
+                        stream,
+                        data: Bytes::from(decoded),
+                    })
+                } else {
+                    self.append_clipboard(stream, &data);
+                    return Ok(None);
+                }
             }
             ClientInstruction::End { stream } => {
-                let Some(payload) = self.clipboard_streams.remove(&stream) else {
-                    return Ok(None);
-                };
-                InputEvent::Clipboard(Bytes::from(payload))
+                if self.upload_streams.remove(&stream) {
+                    InputEvent::File(FileRequest::End { stream })
+                } else {
+                    let Some(payload) = self.clipboard_streams.remove(&stream) else {
+                        return Ok(None);
+                    };
+                    InputEvent::Clipboard(Bytes::from(payload))
+                }
+            }
+            ClientInstruction::Get { object, name } => {
+                InputEvent::File(FileRequest::Get { object, name })
+            }
+            ClientInstruction::Put {
+                object,
+                stream,
+                mimetype,
+                name,
+            } => {
+                self.upload_streams.insert(stream);
+                InputEvent::File(FileRequest::Put {
+                    object,
+                    stream,
+                    mimetype,
+                    name,
+                })
+            }
+            ClientInstruction::Ack { stream, status, .. } => {
+                InputEvent::File(FileRequest::Ack { stream, status })
             }
             // Sync/nop bookkeeping never reaches the target.
             ClientInstruction::Sync { .. }

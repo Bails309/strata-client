@@ -263,6 +263,8 @@ impl ProtocolEngine for VncEngine {
             // extension for asking, which this client does not expose, so
             // the browser scales instead.
             InputEvent::Resize { .. } => {}
+            // Handled by the SFTP decorator, which sits above this engine.
+            InputEvent::File(_) => {}
             InputEvent::Disconnect => {
                 self.finished = true;
                 let _ = self.client.close().await;

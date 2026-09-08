@@ -1167,6 +1167,8 @@ impl RdpSession {
                     None => tracing::debug!("target does not support dynamic resize"),
                 }
             }
+            // Handled by the SFTP decorator, which sits above this engine.
+            InputEvent::File(_) => {}
             InputEvent::Disconnect => {
                 self.finished = true;
                 self.pending.push_back(TargetEvent::Disconnected {

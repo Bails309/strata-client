@@ -14,6 +14,7 @@
 
 pub mod keymap;
 
+use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,7 +23,7 @@ use bytes::Bytes;
 use russh::client::{self, Handle, Msg};
 use russh::keys::{HashAlg, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg, Disconnect};
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
 use tokio::sync::{mpsc, Mutex};
 
 use crate::engine::ssh::keymap::{keysym_to_bytes, Modifiers};
@@ -80,7 +81,7 @@ impl CellSize {
 }
 
 /// Engine-wide SSH settings.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SshConfig {
     /// Host key admission policy.
     pub host_keys: HostKeyPolicy,
@@ -92,6 +93,32 @@ pub struct SshConfig {
     pub keepalive: Duration,
     /// Connection is dropped after this much inactivity.
     pub inactivity_timeout: Duration,
+    /// Private key for public-key authentication, in OpenSSH or PuTTY
+    /// format, as guacd's `private-key` parameter holds it.
+    pub private_key: Option<SecretString>,
+    /// Passphrase decrypting [`Self::private_key`], if it is encrypted.
+    pub passphrase: Option<SecretString>,
+}
+
+impl fmt::Debug for SshConfig {
+    /// Hand-written so a config can be logged without the key in it.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SshConfig")
+            .field("host_keys", &self.host_keys)
+            .field("term", &self.term)
+            .field("cell", &self.cell)
+            .field("keepalive", &self.keepalive)
+            .field("inactivity_timeout", &self.inactivity_timeout)
+            .field(
+                "private_key",
+                &self.private_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "passphrase",
+                &self.passphrase.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 impl SshConfig {
@@ -104,7 +131,21 @@ impl SshConfig {
             cell: CellSize::default(),
             keepalive: Duration::from_secs(30),
             inactivity_timeout: Duration::from_secs(3600),
+            private_key: None,
+            passphrase: None,
         }
+    }
+
+    /// Attach a private key for public-key authentication.
+    #[must_use]
+    pub fn with_private_key(
+        mut self,
+        key: Option<SecretString>,
+        passphrase: Option<SecretString>,
+    ) -> Self {
+        self.private_key = key;
+        self.passphrase = passphrase;
+        self
     }
 }
 
@@ -414,6 +455,28 @@ impl SshEngine {
         // Nothing below this line may observe the original credential.
         drop(secret);
 
+        // A key beats a password when both are configured, matching the
+        // order OpenSSH tries them in.
+        if engine.config.private_key.is_some() && !username.is_empty() {
+            match engine.try_public_key(&username).await {
+                Ok(true) => {
+                    engine.open_shell().await?;
+                    return Ok(engine);
+                }
+                Ok(false) => {
+                    // Fall through to a password, again as OpenSSH does,
+                    // rather than failing a session whose key merely is
+                    // not installed on this host yet.
+                    tracing::info!("ssh public key rejected; falling back to password");
+                }
+                Err(err) => {
+                    // A key that will not parse is a configuration error
+                    // and silently becoming a password prompt would hide it.
+                    return Err(err);
+                }
+            }
+        }
+
         if username.is_empty() || password.is_empty() {
             // Anything the connection did supply is kept, so only the
             // missing half is asked for.
@@ -442,6 +505,43 @@ impl SshEngine {
         }
         engine.open_shell().await?;
         Ok(engine)
+    }
+
+    /// Offer the configured private key.
+    ///
+    /// `Ok(false)` means the server declined the key, which is recoverable
+    /// by trying a password. An error means the key itself is unusable,
+    /// which is not.
+    async fn try_public_key(&mut self, username: &str) -> Result<bool, EngineError> {
+        let Some(key) = self.config.private_key.as_ref() else {
+            return Ok(false);
+        };
+        let passphrase = self
+            .config
+            .passphrase
+            .as_ref()
+            .map(ExposeSecret::expose_secret);
+        let decoded =
+            russh::keys::decode_secret_key(key.expose_secret(), passphrase).map_err(|err| {
+                // The message names the failure but never the key.
+                EngineError::Protocol(format!(
+                    "the configured private key could not be read: {err}"
+                ))
+            })?;
+
+        let outcome = self
+            .session
+            .authenticate_publickey(
+                username,
+                // RSA keys are signed SHA-256; anything else ignores this.
+                russh::keys::PrivateKeyWithHashAlg::new(
+                    std::sync::Arc::new(decoded),
+                    Some(russh::keys::HashAlg::Sha256),
+                ),
+            )
+            .await
+            .map_err(map_russh)?;
+        Ok(matches!(outcome, russh::client::AuthResult::Success))
     }
 
     /// Queue terminal output for the client while there is no channel.
@@ -877,6 +977,29 @@ mod tests {
         // The escape byte is dropped; the printable remainder is not, which
         // is why an editing prompt is not what this is.
         assert_eq!(login.typed, "[A");
+    }
+
+    #[test]
+    fn a_private_key_never_appears_in_a_debug_dump() {
+        // SshConfig is carried through the engine and is exactly the kind
+        // of struct that ends up in a tracing field or a panic message.
+        let config = SshConfig::with_fingerprints(vec!["SHA256:aaa".to_owned()]).with_private_key(
+            Some(SecretString::from(
+                "-----BEGIN OPENSSH PRIVATE KEY-----\nSUPERSECRET\n".to_owned(),
+            )),
+            Some(SecretString::from("hunter2".to_owned())),
+        );
+        let dumped = format!("{config:?}");
+        assert!(!dumped.contains("SUPERSECRET"), "{dumped}");
+        assert!(!dumped.contains("hunter2"), "{dumped}");
+        assert!(dumped.contains("redacted"), "{dumped}");
+    }
+
+    #[test]
+    fn a_config_without_a_key_still_says_so() {
+        let config = SshConfig::with_fingerprints(vec![]);
+        assert!(config.private_key.is_none());
+        assert!(format!("{config:?}").contains("private_key: None"));
     }
 
     #[test]

@@ -805,9 +805,20 @@ async fn connect_engine(
 
     match protocol {
         Protocol::Ssh => {
-            let factory = SshEngineFactory::new(SshConfig::with_fingerprints(
-                host_key_fingerprints(handshake),
-            ));
+            let factory = SshEngineFactory::new(
+                SshConfig::with_fingerprints(host_key_fingerprints(handshake)).with_private_key(
+                    handshake
+                        .extra
+                        .get("private-key")
+                        .filter(|k| !k.trim().is_empty())
+                        .map(|k| SecretString::from(k.clone())),
+                    handshake
+                        .extra
+                        .get("passphrase")
+                        .filter(|p| !p.is_empty())
+                        .map(|p| SecretString::from(p.clone())),
+                ),
+            );
             let engine = factory
                 .connect(spec)
                 .await

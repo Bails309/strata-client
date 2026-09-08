@@ -336,6 +336,15 @@ pub struct SshEngine {
     width: u32,
     height: u32,
     exit_status: Option<u32>,
+    /// What the client last put on its clipboard.
+    ///
+    /// Held rather than typed. The client pushes this on focus and on
+    /// mouseover, not only on paste, so writing it straight to the PTY
+    /// meant merely entering the terminal typed the operator's clipboard
+    /// into it — and executed it, if it happened to end in a newline.
+    clipboard: Bytes,
+    /// Buttons held at the last mouse event, to spot a release.
+    mouse_mask: u8,
     /// Terminal output produced before a channel exists.
     ///
     /// An mpsc rather than a queue because `next_event` is dropped by the
@@ -395,6 +404,8 @@ impl SshEngine {
             width,
             height,
             exit_status: None,
+            clipboard: Bytes::new(),
+            mouse_mask: 0,
             prompt_tx,
             prompt_rx,
         };
@@ -551,6 +562,18 @@ impl SshEngine {
         self.exit_status
     }
 
+    /// Send whatever the client last put on its clipboard.
+    ///
+    /// Only ever reached from a deliberate paste gesture, never from the
+    /// clipboard arriving.
+    async fn paste(&mut self) -> Result<(), EngineError> {
+        if self.clipboard.is_empty() {
+            return Ok(());
+        }
+        let data = self.clipboard.clone();
+        self.write(data).await
+    }
+
     async fn write(&mut self, data: impl Into<Bytes>) -> Result<(), EngineError> {
         let bytes: Bytes = data.into();
         match &mut self.stage {
@@ -573,12 +596,24 @@ impl ProtocolEngine for SshEngine {
                 if self.modifiers.track(keysym, pressed) || !pressed {
                     return Ok(());
                 }
+                // Ctrl+Shift+V and Cmd+V paste, as they do in guacd's
+                // terminal and in every other terminal emulator.
+                if (keysym == u32::from(b'V') && self.modifiers.ctrl)
+                    || (keysym == u32::from(b'v') && self.modifiers.alt)
+                {
+                    return self.paste().await;
+                }
                 if let Some(bytes) = keysym_to_bytes(keysym, self.modifiers) {
                     self.write(bytes).await?;
                 }
             }
-            // A paste is just typed input as far as the PTY is concerned.
-            InputEvent::Text(data) | InputEvent::Clipboard(data) => self.write(data).await?,
+            // Raw PTY bytes, which is a real keystroke rather than a
+            // clipboard announcement.
+            InputEvent::Text(data) => self.write(data).await?,
+            // Only a note of what the client holds. The client sends this
+            // on focus and mouseover as well as on paste, so acting on it
+            // would type the operator's clipboard into the session.
+            InputEvent::Clipboard(data) => self.clipboard = data,
             InputEvent::Resize { width, height } => {
                 self.width = width;
                 self.height = height;
@@ -599,8 +634,18 @@ impl ProtocolEngine for SshEngine {
                     channel.eof().await.map_err(map_russh)?;
                 }
             }
-            // A PTY without mouse reporting has nothing to do with this.
-            InputEvent::Mouse { .. } => {}
+            // A PTY has no mouse reporting, but a terminal still pastes
+            // on middle or right click, which is how most people paste
+            // into one.
+            InputEvent::Mouse { mask, .. } => {
+                const MIDDLE: u8 = 0x02;
+                const RIGHT: u8 = 0x04;
+                let released = self.mouse_mask & !mask;
+                self.mouse_mask = mask;
+                if released & (MIDDLE | RIGHT) != 0 {
+                    self.paste().await?;
+                }
+            }
         }
         Ok(())
     }

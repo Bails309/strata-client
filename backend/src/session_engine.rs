@@ -86,8 +86,7 @@ const AUTH_PACKAGE_PARAM: &str = "auth-pkg";
 /// there instead. Running it natively would drop a setting an
 /// administrator deliberately chose, and a redirected drive or printer
 /// that silently fails to appear is worse than a slower session.
-const RDP_FEATURES_REQUIRING_GUACD: &[&str] =
-    &["enable-audio-input", "remote-app", "gateway-hostname"];
+const RDP_FEATURES_REQUIRING_GUACD: &[&str] = &["enable-audio-input", "remote-app"];
 
 /// Connection parameters naming an SSH feature the native engine does
 /// not implement.

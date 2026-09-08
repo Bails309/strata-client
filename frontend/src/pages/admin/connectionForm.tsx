@@ -97,65 +97,6 @@ export function RdpSections({
         </FieldGrid>
       </Section>
 
-      <Section title="Remote Desktop Gateway">
-        <FieldGrid>
-          <Field
-            label="Gateway Hostname"
-            title="The hostname of the Remote Desktop Gateway to tunnel the RDP connection through."
-          >
-            <input
-              value={ex("gateway-hostname")}
-              onChange={(e) => setEx("gateway-hostname", e.target.value)}
-              placeholder="gw.example.com"
-              title="The hostname of the Remote Desktop Gateway to tunnel the RDP connection through."
-            />
-          </Field>
-          <Field
-            label="Gateway Port"
-            title="The port of the Remote Desktop Gateway. By default, this is 443."
-          >
-            <input
-              type="number"
-              value={ex("gateway-port")}
-              onChange={(e) => setEx("gateway-port", e.target.value)}
-              placeholder="443"
-              title="The port of the Remote Desktop Gateway. By default, this is 443."
-            />
-          </Field>
-          <Field
-            label="Gateway Domain"
-            title="The domain to use when authenticating with the Remote Desktop Gateway."
-          >
-            <input
-              value={ex("gateway-domain")}
-              onChange={(e) => setEx("gateway-domain", e.target.value)}
-              title="The domain to use when authenticating with the Remote Desktop Gateway."
-            />
-          </Field>
-          <Field
-            label="Gateway Username"
-            title="The username to use when authenticating with the Remote Desktop Gateway."
-          >
-            <input
-              value={ex("gateway-username")}
-              onChange={(e) => setEx("gateway-username", e.target.value)}
-              title="The username to use when authenticating with the Remote Desktop Gateway."
-            />
-          </Field>
-          <Field
-            label="Gateway Password"
-            title="The password to use when authenticating with the Remote Desktop Gateway."
-          >
-            <input
-              type="password"
-              value={ex("gateway-password")}
-              onChange={(e) => setEx("gateway-password", e.target.value)}
-              title="The password to use when authenticating with the Remote Desktop Gateway."
-            />
-          </Field>
-        </FieldGrid>
-      </Section>
-
       <Section title="Basic Settings">
         <FieldGrid>
           <Field

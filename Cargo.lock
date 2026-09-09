@@ -5398,6 +5398,7 @@ dependencies = [
  "rustls-pki-types",
  "secrecy",
  "serde_json",
+ "sha2 0.11.0",
  "sspi",
  "strata-protocol",
  "thiserror 2.0.20",

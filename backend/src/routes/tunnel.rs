@@ -868,6 +868,35 @@ pub async fn ws_tunnel(
         (final_username, final_password)
     };
 
+    // ── RDP: resolve the attached trusted-CA bundle into the PEM the
+    // native engine verifies against. Done here, like the web kiosk's
+    // equivalent lookup further down, so `session_engine` stays
+    // sqlx-free. `trusted-ca-pem` is absent from `is_allowed_guacd_param`
+    // and so is never forwarded on the wire.
+    if wire_protocol == "rdp" {
+        if let Some(id) = extra
+            .get("trusted_ca_id")
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .and_then(|v| uuid::Uuid::parse_str(v).ok())
+        {
+            match crate::services::trusted_ca::get(&db.pool, id).await? {
+                Some(ca) => {
+                    extra.insert(crate::session_engine::TRUSTED_CA_PEM_PARAM.into(), ca.pem);
+                }
+                // Failing closed: the connection asks to verify against
+                // a bundle that no longer exists, and carrying on would
+                // silently downgrade it to whatever the `ignore-cert`
+                // box happens to say.
+                None => {
+                    return Err(AppError::Validation(format!(
+                        "connection references trusted CA {id}, which no longer exists"
+                    )))
+                }
+            }
+        }
+    }
+
     // ── rustguac parity Phase 3: ensure VDI container is running ──
     // For `vdi` connections, ask the driver to spawn (or reuse) the
     // per-(connection,user) container. We override hostname/port with

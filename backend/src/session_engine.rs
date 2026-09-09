@@ -43,6 +43,7 @@ use strata_session::engine::{EngineFactory, Protocol, ProtocolEngine, TargetSpec
 use strata_session::protocol::ServerInstruction;
 use strata_session::routing::{RoutingPolicy, SessionBackend};
 use strata_session::terminal::{RasterisingEngine, TerminalFont, Typescript, DEFAULT_FONT_SIZE_PX};
+use strata_session::tls::CertPolicy;
 use strata_session::transport::{ClientFrame, GuacDecoder, GuacWireEncoder};
 use strata_session::wol;
 use uuid::Uuid;
@@ -78,6 +79,23 @@ pub(crate) const GUACD_HOST_KEY_PARAM: &str = "host-key";
 /// routed to the native engine.
 const KDC_URL_PARAM: &str = "kdc-url";
 const AUTH_PACKAGE_PARAM: &str = "auth-pkg";
+
+/// Connection parameter pinning the target's TLS certificate.
+///
+/// SHA-256 fingerprints, comma or newline separated, in either the hex
+/// form `openssl x509 -fingerprint -sha256` prints or the `SHA256:`
+/// base64 form. Named to match guacd's parameter of the same name so a
+/// connection configured for one engine means the same on the other.
+const CERT_FINGERPRINTS_PARAM: &str = "cert-fingerprints";
+
+/// The PEM of the connection's attached trusted-CA bundle.
+///
+/// Not an administrator-facing parameter: the connection stores a
+/// `trusted_ca_id`, and the tunnel route resolves it to this before the
+/// handshake is built, the same way the web kiosk resolves it before
+/// spawning Chromium. Absent from the guacd allowlist, so it is never
+/// forwarded on the wire.
+pub(crate) const TRUSTED_CA_PEM_PARAM: &str = "trusted-ca-pem";
 
 /// Connection parameters naming a feature the native RDP engine does
 /// not implement at all.
@@ -279,10 +297,12 @@ fn policy_from_env() -> RoutingPolicy {
     };
 
     let available = RoutingPolicy::compiled_protocols();
-    let eligible = match std::env::var("STRATA_SESSION_NATIVE_PROTOCOLS") {
-        Ok(list) => list.split(',').filter_map(protocol_from_str).collect(),
-        Err(_) => available.clone(),
-    };
+    let eligible = eligible_protocols(
+        std::env::var("STRATA_SESSION_NATIVE_PROTOCOLS")
+            .ok()
+            .as_deref(),
+        &available,
+    );
     let hosts: HashSet<String> = std::env::var("STRATA_SESSION_NATIVE_HOSTS")
         .unwrap_or_default()
         .split(',')
@@ -294,6 +314,43 @@ fn policy_from_env() -> RoutingPolicy {
         .with_eligible_protocols(eligible)
         .with_pinned_hosts(hosts)
         .with_rollout_percent(percent)
+}
+
+/// Which protocols the rollout may serve natively.
+///
+/// A blank value counts as unset. Compose passes the variable through as
+/// `${STRATA_SESSION_NATIVE_PROTOCOLS:-}`, so commenting the line out in
+/// `.env` still delivers an empty string — and reading that literally
+/// leaves nothing eligible, which under `native-only` refuses every
+/// session rather than serving them all.
+fn eligible_protocols(raw: Option<&str>, available: &HashSet<Protocol>) -> HashSet<Protocol> {
+    let entries: Vec<&str> = raw
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .collect();
+    // Naming nothing is not the same as naming something unrecognised:
+    // an empty list is the operator having expressed no restriction.
+    if entries.is_empty() {
+        return available.clone();
+    }
+    let mut eligible = HashSet::new();
+    for entry in entries {
+        match protocol_from_str(entry) {
+            Some(protocol) => {
+                eligible.insert(protocol);
+            }
+            // Named but unrecognised: honour the restriction, because
+            // ignoring it would widen the rollout beyond what was asked
+            // for, but say so — a typo here silently drops a protocol.
+            None => tracing::warn!(
+                entry,
+                "STRATA_SESSION_NATIVE_PROTOCOLS names an unknown protocol; ignoring it"
+            ),
+        }
+    }
+    eligible
 }
 
 /// Whether this deployment still has a guacd to fall back to.
@@ -445,6 +502,12 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
             // Nothing about an RDP session needs guacd now. Audio
             // playback is carried over RDPSND, so a connection that
             // allows it no longer has to leave the native engine.
+            //
+            // Checked here as well as at connect time so a mistyped
+            // fingerprint is reported before the target is dialled,
+            // where the message is about the connection rather than
+            // about a handshake that failed.
+            rdp_cert_policy(handshake)?;
             let kerberos_only = handshake
                 .extra
                 .get(AUTH_PACKAGE_PARAM)
@@ -591,6 +654,58 @@ fn kdc_url(handshake: &HandshakeParams) -> Option<String> {
         .extra
         .get(KDC_URL_PARAM)
         .and_then(|raw| normalise_kdc(raw))
+}
+
+/// What the connection accepts from the RDP target's TLS certificate.
+///
+/// The precedence is deliberate. A pinned fingerprint and an attached CA
+/// are both specific statements about *this* target, so either outranks
+/// the blanket "ignore certificate" box — an administrator who pinned a
+/// fingerprint and left that box ticked from an earlier troubleshooting
+/// session gets the pin enforced rather than discarded. A connection
+/// with neither behaves exactly as it did before this existed.
+fn rdp_cert_policy(handshake: &HandshakeParams) -> Result<CertPolicy, String> {
+    let fingerprints = cert_fingerprints(handshake)?;
+    if !fingerprints.is_empty() {
+        return Ok(CertPolicy::Pinned { fingerprints });
+    }
+    let bundle = handshake
+        .extra
+        .get(TRUSTED_CA_PEM_PARAM)
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty());
+    match bundle {
+        Some(pem) => Ok(CertPolicy::Verify {
+            extra_roots: Some(pem.to_owned()),
+        }),
+        None if handshake.ignore_cert => Ok(CertPolicy::Ignore),
+        None => Ok(CertPolicy::Verify { extra_roots: None }),
+    }
+}
+
+/// Parse the pinned certificate fingerprints, rejecting malformed ones.
+///
+/// A fingerprint that cannot be parsed is an error rather than a skipped
+/// entry: dropping it would leave the remaining pins looking like the
+/// whole list, so a typo would quietly narrow what the connection
+/// accepts instead of failing where it can be corrected.
+fn cert_fingerprints(handshake: &HandshakeParams) -> Result<Vec<Vec<u8>>, String> {
+    let Some(raw) = handshake.extra.get(CERT_FINGERPRINTS_PARAM) else {
+        return Ok(Vec::new());
+    };
+    raw.lines()
+        .flat_map(|line| line.split(','))
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            strata_session::tls::parse_fingerprint(entry).ok_or_else(|| {
+                format!(
+                    "`{CERT_FINGERPRINTS_PARAM}` contains `{entry}`, which is not a SHA-256 \
+                     certificate fingerprint; expected 64 hex characters or a `SHA256:` value"
+                )
+            })
+        })
+        .collect()
 }
 
 /// Serve one session with the native engine.
@@ -1115,7 +1230,7 @@ async fn connect_target(
                 read_only: flag(handshake, "read-only"),
                 disable_copy: flag(handshake, "disable-copy"),
                 disable_paste: flag(handshake, "disable-paste"),
-                verify_certificate: !handshake.ignore_cert,
+                cert_policy: rdp_cert_policy(handshake).map_err(AppError::Validation)?,
                 performance: RdpPerformance {
                     wallpaper: flag(handshake, "enable-wallpaper"),
                     theming: flag(handshake, "enable-theming"),
@@ -1299,6 +1414,151 @@ mod tests {
             dpi: 96,
             extra,
         }
+    }
+
+    /// SHA-256 of the empty input: a real digest, so it parses, without
+    /// needing a certificate fixture.
+    const A_FINGERPRINT: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    #[test]
+    fn a_blank_protocol_list_means_every_compiled_protocol() {
+        // Compose passes the variable through as `${VAR:-}`, so
+        // commenting the line out in `.env` still arrives as "". Reading
+        // that literally left nothing eligible, which under native-only
+        // refuses every session instead of serving them all.
+        let available = RoutingPolicy::compiled_protocols();
+        assert!(!available.is_empty());
+        for blank in [None, Some(""), Some("   "), Some(" , ")] {
+            assert_eq!(
+                eligible_protocols(blank, &available),
+                available,
+                "blank value {blank:?} should mean every compiled protocol"
+            );
+        }
+    }
+
+    #[test]
+    fn kubernetes_is_eligible_when_the_list_is_left_unset() {
+        // The gap this closed: `rdp,ssh,vnc` omitted kubernetes, and
+        // under native-only an omitted protocol is refused rather than
+        // quietly handed to guacd.
+        let available = RoutingPolicy::compiled_protocols();
+        assert!(eligible_protocols(None, &available).contains(&Protocol::KubeExec));
+        assert!(!eligible_protocols(Some("rdp,ssh,vnc"), &available).contains(&Protocol::KubeExec));
+    }
+
+    #[test]
+    fn an_explicit_list_is_honoured_and_typos_do_not_widen_it() {
+        let available = RoutingPolicy::compiled_protocols();
+        let eligible = eligible_protocols(Some("rdp, nonsense ,ssh"), &available);
+        assert_eq!(
+            eligible,
+            HashSet::from([Protocol::Rdp, Protocol::Ssh]),
+            "an unknown entry must not fall back to allowing everything"
+        );
+
+        // Naming nothing and naming only nonsense are different: the
+        // first expressed no restriction, the second expressed one we
+        // could not honour, and quietly widening that would enable the
+        // engine for protocols nobody asked for.
+        assert!(eligible_protocols(Some("nonsense"), &available).is_empty());
+    }
+
+    fn rdp_handshake(params: &[(&str, &str)]) -> HandshakeParams {
+        let mut hs = handshake("rdp", None);
+        hs.extra.clear();
+        for (k, v) in params {
+            hs.extra.insert((*k).to_owned(), (*v).to_owned());
+        }
+        hs
+    }
+
+    #[test]
+    fn a_connection_with_no_certificate_settings_behaves_as_it_always_did() {
+        let mut hs = rdp_handshake(&[]);
+        assert!(matches!(
+            rdp_cert_policy(&hs),
+            Ok(CertPolicy::Verify { extra_roots: None })
+        ));
+        hs.ignore_cert = true;
+        assert!(matches!(rdp_cert_policy(&hs), Ok(CertPolicy::Ignore)));
+    }
+
+    #[test]
+    fn an_attached_ca_and_a_pin_both_outrank_the_ignore_box() {
+        // An administrator who set either made a specific statement
+        // about this target; honouring "ignore certificate" over it
+        // would make the field a no-op, which is the class of bug the
+        // fields were added to fix.
+        let mut hs = rdp_handshake(&[(TRUSTED_CA_PEM_PARAM, "-----BEGIN CERTIFICATE-----")]);
+        hs.ignore_cert = true;
+        assert!(matches!(
+            rdp_cert_policy(&hs),
+            Ok(CertPolicy::Verify {
+                extra_roots: Some(_)
+            })
+        ));
+
+        let mut hs = rdp_handshake(&[(CERT_FINGERPRINTS_PARAM, A_FINGERPRINT)]);
+        hs.ignore_cert = true;
+        assert!(matches!(
+            rdp_cert_policy(&hs),
+            Ok(CertPolicy::Pinned { .. })
+        ));
+    }
+
+    #[test]
+    fn a_pin_outranks_an_attached_ca() {
+        // Pinning names one certificate; a CA vouches for a whole
+        // namespace. The narrower statement wins.
+        let hs = rdp_handshake(&[
+            (CERT_FINGERPRINTS_PARAM, A_FINGERPRINT),
+            (TRUSTED_CA_PEM_PARAM, "-----BEGIN CERTIFICATE-----"),
+        ]);
+        assert!(matches!(
+            rdp_cert_policy(&hs),
+            Ok(CertPolicy::Pinned { .. })
+        ));
+    }
+
+    #[test]
+    fn several_pins_may_be_listed_on_one_connection() {
+        // A host re-issued mid-rollout presents either certificate, so
+        // pinning only one would fail intermittently.
+        let hs = rdp_handshake(&[(
+            CERT_FINGERPRINTS_PARAM,
+            &format!("{A_FINGERPRINT},\n SHA256:{A_FINGERPRINT}"),
+        )]);
+        let Ok(CertPolicy::Pinned { fingerprints }) = rdp_cert_policy(&hs) else {
+            panic!("expected pinning");
+        };
+        assert_eq!(fingerprints.len(), 2);
+        assert_eq!(fingerprints[0], fingerprints[1]);
+    }
+
+    #[test]
+    fn a_mistyped_fingerprint_fails_the_connection_rather_than_narrowing_it() {
+        // Skipping the bad entry would leave the good ones looking like
+        // the whole list, so a typo would quietly change what the
+        // connection accepts instead of being corrected.
+        let hs = rdp_handshake(&[(CERT_FINGERPRINTS_PARAM, &format!("{A_FINGERPRINT}, wat"))]);
+        let err = rdp_cert_policy(&hs).expect_err("mistyped fingerprint");
+        assert!(err.contains("wat"), "{err}");
+
+        // And it is caught by preflight, before the target is dialled.
+        let err = preflight(Protocol::Rdp, &hs).expect_err("mistyped fingerprint");
+        assert!(err.contains("wat"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_fingerprint_list_is_not_treated_as_pinning() {
+        // Otherwise clearing the box would build a verifier that
+        // matches nothing and refuse every certificate.
+        let hs = rdp_handshake(&[(CERT_FINGERPRINTS_PARAM, "  ,\n  ")]);
+        assert!(matches!(
+            rdp_cert_policy(&hs),
+            Ok(CertPolicy::Verify { extra_roots: None })
+        ));
     }
 
     #[test]

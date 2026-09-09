@@ -34,6 +34,7 @@ rdp = [
     "dep:ironrdp-displaycontrol",
     "dep:ironrdp-rdpsnd",
     "dep:rustls-native-certs",
+    "dep:rustls-pki-types",
     "dep:x509-cert",
     "dep:sspi",
     "dep:picky",
@@ -88,6 +89,8 @@ async-trait = { workspace = true }
 # Wire parsing
 winnow = { workspace = true }
 base64 = { workspace = true }
+# Certificate fingerprints, for the pinning path in `tls.rs`.
+sha2 = { workspace = true }
 
 # Secrets
 secrecy = { workspace = true }

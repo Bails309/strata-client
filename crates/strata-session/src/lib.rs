@@ -57,7 +57,7 @@ pub mod routing;
 #[cfg(feature = "terminal")]
 pub mod terminal;
 #[cfg(any(feature = "rdp", feature = "kubernetes"))]
-pub(crate) mod tls;
+pub mod tls;
 pub mod transport;
 pub mod wol;
 

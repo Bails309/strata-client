@@ -43,6 +43,29 @@ export function FieldGrid({ children }: { children: React.ReactNode }) {
   return <div className="grid grid-cols-2 gap-x-4 gap-y-2">{children}</div>;
 }
 
+// ── Helper: stored CA bundles for the trust pickers ─────────────────
+
+/**
+ * Populated lazily so the widget shows up even if the user lacks Manage
+ * System — the slim picker route is open to any authenticated user.
+ * Failures are silenced because an empty list simply hides the dropdown.
+ */
+function useTrustedCas(): TrustedCaPickerEntry[] {
+  const [trustedCas, setTrustedCas] = useState<TrustedCaPickerEntry[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    getTrustedCasForPicker()
+      .then((rows) => {
+        if (!cancelled) setTrustedCas(rows);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return trustedCas;
+}
+
 // ── RDP Parameter Sections ──────────────────────────────────────────
 
 export function RdpSections({
@@ -56,6 +79,7 @@ export function RdpSections({
   ex: (k: string) => string;
   setEx: (k: string, v: string) => void;
 }) {
+  const trustedCas = useTrustedCas();
   return (
     <>
       <Section title="Authentication" defaultOpen>
@@ -95,6 +119,51 @@ export function RdpSections({
             </label>
           </div>
         </FieldGrid>
+      </Section>
+
+      <Section title="Certificate Trust">
+        <p className="text-xs opacity-60 mb-2">
+          Most RDP hosts present a self-signed certificate that the public trust store cannot
+          validate. Rather than ignoring it, identify the host by attaching the CA that issued its
+          certificate, or by pinning the certificate itself. Either takes precedence over{" "}
+          <strong>Ignore server certificate</strong> above.
+        </p>
+        <FieldGrid>
+          <Field
+            className="form-group !mb-0 col-span-2"
+            label="Trusted CA"
+            title="A stored CA bundle to trust in addition to the system store, for hosts whose certificate chains to a private root. Manage entries under Admin → Trusted CAs."
+          >
+            <Select
+              value={ex("trusted_ca_id")}
+              onChange={(v) => setEx("trusted_ca_id", v)}
+              options={[
+                { value: "", label: "— Use system default trust store —" },
+                ...trustedCas.map((c) => ({
+                  value: c.id,
+                  label: c.subject ? `${c.name} (${c.subject})` : c.name,
+                })),
+              ]}
+            />
+          </Field>
+          <Field
+            className="form-group !mb-0 col-span-2"
+            label="Pinned certificate fingerprints (one per line)"
+            title="SHA-256 fingerprints of the exact certificates this connection will accept. When set, the certificate chain is not consulted — this is how a self-signed host is identified, and it is the same trust model as the SSH host keys pinned on SSH connections."
+          >
+            <textarea
+              value={ex("cert-fingerprints")}
+              onChange={(e) => setEx("cert-fingerprints", e.target.value)}
+              rows={3}
+              placeholder={"AA:BB:CC:…  (openssl x509 -fingerprint -sha256)"}
+              className="font-mono text-xs"
+            />
+          </Field>
+        </FieldGrid>
+        <p className="text-xs opacity-60 mt-2">
+          Hex or <code>SHA256:</code> base64 are both accepted. A value that is not a whole SHA-256
+          digest is rejected when the session starts, rather than silently pinning nothing.
+        </p>
       </Section>
 
       <Section title="Basic Settings">
@@ -267,23 +336,6 @@ export function RdpSections({
 
       <Section title="Clipboard">
         <FieldGrid>
-          <Field
-            label="Normalize Clipboard"
-            title="Controls how line endings in clipboard content are normalized. 'Preserve' keeps original line endings, 'Unix' converts to LF, 'Windows' converts to CRLF."
-          >
-            <Select
-              value={ex("normalize-clipboard")}
-              onChange={(v) => setEx("normalize-clipboard", v)}
-              placeholder="Default (preserve)"
-              options={[
-                { value: "", label: "Default (preserve)" },
-                { value: "preserve", label: "Preserve" },
-                { value: "unix", label: "Unix (LF)" },
-                { value: "windows", label: "Windows (CRLF)" },
-              ]}
-            />
-          </Field>
-          <div className="form-group !mb-0" />
           <div className="form-group !mb-0">
             <span className="block" aria-hidden="true">
               &nbsp;
@@ -338,43 +390,6 @@ export function RdpSections({
                 className="checkbox"
               />
               Disable audio playback
-            </label>
-          </div>
-        </FieldGrid>
-        <hr className="border-0 border-t border-border my-3" />
-        <FieldGrid>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Disables file downloads from the remote desktop to the local browser."
-            >
-              <input
-                type="checkbox"
-                checked={ex("disable-download") === "true"}
-                onChange={(e) => setEx("disable-download", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Disable file download
-            </label>
-          </div>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Disables file uploads from the local browser to the remote desktop."
-            >
-              <input
-                type="checkbox"
-                checked={ex("disable-upload") === "true"}
-                onChange={(e) => setEx("disable-upload", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Disable file upload
             </label>
           </div>
         </FieldGrid>
@@ -1006,11 +1021,7 @@ export function SshSections({
                     >
                       Approve
                     </button>
-                    <button
-                      type="button"
-                      className="btn text-xs"
-                      onClick={() => setProbe(null)}
-                    >
+                    <button type="button" className="btn text-xs" onClick={() => setProbe(null)}>
                       Discard
                     </button>
                   </div>
@@ -1537,22 +1548,8 @@ export function WebSections({
     setEx("allowed_domains", cleaned.length ? JSON.stringify(cleaned) : "");
   };
 
-  // Trusted CA picker — populated lazily so the widget shows up
-  // even if the user lacks Manage System (the slim picker route is
-  // open to any authenticated user). Failures are silenced because
-  // an empty list simply hides the dropdown.
-  const [trustedCas, setTrustedCas] = useState<TrustedCaPickerEntry[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    getTrustedCasForPicker()
-      .then((rows) => {
-        if (!cancelled) setTrustedCas(rows);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Trusted CA picker — shared with the RDP form.
+  const trustedCas = useTrustedCas();
 
   return (
     <>

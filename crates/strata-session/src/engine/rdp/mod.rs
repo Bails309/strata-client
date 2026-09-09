@@ -87,6 +87,7 @@ use crate::engine::rdp::kdc::KdcNetworkClient;
 use crate::engine::rdp::keycodes::keysym_to_scancode;
 use crate::engine::{EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec};
 use crate::error::EngineError;
+use crate::tls::CertPolicy;
 
 /// Events buffered from the session thread before it applies backpressure.
 const EVENT_QUEUE_DEPTH: usize = 256;
@@ -120,12 +121,13 @@ pub struct RdpConfig {
     pub disable_copy: bool,
     /// Never carry the client's clipboard to the target.
     pub disable_paste: bool,
-    /// Verify the target's TLS certificate against the host trust store.
+    /// What the connection accepts from the target's TLS certificate.
     ///
-    /// Mirrors the connection's `ignore-cert` box, inverted. Most RDP
-    /// hosts are self-signed, so enabling this needs the signing CA
-    /// installed or the connection will refuse to start.
-    pub verify_certificate: bool,
+    /// Most RDP hosts are self-signed, so plain system-store
+    /// verification needs the signing CA installed. The other two arms
+    /// exist for that case: attach the issuing CA to the connection, or
+    /// pin the certificate's fingerprint directly.
+    pub cert_policy: CertPolicy,
 }
 
 /// Desktop features the target may enable, mirroring guacd's
@@ -186,7 +188,7 @@ impl Default for RdpConfig {
             read_only: false,
             disable_copy: false,
             disable_paste: false,
-            verify_certificate: false,
+            cert_policy: CertPolicy::default(),
         }
     }
 }
@@ -568,10 +570,9 @@ impl RdpSession {
             .map_err(map_connector)?;
 
         let initial = framed.into_inner_no_leftover();
-        let (upgraded_stream, server_cert) =
-            tls::upgrade(initial, &hostname, config.verify_certificate)
-                .await
-                .map_err(EngineError::Transport)?;
+        let (upgraded_stream, server_cert) = tls::upgrade(initial, &hostname, &config.cert_policy)
+            .await
+            .map_err(EngineError::Transport)?;
 
         // CredSSP binds to the server's public key, which is what keeps
         // an unverified certificate usable when the connection opted out

@@ -1580,8 +1580,10 @@ describe("SessionsTab", () => {
     await user.click(screen.getByText("Sessions"));
     expect(await screen.findByText("72")).toBeInTheDocument();
     expect(screen.getByText("1.2")).toBeInTheDocument();
-    expect(screen.getByText("5")).toBeInTheDocument();
-    expect(screen.getByText("3")).toBeInTheDocument();
+    // Scoped to their own cards: the engine-cost cards added alongside
+    // these render small integers too, so a bare getByText is ambiguous.
+    expect(screen.getByText("Unique Users").parentElement).toHaveTextContent("5");
+    expect(screen.getByText("Active Now").parentElement).toHaveTextContent("3");
     expect(screen.getByText(/last 30 days/i)).toBeInTheDocument();
   });
 
@@ -2651,16 +2653,15 @@ describe("ConnectionForm protocol sections", () => {
     expect(screen.getByText(/Security Mode/)).toBeInTheDocument();
   });
 
-  it("expands RDP Remote Desktop Gateway section", async () => {
+  it("expands RDP Certificate Trust section", async () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("Access"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
-    await user.click(screen.getByRole("button", { name: /▸ Remote Desktop Gateway/ }));
-    expect(screen.getByText("Gateway Hostname")).toBeInTheDocument();
-    expect(screen.getByText("Gateway Port")).toBeInTheDocument();
-    expect(screen.getByText("Gateway Username")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /▸ Certificate Trust/ }));
+    expect(screen.getByText("Trusted CA")).toBeInTheDocument();
+    expect(screen.getByText(/Pinned certificate fingerprints/)).toBeInTheDocument();
   });
 
   it("expands RDP Basic Settings section", async () => {
@@ -2693,14 +2694,17 @@ describe("ConnectionForm protocol sections", () => {
     expect(screen.getByText("Enable wallpaper")).toBeInTheDocument();
   });
 
-  it("expands RDP Drive Redirection section", async () => {
+  it("expands RDP Device Redirection section", async () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("Access"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ Device Redirection/ }));
-    expect(screen.getByText("Enable drive / file transfer")).toBeInTheDocument();
+    // Drive and printer redirection were withdrawn with the RDPDR
+    // channel; audio playback is all this section still carries.
+    expect(screen.getByText("Disable audio playback")).toBeInTheDocument();
+    expect(screen.queryByText("Disable file download")).not.toBeInTheDocument();
   });
 
   it("expands RDP Screen Recording section", async () => {
@@ -2731,16 +2735,8 @@ describe("ConnectionForm protocol sections", () => {
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ Clipboard/ }));
     expect(screen.getByText("Disable copy from remote")).toBeInTheDocument();
-  });
-
-  it("expands RDP RemoteApp section", async () => {
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText("Access"));
-    await screen.findByText("Server A");
-    await user.click(screen.getByText("+ Add Connection"));
-    await user.click(screen.getByRole("button", { name: /▸ RemoteApp/ }));
-    expect(screen.getByPlaceholderText("||notepad")).toBeInTheDocument();
+    // Line-ending normalisation was never wired to anything.
+    expect(screen.queryByText("Normalize Clipboard")).not.toBeInTheDocument();
   });
 
   it("expands RDP Load Balancing section", async () => {

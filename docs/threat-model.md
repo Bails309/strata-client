@@ -18,14 +18,20 @@ flowchart LR
     Browser -->|TLS| Nginx
     Nginx["Nginx (frontend)"]
     Nginx -->|HTTP| Backend
-    Backend["Backend (Rust / Axum)"]
+    Backend["Backend (Rust / Axum)<br/>incl. session engine"]
     Backend --> Postgres([PostgreSQL])
     Backend --> Vault([HashiCorp Vault])
-    Backend --> Guacd([guacd pool])
-    Guacd --> Targets([Target servers (RDP/VNC/SSH)])
+    Backend --> Targets([Target servers (RDP/VNC/SSH/K8s)])
     AD([Active Directory])
     AD -->|LDAP / LDAPS| Backend
 ```
+
+> **Changed in v2.0.0.** The `guacd` pool was a node on this diagram and is
+> gone; the session engine is compiled into the backend. The security-relevant
+> consequence is that **a trust boundary was removed, not moved** — target
+> credentials no longer leave the backend process to cross a plaintext socket
+> to a separate container. See [§2.8](#28-session-engine-in-process) for what
+> that costs as well as what it buys.
 
 ### 1.2 Trust zones
 
@@ -35,7 +41,7 @@ flowchart LR
 | **Edge**        | Nginx (terminates TLS, serves SPA) | Backend             |
 | **Application** | Backend, internal Docker network   | Vault, DB           |
 | **Data**        | PostgreSQL, Vault                  | Backend only        |
-| **Target**      | RDP/VNC/SSH targets, AD            | Backend (via guacd) |
+| **Target**      | RDP/VNC/SSH targets, AD            | Backend directly    |
 
 ### 1.3 Critical assets
 
@@ -43,7 +49,7 @@ flowchart LR
 2. **Session recordings** (contain on-screen secrets).
 3. **JWT signing key** (loss → arbitrary user impersonation).
 4. **Database** (audit logs, password hashes, RBAC).
-5. **Active sessions** in `guacd` (live RDP/VNC/SSH streams).
+5. **Active sessions** in the backend process (live RDP/VNC/SSH/K8s streams).
 
 ---
 
@@ -87,17 +93,17 @@ flowchart LR
 | **E** RBAC bypass               | Direct API hit on hidden route                       | Automated negative-test pack `e2e/tests/rbac.spec.ts` exercises every protected route with (a) no auth, (b) authenticated-but-unprivileged Bearer, and (c) cookie auth without/with bad CSRF; admin routes must return 403 to a no-permission user. **W4-4 complete.** | OK                     |
 | **E** IDOR                      | `/api/connections/:id` for another user's connection | Every row-scoped query joins on `user_permissions`/`role_permissions`; covered by `rbac.spec.ts` wrong-role probes. **W4-4 complete.**                                                                                                                                 | OK                     |
 
-### 2.4 Tunnel proxy (WS ↔ guacd)
+### 2.4 Tunnel proxy (WS ↔ session engine)
 
 | Threat                             | Vector                                  | Mitigation                                                                                                   | Residual                          |
 | ---------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------- |
 | **S** Tunnel hijack                | Stealing a tunnel ticket                | Tickets are single-use, scoped to (user, connection, expiry < 60s), validated on `/tunnel` upgrade           | OK                                |
-| **T** Mid-stream injection         | MITM on internal hop                    | Internal Docker network only; backend ↔ guacd is non-routed                                                  | Acceptable for default deployment |
+| **T** Mid-stream injection         | MITM on the internal hop                | **No internal hop.** The instruction stream is produced in-process; there is no socket between the router and the engine to interpose on | Eliminated in v2.0.0              |
 | **R** Session attribution          | "Who opened this RDP session?"          | Tunnel ticket binds to user; `audit_logs.session_open` row written before WS upgrade                         | OK                                |
 | **I** Session recording theft      | Direct file access                      | Recordings stored on disk with per-session ownership token; download via capability-token URL with short TTL | OK                                |
-| **I** Credential exposure to guacd | Plaintext password sent on `connect`    | Internal network only; never logged; in-memory only                                                          | Acceptable                        |
+| **I** Credential exposure in transit | Plaintext password crossing a process boundary | **No longer applicable.** Decrypted credentials stay in backend process memory and are handed to the protocol implementation by reference; never logged | Eliminated in v2.0.0              |
 | **D** Tunnel exhaustion            | Open many tunnels                       | Per-user concurrent session cap (`max_concurrent_sessions`)                                                  | OK                                |
-| **E** Connection swap              | Open ticket for connection A, talk to B | guacd handshake uses the params encoded in the ticket; mismatch closes the WS                                | OK                                |
+| **E** Connection swap              | Open ticket for connection A, talk to B | The engine is handed the params encoded in the ticket and never re-reads them from the client; mismatch closes the WS | OK                                |
 
 ### 2.5 Vault integration
 
@@ -130,14 +136,37 @@ flowchart LR
 | **D** Connection exhaustion           | sqlx pool exhausted            | Pool size + acquire timeout; circuit breaker on failure                             | OK         |
 | **E** SQL injection → arbitrary write | See 2.3 — sqlx checked queries | OK                                                                                  |
 
-### 2.8 guacd (and the vendored Guacamole patches)
+### 2.8 Session engine (in-process)
 
-| Threat                                               | Vector                                 | Mitigation                                                                                    | Residual                                     |
-| ---------------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| **T** Patched guacd diverges from upstream CVE fixes | Custom H.264 patches missed in upgrade | `guacd/patches/` is small and reviewed on every guacamole-server bump; CI pin to image digest | Maintenance burden — acknowledged            |
-| **I** RDP credential logging                         | Verbose guacd logs                     | Default log level excludes secrets; audit on bump                                             | Spot-check                                   |
-| **D** Buggy patch crashes guacd                      | OOM, segfault                          | Pool replaces failed instance; per-pool circuit breaker                                       | OK                                           |
-| **E** Container escape from guacd                    | Kernel exploit                         | Container runs with dropped caps + read-only root; no privileged mode; non-root user          | OK for default; document any custom override |
+> **Replaces the former "guacd (and the vendored Guacamole patches)" section.**
+> Removing the daemon removed four threats and introduced one. Both halves are
+> recorded here, because the trade is the point.
+
+**Retired in v2.0.0:**
+
+| Retired threat                                       | Why it no longer applies                                                                                       |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **T** Patched guacd diverges from upstream CVE fixes | There are no vendored C patches. The maintenance burden this section explicitly acknowledged is gone.          |
+| **I** RDP credential logging via verbose guacd logs  | No second process with its own log level and its own view of the credential.                                    |
+| **D** Buggy patch crashes guacd                      | No shared daemon whose crash takes unrelated sessions with it.                                                  |
+| **E** Container escape from guacd                    | No separate container. This also removes the C attack surface that made escape worth modelling in the first place. |
+
+**Introduced in v2.0.0 — the honest cost:**
+
+| Threat                              | Vector                                                                 | Mitigation                                                                                                                                                                                                 | Residual                                                             |
+| ----------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| **D/E** Blast radius of an engine fault | A malicious or malformed frame from a **target** now reaches code inside the process that holds Vault-decrypted credentials and the DB pool | Protocol parsing is safe Rust — the memory-corruption class that motivated isolating `guacd` is not reachable. Each session runs in its own task with its own bounded buffers; a panic is caught at the task boundary and closes that session only. | **Accepted, and the most important residual in this release.** A logic flaw in the engine is no longer contained by a process boundary. |
+| **D** Resource exhaustion by a hostile target | Oversize frames, unbounded clipboard, runaway image data              | Fixed ceilings enforced in the engine: 8 MiB per clipboard direction (`MAX_CLIPBOARD_BYTES`), 16 MiB per-instruction pending buffer, per-user concurrent session cap                                       | OK                                                                    |
+| **I** Target-controlled data in backend logs | A target supplying hostile strings that get logged                     | Engine logs are structured and record sizes, opcodes and timings — not payloads                                                                                                                          | Spot-check on protocol additions                                      |
+
+> **Why the trade was judged acceptable.** The retired threats were live and
+> recurring — tracking upstream `guacamole-server` CVEs against a patched fork
+> is continuous work, and getting it wrong is a memory-safety bug in C reachable
+> from a target. The introduced threat is a *containment* regression against a
+> *memory-safe* implementation. Operators who need the process boundary back
+> should run the backend itself with reduced privileges and a dropped capability
+> set, which is the mitigation that was previously applied to the `guacd`
+> container.
 
 ### 2.9 VDI driver (experimental)
 
@@ -292,7 +321,7 @@ flowchart LR
     DMZ["DMZ NODE (strata-dmz)<br/><sub>terminates TLS<br/>signs edge headers<br/>proxies over h2-in-mTLS reverse tunnel<br/>no business secrets</sub>"]
     Backend["Backend (Rust / Axum)"]
     Backend -.->|"mTLS link (outbound)"| DMZ
-    Backend --> Internal([Vault, Postgres, AD, guacd, …])
+    Backend --> Internal([Vault, Postgres, AD, targets, …])
 ```
 
 ### 6.2 New trust zones

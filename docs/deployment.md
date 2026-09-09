@@ -315,14 +315,13 @@ runtime delivery and are documented here for production deployments:
 | ------------------------------- | ------------------------------------------------------------------------------------------------- |
 | RDP / SSH / VNC + web (default) | `docker compose up -d --build`                                                                    |
 | Add bundled PostgreSQL          | `docker compose --profile local-db up -d --build`                                                 |
-| Add a second guacd              | `docker compose --profile scale up -d --build`                                                    |
 | Add antivirus scanning          | `docker compose --profile av up -d --build`                                                       |
 | Add VDI                         | `docker compose -f docker-compose.yml -f docker-compose.vdi.yml up -d --build`                    |
 | Everything                      | `docker compose -f docker-compose.yml -f docker-compose.vdi.yml --profile local-db up -d --build` |
 
 `-f` flags select which compose files to merge (structural — for
 VDI's host-root mount). `--profile` flags select which optional
-services to start (local postgres, extra guacd). The two are
+services to start (local postgres, antivirus). The two are
 independent.
 
 > **Set `COMPOSE_PROFILES` in `.env` if you run any optional service.**
@@ -331,10 +330,10 @@ independent.
 > `docker compose up -d --build` does **not** stop services outside the
 > active set — so a profiled container carries on running its **old image**
 > while everything else is upgraded, with no error and nothing in the diff
-> to notice. On the `scale` profile that means `guacd` and `guacd-2` end up
-> on different builds, and because sessions distribute across both, a
-> version-dependent bug then appears to be *intermittently* fixed. That is
-> a genuinely difficult thing to diagnose after the fact.
+> to notice. On the `av` profile that means `clamav` carries on running an
+> old image while the backend is upgraded, so a signature or fail-mode
+> change appears not to have taken — a genuinely difficult thing to
+> diagnose after the fact.
 >
 > Putting the profiles in `.env` removes the footgun permanently, because
 > every later `ps`, `logs`, `down` and `up` sees the same set:
@@ -545,7 +544,7 @@ To automatically import computer accounts from Active Directory:
    - **Protocol / Port** — default protocol and port for imported connections (e.g. RDP/3389)
    - **Group** — optional connection group for imported connections
    - **CA Certificate** — upload an internal CA cert (PEM) if using LDAPS with self-signed certificates
-   - **Connection Defaults** (RDP only) — configure Guacamole parameters applied to all synced connections:
+   - **Connection Defaults** (RDP only) — connection parameters applied to all synced connections:
      - _Display & Performance_: ignore server certificate, enable wallpaper/font smoothing/desktop composition/theming/full-window drag/menu animations, disable bitmap/glyph/offscreen caching, disable GFX pipeline
      - _Session Recording_: recording path, recording name (supports `${GUAC_DATE}`, `${GUAC_TIME}`, `${GUAC_USERNAME}` tokens), auto-create recording path, include key events, exclude mouse/touch/graphical output
 4. Click **⚡ Test Connection** to validate connectivity and preview discovered objects
@@ -1055,39 +1054,24 @@ docker compose up -d --build
 
 The backend automatically runs any new SQL migrations on startup using advisory locks, so it is safe to scale horizontally. Migrations `001` through `048` are applied in order. If a previously-applied migration's checksum has changed (e.g. due to line-ending normalisation), the backend auto-repairs the stored checksum before proceeding, so no manual database intervention is required.
 
-### Custom guacd
+### Session engine upgrades
 
-> **Warning:** Restarting guacd drops all active user sessions. Schedule upgrades during a maintenance window.
-
-#### Automated (CI/CD)
-
-The GitHub Actions workflow at `.github/workflows/build-guacd.yml` runs weekly and pushes to GHCR. To use the pre-built image:
-
-1. Update `docker-compose.yml` to pull from your registry:
-
-   ```yaml
-   guacd:
-     image: ghcr.io/your-org/custom-guacd:latest
-   ```
-
-2. Pull and restart:
-   ```bash
-   docker compose pull guacd
-   docker compose up -d guacd
-   ```
-
-#### Manual
-
-```bash
-# Clone the latest release
-git clone --depth 1 --branch <version> https://github.com/apache/guacamole-server.git /tmp/guac-src
-
-# Build with the custom Dockerfile (already configured)
-docker build -t custom-guacd:latest ./guacd
-
-# Recreate the container
-docker compose up -d guacd
-```
+> **Changed in v2.0.0.** This section previously covered rebuilding the custom
+> `guacd` image, either from `.github/workflows/build-guacd.yml` weekly or by
+> hand from `./guacd`. Neither exists. The session engine is compiled into the
+> backend binary, so **upgrading it is upgrading the backend**:
+>
+> ```bash
+> docker compose up -d --build backend
+> ```
+>
+> The old warning still applies for the same reason it always did, now for the
+> backend rather than a sidecar: **restarting drops active sessions.** Schedule
+> upgrades during a maintenance window. The engine hands the process shutdown
+> signal to the session loop so the browser is told the gateway restarted
+> rather than that the *target* hung up — the latter suppresses the client's
+> automatic reconnect, which is what made a restart look like a target fault
+> before this was wired up.
 
 ---
 
@@ -1095,11 +1079,23 @@ docker compose up -d guacd
 
 ### Backend Scaling
 
-The Rust backend is stateless (session state lives in the WebSocket connection and guacd). To run multiple instances:
+The Rust backend holds session state in-process (v2.0.0+): a session is a
+Tokio task inside the backend that owns the socket to the target. It is
+therefore **not** stateless with respect to live sessions — a backend restart
+ends the sessions it was serving, and a load balancer must keep a session's
+WebSocket on the instance that opened it.
+
+To run multiple instances:
 
 1. Point all instances at the same external PostgreSQL database
-2. Place behind a load balancer with sticky sessions (or WebSocket-aware routing)
-3. The advisory-lock migration system ensures only one instance applies schema changes
+2. Place behind a load balancer with **sticky sessions** or WebSocket-aware
+   routing. This is required, not merely recommended — a WebSocket that
+   lands on a different instance mid-session has no session to attach to
+3. The advisory-lock migration system ensures only one instance applies
+   schema changes
+
+Scaling the backend is now how you scale the session tier. There is no
+separate daemon pool.
 
 ### Database
 
@@ -1109,96 +1105,34 @@ Use a managed PostgreSQL service (e.g., AWS RDS, Azure Database for PostgreSQL, 
 - Read replicas (for audit log queries)
 - Connection pooling (PgBouncer)
 
-### guacd Scaling
+### Session capacity planning
 
-For environments with many concurrent sessions, deploy additional guacd sidecar instances. Each guacd instance handles approximately 10–15 concurrent RDP sessions with H.264 encoding.
+A session's cost is **measured rather than estimated** since v2.0.0, because
+the engine's allocations are known: two 1920×1080 framebuffers at four bytes
+per pixel — the live one and the previous frame used to narrow the target's
+damage rectangles — plus roughly 8 MB of channel and encoder state. About
+**24 MB per RDP session**. Terminal protocols hold a character grid rather
+than a framebuffer and are much lighter.
 
-#### Adding a Second guacd Instance
+The admin **Sessions** tab computes the host's recommended maximum from this
+figure and the host's actual CPU and memory, reserving 30% headroom, so
+prefer that number over a table. As a rule of thumb:
 
-The default `docker-compose.yml` includes a pre-configured `guacd-2` service behind the `scale` profile:
+| Host | Approx. concurrent RDP sessions |
+| ---- | ------------------------------- |
+| 2 vCPU / 4 GB   | ~9 (CPU-bound)  |
+| 4 vCPU / 8 GB   | ~18 (CPU-bound) |
+| 8 vCPU / 16 GB  | ~37 (CPU-bound) |
+| 16 vCPU / 32 GB | ~74 (CPU-bound) |
 
-```bash
-# Enable the scale profile and set the sidecar address
-GUACD_INSTANCES=guacd-2:4822 docker compose --profile scale up -d
-```
+CPU is the binding constraint at these ratios, not memory. Add hosts behind
+the load balancer to go further.
 
-The backend discovers `guacd-2` via the `GUACD_INSTANCES` environment variable and distributes new connections across both `guacd` (the default) and `guacd-2` using a round-robin `GuacdPool`.
-
-#### Adding 3 or More guacd Instances
-
-To scale beyond 2 instances, duplicate the `guacd-2` service block in `docker-compose.yml` for each additional sidecar:
-
-```yaml
-# ── Additional guacd sidecar (copy this block for guacd-4, guacd-5, etc.)
-guacd-3:
-  build:
-    context: ./guacd
-    dockerfile: Dockerfile
-  image: strata/custom-guacd:latest
-  restart: unless-stopped
-  profiles:
-    - scale
-  networks:
-    - guac-internal
-  volumes:
-    - guac-recordings:/var/lib/guacamole/recordings
-    - guac-drive:/var/lib/guacamole/drive
-    - krb5-config:/etc/krb5
-    - backend-config:/app/config:ro
-  environment:
-    - KRB5_CONFIG=/etc/krb5/krb5.conf
-  security_opt:
-    - no-new-privileges:true
-  cap_drop:
-    - ALL
-  cap_add:
-    - SETGID
-    - SETUID
-  healthcheck:
-    test: ["CMD-SHELL", "nc -z localhost 4822 || exit 1"]
-    interval: 15s
-    timeout: 5s
-    retries: 3
-```
-
-Then list all sidecar hostnames in `GUACD_INSTANCES` (comma-separated):
-
-```bash
-# .env
-GUACD_INSTANCES=guacd-2:4822,guacd-3:4822
-```
-
-Or configure via `config.toml`:
-
-```toml
-guacd_instances = ["guacd-2:4822", "guacd-3:4822"]
-```
-
-Start everything:
-
-```bash
-docker compose --profile scale up -d
-```
-
-#### Capacity Planning
-
-| Concurrent sessions | guacd instances | Estimated CPU cores |
-| ------------------- | --------------- | ------------------- |
-| Up to 15            | 1 (default)     | 2                   |
-| 15–30               | 2               | 4                   |
-| 30–45               | 3               | 6                   |
-| 45–60               | 4               | 8                   |
-
-> **Note:** Each concurrent RDP session with H.264 GFX uses approximately 1 CPU core at peak. SSH and VNC sessions are significantly lighter (~0.1 cores each). Adjust instance count based on your protocol mix.
-
-#### How It Works
-
-- The primary `guacd` service (always running) handles connections by default
-- Sidecar instances listed in `GUACD_INSTANCES` are added to the round-robin pool
-- New tunnel connections are distributed evenly across all healthy instances
-- Each guacd instance independently connects to target hosts, so they can be placed in different network segments if needed
-- All instances share the same `guac-recordings`, `guac-drive`, and `krb5-config` volumes
-- If a sidecar is unreachable, the backend skips it and routes to the next available instance
+> **Changed in v2.0.0.** This section previously documented adding `guacd`
+> sidecars via `GUACD_INSTANCES` and the `scale` compose profile, sized at
+> ~10–15 concurrent RDP sessions per instance. The daemon, the pool, the
+> environment variable and the profile have all been removed — see the
+> [v2.0.0 upgrade notes](#v1146--v200-guacd-removed-native-rust-session-engine).
 
 ### Vault
 
@@ -1373,7 +1307,6 @@ flowchart LR
         Backend --> Vault["Vault"]
         Backend --> Postgres["PostgreSQL"]
         Backend --> AD["Active Directory"]
-        Backend --> Guacd["guacd"]
     end
     Backend -.->|mTLS h2 link<br/>:8444 outbound| DMZ
 ```
@@ -1833,7 +1766,6 @@ flowchart TB
     subgraph InternalHost["Internal host (no public IP)"]
         Backend["backend"]
         Backend --- Postgres["postgres"]
-        Backend --- Guacd["guacd"]
         Backend --- Vault["vault"]
     end
     Backend -.->|"mTLS link<br/>:8444 (outbound only)"| DMZ
@@ -2047,11 +1979,9 @@ flowchart LR
         BE["backend<br/><sub>:8080 (LAN-only listener)<br/>+ outbound mTLS link to DMZ</sub>"]
         PG[("postgres")]
         VA["vault"]
-        GD["guacd"]
         IFE -->|"HTTP/HTTPS<br/>over docker net"| BE
         BE --- PG
         BE --- VA
-        BE --- GD
     end
 
     subgraph DMZHost["DMZ host"]
@@ -2067,8 +1997,8 @@ flowchart LR
 
 > **Trust model invariant.** The two ingress paths land in the same
 > axum router and share the **same** auth/CSRF/session/RBAC
-> enforcement, the same database, the same Vault, the same guacd
-> pool. There is exactly ONE enforcement point — the backend's
+> enforcement, the same database, the same Vault, the same session
+> engine. There is exactly ONE enforcement point — the backend's
 > middleware stack — regardless of which ingress a request arrived
 > on. The `x-strata-edge-*` headers only **enrich** trusted
 > requests with the public client IP and link provenance; they
@@ -2150,7 +2080,7 @@ This brings up the **full** internal stack:
 - `frontend` — nginx serving the SPA on `:443` to the corp LAN
 - `backend` — axum router, public listener on `:8080` AND outbound
   mTLS link to the DMZ
-- `postgres-local`, `vault`, `guacd` — unchanged from a
+- `postgres-local`, `vault` — unchanged from a
   non-DMZ deployment
 
 > **What about [docker-compose.internal.yml](../docker-compose.internal.yml)?**
@@ -2677,9 +2607,9 @@ The `config.toml` file is stored in the `backend-config` Docker volume. Back it 
 | ----------------------- | ------------------------------------------------------------------------- |
 | `GET /api/health`       | Returns `{"status":"ok"}` if the backend is running                       |
 | `GET /api/status`       | Returns boot phase, database connectivity, and vault configuration status |
-| `GET /api/admin/health` | Returns detailed health for database, guacd, and vault (including mode)   |
+| `GET /api/admin/health` | Returns detailed health for the database, the session engine, and vault (including mode) |
 
-Docker health checks are configured for `guacd` (TCP 4822), `postgres-local` (`pg_isready`), and `vault` (sys/health endpoint).
+Docker health checks are configured for `postgres-local` (`pg_isready`) and `vault` (sys/health endpoint). There is no longer a `guacd` container to health-check on TCP 4822; the session engine's readiness is reported inside `/api/admin/health` as `engine.protocols` (what it can serve) and `engine.withheld` (what was compiled out), which is strictly more informative than a socket probe — a reachable daemon told you nothing about which protocols it had been built with.
 
 ---
 
@@ -2710,9 +2640,9 @@ Clipboard synchronisation requires the [Clipboard API](https://developer.mozilla
 
 #### Diagnosing clipboard problems (v1.14.4+)
 
-Clipboard failures are silent by construction — the Guacamole clipboard
-stream has no error instruction for a transfer the remote simply never
-completes — so both ends carry opt-in instrumentation. Neither records
+Clipboard failures are silent by construction — the clipboard stream has no
+error instruction for a transfer the remote simply never
+completes — so the browser carries opt-in instrumentation. It does not record
 clipboard **contents**: only opcodes, stream indices, payload sizes,
 timings, and a non-reversible digest used to correlate entries. Traces
 are safe to attach to a support ticket.
@@ -2730,29 +2660,19 @@ tab's devtools console:
 | `strataClipboard.dump()`    | Structured entries, oldest first                         |
 | `strataClipboard.clear()`   | Reset the buffer                                         |
 
-**Backend side.** Set `STRATA_CLIPBOARD_TRACE=1` on the backend
-container to trace clipboard stream lifecycles in both directions:
+**Backend side.** Removed in v2.0.0. `STRATA_CLIPBOARD_TRACE` and the
+`docker-compose.clipboard-debug.yml` overlay traced the clipboard streams
+crossing the socket to `guacd`; there is no such socket now, and the tracer
+went with the daemon. The browser-side `strataClipboard` buffer above is
+unchanged and is the primary diagnostic.
 
-```bash
-# docker-compose.override.yml, or .env
-STRATA_CLIPBOARD_TRACE=1
-```
-
-| Env var                  | Default | Effect                                                                                           |
-| ------------------------ | ------- | ------------------------------------------------------------------------------------------------ |
-| `STRATA_CLIPBOARD_TRACE` | unset   | `1` / `true` enables per-tunnel clipboard stream tracing. Fully inert (zero parsing) when unset. |
-
-What to look for in the backend log:
-
-| Message                                                                     | Meaning                                                                                                                  |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `clipboard stream opened while another is still open in the same direction` | Two transfers overlapping. `guacd`'s RDP clipboard is one shared buffer, so this splices payloads and can wedge CLIPRDR. |
-| `clipboard stream never received end`                                       | The remote abandoned a transfer — the delayed-render CLIPRDR hang behind the v1.14.1 watchdog.                           |
-| `clipboard stream-end` with `blobs=0`                                       | The remote announced a clipboard format and then produced nothing.                                                       |
-| `clipboard stream ack reported an error`                                    | `guacd` rejected a chunk; the accompanying code identifies why.                                                          |
-
-To correlate with `guacd`'s own CLIPRDR logging, raise its log level
-(`GUACD_LOG_LEVEL=debug`) in the same window.
+The failure modes that tracer existed to catch were properties of `guacd`'s
+single shared RDP clipboard buffer — overlapping transfers splicing their
+payloads, and an oversize copy being discarded rather than truncated. Neither
+can occur now: the engine gives each direction its own 8 MiB ceiling and logs
+a truncation rather than dropping the transfer. A transfer the remote
+abandons is still possible, and remains visible in the browser buffer as a
+stream that opens and never ends.
 
 ---
 
@@ -2764,7 +2684,7 @@ To correlate with `guacd`'s own CLIPRDR logging, raise its log level
 2. Click **Connect** on the connection row
 3. If Vault-stored credentials exist, the session opens immediately
 4. If no credentials are stored (RDP), a credential prompt appears — enter the username and password for the remote host, then click **Connect**
-5. For SSH connections without stored credentials, the session connects and `guacd` may issue an interactive credential prompt inside the session
+5. For SSH connections without stored credentials, the session connects and the remote host may issue an interactive credential prompt inside the session
 
 ### Tiled Multi-Session View
 
@@ -2819,20 +2739,30 @@ No manual action is required. Clipboard sync works with both RDP and SSH session
 >
 > If you are on a host that was already stuck before this release, log off the Windows session once (not just disconnect) to restart `rdpclip.exe`.
 
-> **Size limits (v1.14.6+).** There is a hard ceiling on how much text can cross the clipboard in one operation, set by `guacd`'s per-connection clipboard buffer. Strata requests **8 MiB**, which is comfortably beyond normal use. Two things are worth knowing:
+> **Size limits (rewritten in v2.0.0).** The ceiling is **8 MiB per
+> direction**, applied symmetrically, and it is a constant in the engine
+> (`MAX_CLIPBOARD_BYTES`) rather than something negotiated over a socket.
+> Exceeding it **truncates and logs** — in both directions.
 >
-> - **Exceeding the ceiling when copying _from_ the remote loses the copy entirely** — you get nothing, rather than a shortened version. That is `guacd`'s behaviour: the conversion into its fixed buffer fails, and the code that would have delivered the text is skipped. Nothing is logged at default verbosity, so it presents purely as "the clipboard didn't update".
-> - **Exceeding it when pasting _into_ the remote truncates instead**, at roughly half the buffer, because that direction converts to UTF-16.
+> That is the behaviour change worth knowing about. Under `guacd`, overrunning
+> the buffer when copying _from_ the remote lost the copy **entirely**: the
+> conversion into its fixed buffer failed, the delivery was skipped, and
+> nothing was logged at default verbosity, so it presented purely as "the
+> clipboard didn't update". Pasting _into_ the remote truncated at roughly
+> half the buffer, because that direction converted to UTF-16. Neither
+> asymmetry survives.
 >
-> Before v1.14.6 the requested 8 MiB was **never applied to RDP connections** — the pinned `guacd` did not support the parameter for RDP, and Guacamole silently ignores parameters the server does not advertise, so RDP ran at a hard-coded **256 KiB**. A copy only slightly over that (for example a 12,747-line, 281,852-character script) vanished with no error, while a file that sounded larger but was smaller in bytes worked fine. **This is fixed by rebuilding the `guacd` image**, not by a backend upgrade — see the release notes for v1.14.6.
+> `STRATA_CLIPBOARD_BUFFER_BYTES` no longer exists and is ignored if set. It
+> was a request sent in the handshake, and there is no longer a peer to
+> request it from. The whitelisted per-connection `clipboard-buffer-size`
+> extra parameter is likewise inert.
 >
-> To confirm what a deployment is actually using:
+> If you are diagnosing a clipboard problem that used to be attributed to the
+> buffer, the truncation is now stated plainly in the backend log:
 >
 > ```sh
-> docker compose logs backend | grep -i "clipboard buffer"
+> docker compose logs backend | grep -i "clipboard"
 > ```
->
-> A line reading `clipboard buffer size negotiated with guacd … clipboard_buffer_size="8388608"` confirms it. A `WARN` that `guacd` did not advertise `clipboard-buffer-size` means transfers are capped at `guacd`'s 256 KiB default and the `guacd` image needs rebuilding. Set `STRATA_CLIPBOARD_BUFFER_BYTES` on the backend to raise the request (maximum `52428800`); Strata clamps it to the range `guacd` accepts, so the logged value is always the effective one. Reconnect existing sessions after changing it — the buffer is negotiated once, at connect.
 
 ### File Transfer
 
@@ -2940,5 +2870,5 @@ Display tags use your existing user tags (created from the Dashboard tag manager
 | 503 on all API calls            | Backend in setup mode            | Complete the first-boot wizard           |
 | 401 on authenticated routes     | SSO not configured               | Configure OIDC in Admin → SSO            |
 | Vault errors on credential save | Vault unreachable or key missing | Verify Vault URL, token, and transit key |
-| Sessions drop on guacd restart  | Expected — guacd is stateful     | Schedule restarts during maintenance     |
+| Sessions drop on backend restart | Expected — the engine is in-process | Schedule restarts during maintenance     |
 | Database migration race         | Multiple backends starting       | Advisory locks handle this automatically |

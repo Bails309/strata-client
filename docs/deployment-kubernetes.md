@@ -25,7 +25,6 @@ A production deployment is composed of these workloads:
 |-------------------|--------------------------|----------|-------|
 | `strata-backend`  | Deployment               | 1 today  | See **Multi-replica caveats** below before scaling out. |
 | `strata-frontend` | Deployment               | 2+       | Stateless nginx; safe to scale freely. |
-| `strata-guacd`    | Deployment               | 2+       | Stateless; sticky session per active connection enforced via the backend. |
 | `strata-dmz`      | Deployment (in DMZ namespace) | 1+ | Optional; only when running the DMZ edge. See [dmz-implementation-plan.md](dmz-implementation-plan.md). |
 | `vault`           | StatefulSet              | 1        | Or use a managed Vault. |
 | `postgres`        | StatefulSet or external  | 1        | Strongly prefer a managed Postgres. |
@@ -52,7 +51,15 @@ addressing them will cause correctness bugs:
 
 Run `replicas: 1` for `strata-backend` until a release notes that the
 shared backends (Redis, PostgreSQL `LISTEN/NOTIFY`) are wired in. The
-frontend and `guacd` can be scaled freely today.
+frontend can be scaled freely today.
+
+> **Changed in v2.0.0.** There is no `strata-guacd` Deployment. The session
+> engine is compiled into the backend, which removes the only workload that
+> was previously safe to scale horizontally for session capacity — so on
+> Kubernetes the single-replica backend constraint above is now also your
+> **session** capacity ceiling, not just your control-plane ceiling. Size the
+> backend pod accordingly (see [Resource requests & limits](#resource-requests--limits))
+> and treat a backend rollout as session-affecting.
 
 When that work lands, move the cache layers to Redis and the
 share-revocation broadcast to `LISTEN/NOTIFY`, then bump
@@ -62,7 +69,7 @@ worker.
 ## Namespaces
 
 ```
-strata-system     # backend, frontend, guacd, postgres, vault
+strata-system     # backend, frontend, postgres, vault
 strata-dmz        # optional DMZ edge, in a separate namespace with its
                   # own NetworkPolicy that only allows egress to the
                   # backend's link-server port.
@@ -162,7 +169,7 @@ If you front with Traefik, the equivalent annotations are
 
 ## NetworkPolicy
 
-The backend should be reachable only by the frontend, the guacd pool,
+The backend should be reachable only by the frontend,
 the DMZ edge (if deployed), and cluster-scrape monitors:
 
 ```yaml
@@ -177,7 +184,6 @@ spec:
   ingress:
     - from:
         - podSelector: { matchLabels: { app: strata-frontend } }
-        - podSelector: { matchLabels: { app: strata-guacd } }
         - namespaceSelector: { matchLabels: { name: strata-dmz } }
           podSelector: { matchLabels: { app: strata-dmz } }
         - namespaceSelector: { matchLabels: { name: monitoring } }
@@ -189,10 +195,12 @@ spec:
     # vault
     - to: [{ podSelector: { matchLabels: { app: vault } } }]
       ports: [{ port: 8200 }]
-    # guacd pool
-    - to: [{ podSelector: { matchLabels: { app: strata-guacd } } }]
-      ports: [{ port: 4822 }]
     # DNS, AD/LDAP, SMTP, OIDC discovery — open per environment
+    #
+    # NOTE (v2.0.0): backend egress must now also reach the RDP/VNC/SSH/K8s
+    # *targets* directly — previously that egress belonged to the guacd pods
+    # and the backend only needed to reach guacd on 4822. Widen this policy
+    # to your target networks or sessions will fail to connect.
 ```
 
 The DMZ namespace gets its own restrictive policy that only permits
@@ -233,16 +241,22 @@ Starting points for a 50–200 user deployment:
 
 | Workload          | CPU request | CPU limit | Memory request | Memory limit |
 |-------------------|------------:|----------:|---------------:|-------------:|
-| strata-backend    |       250m  |       2   |         512Mi  |        2Gi   |
+| strata-backend    |         1   |       4   |        1024Mi  |        4Gi   |
 | strata-frontend   |        50m  |     200m  |          64Mi  |       128Mi  |
-| strata-guacd      |       500m  |       2   |         256Mi  |        1Gi   |
 | strata-dmz (edge) |       100m  |     500m  |         128Mi  |       512Mi  |
 | postgres          |       500m  |       2   |        1024Mi  |        4Gi   |
 | vault             |       100m  |     500m  |         256Mi  |        1Gi   |
 
-Scale CPU on guacd horizontally first (it is the bottleneck under
-many concurrent RDP sessions). Scale memory on the backend if you run
-many concurrent file transfers.
+> **Changed in v2.0.0.** The backend request/limit is raised because it
+> absorbed the entire `strata-guacd` row. Size it on **CPU, not memory** — an
+> active session costs roughly **24 MB** of RSS, so a 4Gi limit is generous,
+> while frame encoding is CPU-bound and is what actually caps concurrency.
+> Memory still matters for concurrent file transfers.
+>
+> Do **not** set a CPU limit tight enough to throttle: CFS throttling on an
+> encode loop shows up to users as intermittent frame stutter rather than as a
+> resource error, which is a genuinely unpleasant thing to diagnose. Prefer a
+> generous limit with an accurate request.
 
 ## Graceful shutdown
 
@@ -296,7 +310,7 @@ runbook against a staging environment first.
 ## Common pitfalls
 
 * **WebSocket idle timeouts.** The default ingress idle timeout is
-  often 60 seconds; long-lived guacd sessions need an extended
+  often 60 seconds; long-lived remote sessions need an extended
   `proxy-read-timeout` (3600s). Symptoms: sessions disconnect after
   ~60s with no client error.
 * **TLS termination at the ingress only.** The backend expects to see

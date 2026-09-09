@@ -80,7 +80,7 @@ describe("NetworkTab", () => {
     expect(btn).not.toBeDisabled();
   });
 
-  it("calls updateDns + onSave with trimmed values, surfaces restart banner", async () => {
+  it("calls updateDns + onSave with trimmed values, and confirms which servers will be used", async () => {
     vi.mocked(updateDns).mockResolvedValueOnce({
       status: "ok",
       restart_required: true,
@@ -106,6 +106,10 @@ describe("NetworkTab", () => {
       })
     );
     expect(onSave).toHaveBeenCalled();
-    expect(await screen.findByText(/Restart required/i)).toBeInTheDocument();
+    // Since v2.0.0 the engine resolves in-process, so saving takes effect on
+    // the next session. Naming the servers back is the only confirmation the
+    // operator gets that the value landed.
+    expect(await screen.findByText(/Saved/i)).toBeInTheDocument();
+    expect(screen.getByText(/10\.0\.0\.1/)).toBeInTheDocument();
   });
 });

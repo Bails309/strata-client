@@ -4,6 +4,63 @@ This document describes the security model, encryption architecture, and authent
 
 ---
 
+## Session tier security posture (v2.0.0)
+
+v2.0.0 removed Apache Guacamole's `guacd` daemon and moved every protocol
+into native Rust engines running inside the backend process. That moves a
+trust boundary, and changes several security properties. This section
+states them in one place; the detail is in the sections that follow.
+
+**The boundary that disappeared.** Sessions were previously served by a
+separate C process reached over TCP 4822 on the internal Docker network.
+Credentials crossed that boundary as Guacamole connection parameters,
+which meant a decrypted password existed in a second process's address
+space, and could surface in that process's logs or argument vector.
+Session code is now in-process: the credential lives in a
+`secrecy::SecretString` that zeroes on drop, redacts in `Debug`, and is
+revoked on teardown even when engine shutdown fails.
+
+**The attack surface that disappeared.** `guacd` was the largest block of
+unmanaged C in the product — FreeRDP, libssh2, libvncclient, and five
+local patches to keep them working, all parsing attacker-influenced
+protocol data. The replacement engines are memory-safe Rust. This does
+not make protocol parsing risk-free, but it removes an entire class of
+it, and it removes a dependency whose CVE stream Strata had to track and
+rebuild for weekly.
+
+**Two controls that are now stricter, by design:**
+
+| Control | Before | v2.0.0 |
+| ------- | ------ | ------ |
+| **RDP NLA** | The connector advertised CredSSP *and* the legacy TLS security layer, so a target could negotiate down to a layer where the RDP connection completes **before any credential is checked** — authentication moving to an in-session login screen. A live test against a non-NLA xrdp produced a healthy, apparently authenticated session from a deliberately wrong password. | CredSSP is advertised **only**. A target that will not do NLA is refused. This is also why NLA cannot be optional: RDP certificates are self-signed as a matter of course, so it is CredSSP's binding to the server's public key that authenticates the target at all. |
+| **SSH host keys** | Verification depended on connection configuration. | Mandatory. The engine accepts a list of SHA-256 fingerprints and nothing else — there is deliberately no accept-anything mode, because an SSH gateway that skips host-key verification is a man-in-the-middle waiting to happen. Every key a host offers can be pinned, since which one is used comes out of negotiation. |
+
+**Certificate trust for RDP.** A connection can verify its target against
+an uploaded CA bundle or a pinned SHA-256 fingerprint, with precedence
+**pin > CA bundle > `ignore-cert`**. Certificate discovery reads the
+target's certificate over the very channel it is meant to protect and is
+deliberately **not** verified — it is the starting point for a human
+decision, not proof of anything.
+
+**Controls removed rather than reimplemented,** each because it widened
+the gateway's exposure for a capability that could be met another way:
+
+| Removed | Reasoning |
+| ------- | --------- |
+| RD Gateway (`gateway-*`) | A second, unaudited network hop around the gateway's own access control. |
+| Microphone input | A data-exfiltration path a privileged-access gateway should not open by default. |
+| Drive and printer redirection | Replaced by one SFTP path with a single permission model and a single audit trail, instead of three mechanisms with three. |
+| RemoteApp | Requires an alternate shell channel whose behaviour Strata could not fully mediate. |
+
+**Target hostname resolution** now happens in-process against the
+nameservers an administrator configures, while Strata's own
+infrastructure lookups stay on the container resolver. Only the socket
+uses the resolved address — the hostname still reaches TLS verification
+and the Kerberos SPN, so pre-resolution cannot be used to steer a session
+to an attacker-controlled address while retaining a valid-looking name.
+
+---
+
 ## Authentication
 
 ### OIDC / OpenID Connect (Multi-SSO support since v1.9.0)
@@ -302,8 +359,17 @@ flowchart TB
 1. Fetch `(ciphertext, vault_wrapped_dek, nonce)` from PostgreSQL
 2. Send the wrapped DEK to Vault `POST /v1/transit/decrypt/<key>` — Vault returns the plaintext DEK
 3. Decrypt the password with the DEK using AES-256-GCM
-4. Inject the plaintext credential into the guacd handshake
+4. Hand the plaintext credential to the session engine in a `secrecy::SecretString`
 5. Zeroize the DEK and plaintext password from memory
+
+> **Improved in v2.0.0.** The credential previously crossed a process
+> boundary: it was written into the `guacd` handshake over TCP 4822 as a
+> connection parameter, which meant it existed in a second process's
+> address space and could surface in that process's logs or argument
+> vector. The engine now runs in-process, so the secret stays inside a
+> `SecretString` that zeroes on drop and redacts itself in `Debug`, and is
+> revoked on teardown even when engine shutdown fails. **No plaintext
+> credential crosses a process boundary.**
 
 **Key properties:**
 
@@ -334,7 +400,7 @@ When establishing a tunnel, the backend resolves credentials in the following pr
 
 **Remote → local clipboard stall watchdog (v1.14.1)** — the remote → local clipboard receive path in `frontend/src/components/SessionManager.tsx` (`client.onclipboard`) is a Guacamole stream (`clipboard` → one or more `blob` → `end`) and historically wrote to `navigator.clipboard.writeText()` only when the terminating `end` instruction arrived. Under certain RDP CLIPRDR conditions (delayed-rendering clipboard owners such as Chrome/Edge/VS Code/terminals whose in-flight format-data request is interrupted by a subsequent copy, or a FreeRDP CLIPRDR state machine wedged after many transfers) `guacd` opens the stream, delivers zero or a partial set of blobs, and never emits `end` — so the local clipboard silently retained stale content until a full reconnect. v1.14.1 adds a per-stream 2-second stall watchdog that force-flushes accumulated text if `end` never arrives, acks the stalled stream so `guacd` can free the orphaned stream index, and logs a diagnostic warning. **This is an availability/resilience fix, not a security-boundary change.** No new endpoint, secret store, or server-side privilege is introduced; the same bytes already flowed over the same authenticated WebSocket and tunnel ticket. The watchdog is a strict client-side consumer of stream data the browser was already authorised to receive. A deliberate **no-clobber guard** prevents a zero-blob stall from overwriting the user's existing local clipboard with an empty string, so the failure mode can never _destroy_ clipboard contents — at worst it delivers a partial copy, which the diagnostic log makes observable. The `stream.sendAck` on stall carries only a non-fatal status code and a fixed human-readable message; no payload data is echoed back to the server.
 
-**Clipboard size ceiling and silent data loss (v1.14.6)** — `guacd` allocates a single fixed-size clipboard buffer per connection, and overrunning it fails **silently, and differently in each direction**. On the remote → local path the publishing calls in `guac_rdp_cliprdr_format_data_response()` sit inside the conversion's success branch, so an oversize copy emits **no `clipboard` instruction at all** — the transfer is discarded wholesale rather than truncated. On the local → remote path the same overrun truncates, at roughly half the buffer, because that direction converts UTF-8 → UTF-16.
+**Clipboard size ceiling (v1.14.6, superseded by v2.0.0)** — `guacd` allocates a single fixed-size clipboard buffer per connection, and overrunning it fails **silently, and differently in each direction**. On the remote → local path the publishing calls in `guac_rdp_cliprdr_format_data_response()` sit inside the conversion's success branch, so an oversize copy emits **no `clipboard` instruction at all** — the transfer is discarded wholesale rather than truncated. On the local → remote path the same overrun truncates, at roughly half the buffer, because that direction converts UTF-8 → UTF-16.
 
 The security-relevant properties:
 
@@ -343,6 +409,18 @@ The security-relevant properties:
 - **The setting is only honoured if `guacd` advertises it.** The Guacamole handshake carries values only for parameters `guacd` lists in its `args` response. A `clipboard-buffer-size` the running `guacd` does not support is dropped without comment — which is how RDP connections ran at the 262,144-byte default for several releases while the backend believed it was requesting 8 MiB. This is a general property of the handshake and applies to every parameter Strata sends: **an unadvertised parameter is silently ignored, not rejected.** The backend now logs the negotiated value at `INFO` and `WARN`s when the parameter was absent, so the condition is observable rather than inferred.
 - **Bounds are enforced on both sides.** `STRATA_CLIPBOARD_BUFFER_BYTES` is clamped in `backend/src/tunnel.rs` to `guacd`'s accepted 256 KiB – 50 MB range before transmission, so an operator cannot request an allocation outside what `guacd` will honour, and the logged value always matches the effective one. `clipboard-buffer-size` remains in the `is_allowed_guacd_param` whitelist for per-connection override.
 - **No change to clipboard policy.** `disable-copy` / `disable-paste` continue to gate the feature per connection, unchanged. Raising a buffer ceiling does not widen what any user may transfer, only how much of what they are already permitted to transfer survives the trip.
+
+> **Superseded in v2.0.0.** The whole class of defect above was a property
+> of `guacd`'s single fixed-size per-connection buffer, and that buffer no
+> longer exists. The native engine enforces a **fixed 8 MiB ceiling per
+> direction** (`MAX_CLIPBOARD_BYTES`), applied symmetrically, and a
+> transfer that exceeds it is **truncated with a log line** rather than
+> discarded in silence. `STRATA_CLIPBOARD_BUFFER_BYTES`,
+> `STRATA_CLIPBOARD_TRACE` and the parameter-advertisement problem are all
+> gone with the daemon. `disable-copy` / `disable-paste` are unchanged and
+> still gate the feature per connection. The paragraphs above are retained
+> because they explain the reasoning behind the current ceiling and remain
+> the reference for anyone reading a pre-v2.0.0 incident.
 
 **Local → remote clipboard serialisation (v1.14.4)** — the local → remote push path was previously six independent inline implementations (three display listeners plus a window `paste` handler in `SessionManager.tsx`, a second pair registered on the _same_ `displayEl` by `usePopOut.ts`, the `SessionMenu.tsx` textarea, and three `CommandPalette.tsx` actions). Because each read `session.remoteClipboard` before any of them wrote it back, a single click could open several clipboard streams whose `blob` instructions then interleaved into `guacd`'s single shared RDP clipboard buffer, splicing two payloads together and potentially wedging the Windows CLIPRDR channel for the remainder of the logged-on session. v1.14.4 routes every caller through `frontend/src/components/clipboardSync.ts`, which serialises transmission per session.
 

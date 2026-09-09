@@ -52,13 +52,11 @@ prefer giving them a full VDI desktop instead — see
 ```mermaid
 flowchart LR
     Browser["Browser (user)"]
-    Browser <-->|"HTTPS / WSS"| Backend
-    Backend["Strata backend"]
-    Backend <-->|"Guac proto"| Guacd
-    Guacd["guacd (VNC)"]
+    Browser <-->|"HTTPS / WSS (Guac proto)"| Backend
+    Backend["Strata backend<br/><sub>+ in-process VNC engine</sub>"]
     Backend -->|"spawn / supervise"| Display
     Display["Xvnc display :100..:199<br/>+ Chromium<br/><sub>--kiosk<br/>--user-data-dir<br/>--host-rules<br/>--remote-debug 127.0.0.1</sub>"]
-    Engine -->|"VNC"| Display
+    Backend -->|"VNC to 127.0.0.1:{5900+display}"| Display
 ```
 
 Key properties:

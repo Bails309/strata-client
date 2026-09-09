@@ -38,7 +38,7 @@ sudo ufw enable
 ```
 
 ### 2.3 Optimize Swap (For 4GB RAM or less)
-If you are running on a lower-spec VM (4GB RAM or less), it is highly recommended to enable a swap file to prevent the `guacd` container from being killed during memory spikes.
+If you are running on a lower-spec VM (4GB RAM or less), it is highly recommended to enable a swap file to prevent the `backend` container from being killed during memory spikes.
 
 ```bash
 # Create 4GB swap file

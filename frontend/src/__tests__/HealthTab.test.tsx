@@ -34,8 +34,8 @@ const health = (over: Partial<ServiceHealth> = {}): ServiceHealth => ({
 
 const metrics = (over: Partial<MetricsSummary> = {}): MetricsSummary => ({
   active_sessions: 2,
-  total_bytes_from_guacd: 0,
-  total_bytes_to_guacd: 0,
+  total_bytes_down: 0,
+  total_bytes_up: 0,
   sessions_by_protocol: { ssh: 2 },
   system_total_memory: 8 * 1024 * 1024 * 1024,
   system_cpu_cores: 4,

@@ -278,10 +278,10 @@ pub struct ActiveSession {
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub buffer: Arc<RwLock<SessionBuffer>>,
     pub broadcast_tx: broadcast::Sender<Arc<String>>,
-    /// Bytes received from the target (server → client direction)
-    pub bytes_from_guacd: AtomicU64,
-    /// Bytes sent to the target (client → server direction)
-    pub bytes_to_guacd: AtomicU64,
+    /// Bytes sent to the browser (server → client direction)
+    pub bytes_down: AtomicU64,
+    /// Bytes received from the browser (client → server direction)
+    pub bytes_up: AtomicU64,
     pub remote_host: String,
     pub client_ip: String,
     pub kill_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
@@ -335,8 +335,8 @@ pub struct SessionInfo {
     pub username: String,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub buffer_depth_secs: u64,
-    pub bytes_from_guacd: u64,
-    pub bytes_to_guacd: u64,
+    pub bytes_down: u64,
+    pub bytes_up: u64,
     pub remote_host: String,
     pub client_ip: String,
 }
@@ -400,8 +400,8 @@ impl SessionRegistry {
             started_at: chrono::Utc::now(),
             buffer: buffer.clone(),
             broadcast_tx: tx.clone(),
-            bytes_from_guacd: AtomicU64::new(0),
-            bytes_to_guacd: AtomicU64::new(0),
+            bytes_down: AtomicU64::new(0),
+            bytes_up: AtomicU64::new(0),
             remote_host,
             client_ip,
             kill_tx: Arc::new(tokio::sync::Mutex::new(Some(kill_tx))),
@@ -436,8 +436,8 @@ impl SessionRegistry {
                 username: s.username.clone(),
                 started_at: s.started_at,
                 buffer_depth_secs: depth,
-                bytes_from_guacd: s.bytes_from_guacd.load(Ordering::Relaxed),
-                bytes_to_guacd: s.bytes_to_guacd.load(Ordering::Relaxed),
+                bytes_down: s.bytes_down.load(Ordering::Relaxed),
+                bytes_up: s.bytes_up.load(Ordering::Relaxed),
                 remote_host: s.remote_host.clone(),
                 client_ip: s.client_ip.clone(),
             });
@@ -490,15 +490,15 @@ impl SessionRegistry {
         let mut by_protocol: HashMap<String, u32> = HashMap::new();
 
         for s in sessions.values() {
-            total_bytes_in += s.bytes_from_guacd.load(Ordering::Relaxed);
-            total_bytes_out += s.bytes_to_guacd.load(Ordering::Relaxed);
+            total_bytes_in += s.bytes_down.load(Ordering::Relaxed);
+            total_bytes_out += s.bytes_up.load(Ordering::Relaxed);
             *by_protocol.entry(s.protocol.clone()).or_insert(0) += 1;
         }
 
         MetricsSummary {
             active_sessions: sessions.len() as u32,
-            total_bytes_from_guacd: total_bytes_in,
-            total_bytes_to_guacd: total_bytes_out,
+            total_bytes_down: total_bytes_in,
+            total_bytes_up: total_bytes_out,
             sessions_by_protocol: by_protocol,
             system_total_memory: 0,
             system_cpu_cores: 0,
@@ -512,8 +512,8 @@ impl SessionRegistry {
 #[derive(Serialize, Clone)]
 pub struct MetricsSummary {
     pub active_sessions: u32,
-    pub total_bytes_from_guacd: u64,
-    pub total_bytes_to_guacd: u64,
+    pub total_bytes_down: u64,
+    pub total_bytes_up: u64,
     pub sessions_by_protocol: HashMap<String, u32>,
     /// Total system memory in bytes (for display).
     pub system_total_memory: u64,
@@ -671,23 +671,23 @@ mod tests {
             username: "admin".into(),
             started_at: chrono::Utc::now(),
             buffer_depth_secs: 120,
-            bytes_from_guacd: 5000,
-            bytes_to_guacd: 2000,
+            bytes_down: 5000,
+            bytes_up: 2000,
             remote_host: "target".into(),
             client_ip: "source".into(),
         };
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["protocol"], "rdp");
         assert_eq!(json["buffer_depth_secs"], 120);
-        assert_eq!(json["bytes_from_guacd"], 5000);
+        assert_eq!(json["bytes_down"], 5000);
     }
 
     #[test]
     fn metrics_summary_serializes() {
         let m = MetricsSummary {
             active_sessions: 3,
-            total_bytes_from_guacd: 1024,
-            total_bytes_to_guacd: 512,
+            total_bytes_down: 1024,
+            total_bytes_up: 512,
             sessions_by_protocol: {
                 let mut map = HashMap::new();
                 map.insert("rdp".into(), 2);
@@ -718,8 +718,8 @@ mod tests {
         let registry = SessionRegistry::new();
         let m = registry.metrics().await;
         assert_eq!(m.active_sessions, 0);
-        assert_eq!(m.total_bytes_from_guacd, 0);
-        assert_eq!(m.total_bytes_to_guacd, 0);
+        assert_eq!(m.total_bytes_down, 0);
+        assert_eq!(m.total_bytes_up, 0);
         assert!(m.sessions_by_protocol.is_empty());
     }
 
@@ -772,14 +772,14 @@ mod tests {
             )
             .await;
         let sess = registry.get("native").await.unwrap();
-        sess.bytes_from_guacd.store(900, Ordering::Relaxed);
-        sess.bytes_to_guacd.store(100, Ordering::Relaxed);
+        sess.bytes_down.store(900, Ordering::Relaxed);
+        sess.bytes_up.store(100, Ordering::Relaxed);
 
         let m = registry.metrics().await;
         assert_eq!(m.active_sessions, 1);
         assert_eq!(*m.sessions_by_protocol.get("rdp").unwrap(), 1);
-        assert_eq!(m.total_bytes_from_guacd, 900);
-        assert_eq!(m.total_bytes_to_guacd, 100);
+        assert_eq!(m.total_bytes_down, 900);
+        assert_eq!(m.total_bytes_up, 100);
     }
 
     #[test]

@@ -174,8 +174,8 @@ const healthDown = {
 
 const metricsOk = {
   active_sessions: 7,
-  total_bytes_from_guacd: 1024,
-  total_bytes_to_guacd: 512,
+  total_bytes_down: 1024,
+  total_bytes_up: 512,
   sessions_by_protocol: { rdp: 4, ssh: 3 },
   system_total_memory: 8589934592,
   system_cpu_cores: 4,

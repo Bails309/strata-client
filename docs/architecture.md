@@ -323,7 +323,7 @@ buffer" "521"` instruction to the browser and closes the tunnel.
 - The tunnel ingests non-ASCII WS frames via `str::from_utf8` before
   forwarding; invalid bytes are logged and dropped.
 - Keepalives: `Ping` every 15 s, disconnect if no `Pong` within 30 s.
-- Per-session bandwidth counters (`bytes_from_guacd`, `bytes_to_guacd`)
+- Per-session bandwidth counters (`bytes_down`, `bytes_up`)
   are updated atomically on every read/write for the session-metrics
   endpoint.
 - **Auth watchdog (v1.3.2; revised v1.4.1).** A 30-second ticker runs

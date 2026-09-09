@@ -191,7 +191,7 @@ function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
                 color: "var(--color-txt-secondary)",
               }}
             >
-              ↓{fmtBw(metrics.total_bytes_from_guacd)} ↑{fmtBw(metrics.total_bytes_to_guacd)}
+              ↓{fmtBw(metrics.total_bytes_down)} ↑{fmtBw(metrics.total_bytes_up)}
             </span>
           </div>
 

@@ -1010,8 +1010,8 @@ List all currently active tunnel sessions. Each entry includes the session's rin
     "username": "jdoe",
     "started_at": "2026-04-06T10:30:00Z",
     "buffer_depth_secs": 287,
-    "bytes_from_guacd": 52428800,
-    "bytes_to_guacd": 1048576,
+    "bytes_down": 52428800,
+    "bytes_up": 1048576,
     "remote_host": "10.0.42.7",
     "client_ip": "203.0.113.42"
   }
@@ -1054,40 +1054,30 @@ Aggregate metrics across all active tunnel sessions.
 ```json
 {
   "active_sessions": 12,
-  "native_sessions": 4,
-  "guacd_sessions": 8,
-  "total_bytes_from_guacd": 629145600,
-  "total_bytes_to_guacd": 12582912,
+  "total_bytes_down": 629145600,
+  "total_bytes_up": 12582912,
   "sessions_by_protocol": {
     "rdp": 8,
     "ssh": 3,
     "vnc": 1
   },
-  "guacd_bytes_down": 419430400,
-  "guacd_bytes_up": 8388608,
-  "guacd_by_protocol": { "ssh": 3, "rdp": 4, "vnc": 1 },
-  "native_bytes_down": 209715200,
-  "native_bytes_up": 4194304,
-  "native_by_protocol": { "rdp": 4 }
+  "system_total_memory": 16365801472,
+  "system_cpu_cores": 16,
+  "native_ram_per_session_mb": 24,
+  "native_recommended": 74
 }
 ```
 
-| Field                    | Type    | Description                                                             |
-| ------------------------ | ------- | ----------------------------------------------------------------------- |
-| `active_sessions`        | integer | Total number of active tunnel sessions, whichever engine serves them    |
-| `native_sessions`        | integer | How many of `active_sessions` the native engine serves                  |
-| `guacd_sessions`         | integer | How many of `active_sessions` guacd serves                              |
-| `total_bytes_from_guacd` | integer | Cumulative bytes sent downstream across all sessions                    |
-| `total_bytes_to_guacd`   | integer | Cumulative bytes received upstream across all sessions                  |
-| `sessions_by_protocol`   | object  | Session count grouped by protocol (rdp, ssh, vnc, web, vdi, kubernetes) |
-| `guacd_bytes_down`/`_up` | integer | Bandwidth for guacd-served sessions only                                |
-| `guacd_by_protocol`      | object  | Protocol mix for guacd-served sessions only                             |
-| `native_bytes_down`/`_up`| integer | Bandwidth for natively served sessions only                             |
-| `native_by_protocol`     | object  | Protocol mix for natively served sessions only                          |
-
-The `total_*` and `sessions_by_protocol` fields keep their original meaning
-and count every session. The per-engine fields exist because the two capacity
-panels each describe one engine, and a native session costs guacd nothing.
+| Field                       | Type    | Description                                                             |
+| --------------------------- | ------- | ----------------------------------------------------------------------- |
+| `active_sessions`           | integer | Total number of active tunnel sessions                                  |
+| `total_bytes_down`          | integer | Cumulative bytes sent downstream (engine → browser) across all sessions |
+| `total_bytes_up`            | integer | Cumulative bytes received upstream (browser → engine) across all sessions |
+| `sessions_by_protocol`      | object  | Session count grouped by protocol (rdp, ssh, vnc, web, vdi, kubernetes) |
+| `system_total_memory`       | integer | Host physical memory in bytes                                           |
+| `system_cpu_cores`          | integer | Host logical CPU cores                                                  |
+| `native_ram_per_session_mb` | integer | Memory one session costs, from what the engine actually allocates       |
+| `native_recommended`        | integer | Sessions this host could serve, reserving 30% headroom                  |
 
 ---
 
@@ -1453,8 +1443,8 @@ List the calling user's own active tunnel sessions. Returns only sessions where 
     "username": "jdoe",
     "started_at": "2026-04-15T10:30:00Z",
     "buffer_depth_secs": 120,
-    "bytes_from_guacd": 5242880,
-    "bytes_to_guacd": 104857
+    "bytes_down": 5242880,
+    "bytes_up": 104857
   }
 ]
 ```

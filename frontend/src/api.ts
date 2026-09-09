@@ -1710,8 +1710,8 @@ export interface ActiveSession {
   username: string;
   started_at: string;
   buffer_depth_secs: number;
-  bytes_from_guacd: number;
-  bytes_to_guacd: number;
+  bytes_down: number;
+  bytes_up: number;
   remote_host: string;
   client_ip: string;
 }
@@ -1909,8 +1909,8 @@ export async function buildUserNvrObserveUrl(
 
 export interface MetricsSummary {
   active_sessions: number;
-  total_bytes_from_guacd: number;
-  total_bytes_to_guacd: number;
+  total_bytes_down: number;
+  total_bytes_up: number;
   sessions_by_protocol: Record<string, number>;
   system_total_memory: number;
   system_cpu_cores: number;

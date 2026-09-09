@@ -966,7 +966,7 @@ pub async fn run_native(
                     ClientFrame::Binary(bytes) => Message::Binary(bytes.clone()),
                 };
                 if let Some(sess) = bandwidth.as_ref() {
-                    sess.bytes_from_guacd
+                    sess.bytes_down
                         .fetch_add(frame.len() as u64, Ordering::Relaxed);
                 }
                 if sink.send(message).await.is_err() {
@@ -978,7 +978,7 @@ pub async fn run_native(
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
                         if let Some(sess) = bandwidth.as_ref() {
-                            sess.bytes_to_guacd
+                            sess.bytes_up
                                 .fetch_add(text.len() as u64, Ordering::Relaxed);
                         }
                         decoder.extend(text.as_bytes());
@@ -1080,16 +1080,16 @@ where
     let _ = sink.send(Message::Text(text.into())).await;
 }
 
-/// Mirror the guacd path's teardown: wake viewers, unregister, clean up
-/// shared files, and finalise the recording row.
+/// Wake viewers, unregister, clean up shared files, and finalise the
+/// recording row.
 async fn finalize_session(
     ctx: &NvrContext,
     bandwidth: Option<&Arc<crate::services::session_registry::ActiveSession>>,
 ) {
-    let (bytes_from, bytes_to) = bandwidth.map_or((0i64, 0i64), |sess| {
+    let (bytes_down, bytes_up) = bandwidth.map_or((0i64, 0i64), |sess| {
         (
-            sess.bytes_from_guacd.load(Ordering::Relaxed) as i64,
-            sess.bytes_to_guacd.load(Ordering::Relaxed) as i64,
+            sess.bytes_down.load(Ordering::Relaxed) as i64,
+            sess.bytes_up.load(Ordering::Relaxed) as i64,
         )
     });
 
@@ -1108,12 +1108,12 @@ async fn finalize_session(
 
     let duration = (chrono::Utc::now() - ctx.started_at).num_seconds() as i32;
     match sqlx::query(
-        "UPDATE recordings SET duration_secs = $1, bytes_from_guacd = $2, bytes_to_guacd = $3, \
+        "UPDATE recordings SET duration_secs = $1, bytes_down = $2, bytes_up = $3, \
          engine = 'native' WHERE session_id = $4",
     )
     .bind(duration)
-    .bind(bytes_from)
-    .bind(bytes_to)
+    .bind(bytes_down)
+    .bind(bytes_up)
     .bind(&ctx.session_id)
     .execute(&ctx.db_pool)
     .await

@@ -55,7 +55,7 @@ flowchart TB
         Link["• TLS 1.3 + mTLS<br/>• App-layer challenge-response<br/>• HTTP/2 framing<br/>• Stream = HTTP request"]
     end
     subgraph InternalNode["INTERNAL NODE (strata-internal)"]
-        Internal["• Existing Axum router<br/>• Existing auth / RBAC<br/>• Vault, Postgres, guacd<br/>• Audit logging<br/>• Outbound link client<br/>• Request adapter"]
+        Internal["• Existing Axum router<br/>• Existing auth / RBAC<br/>• Vault, Postgres, session engine<br/>• Audit logging<br/>• Outbound link client<br/>• Request adapter"]
     end
     DMZ --- Link
     Link --- Internal
@@ -123,10 +123,10 @@ sees a valid MAC.
   retried once on a fresh stream after a sub-5s reconnect; non-idempotent
   verbs return `502` if the link is down — same shape as nginx-in-front-of
   -axum today.
-- **WebSockets (guacd tunnel)**: on link drop the internal node holds the
-  guacd connection open for **30 seconds**. If the link reconnects within
+- **WebSockets (session tunnel)**: on link drop the internal node holds the
+  target connection open for **30 seconds**. If the link reconnects within
   that window, the user's session resumes via an opaque resume token. After
-  30s the guacd connection is torn down and the user gets the existing
+  30s the target connection is torn down and the user gets the existing
   "session ended" UX.
 - **Heartbeat**: HTTP/2 PING + a 60-second app-layer heartbeat carrying
   channel counts and metrics — the heartbeat is the metrics transport, not
@@ -173,7 +173,7 @@ features:
 
 1. **Provably minimal dependency closure.** `cargo tree -p strata-dmz`
    structurally cannot show `sqlx`, `vaultrs`, `ldap3`, `kerberos`, or
-   guacd-tunnel crates because `strata-dmz/Cargo.toml` does not depend on
+   `strata-session` because `strata-dmz/Cargo.toml` does not depend on
    them. No `#[cfg(feature)]` accidents are possible.
 2. **CI-enforceable hard constraints** (see `.github/workflows/ci.yml`):
    ```bash
@@ -301,7 +301,7 @@ services:
 | Internal node | IdP (token / userinfo)                     | 443/tcp                 | OIDC token exchange                                 |
 | Internal node | Vault                                      | 8200/tcp                | Existing                                            |
 | Internal node | PG                                         | 5432/tcp                | Existing                                            |
-| Internal node | guacd                                      | 4822/tcp                | Existing                                            |
+| Internal node | RDP / VNC / SSH / K8s targets              | per protocol            | Existing (was via guacd pre-v2.0.0)                 |
 
 **Hardening rule:** the DMZ host's outbound firewall must permit only
 the IdP endpoint, and **must** deny any new connection to the internal

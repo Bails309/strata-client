@@ -12,7 +12,11 @@ This guide provides a detailed, step-by-step walkthrough for deploying Strata Cl
 | **OS** | Ubuntu 22.04+ (LTS) | Ubuntu 24.04 (LTS) |
 
 > [!TIP]
-> **guacd** is a high-performance C daemon that handles RDP/SSH/VNC encoding. It is CPU-intensive, especially with H.264 enabled.
+> The **session engine** runs inside the backend and handles RDP/SSH/VNC
+> encoding. It is CPU-bound, not memory-bound — budget roughly 24 MB of RAM
+> per active session and size the CPU for your concurrency. Before v2.0.0
+> this work lived in a separate `guacd` container; it does not any more, so
+> the backend's CPU allocation is what governs session capacity.
 
 ---
 
@@ -159,7 +163,6 @@ For troubleshooting:
 ```bash
 docker compose logs -f frontend
 docker compose logs -f backend
-docker compose logs -f guacd
 ```
 
 ### Backup

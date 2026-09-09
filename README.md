@@ -8,7 +8,7 @@
 
 <p align="center">
   <strong>A high-performance, modernized client and proxy architecture for <a href="https://guacamole.apache.org/">Apache Guacamole</a>.</strong><br>
-  <sub>Rust backend · React SPA · Vault envelope encryption · OIDC SSO · FreeRDP 3 · Kerberos NLA · H.264 streaming</sub>
+  <sub>Rust backend · React SPA · Vault envelope encryption · OIDC SSO · native Rust session engine · Kerberos NLA</sub>
 </p>
 
 <p align="center">
@@ -186,7 +186,7 @@ For the full per-version history of how these capabilities were built and the bu
 
 ## vs. vanilla Apache Guacamole
 
-Apache Guacamole's reference web app is a fantastic protocol gateway. Strata is what you'd build on top of it for an enterprise privileged-access deployment — without forking guacd.
+Apache Guacamole's reference web app is a fantastic protocol gateway. Strata is what you'd build on top of it for an enterprise privileged-access deployment — and, since v2.0.0, without any of it at runtime. The browser still speaks the Guacamole wire protocol, which is the part worth keeping; everything behind it is Strata's own.
 
 | Capability                  | Apache Guacamole reference webapp | **Strata Client**                                                                                                                                     |
 | --------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -198,7 +198,7 @@ Apache Guacamole's reference web app is a fantastic protocol gateway. Strata is 
 | Audit log                   | Application log                   | **Append-only, SHA-256 hash-chained** `audit_logs` covering every privileged action                                                                   |
 | Live session observation    | Not included                      | **NVR-style live observe** with 5-minute rewind buffer, share links (view/control), kill controls                                                     |
 | Recording playback          | Server-side render to video       | **In-browser playback** with seek/speed; optional Azure Blob Storage offload                                                                          |
-| H.264 GFX                   | Server-side transcode             | **End-to-end passthrough** to the browser's WebCodecs decoder — no proxy-side decode                                                                  |
+| Session tier                | `guacd` C daemon (FreeRDP, libssh2)  | **In-process Rust engine** — no separate container, no vendored C patches, no plaintext credential crossing a process boundary |                                                  |
 | Web / VDI sessions          | Not supported                     | **First-class** kiosk Chromium-in-Xvnc and Strata-managed `xrdp` Docker containers                                                                    |
 | Multi-monitor               | Limited                           | **Window Management API** spans a session across physical monitors                                                                                    |
 | Operator UX                 | JSP web app                       | **React 19 SPA** with setup wizard, scriptable Command Palette, Quick Share file CDN                                                                  |
@@ -361,7 +361,7 @@ After setup, log in and navigate to **Admin → SSO / OIDC** to configure your i
 
 ### 5. Add optional components
 
-The core stack is fully functional out of the box. Most production deployments enable one or more **optional components** (ClamAV antivirus, additional `guacd` sidecars, the DMZ edge node, web-kiosk / VDI session containers, the Safeguard JIT integration, etc.) — each ships with its own deployment guide. Jump directly to the relevant one from the [Component & deployment guides](#-component--deployment-guides) table below.
+The core stack is fully functional out of the box. Most production deployments enable one or more **optional components** (ClamAV antivirus, the DMZ edge node, web-kiosk / VDI session containers, the Safeguard JIT integration, etc.) — each ships with its own deployment guide. Jump directly to the relevant one from the [Component & deployment guides](#-component--deployment-guides) table below.
 
 ## 🛠️ Development
 
@@ -383,7 +383,7 @@ npm install
 npm run dev          # Vite dev server on :5173, proxies /api → :8080
 ```
 
-### Custom guacd
+### Session engine
 
 Removed in v2.0.0. Sessions are served by the native Rust engine in
 `crates/strata-session`; there is no separate protocol daemon to build.

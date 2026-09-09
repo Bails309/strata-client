@@ -34,7 +34,7 @@ flowchart LR
         Backend --> Vault["Vault"]
         Backend --> Postgres["PostgreSQL"]
         Backend --> AD["Active Directory"]
-        Backend --> Guacd["guacd"]
+        Backend --> Targets["Targets (RDP/VNC/SSH)"]
     end
     Backend -. "mTLS h2 link<br/>:8444 outbound from internal" .-> DMZ
 ```
@@ -110,13 +110,13 @@ Extended CONNECT and bridges it to a regular HTTP/1.1 WebSocket
 upgrade against `127.0.0.1:8080` (overridable via
 `STRATA_DMZ_LOOPBACK_ADDR`), so the existing
 `/api/tunnel/{connection_id}` axum handler runs unchanged. **The
-guacd connection always originates from the internal node's IP, not
+target connection always originates from the internal node's IP, not
 the DMZ node's IP** — exactly as a single-node deployment behaves.
 
 Individual h2 frames on the DMZ→public direction are capped at 8 MiB
 to prevent memory amplification by a misbehaving internal node;
 flow-control windows are honoured in both directions so back-pressure
-from a slow public client transparently slows the upstream guacd
+from a slow public client transparently slows the upstream session
 traffic.
 
 ### Body streaming and HTTP/2 hardening (v1.10.6+)

@@ -436,8 +436,8 @@ The security-relevant properties of that consolidation:
 
 - **Contents are never captured.** Recorded fields are limited to opcode / event name, Guacamole stream index, blob counts, payload **lengths**, elapsed timings, ack status codes, and tunnel state. The only content-derived value retained is a **non-reversible 32-bit FNV-1a digest**, present solely so two entries can be compared for "same text" during triage. A 32-bit digest is not a secure hash and must not be treated as one — it is a correlation aid, not an integrity control — but it is a lossy one-way projection of the input and cannot be inverted to recover a clipboard payload.
 - **Browser buffer is memory-only and bounded.** The 500-entry ring lives in page memory and is discarded on reload; it is never persisted, never transmitted, and never attached to any request. The only `localStorage` write is the boolean verbosity preference under `strata.debug.clipboard`, which contains no session or clipboard data. The dump is retrieved manually by the user from their own devtools console.
-- **Backend tracer is off by default and inert when off.** `ClipboardTracer::new()` reads `STRATA_CLIPBOARD_TRACE` once per tunnel; when unset, `observe_batch` returns immediately without parsing, so there is no measurable cost and nothing is emitted on the hot path.
-- **The parser is length-driven, not delimiter-driven.** `scan_instruction` in `backend/src/tunnel.rs` consumes each element using the Guacamole protocol's own character-count prefix, so a clipboard payload containing `;` or `,` cannot desynchronise the scan — and, because it operates on a `&str` slice of an already-validated batch and bails out (`None`) on any malformed or truncated input, a hostile guacd or client cannot drive it out of bounds or into an unbounded loop. It never allocates a copy of the payload.
+- **Backend tracer removed in v2.0.0.** `STRATA_CLIPBOARD_TRACE` and `ClipboardTracer` traced the instruction batches crossing the socket to `guacd`; there is no socket and no tracer. The browser buffer above is unaffected and remains the primary diagnostic.
+- **The parser is length-driven, not delimiter-driven.** `GuacDecoder` consumes each element using the Guacamole protocol's own character-count prefix, so a clipboard payload containing `;` or `,` cannot desynchronise the scan. It distinguishes a malformed instruction from an incomplete prefix — a split read waits rather than killing the session — and a hostile payload cannot steer it into reading beyond the batch. The parser has a fuzz harness.stile guacd or client cannot drive it out of bounds or into an unbounded loop. It never allocates a copy of the payload.
 - **Traces are safe to share.** A trace captured for support contains no credentials, no clipboard text, and no user-identifying data beyond the session identifier already present in existing tunnel logs.
 
 **Toast notification surface (v1.8.0)** — `frontend/src/components/ToastProvider.tsx` is the new generic notification surface mounted under `SettingsProvider` in `App.tsx`. Toast `title` and `description` strings are rendered as plain React children, so they pass through React's standard text-escaping path; the provider has no `dangerouslySetInnerHTML`, no `innerHTML` write, and no HTML-string consumer in any code path. A future caller passing a server-controlled string into a toast cannot accidentally introduce a stored XSS through this surface. Action button click handlers are typed as `() => boolean | void | Promise<boolean | void>` so a long-running click cannot freeze the UI thread, and the provider clears every outstanding `setTimeout` on unmount so a logout or hot-reload does not leak handles.
@@ -536,7 +536,7 @@ AD sync `connection_defaults` are applied as the `extra` JSONB on synced connect
 
 - **Display & performance**: color-depth, resize-method, force-lossless, cursor, read-only
 - **RDP performance flags**: enable-wallpaper, enable-theming, enable-font-smoothing, enable-full-window-drag, enable-desktop-composition, enable-menu-animations, disable-bitmap-caching, disable-offscreen-caching, disable-glyph-caching, disable-gfx
-- **H.264 GFX passthrough (v0.28.0+)**: `enable-h264`, `force-lossless`, plus the underlying `disable-gfx` / `disable-offscreen-caching` toggles. The H.264 stream is treated as **untrusted opaque data** by the backend — guacd forwards NAL units verbatim without parsing or re-encoding them. Decoding occurs entirely in the browser's WebCodecs `VideoDecoder`, which runs inside the same web origin sandbox as the rest of the page. No additional credentials, paths, or shell-executable parameters are exposed by these flags
+- **H.264 GFX passthrough (v0.28.0 – v1.14.6, removed in v2.0.0)**: `enable-h264` is stripped from every connection's `extra` map by migration `087` and is no longer accepted by the whitelist. The engine has no EGFX pipeline; `disable-gfx` / `disable-offscreen-caching` remain accepted but inert. Nothing is withdrawn in practice — the parameter defaulted to `false` and no connection had it set. The removal is *itself* the security-relevant point: advertising a codec the engine cannot deliver corrupts the bitmap cache into persistent ghost tiles, so leaving a dead toggle in the editor was worse than removing it. Rationale in [migration 087](../backend/migrations/087_drop_h264_passthrough.sql).andbox as the rest of the page. No additional credentials, paths, or shell-executable parameters are exposed by these flags
 - **Session recording**: recording-path, recording-name, create-recording-path, recording-include-keys, recording-exclude-output, recording-exclude-mouse, recording-exclude-touch
 - **Authentication**: ignore-cert (certificate validation bypass only — no credential parameters)
 - **Clipboard, audio, printing, Wake-on-LAN**: various toggle and configuration parameters
@@ -742,7 +742,7 @@ service.
 When a session is established under a role granting
 `can_use_quick_share_outbound`, `SessionManager.client.onfile`
 (`frontend/src/services/SessionManager.ts`) suppresses the legacy
-auto-download path. Instead the bytes guacd pushes back over the RDP /
+auto-download path. Instead the bytes the engine pushes back over the RDP /
 SFTP drive channel are buffered via `Guacamole.BlobReader`, wrapped in
 a `FormData` (with `session_id`, `connection_id`, and any pending
 justification), and POSTed to `/api/user/outbound-shares` over the
@@ -929,19 +929,33 @@ in `backend/src/routes/outbound_shares.rs::tests`
 
 ## Recordings Volume — Cross-Container POSIX Permissions Model
 
-**Status:** invariant from v1.1.0 onwards. Documented after the
-v1.1.0 EACCES playback regression (see `CHANGELOG.md` 1.1.0
-_"Recording playback Tunnel error caused by EACCES on the shared
-recordings volume"_).
+**Status:** invariant from v1.1.0 onwards; **retained in v2.0.0 as upgrade
+compatibility.** Documented after the v1.1.0 EACCES playback regression (see
+`CHANGELOG.md` 1.1.0 _"Recording playback Tunnel error caused by EACCES on the
+shared recordings volume"_).
+
+> **Changed in v2.0.0.** The backend is now both writer and reader — the
+> engine writes `.guac` files as `strata` directly, so for **new** recordings
+> the cross-container problem below does not arise at all.
+>
+> The supplementary-group machinery is nevertheless **kept**, and deliberately
+> so: recordings written before v2.0.0 are still owned by `guacd:guacd` at
+> mode `0640`, and both playback and the retention sweeper need the backend to
+> hold that group to read or delete them. Removing the bootstrap would have
+> made historic recordings silently unplayable after an upgrade — an
+> availability failure on exactly the data an auditor is most likely to want.
+> The gid discovery falls back to the directory gid when no guacd-era file is
+> present, so a clean v2.0.0 install is unaffected.
 
 Session `.guac` recordings are stored on the shared `guac-recordings`
-Docker volume, mounted into both the `guacd` and `backend`
-containers at `/var/lib/guacamole/recordings`. The two containers run
+Docker volume at `/var/lib/guacamole/recordings`. Historically it was
+mounted into both the `guacd` and `backend`
+containers, which ran
 as different POSIX users (Alpine guacd vs Debian backend), so a
-defined permissions contract is required to keep playback working
+defined permissions contract was required to keep playback working
 without elevating either side's privileges.
 
-**Writer side (guacd):**
+**Writer side (guacd, pre-v2.0.0 recordings):**
 
 - File ownership: `guacd:guacd` (uid/gid `100:101` inside the
   Alpine-based `strata/custom-guacd` image).
@@ -984,7 +998,7 @@ without elevating either side's privileges.
   continues to work.
 - We do not `chown -R strata:strata /var/lib/guacamole` in the
   backend entrypoint (that line was previously present and was
-  removed in v1.1.0). It races with in-flight guacd writes and
+  removed in v1.1.0). It raced with in-flight guacd writes and
   destroys the gid signal the supplementary-group lookup needs.
 - We do not chmod recordings to world-readable (`0644`). On a
   multi-tenant Linux host where the volume is bind-mounted from
@@ -1055,7 +1069,7 @@ side: `frontend/src/components/SessionManager.tsx` wires a
 display element and `blur` on the `window`. When fired, the
 helper inspects `mouse.currentState`; if any of `left` / `middle`
 / `right` is still set, it constructs a buttons-released
-`Guacamole.Mouse.State` and sends it to guacd via
+`Guacamole.Mouse.State` and sends it to the engine via
 `client.sendMouseState(s, true)`.
 
 **Why this is a security property, not just a UX fix.** When a
@@ -1063,7 +1077,7 @@ user clicks inside the Guacamole canvas and the matching
 `mouseup` event lands outside the page's document (browser
 chrome, devtools, popped-out windows, the OS desktop after an
 alt-tab-out), the page never receives the `mouseup` and
-guacd's terminal stays in _"left button held"_ state. Without a
+the terminal stays in _"left button held"_ state. Without a
 reset event:
 
 - **SSH** would continue building a text selection across
@@ -1110,16 +1124,42 @@ The `PUT /api/admin/settings/dns` endpoint validates all DNS entries before writ
 - Each DNS server entry must be a valid IPv4 address (four octets, 0–255, no leading zeros)
 - Each search domain must be a valid DNS domain name (alphanumeric labels, hyphens allowed, no leading/trailing hyphens, max 253 characters total, max 6 domains)
 - Empty or whitespace-only entries are rejected
-- The validated entries are written to `/app/config/resolv.conf` as `search <domains>` and `nameserver <ip>` lines, with Docker's embedded DNS (`127.0.0.11`) appended as a fallback
+- The validated entries are stored in the `settings` table and read by the session engine; **nothing is written to disk**
 
-### File System Isolation
+### Isolation
 
-The `resolv.conf` file is written to the `backend-config` Docker volume, which is mounted read-only (`ro`) into guacd containers. The guacd `entrypoint.sh` copies the file to `/etc/resolv.conf` before dropping privileges via `su-exec`. This ensures:
+> **Changed in v2.0.0.** The old design wrote `/app/config/resolv.conf` into
+> the `backend-config` volume, mounted read-only into the `guacd` containers,
+> whose entrypoint copied it over `/etc/resolv.conf` before dropping
+> privileges via `su-exec`. That file and that mechanism are gone. A stale
+> copy left by the previous version is deleted on the next save so it cannot
+> be mistaken for live configuration.
 
-- The backend controls DNS configuration via the shared volume
-- guacd cannot modify the source file (read-only mount)
-- The entrypoint runs as root only long enough to copy the file, then drops to the `guacd` user
-- Docker's embedded DNS is always preserved as a fallback to prevent breaking existing connections
+Resolution now happens in-process
+([`backend/src/services/dns.rs`](../backend/src/services/dns.rs)), which
+gives a tighter boundary than the file-copy design did:
+
+- **Operator-supplied nameservers never become the backend's own resolver.**
+  They are used *only* to resolve **target** hostnames. Strata's lookups for
+  `postgres-local`, `vault` and `clamav` continue to go to Docker's embedded
+  resolver. An administrator who configures a hostile nameserver therefore
+  cannot redirect Strata's database or secret-store traffic — the blast
+  radius is confined to the connection targets that administrator already
+  controls the hostnames of.
+- **No root, no file write, no container restart.** The previous mechanism
+  required a root-owned copy at container start and a restart to apply,
+  which dropped every session on that daemon. Neither is needed.
+- **The hostname still governs authentication.** Only the socket uses the
+  resolved address; TLS certificate verification and the Kerberos SPN still
+  see the configured *name*. This matters: pre-resolving without preserving
+  the name would silently downgrade a name-based NLA handshake to an
+  address-based one, which is a security-relevant change disguised as a
+  performance one.
+- **Fails open, deliberately.** An unreachable nameserver falls back to the
+  container's resolver rather than refusing the session. This is an
+  availability choice, and it is the right one here: the alternative makes a
+  DNS outage into a total gateway outage, and the fallback path is no weaker
+  than the pre-v2.0.0 behaviour.
 
 ### Audit Trail
 
@@ -1245,9 +1285,24 @@ For production external databases, use `require` at minimum. Use `verify-full` w
 
 All containers communicate over an internal Docker bridge network (`guac-internal`). Only the nginx reverse proxy (frontend container) exposes host-mapped ports (`HTTP_PORT` default 80, `HTTPS_PORT` default 443). The backend, `guacd`, `postgres-local`, and Vault are **not** exposed to the host network.
 
-### guacd Communication
+### Session Engine Communication
 
-The backend connects to `guacd` over an internal TCP socket (port 4822). The Guacamole protocol is not encrypted natively — network isolation via Docker networking provides the security boundary.
+> **Changed in v2.0.0.** This section previously read: *"The backend connects
+> to `guacd` over an internal TCP socket (port 4822). The Guacamole protocol
+> is not encrypted natively — network isolation via Docker networking is the
+> control."* That hop is gone. The session engine runs inside the backend
+> process, so the instruction stream never reaches a socket, and the
+> plaintext credential injected into the old `connect` handshake never
+> crosses a process boundary. Docker network isolation is no longer
+> load-bearing for this path because there is no path to isolate.
+>
+> The compensating consideration is recorded in
+> [threat-model.md § 2.8](threat-model.md#28-session-engine-in-process):
+> hostile input from a target now reaches code in the same process as the
+> Vault-decrypted credentials and the database pool. That containment loss
+> is real and is accepted on the basis that the parsing is safe Rust, each
+> session is an isolated task, and the C memory-safety surface that made the
+> process boundary worth having in the first place is gone.rking provides the security boundary.
 
 ### Vault Communication
 
@@ -1342,7 +1397,7 @@ All services in the Docker Compose stack apply security constraints:
 | `cap_drop: ALL`                        | All services                                                                                                                                                                                       |
 | `cap_add` (minimal)                    | `frontend` (`NET_BIND_SERVICE`), `backend` / `postgres-local` (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`), `vault` (`IPC_LOCK`, `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`) |
 | `read_only: true` + `tmpfs`            | `frontend`                                                                                                                                                                                         |
-| Resource limits (`cpus`, `memory`)     | `guacd`, `backend`, `postgres-local`                                                                                                                                                               |
+| Resource limits (`cpus`, `memory`)     | `backend`, `postgres-local`                                                                                                                                                               |
 
 ---
 
@@ -1525,7 +1580,7 @@ as ciphertext at rest and validated at every trust boundary.
   ChaCha20-Poly1305, and Vault's KEK encrypts the DEK. The DB never
   sees plaintext; the backend memory holds plaintext for the
   millisecond between Vault decrypt and the outbound
-  `reqwest::RequestBuilder::bearer_auth()` / guacd handshake.
+  `reqwest::RequestBuilder::bearer_auth()` / session start.
 - **Mask-on-read for admin GET.** `GET /api/admin/safeguard/config`
   renders every sealed column as the eight-character literal
   `"********"`. The corresponding PUT accepts the same literal as a
@@ -1747,9 +1802,24 @@ The frontend is a Progressive Web App:
 
 ## H.264 GFX Encoding
 
-RDP connections use the FreeRDP 3 GFX pipeline with H.264 encoding by default (`enable-gfx=true`, `enable-gfx-h264=true`). This significantly reduces bandwidth but means the guacd container processes video codec frames. The H.264 decode/encode happens entirely within the guacd container — no video data leaves the Docker network unencrypted.
-
-Per-connection overrides can disable GFX via the `extra` JSONB field: `{"enable-gfx": "false"}`.
+> **Removed in v2.0.0.** There is no H.264 pipeline. The RDP engine
+> maintains a full-desktop framebuffer, reports changed rectangles and
+> PNG-encodes them; migration `087` strips `enable-h264` from every
+> connection.
+>
+> The security-relevant effect is a **reduction** in attack surface, and
+> it is the concrete instance of the general argument for this release. The
+> old path meant a video codec \u2014 the most historically CVE-dense category
+> of C in the whole deployment \u2014 parsed attacker-adjacent bitstreams inside
+> the session tier. That code is not merely isolated now; it is not
+> compiled in.
+>
+> The cost is bandwidth, and it is smaller than the old notes implied: the
+> native encoder measures **0.077 bytes per pixel**, roughly 39:1, about
+> **230 kbps** for an active desktop. Full reasoning, including the route
+> back if a target that encodes AVC444 becomes available for testing, is in
+> [architecture.md](architecture.md#h264-gfx-passthrough-v0280--v1146-removed-in-v200)
+> and [migration 087](../backend/migrations/087_drop_h264_passthrough.sql).
 
 ---
 
@@ -1761,7 +1831,7 @@ Browsers cannot capture the physical Windows key — the operating system interc
 
 Strata remaps **Right Ctrl** (keysym `0xFFE4`) as a Windows key proxy, following the same "host key" convention used by VMware Workstation and VirtualBox:
 
-| User action                                    | Keysyms sent to guacd                               |
+| User action                                    | Keysyms sent to the engine                          |
 | ---------------------------------------------- | --------------------------------------------------- |
 | Hold Right Ctrl + another key                  | `Super_L` down → key down … key up → `Super_L` up   |
 | Tap Right Ctrl alone                           | `Super_L` down → `Super_L` up                       |
@@ -1771,7 +1841,7 @@ Strata remaps **Right Ctrl** (keysym `0xFFE4`) as a Windows key proxy, following
 
 - **Right Ctrl is swallowed** — it is never forwarded to the remote session. Users who need a Right Ctrl keystroke on the remote side can use the Session Bar's virtual keyboard combos.
 - **Stateless reset on focus loss** — if the browser tab or container loses focus while Right Ctrl is held, the proxy resets its internal state to prevent stuck Super keys.
-- **Protocol-aware applicability** — the proxy is effective for **RDP** (guacd translates `Super_L` to the Windows key scancode) and **VNC** (keysym passes through to the X server). For **SSH** sessions, the Super keysym is silently ignored by guacd's SSH plugin; Right Ctrl is still intercepted, which is harmless since terminal emulators have no Super modifier.
+- **Protocol-aware applicability** — the proxy is effective for **RDP** (the engine translates `Super_L` to the Windows key scancode) and **VNC** (keysym passes through to the X server). For **SSH** sessions, the Super keysym is silently ignored by guacd's SSH plugin; Right Ctrl is still intercepted, which is harmless since terminal emulators have no Super modifier.
 - **Consistent across session modes** — the proxy is active in all four keyboard handler locations: single session view, tiled multi-session, pop-out windows, and shared viewer (control mode).
 - **Single utility, no duplication** — all handler sites use the shared `createWinKeyProxy()` function, ensuring consistent behavior and a single point for future keyboard remapping features.
 
@@ -2004,14 +2074,15 @@ to hold:
   misbehaving (or RCE'd) internal node cannot make the DMZ buffer
   arbitrary memory before flushing to the public socket. h2
   flow-control windows are honoured in both directions; back-pressure
-  from a slow public client transparently slows upstream guacd
+  from a slow public client transparently slows the upstream session
   traffic via `RecvStream::release_capacity()` calls on the link.
-- **guacd connection origin unchanged.** The TCP connection to
-  `guacd:4822` is initiated by the **internal** node, exactly as in
+- **Target connection origin unchanged.** The TCP connection to the
+  target is initiated by the **internal** node, exactly as in
   a single-node deployment. Target hosts see the internal node's IP,
   never the DMZ node's IP. This is a deliberate architectural
   property that v1.5.2 makes user-visible (rather than only true on
-  paper).
+  paper), and v2.0.0 does not change it — the session engine moved
+  into the backend, which is on the internal node.
 - **Test coverage.** The `compute_accept` helper is unit-tested
   against the RFC 6455 §1.3 worked example
   (`dGhlIHNhbXBsZSBub25jZQ==` → `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`) so
@@ -2066,28 +2137,31 @@ rate limits collapse to per-LB-IP buckets and audit logs lose
 source-IP fidelity. The new startup banner (below) warns when the
 variable is missing.
 
-### guacd runtime ownership and minimal capabilities
+### Session recording ownership and minimal capabilities
 
-v1.10.5 adjusts the `guacd` container startup to ensure the process can
-create session recordings on shared volumes. The entrypoint performs a
-root-owned `chown` of the recordings and drive paths to the `guacd` UID/GID
-before dropping privileges. To effect this change the `docker-compose.yml`
-may add narrowly-scoped capabilities to the `guacd` service (`CHOWN`,
-`FOWNER`, `DAC_OVERRIDE`, `SETUID`, `SETGID`). These are applied only to the
-container at start so the long-running `guacd` process runs unprivileged as
-the `guacd` user.
-
-Operator guidance:
-
-- Rebuild and recreate the `guacd` container after upgrade: `docker compose up -d --force-recreate guacd`.
-- Confirm `guacd` writes to the recordings volume (e.g. `docker compose exec guacd ls -la /var/lib/guacamole/recordings`).
-- The entrypoint chown runs as root and then drops to the `guacd` user; no
-  host-level filesystem ACLs are changed beyond the volume mount ownership.
-
-Security rationale: Without the startup chown, `guacd` could fail to create
-`.guac` files on shared mounts where the container-local `guacd` UID differs
-from the host/GID mapping. The capability set is intentionally minimal and
-applies only during container start; the runtime process runs unprivileged.
+> **Rewritten in v2.0.0.** This section described the `guacd` container's
+> startup: a root-owned `chown` of the recordings and drive paths to the
+> `guacd` UID/GID before dropping privileges, backed by a narrowly-scoped
+> `CHOWN` / `FOWNER` / `DAC_OVERRIDE` / `SETUID` / `SETGID` capability set
+> applied only at start. That container is gone, and with it those
+> capabilities.
+>
+> The problem it solved has also gone, rather than moved: the engine writes
+> `.guac` files as the same unprivileged `strata` user that reads them, so
+> there is no cross-UID handoff to reconcile and no startup `chown` to
+> perform. The backend's own capability set is unchanged \u2014 it retains
+> `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID` and `SETUID` for the
+> ephemeral web-session storage under `/var/lib/strata`, not for recordings.
+>
+> The one piece of the old model that **is** retained is the
+> supplementary-group bootstrap in `backend/entrypoint.sh`, so that
+> recordings written before the upgrade \u2014 still owned `guacd:guacd` at mode
+> `0640` \u2014 remain readable. See
+> [Recordings Volume \u2014 Cross-Container POSIX Permissions Model](#recordings-volume--cross-container-posix-permissions-model).
+>
+> **Operator action on upgrade:** none for this item. Verify with
+> `docker compose exec backend ls -la /var/lib/guacamole/recordings` that
+> both pre- and post-upgrade files are listed and readable.
 
 ### DMZ public listener: TLS 1.3 only + HTTP/2 Rapid Reset mitigation
 
@@ -2233,7 +2307,7 @@ variables.
 6. **Network policies** — in Kubernetes, use NetworkPolicies to restrict inter-pod communication
 7. **Secret rotation** — rotate Vault tokens and database credentials periodically
 8. **Log forwarding** — forward the backend's structured JSON logs to a SIEM or log aggregation service
-9. **Container scanning** — scan the custom guacd and backend images for vulnerabilities in CI
+9. **Container scanning** — scan the backend and frontend images for vulnerabilities in CI
 10. **Backup unseal key** — if using the bundled Vault, back up the `backend-config` volume containing the unseal key and root token
 
 ---

@@ -2,7 +2,12 @@
 
 ## Overview
 
-Strata Client is a microservices system that replaces the legacy Java/Tomcat + AngularJS Apache Guacamole stack with a Rust proxy and React SPA. The core stack runs four containers (frontend/nginx, backend, guacd, Vault); optional profiles add a bundled PostgreSQL instance and additional guacd sidecar instances for horizontal scaling. The backend image (Debian trixie-slim) additionally ships `Xvnc` and `chromium` baked in to support the `web` protocol out of the box; the `vdi` protocol is gated behind the [`docker-compose.vdi.yml`](../docker-compose.vdi.yml) overlay because it requires mounting `/var/run/docker.sock` (= host root).
+Strata Client is a microservices system that replaces the legacy Java/Tomcat + AngularJS Apache Guacamole stack with a Rust proxy and React SPA. Since **v2.0.0** it also replaces Apache's `guacd` C daemon: every protocol is served by a **native Rust session engine** (`crates/strata-session`) running in-process inside the backend. The core stack runs three containers (frontend/nginx, backend, Vault); optional profiles add a bundled PostgreSQL instance and a ClamAV sidecar. The backend image (Debian trixie-slim) additionally ships `Xvnc` and `chromium` baked in to support the `web` protocol out of the box; the `vdi` protocol is gated behind the [`docker-compose.vdi.yml`](../docker-compose.vdi.yml) overlay because it requires mounting `/var/run/docker.sock` (= host root).
+
+The browser is unaffected by the engine change: it still speaks the Guacamole
+wire protocol, and `.guac` recordings written under either engine are
+interchangeable. See [ADR-0015](adr/ADR-0015-native-rust-session-engine.md) for
+the rationale and [CHANGELOG](../CHANGELOG.md#200--2026-09-09) for the removal.
 
 ```mermaid
 flowchart LR
@@ -10,22 +15,41 @@ flowchart LR
     Browser -->|HTTPS / WSS| Frontend
     subgraph Net["Docker Compose network (guac-internal bridge)"]
         Frontend["frontend (nginx + njs)<br/><sub>:80 / :443<br/>header masking</sub>"]
-        Backend["backend (Rust / Axum)<br/><sub>:8080</sub>"]
-        Guacd["guacd<br/><sub>FreeRDP 3 + H.264</sub>"]
-        Guacd2["guacd-2… (optional sidecars)"]
+        Backend["backend (Rust / Axum)<br/><sub>:8080<br/>native session engine</sub>"]
         Postgres["PostgreSQL<br/><sub>:5432</sub>"]
         Vault["Vault 1.19<br/><sub>Transit</sub>"]
         Frontend -->|/api| Backend
-        Backend -->|TCP 4822| Guacd
-        Backend -.->|TCP 4822| Guacd2
         Backend -->|SQL| Postgres
         Backend -->|HTTP| Vault
     end
+    Backend -->|RDP / VNC / SSH / K8s API| Targets([Target hosts])
 ```
 
 ## Containers
 
-### 1. Custom guacd
+### 1. Session engine (in-process, not a container)
+
+Up to v1.14.6 this section described a `guacd` container built from
+`guacd/Dockerfile` with five FreeRDP patches, reached over TCP 4822 and
+optionally scaled with round-robin sidecars. **None of that exists now.**
+
+| Item | Value |
+| ---- | ----- |
+| Location | `crates/strata-session`, linked into the backend binary |
+| Concurrency | One Tokio task per session; RDP additionally runs on a dedicated thread with its own current-thread runtime, because `ironrdp-async`'s connection future is not `Send` |
+| RDP | `ironrdp` — CredSSP/NLA only, PNG-encoded damage regions, RDPSND audio, Display Control resize, CLIPRDR clipboard |
+| SSH | `russh` — interactive PTY, mandatory host-key pinning, key or password auth, keyboard-interactive |
+| VNC | `vnc-rs` — standard RFB security types, repeaters, reverse connections |
+| Kubernetes | native exec client over `v4.channel.k8s.io` with client-certificate auth |
+| File transfer | `russh-sftp`, decorating any protocol rather than being one |
+| Terminal | `alacritty_terminal` grid + a rasteriser, so SSH and Kubernetes render wire-compatibly |
+| Wire protocol | `winnow` zero-copy Guacamole parser/encoder; length prefixes counted in Unicode characters, not bytes |
+| Scaling | Scale the backend. There is no separate daemon pool to size — see [deployment.md](deployment.md#high-availability) |
+
+<details>
+<summary>Historical — the custom guacd container (up to v1.14.6)</summary>
+
+### Custom guacd
 
 | Item       | Value                           |
 | ---------- | ------------------------------- |
@@ -88,11 +112,59 @@ Volumes:
 - `krb5-config` → `/etc/krb5` — dynamically generated `krb5.conf`
 - `backend-config` → `/app/config` (read-only) — custom `resolv.conf` written by the backend for DNS configuration
 
-**Custom DNS resolution:** The guacd container uses a custom `entrypoint.sh` wrapper that checks for `/app/config/resolv.conf` on startup. If present, it copies the file to `/etc/resolv.conf`, enabling the container to resolve internal hostnames (e.g. `.local`, `.dmz.local` domains). The entrypoint then drops privileges to the `guacd` user via `su-exec` before launching the daemon. DNS servers and search domains are configured via the Admin Settings Network tab and written to the shared `backend-config` volume by the backend. Docker's embedded DNS (`127.0.0.11`) is always appended as a fallback nameserver so existing connections that resolve via public DNS continue working.
-
 **Recording write semantics (v1.1.0+):** guacd writes session recordings into the shared `guac-recordings` volume as `guacd:guacd` (uid/gid 100/101 inside the Alpine guacd container) at mode `0640` — group-only-read. The upstream `guacamole-server` `recording.c` `open()` hard-codes mode `0640`, so this is independent of the in-container `umask`. This gid is the integration point with the backend: the backend's `entrypoint.sh` reads the gid off the volume at startup and adds the `strata` user to a matching local group via `usermod -aG`, so historic playback works under standard POSIX group-read without requiring `DAC_OVERRIDE`. The fix is volume-agnostic — Docker named volumes, bind-mounts, NFSv3/v4 with preserved gids, and CIFS with `uid=,gid=` mount options all work transparently.
 
-**On-demand MP4 Video Conversion Pipeline (v1.14.0+):** Raw `.guac` session recordings store Guacamole instruction streams that are streamed to `guacamole-common-js` for playback. To support native playback and downloading on Windows OS, the backend service `convert_guac_to_mp4` (`backend/src/services/recordings.rs`) invokes Apache Guacamole's native `guacenc` encoding binary (compiled against `ffmpeg` in `backend/Dockerfile`) with the `-f` flag. `guacenc` renders the `.guac` stream frame-by-frame into an H.264 video container (`.mp4` / `.m4v`). Converted MP4 files are cached locally adjacent to the raw recording file for fast subsequent downloads. The `prepare_recording_for_download` function resolves local disk files as well as Azure Blob Storage objects, serving `video/mp4` downloads with sanitized filenames (`<connection_name>_<recording_id>.mp4`).
+</details>
+
+> **Still live from the block above:** the recordings-gid handling in
+> `backend/entrypoint.sh` is **retained as upgrade compatibility**.
+> Recordings written before v2.0.0 are still owned by `guacd:guacd`, and
+> both playback and the retention sweeper need the backend to hold that
+> supplementary group. Recordings written by the native engine are owned
+> by `strata` directly.
+>
+> **Custom DNS** is no longer applied by copying a `resolv.conf` into a
+> container at startup — see [Target hostname resolution](#target-hostname-resolution-v200) below.
+
+### Target hostname resolution (v2.0.0)
+
+The session engine resolves *target* hostnames itself, against the
+nameservers configured in **Admin → Network**, applying the search suffix
+to short names. Strata's own infrastructure lookups (`postgres-local`,
+`vault`, `clamav`) continue to use the container's resolver.
+
+This is not how it worked before. `guacd` resolved every target, so its
+container's `resolv.conf` was what mattered, and its entrypoint copied one
+in from the shared `backend-config` volume. The backend cannot use the
+same mechanism, for two reasons that compound:
+
+1. It reaches postgres, vault and clamav through Docker's embedded
+   resolver at `127.0.0.11`. Replacing its `resolv.conf` would lose them.
+2. *Appending* the operator's nameservers after `127.0.0.11` does not
+   help either, because glibc only advances to the next nameserver on
+   timeout or SERVFAIL — never on the `NXDOMAIN` that Docker's resolver
+   returns for a name it does not know. The lookup would stop before it
+   ever reached them.
+
+Resolving in-process (`backend/src/services/dns.rs`, `hickory-resolver`)
+avoids both, and makes the setting take effect on the next session rather
+than requiring a container restart. The resolver is cached against the
+settings value, so an administrator's edit is picked up without
+rebuilding one per connection.
+
+Only the **socket** uses the resolved address. `TargetSpec::connect_addr`
+sits alongside `hostname`, and every engine dials the address while still
+passing the *name* to TLS certificate verification and the Kerberos SPN —
+otherwise pre-resolving would silently convert a name-based handshake into
+an address-based one and break NLA against Active Directory. A lookup that
+fails falls back to the system resolver rather than refusing the session.
+
+**Recording MP4 conversion (v1.14.0+):** Raw `.guac` session recordings store Guacamole instruction streams that are streamed to `guacamole-common-js` for playback. To support native playback and downloading on Windows, the backend service `convert_guac_to_mp4` (`backend/src/services/recordings.rs`) invokes Apache Guacamole's native `guacenc` encoding binary (compiled against `ffmpeg` in `backend/Dockerfile`) with the `-f` flag. `guacenc` renders the `.guac` stream frame-by-frame into an H.264 video container (`.mp4` / `.m4v`). Converted MP4 files are cached locally adjacent to the raw recording file for fast subsequent downloads. The `prepare_recording_for_download` function resolves local disk files as well as Azure Blob Storage objects, serving `video/mp4` downloads with sanitized filenames (`<connection_name>_<recording_id>.mp4`).
+
+> `guacenc` is a **build-time** Guacamole component in the backend image
+> and is unrelated to the removed `guacd` daemon. It reads the `.guac`
+> format, which v2.0.0 still writes, so recordings from either engine
+> convert identically.
 
 ### 2. Rust Backend
 

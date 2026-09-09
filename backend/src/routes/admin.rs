@@ -2786,23 +2786,17 @@ pub async fn get_metrics(
 ) -> Result<Json<crate::services::session_registry::MetricsSummary>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let _db = require_running(&state).await?;
-    let (registry, pool_size) = {
+    let registry = {
         let s = state.read().await;
-        let size = s.guacd_pool.as_ref().map(|p| p.len() as u32).unwrap_or(1);
-        (s.session_registry.clone(), size)
+        s.session_registry.clone()
     };
     let mut metrics = registry.metrics().await;
-    metrics.guacd_pool_size = pool_size;
 
     // ── Dynamic capacity recommendation based on host resources ──
     //
     // Read system CPU and memory via sysinfo.  Reserve 30% headroom for
     // other processes (backend, nginx, postgres, OS).  Use the more
     // constraining of the CPU-bound and memory-bound estimates.
-    //
-    // Per-session resource estimates (weighted average across RDP/VNC/SSH):
-    //   RAM  ≈ 150 MB   (RDP ~200, VNC ~100, SSH ~20)
-    //   CPU  ≈ 0.15 cores (RDP ~0.25, VNC ~0.10, SSH ~0.02)
     use sysinfo::System;
     let mut sys = System::new();
     sys.refresh_memory();
@@ -2815,19 +2809,15 @@ pub async fn get_metrics(
     metrics.system_total_memory = total_mem;
     metrics.system_cpu_cores = cpu_cores as u32;
 
-    const USABLE_FRACTION: f64 = 0.70; // reserve 30% for OS / sidecar processes
-    const RAM_PER_SESSION_MB: f64 = 150.0;
+    // Reserve 30% for OS / sidecar processes.
+    const USABLE_FRACTION: f64 = 0.70;
+    // Weighted average across RDP/VNC/SSH: RDP ~0.25, VNC ~0.10, SSH ~0.02.
     const CPU_PER_SESSION: f64 = 0.15;
 
     let usable_mem_mb = (total_mem as f64 / 1_048_576.0) * USABLE_FRACTION;
     let usable_cpu = cpu_cores as f64 * USABLE_FRACTION;
 
-    let by_mem = (usable_mem_mb / RAM_PER_SESSION_MB) as u32;
     let by_cpu = (usable_cpu / CPU_PER_SESSION) as u32;
-
-    // Bottleneck governs; divide by pool size for per-instance recommendation.
-    let total_recommended = by_mem.min(by_cpu).max(1);
-    metrics.recommended_per_instance = (total_recommended / pool_size).max(1);
 
     // ── Native engine capacity ──
     //
@@ -2836,10 +2826,6 @@ pub async fn get_metrics(
     // frame used to narrow the target's damage rectangles, at four bytes
     // a pixel. Everything else — decoder state, channel buffers, the
     // encode scratch — is small beside that.
-    //
-    // guacd cannot be costed this way. It is a separate process per
-    // pool instance carrying FreeRDP, cairo surfaces and a worker thread
-    // per core, which is why its figure above is a blended estimate.
     const NATIVE_FRAMEBUFFERS_PER_SESSION: f64 = 2.0;
     const NATIVE_OVERHEAD_MB: f64 = 8.0;
     let framebuffer_mb = (1920.0 * 1080.0 * 4.0) / 1_048_576.0;
@@ -2847,8 +2833,6 @@ pub async fn get_metrics(
         framebuffer_mb * NATIVE_FRAMEBUFFERS_PER_SESSION + NATIVE_OVERHEAD_MB;
     metrics.native_ram_per_session_mb = native_ram_per_session.ceil() as u32;
 
-    // Same headroom and the same CPU bound as guacd, so the two numbers
-    // differ only where the engines genuinely differ.
     let native_by_mem = (usable_mem_mb / native_ram_per_session) as u32;
     metrics.native_recommended = native_by_mem.min(by_cpu).max(1);
 
@@ -4883,7 +4867,6 @@ mod tests {
             config: None,
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
-            guacd_pool: None,
             file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                 "/tmp/strata-files",
             ))
@@ -4915,7 +4898,6 @@ mod tests {
             config: None,
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
-            guacd_pool: None,
             file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                 "/tmp/strata-files",
             ))

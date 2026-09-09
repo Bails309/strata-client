@@ -17,7 +17,6 @@ pub mod edge_header;
 pub mod email;
 pub mod favorites;
 pub mod file_store;
-pub mod guacd_pool;
 pub mod health_check;
 pub mod http_client;
 pub mod idempotency;

@@ -996,21 +996,10 @@ export interface DatabaseHealth {
 }
 
 export interface EngineHealth {
-  mode: string;
   protocols: string[];
   withheld: string[];
   /** SSH and Kubernetes sessions are refused without a terminal font. */
   terminal_font: boolean;
-  guacd_fallback: boolean;
-}
-
-export interface GuacdHealth {
-  /** False when the native engine serves every session, in which case an
-   * unreachable daemon is expected rather than a fault. */
-  in_use: boolean;
-  reachable: boolean;
-  host: string;
-  port: number;
 }
 
 export interface VaultHealth {
@@ -1072,7 +1061,6 @@ export interface AvHealth {
 export interface ServiceHealth {
   version?: string;
   database: DatabaseHealth;
-  guacd: GuacdHealth;
   engine: EngineHealth;
   vault: VaultHealth;
   schema: SchemaHealth;
@@ -1921,28 +1909,14 @@ export async function buildUserNvrObserveUrl(
 
 export interface MetricsSummary {
   active_sessions: number;
-  /** How many of `active_sessions` the native engine serves. */
-  native_sessions: number;
-  /** How many of `active_sessions` guacd serves. */
-  guacd_sessions: number;
   total_bytes_from_guacd: number;
   total_bytes_to_guacd: number;
   sessions_by_protocol: Record<string, number>;
-  /** Bandwidth and protocol mix for guacd-served sessions only. */
-  guacd_bytes_down: number;
-  guacd_bytes_up: number;
-  guacd_by_protocol: Record<string, number>;
-  /** Bandwidth and protocol mix for natively served sessions only. */
-  native_bytes_down: number;
-  native_bytes_up: number;
-  native_by_protocol: Record<string, number>;
-  guacd_pool_size: number;
-  recommended_per_instance: number;
   system_total_memory: number;
   system_cpu_cores: number;
-  /** Memory one native session costs, from what it allocates. */
+  /** Memory one session costs, from what the engine allocates. */
   native_ram_per_session_mb: number;
-  /** Sessions this host could serve if every one ran natively. */
+  /** Sessions this host could serve. */
   native_recommended: number;
 }
 

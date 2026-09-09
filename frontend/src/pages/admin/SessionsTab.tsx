@@ -19,356 +19,8 @@ function escapeSvgText(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function GuacdCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
-  const poolSize = metrics.guacd_pool_size || 1;
-  // Sessions the native engine serves cost guacd nothing, so they must not
-  // consume its capacity or appear in its bandwidth.
-  const activeSessions = metrics.guacd_sessions;
-  const recPerInstance = metrics.recommended_per_instance || 20;
-  const totalCapacity = poolSize * recPerInstance;
-  const perInstance = poolSize > 0 ? activeSessions / poolSize : activeSessions;
-  const usagePercent = Math.min((activeSessions / totalCapacity) * 100, 100);
-
-  // Format system resources for display
-  const memGB = metrics.system_total_memory
-    ? (metrics.system_total_memory / 1_073_741_824).toFixed(1)
-    : null;
-  const cpuCores = metrics.system_cpu_cores || null;
-
-  // Format total live bandwidth
-  const totalBw = metrics.guacd_bytes_down + metrics.guacd_bytes_up;
-  const fmtBw = (b: number) => {
-    if (b < 1024) return `${b} B`;
-    if (b < 1_048_576) return `${(b / 1024).toFixed(1)} KB`;
-    if (b < 1_073_741_824) return `${(b / 1_048_576).toFixed(1)} MB`;
-    return `${(b / 1_073_741_824).toFixed(2)} GB`;
-  };
-
-  // Color zones
-  const getColor = (pct: number) => {
-    if (pct >= 80) return "#ef4444"; // red
-    if (pct >= 60) return "#f59e0b"; // amber
-    return "#22c55e"; // green
-  };
-
-  const color = getColor(usagePercent);
-
-  // Recommendation
-  const getRecommendation = () => {
-    if (usagePercent >= 90)
-      return {
-        level: "critical" as const,
-        text: "Capacity critical — add guacd instances immediately to avoid degraded performance.",
-      };
-    if (usagePercent >= 75)
-      return {
-        level: "warning" as const,
-        text: "Consider adding another guacd instance. Performance may degrade above 80% capacity.",
-      };
-    if (usagePercent >= 50)
-      return {
-        level: "info" as const,
-        text: "Capacity healthy. Plan to scale when sustained load exceeds 75%.",
-      };
-    return null;
-  };
-
-  const recommendation = getRecommendation();
-
-  // Semi-circle arc gauge
-  const radius = 70;
-  const strokeWidth = 12;
-  const circumference = Math.PI * radius; // half-circle
-  const offset = circumference - (usagePercent / 100) * circumference;
-
-  // Protocol breakdown
-  const protocols = Object.entries(metrics.guacd_by_protocol);
-
-  return (
-    <div
-      className="rounded-xl p-5"
-      style={{
-        background: "var(--color-surface-secondary)",
-        border: "1px solid var(--color-glass-border)",
-        boxShadow: "0 2px 8px rgba(0,0,0,0.15), inset 0 1px 0 var(--color-glass-highlight)",
-      }}
-    >
-      <div className="flex items-center gap-2 mb-4">
-        <svg
-          width="18"
-          height="18"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="var(--color-accent)"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-        </svg>
-        <h3 className="text-sm font-bold" style={{ color: "var(--color-accent)" }}>
-          guacd Resource Capacity
-        </h3>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-[auto_1fr] gap-6 items-center">
-        {/* Gauge */}
-        <div className="flex flex-col items-center">
-          <svg width="180" height="105" viewBox="0 0 180 105">
-            {/* Background arc */}
-            <path
-              d={`M ${90 - radius} 95 A ${radius} ${radius} 0 0 1 ${90 + radius} 95`}
-              fill="none"
-              stroke="var(--color-border)"
-              strokeWidth={strokeWidth}
-              strokeLinecap="round"
-            />
-            {/* Value arc */}
-            <path
-              d={`M ${90 - radius} 95 A ${radius} ${radius} 0 0 1 ${90 + radius} 95`}
-              fill="none"
-              stroke={color}
-              strokeWidth={strokeWidth}
-              strokeLinecap="round"
-              strokeDasharray={circumference}
-              strokeDashoffset={offset}
-              style={{ transition: "stroke-dashoffset 0.6s ease, stroke 0.4s ease" }}
-            />
-            {/* Percentage text */}
-            <text
-              x="90"
-              y="78"
-              textAnchor="middle"
-              fill={color}
-              fontSize="28"
-              fontWeight="bold"
-              fontFamily="system-ui"
-            >
-              {Math.round(usagePercent)}%
-            </text>
-            <text
-              x="90"
-              y="96"
-              textAnchor="middle"
-              fill="var(--color-txt-tertiary)"
-              fontSize="10"
-              fontFamily="system-ui"
-            >
-              capacity used
-            </text>
-          </svg>
-        </div>
-
-        {/* Info panel */}
-        <div className="grid gap-3">
-          {/* Metric pills */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div
-              className="rounded-lg px-3 py-2"
-              style={{ background: "var(--color-surface-tertiary)" }}
-            >
-              <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
-                Active Sessions
-              </p>
-              <p className="text-lg font-bold" style={{ color }}>
-                {activeSessions}
-              </p>
-            </div>
-            <div
-              className="rounded-lg px-3 py-2"
-              style={{ background: "var(--color-surface-tertiary)" }}
-            >
-              <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
-                guacd Instances
-              </p>
-              <p className="text-lg font-bold text-txt-primary">{poolSize}</p>
-            </div>
-            <div
-              className="rounded-lg px-3 py-2"
-              style={{ background: "var(--color-surface-tertiary)" }}
-            >
-              <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
-                Per Instance
-              </p>
-              <p className="text-lg font-bold text-txt-primary">{perInstance.toFixed(1)}</p>
-            </div>
-            <div
-              className="rounded-lg px-3 py-2"
-              style={{ background: "var(--color-surface-tertiary)" }}
-            >
-              <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
-                Max Recommended
-              </p>
-              <p className="text-lg font-bold text-txt-primary">{totalCapacity}</p>
-            </div>
-          </div>
-
-          {/* Protocol breakdown + bandwidth */}
-          {protocols.length > 0 && (
-            <div className="flex items-center gap-3 text-xs flex-wrap">
-              <span className="text-txt-tertiary font-semibold">By Protocol:</span>
-              {protocols.map(([proto, count]) => (
-                <span
-                  key={proto}
-                  className="uppercase text-[0.6rem] font-bold tracking-wider px-2 py-0.5 rounded"
-                  style={{
-                    background: "var(--color-surface-tertiary)",
-                    color: "var(--color-txt-secondary)",
-                  }}
-                >
-                  {proto} {count}
-                </span>
-              ))}
-              {totalBw > 0 && (
-                <>
-                  <span className="text-txt-tertiary">|</span>
-                  <span className="text-txt-tertiary font-semibold">Live Bandwidth:</span>
-                  <span
-                    className="text-[0.6rem] font-bold tracking-wider px-2 py-0.5 rounded"
-                    style={{
-                      background: "var(--color-surface-tertiary)",
-                      color: "var(--color-txt-secondary)",
-                    }}
-                  >
-                    ↓{fmtBw(metrics.guacd_bytes_down)} ↑{fmtBw(metrics.guacd_bytes_up)}
-                  </span>
-                </>
-              )}
-            </div>
-          )}
-
-          {/* System resources */}
-          {(memGB || cpuCores) && (
-            <div className="flex items-center gap-3 text-xs">
-              <span className="text-txt-tertiary font-semibold">Host Resources:</span>
-              {cpuCores && (
-                <span
-                  className="text-[0.6rem] font-bold tracking-wider px-2 py-0.5 rounded"
-                  style={{
-                    background: "var(--color-surface-tertiary)",
-                    color: "var(--color-txt-secondary)",
-                  }}
-                >
-                  {cpuCores} vCPUs
-                </span>
-              )}
-              {memGB && (
-                <span
-                  className="text-[0.6rem] font-bold tracking-wider px-2 py-0.5 rounded"
-                  style={{
-                    background: "var(--color-surface-tertiary)",
-                    color: "var(--color-txt-secondary)",
-                  }}
-                >
-                  {memGB} GB RAM
-                </span>
-              )}
-              <span className="text-[0.55rem] text-txt-tertiary italic">
-                ({recPerInstance}/instance after 30% reserve)
-              </span>
-            </div>
-          )}
-
-          {/* Capacity bar */}
-          <div>
-            <div className="flex justify-between text-[0.6rem] text-txt-tertiary mb-1">
-              <span>0</span>
-              <span
-                className="font-semibold"
-                style={{ color: usagePercent >= 75 ? "#f59e0b" : "var(--color-txt-tertiary)" }}
-              >
-                {Math.round(totalCapacity * 0.75)} (scale threshold)
-              </span>
-              <span>{totalCapacity}</span>
-            </div>
-            <div
-              className="relative h-3 rounded-full overflow-hidden"
-              style={{ background: "var(--color-surface-tertiary)" }}
-            >
-              {/* Scale threshold marker */}
-              <div
-                className="absolute top-0 bottom-0 w-px"
-                style={{ left: "75%", background: "#f59e0b", opacity: 0.6, zIndex: 2 }}
-              />
-              {/* Fill */}
-              <div
-                className="h-full rounded-full"
-                style={{
-                  width: `${usagePercent}%`,
-                  background: `linear-gradient(90deg, #22c55e, ${usagePercent > 60 ? "#f59e0b" : "#22c55e"}, ${usagePercent > 80 ? "#ef4444" : usagePercent > 60 ? "#f59e0b" : "#22c55e"})`,
-                  transition: "width 0.6s ease",
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Recommendation */}
-          {recommendation && (
-            <div
-              className="flex items-start gap-2 rounded-lg px-3 py-2 text-xs"
-              style={{
-                background:
-                  recommendation.level === "critical"
-                    ? "rgba(239,68,68,0.1)"
-                    : recommendation.level === "warning"
-                      ? "rgba(245,158,11,0.1)"
-                      : "rgba(34,197,94,0.08)",
-                border: `1px solid ${recommendation.level === "critical" ? "rgba(239,68,68,0.25)" : recommendation.level === "warning" ? "rgba(245,158,11,0.25)" : "rgba(34,197,94,0.15)"}`,
-              }}
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="shrink-0 mt-0.5"
-                stroke={
-                  recommendation.level === "critical"
-                    ? "#ef4444"
-                    : recommendation.level === "warning"
-                      ? "#f59e0b"
-                      : "#22c55e"
-                }
-              >
-                {recommendation.level === "info" ? (
-                  <>
-                    <circle cx="12" cy="12" r="10" />
-                    <path d="M12 16v-4" />
-                    <path d="M12 8h.01" />
-                  </>
-                ) : (
-                  <>
-                    <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-                    <line x1="12" y1="9" x2="12" y2="13" />
-                    <line x1="12" y1="17" x2="12.01" y2="17" />
-                  </>
-                )}
-              </svg>
-              <span
-                style={{
-                  color:
-                    recommendation.level === "critical"
-                      ? "#ef4444"
-                      : recommendation.level === "warning"
-                        ? "#f59e0b"
-                        : "#22c55e",
-                }}
-              >
-                {recommendation.text}
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
-  const activeSessions = metrics.native_sessions;
+  const activeSessions = metrics.active_sessions;
   const totalCapacity = metrics.native_recommended || 1;
   const ramPerSession = metrics.native_ram_per_session_mb;
   const usagePercent = Math.min((activeSessions / totalCapacity) * 100, 100);
@@ -379,17 +31,12 @@ function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
     if (b < 1_073_741_824) return `${(b / 1_048_576).toFixed(1)} MB`;
     return `${(b / 1_073_741_824).toFixed(2)} GB`;
   };
-  const protocols = Object.entries(metrics.native_by_protocol);
+  const protocols = Object.entries(metrics.sessions_by_protocol);
 
   const memGB = metrics.system_total_memory
     ? (metrics.system_total_memory / 1_073_741_824).toFixed(1)
     : null;
   const cpuCores = metrics.system_cpu_cores || null;
-
-  // How much further this host stretches without a guacd process per
-  // pool instance behind every session.
-  const guacdCapacity = (metrics.guacd_pool_size || 1) * (metrics.recommended_per_instance || 20);
-  const headroom = guacdCapacity > 0 ? totalCapacity / guacdCapacity : 0;
 
   const color = usagePercent >= 80 ? "#ef4444" : usagePercent >= 60 ? "#f59e0b" : "#22c55e";
 
@@ -544,7 +191,7 @@ function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
                 color: "var(--color-txt-secondary)",
               }}
             >
-              ↓{fmtBw(metrics.native_bytes_down)} ↑{fmtBw(metrics.native_bytes_up)}
+              ↓{fmtBw(metrics.total_bytes_from_guacd)} ↑{fmtBw(metrics.total_bytes_to_guacd)}
             </span>
           </div>
 
@@ -611,12 +258,12 @@ function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
             </div>
           </div>
 
-          {headroom > 1.1 && (
+          {usagePercent >= 75 && (
             <div
               className="flex items-start gap-2 rounded-lg px-3 py-2 text-xs"
               style={{
-                background: "rgba(34,197,94,0.08)",
-                border: "1px solid rgba(34,197,94,0.15)",
+                background: "rgba(245,158,11,0.1)",
+                border: "1px solid rgba(245,158,11,0.25)",
               }}
             >
               <svg
@@ -628,16 +275,15 @@ function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 className="shrink-0 mt-0.5"
-                stroke="#22c55e"
+                stroke="#f59e0b"
               >
-                <circle cx="12" cy="12" r="10" />
-                <path d="M12 16v-4" />
-                <path d="M12 8h.01" />
+                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
               </svg>
-              <span style={{ color: "#22c55e" }}>
-                {headroom.toFixed(1)}× the sessions guacd fits on this host. A native session holds
-                two framebuffers rather than a decoder process, so the figure is measured from what
-                it allocates, not estimated.
+              <span style={{ color: "#f59e0b" }}>
+                Capacity is above 75%. Plan to add a host before sustained load reaches the
+                recommended maximum.
               </span>
             </div>
           )}
@@ -1324,8 +970,7 @@ export default function SessionsTab() {
         </div>
       </div>
 
-      {/* guacd Capacity Gauge */}
-      {metrics && <GuacdCapacityGauge metrics={metrics} />}
+      {/* Session engine capacity */}
       {metrics && <NativeCapacityGauge metrics={metrics} />}
     </div>
   );

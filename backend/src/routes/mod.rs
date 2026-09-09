@@ -736,7 +736,6 @@ mod tests {
             config: None,
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
-            guacd_pool: None,
             file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                 "/tmp/strata-files",
             ))

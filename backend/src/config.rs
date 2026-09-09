@@ -30,18 +30,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub vault: Option<VaultConfig>,
 
-    #[serde(default)]
-    pub guacd_host: Option<String>,
-    #[serde(default)]
-    pub guacd_port: Option<u16>,
-
-    /// Additional guacd instances for load distribution.
-    /// Each entry is "host:port".  When populated, connections are distributed
-    /// across these instances + the primary (guacd_host:guacd_port) in
-    /// round-robin order.
-    #[serde(default)]
-    pub guacd_instances: Vec<String>,
-
     /// HMAC secret for signing local JWTs.  Generated on first boot
     /// and persisted so tokens survive restarts.
     /// SECURITY: Never written to config.toml — resolved from JWT_SECRET env var only.
@@ -196,21 +184,6 @@ impl SystemSecrets {
     }
 }
 
-/// Parse a comma-separated list of guacd instances, trimming whitespace and
-/// filtering out empty entries.
-pub fn parse_guacd_instances(raw: &str) -> Vec<String> {
-    raw.split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
-/// Parse a port number from an optional string, returning a default if the
-/// string is `None` or not a valid `u16`.
-pub fn parse_port_with_default(raw: Option<&str>, default: u16) -> u16 {
-    raw.and_then(|p| p.parse().ok()).unwrap_or(default)
-}
-
 /// Determine `DatabaseMode` from a database URL string.
 pub fn detect_database_mode(db_url: &str) -> DatabaseMode {
     if db_url.contains("postgres-local") {
@@ -242,9 +215,6 @@ mod tests {
                 mode: VaultMode::Local,
                 unseal_key: Some("unseal-123".into()),
             }),
-            guacd_host: Some("guacd".into()),
-            guacd_port: Some(4822),
-            guacd_instances: vec!["guacd2:4823".into()],
             jwt_secret: Some("jwt-secret-value".into()),
         };
 
@@ -257,9 +227,6 @@ mod tests {
         assert_eq!(loaded.jwt_secret, None);
 
         assert_eq!(loaded.database_mode, DatabaseMode::Local);
-        assert_eq!(loaded.guacd_host.as_deref(), Some("guacd"));
-        assert_eq!(loaded.guacd_port, Some(4822));
-        assert_eq!(loaded.guacd_instances, vec!["guacd2:4823"]);
     }
 
     #[test]
@@ -280,9 +247,6 @@ mod tests {
                 mode: VaultMode::External,
                 unseal_key: Some("unseal-key".into()),
             }),
-            guacd_host: None,
-            guacd_port: None,
-            guacd_instances: vec![],
             jwt_secret: Some("jwt-secret".into()),
         };
 
@@ -324,9 +288,6 @@ mod tests {
             database_ssl_mode: None,
             database_ca_cert: None,
             vault: None,
-            guacd_host: None,
-            guacd_port: None,
-            guacd_instances: vec![],
             jwt_secret: None,
         };
 
@@ -408,9 +369,6 @@ mod tests {
             database_ssl_mode: Some("require".into()),
             database_ca_cert: Some("/path/to/ca.pem".into()),
             vault: None,
-            guacd_host: None,
-            guacd_port: None,
-            guacd_instances: vec![],
             jwt_secret: None,
         };
         let debug = format!("{:?}", cfg);
@@ -430,9 +388,6 @@ mod tests {
             database_ssl_mode: Some("verify-full".into()),
             database_ca_cert: Some("/etc/ssl/ca.pem".into()),
             vault: None,
-            guacd_host: None,
-            guacd_port: None,
-            guacd_instances: vec![],
             jwt_secret: None,
         };
         cfg.save(path_str).unwrap();
@@ -535,78 +490,6 @@ mod tests {
         assert!(path.ends_with("vault-secrets.json"));
 
         std::env::remove_var("CONFIG_PATH");
-    }
-
-    // ── parse_guacd_instances tests ───────────────────────────
-
-    #[test]
-    fn parse_guacd_instances_single() {
-        assert_eq!(parse_guacd_instances("guacd2:4823"), vec!["guacd2:4823"]);
-    }
-
-    #[test]
-    fn parse_guacd_instances_multiple() {
-        assert_eq!(
-            parse_guacd_instances("host1:4822,host2:4823,host3:4824"),
-            vec!["host1:4822", "host2:4823", "host3:4824"]
-        );
-    }
-
-    #[test]
-    fn parse_guacd_instances_with_whitespace() {
-        assert_eq!(
-            parse_guacd_instances(" host1:4822 , host2:4823 "),
-            vec!["host1:4822", "host2:4823"]
-        );
-    }
-
-    #[test]
-    fn parse_guacd_instances_empty() {
-        let result: Vec<String> = parse_guacd_instances("");
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn parse_guacd_instances_trailing_comma() {
-        assert_eq!(parse_guacd_instances("host1:4822,"), vec!["host1:4822"]);
-    }
-
-    #[test]
-    fn parse_guacd_instances_only_commas() {
-        let result: Vec<String> = parse_guacd_instances(",,,");
-        assert!(result.is_empty());
-    }
-
-    // ── parse_port_with_default tests ───────────────────────────
-
-    #[test]
-    fn parse_port_valid() {
-        assert_eq!(parse_port_with_default(Some("8080"), 4822), 8080);
-    }
-
-    #[test]
-    fn parse_port_none() {
-        assert_eq!(parse_port_with_default(None, 4822), 4822);
-    }
-
-    #[test]
-    fn parse_port_invalid() {
-        assert_eq!(parse_port_with_default(Some("abc"), 4822), 4822);
-    }
-
-    #[test]
-    fn parse_port_empty() {
-        assert_eq!(parse_port_with_default(Some(""), 4822), 4822);
-    }
-
-    #[test]
-    fn parse_port_overflow() {
-        assert_eq!(parse_port_with_default(Some("99999"), 4822), 4822);
-    }
-
-    #[test]
-    fn parse_port_zero() {
-        assert_eq!(parse_port_with_default(Some("0"), 4822), 0);
     }
 
     // ── detect_database_mode tests ───────────────────────────

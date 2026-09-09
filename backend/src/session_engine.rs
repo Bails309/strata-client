@@ -241,6 +241,22 @@ fn warn_unsupported_rdp_params(handshake: &HandshakeParams) {
              Display Control channel instead, which does not drop the session"
         );
     }
+    // A gateway must fail closed when the target will not do NLA, so the
+    // engine advertises CredSSP alone. Anything else the connection asks
+    // for is refused rather than silently downgraded, and an operator who
+    // set it should be able to find out why.
+    if let Some(requested) = handshake
+        .security
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("nla"))
+    {
+        tracing::warn!(
+            requested,
+            "connection asks for a non-NLA rdp security layer; the native engine only \
+             negotiates CredSSP, so the session fails rather than downgrading"
+        );
+    }
 }
 
 /// Read a checkbox-style parameter using guacd's truthiness rules.
@@ -374,16 +390,6 @@ fn shutdown_token() -> tokio_util::sync::CancellationToken {
 }
 
 fn policy_from_env() -> RoutingPolicy {
-    let mode = std::env::var("STRATA_SESSION_ENGINE")
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-
-    // Anything unrecognised means guacd. A typo in this variable must
-    // not silently enable the new engine.
-    let Some(percent) = rollout_percent(&mode) else {
-        return RoutingPolicy::disabled();
-    };
-
     let available = RoutingPolicy::compiled_protocols();
     let eligible = eligible_protocols(
         std::env::var("STRATA_SESSION_NATIVE_PROTOCOLS")
@@ -391,26 +397,17 @@ fn policy_from_env() -> RoutingPolicy {
             .as_deref(),
         &available,
     );
-    let hosts: HashSet<String> = std::env::var("STRATA_SESSION_NATIVE_HOSTS")
-        .unwrap_or_default()
-        .split(',')
-        .map(|h| h.trim().to_owned())
-        .filter(|h| !h.is_empty())
-        .collect();
 
-    RoutingPolicy::new(available)
-        .with_eligible_protocols(eligible)
-        .with_pinned_hosts(hosts)
-        .with_rollout_percent(percent)
+    RoutingPolicy::new(available).with_eligible_protocols(eligible)
 }
 
-/// Which protocols the rollout may serve natively.
+/// Which protocols this deployment may serve.
 ///
 /// A blank value counts as unset. Compose passes the variable through as
 /// `${STRATA_SESSION_NATIVE_PROTOCOLS:-}`, so commenting the line out in
 /// `.env` still delivers an empty string — and reading that literally
-/// leaves nothing eligible, which under `native-only` refuses every
-/// session rather than serving them all.
+/// would leave nothing eligible, refusing every session rather than
+/// serving them all.
 fn eligible_protocols(raw: Option<&str>, available: &HashSet<Protocol>) -> HashSet<Protocol> {
     let entries: Vec<&str> = raw
         .unwrap_or_default()
@@ -430,8 +427,8 @@ fn eligible_protocols(raw: Option<&str>, available: &HashSet<Protocol>) -> HashS
                 eligible.insert(protocol);
             }
             // Named but unrecognised: honour the restriction, because
-            // ignoring it would widen the rollout beyond what was asked
-            // for, but say so — a typo here silently drops a protocol.
+            // ignoring it would serve more than was asked for, but say
+            // so — a typo here silently drops a protocol.
             None => tracing::warn!(
                 entry,
                 "STRATA_SESSION_NATIVE_PROTOCOLS names an unknown protocol; ignoring it"
@@ -441,22 +438,10 @@ fn eligible_protocols(raw: Option<&str>, available: &HashSet<Protocol>) -> HashS
     eligible
 }
 
-/// Whether this deployment still has a guacd to fall back to.
-///
-/// `native-only` is what makes the daemon actually removable: without
-/// it a connection the native engine cannot serve is quietly handed to
-/// a guacd that is not running, and the operator sees a connection
-/// timeout rather than the reason.
-pub fn guacd_available() -> bool {
-    fallback_available(&std::env::var("STRATA_SESSION_ENGINE").unwrap_or_default())
-}
-
-/// What the native engine can serve, for the admin health page.
+/// What the session engine can serve, for the admin health page.
 #[derive(serde::Serialize)]
 pub struct EngineHealth {
-    /// `STRATA_SESSION_ENGINE`, or `guacd` when unset.
-    pub mode: String,
-    /// Protocols this deployment will route natively, sorted.
+    /// Protocols this deployment will serve, sorted.
     pub protocols: Vec<&'static str>,
     /// Protocols compiled in but held back by configuration.
     pub withheld: Vec<&'static str>,
@@ -464,9 +449,6 @@ pub struct EngineHealth {
     /// Kubernetes sessions are refused without one, so this is the only
     /// part of the engine that can be unhealthy rather than merely off.
     pub terminal_font: bool,
-    /// Whether a connection the engine cannot serve still has somewhere
-    /// to go.
-    pub guacd_fallback: bool,
 }
 
 /// Report what the engine is able to serve right now.
@@ -481,56 +463,26 @@ pub fn engine_health() -> EngineHealth {
     }
 
     let policy = policy();
-    let enabled = policy.enabled();
-    let mut protocols: Vec<&'static str> = if enabled {
-        policy
-            .available()
-            .intersection(policy.eligible())
-            .copied()
-            .map(name)
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let mut protocols: Vec<&'static str> = policy
+        .available()
+        .intersection(policy.eligible())
+        .copied()
+        .map(name)
+        .collect();
     protocols.sort_unstable();
 
     let mut withheld: Vec<&'static str> = policy
         .available()
         .iter()
-        .filter(|p| !enabled || !policy.eligible().contains(p))
+        .filter(|p| !policy.eligible().contains(p))
         .map(|p| name(*p))
         .collect();
     withheld.sort_unstable();
 
     EngineHealth {
-        mode: std::env::var("STRATA_SESSION_ENGINE")
-            .ok()
-            .map(|m| m.trim().to_ascii_lowercase())
-            .filter(|m| !m.is_empty())
-            .unwrap_or_else(|| "guacd".to_owned()),
         protocols,
         withheld,
         terminal_font: TerminalFont::discover(DEFAULT_FONT_SIZE_PX).is_ok(),
-        guacd_fallback: guacd_available(),
-    }
-}
-
-fn fallback_available(mode: &str) -> bool {
-    !mode.trim().eq_ignore_ascii_case("native-only")
-}
-
-/// Share of sessions this mode sends to the native engine, or `None`
-/// when the mode does not enable it at all.
-fn rollout_percent(mode: &str) -> Option<u8> {
-    match mode.trim().to_ascii_lowercase().as_str() {
-        "native" | "native-only" => Some(100),
-        "canary" => Some(
-            std::env::var("STRATA_SESSION_NATIVE_PERCENT")
-                .ok()
-                .and_then(|v| v.trim().parse::<u8>().ok())
-                .unwrap_or(0),
-        ),
-        _ => None,
     }
 }
 
@@ -545,21 +497,27 @@ pub fn protocol_from_str(protocol: &str) -> Option<Protocol> {
     }
 }
 
-/// Decide whether this session should use the native engine.
+/// Decide whether the engine can serve this session.
 ///
-/// Returns `None` to stay on `guacd`. A session that the policy selects
-/// but that cannot actually run natively — no host key configured, no
-/// font installed — falls back rather than failing: during a canary,
-/// breaking a user's session is worse than not moving it.
+/// Returns `None` when it cannot, which refuses the session. Every
+/// `None` is logged with the reason, because it is now a failure the
+/// operator has to be able to explain rather than a quiet fallback.
 pub fn select_native(handshake: &HandshakeParams) -> Option<Protocol> {
-    let protocol = protocol_from_str(&handshake.protocol)?;
-    let decision = policy().decide(protocol, &handshake.hostname);
+    let Some(protocol) = protocol_from_str(&handshake.protocol) else {
+        tracing::warn!(
+            host = %handshake.hostname,
+            protocol = %handshake.protocol,
+            "no engine serves this protocol"
+        );
+        return None;
+    };
+    let decision = policy().decide(protocol);
     if decision.backend != SessionBackend::Native {
-        tracing::debug!(
+        tracing::warn!(
             host = %handshake.hostname,
             protocol = %handshake.protocol,
             reason = decision.reason,
-            "routing session to guacd"
+            "refusing session"
         );
         return None;
     }
@@ -569,8 +527,7 @@ pub fn select_native(handshake: &HandshakeParams) -> Option<Protocol> {
             host = %handshake.hostname,
             protocol = %handshake.protocol,
             %reason,
-            "session selected for the native engine but cannot run there — \
-             falling back to guacd"
+            "session cannot run on this engine"
         );
         return None;
     }
@@ -578,8 +535,7 @@ pub fn select_native(handshake: &HandshakeParams) -> Option<Protocol> {
     tracing::info!(
         host = %handshake.hostname,
         protocol = %handshake.protocol,
-        reason = decision.reason,
-        "routing session to the native engine"
+        "starting session"
     );
     Some(protocol)
 }
@@ -911,11 +867,6 @@ pub async fn run_native(
                 kill_rx = Some(kill);
                 shared_input_rx = Some(input);
                 bandwidth = ctx.registry.get(&ctx.session_id).await;
-                // Capacity reporting distinguishes the two engines: the
-                // native one's footprint is known, guacd's is estimated.
-                if let Some(sess) = bandwidth.as_ref() {
-                    sess.mark_native();
-                }
             }
             None => {
                 tracing::error!("Session limit reached — rejecting native tunnel");
@@ -1573,7 +1524,6 @@ mod tests {
             ignore_cert: false,
             recording_path: None,
             recording_name: None,
-            create_recording_path: false,
             width: 1024,
             height: 768,
             dpi: 96,
@@ -2009,31 +1959,6 @@ mod tests {
     fn a_connection_with_no_pod_fails_preflight() {
         let err = preflight(Protocol::KubeExec, &handshake("kubernetes", None)).unwrap_err();
         assert!(err.contains("pod"), "{err}");
-    }
-
-    /// The whole point of the mode: a deployment that removed guacd must
-    /// not silently route to it. Every other value keeps the fallback,
-    /// including anything unrecognised.
-    #[test]
-    fn only_native_only_removes_the_fallback() {
-        assert!(fallback_available("guacd"));
-        assert!(fallback_available("canary"));
-        assert!(fallback_available("native"));
-        assert!(fallback_available(""));
-        assert!(fallback_available("nativeonly"));
-        assert!(!fallback_available("native-only"));
-        assert!(!fallback_available("  NATIVE-Only "));
-    }
-
-    /// `native-only` must still turn the engine on, not just turn the
-    /// fallback off.
-    #[test]
-    fn native_only_is_a_full_rollout() {
-        for mode in ["native", "native-only"] {
-            assert_eq!(rollout_percent(mode), Some(100), "{mode}");
-        }
-        assert_eq!(rollout_percent("guacd"), None);
-        assert_eq!(rollout_percent("typo"), None);
     }
 
     fn kube_handshake() -> HandshakeParams {

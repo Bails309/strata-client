@@ -94,7 +94,7 @@ body:
     id: context
     attributes:
       label: Additional context
-      description: Anything else useful — recent upgrade, custom guacd patches, reverse proxy in front, etc.
+      description: Anything else useful — recent upgrade, reverse proxy in front, etc.
   - type: checkboxes
     id: terms
     attributes:

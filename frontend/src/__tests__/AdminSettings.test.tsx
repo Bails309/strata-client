@@ -156,8 +156,7 @@ import {
 
 const healthOk = {
   database: { connected: true, mode: "local", host: "localhost", latency_ms: 5 },
-  guacd: { in_use: true, reachable: true, host: "guacd", port: 4822 },
-  engine: { mode: "native-only", protocols: ["rdp", "ssh"], withheld: [], terminal_font: true, guacd_fallback: false },
+  engine: { protocols: ["rdp", "ssh"], withheld: [], terminal_font: true },
   vault: { configured: true, mode: "local", address: "http://vault:8200" },
   schema: { status: "in_sync", applied_migrations: 28, expected_migrations: 28 },
   uptime_secs: 3600,
@@ -166,8 +165,7 @@ const healthOk = {
 
 const healthDown = {
   database: { connected: false, mode: "local", host: "localhost", latency_ms: null },
-  guacd: { in_use: true, reachable: false, host: "guacd", port: 4822 },
-  engine: { mode: "native-only", protocols: ["rdp", "ssh"], withheld: [], terminal_font: true, guacd_fallback: false },
+  engine: { protocols: ["rdp", "ssh"], withheld: [], terminal_font: true },
   vault: { configured: false, mode: "", address: "" },
   schema: { status: "unavailable", applied_migrations: 0, expected_migrations: 28 },
   uptime_secs: 0,
@@ -176,19 +174,9 @@ const healthDown = {
 
 const metricsOk = {
   active_sessions: 7,
-  native_sessions: 2,
-  guacd_sessions: 5,
   total_bytes_from_guacd: 1024,
   total_bytes_to_guacd: 512,
   sessions_by_protocol: { rdp: 4, ssh: 3 },
-  guacd_bytes_down: 800,
-  guacd_bytes_up: 400,
-  guacd_by_protocol: { rdp: 2, ssh: 3 },
-  native_bytes_down: 224,
-  native_bytes_up: 112,
-  native_by_protocol: { rdp: 2 },
-  guacd_pool_size: 2,
-  recommended_per_instance: 18,
   system_total_memory: 8589934592,
   system_cpu_cores: 4,
   native_ram_per_session_mb: 24,
@@ -337,14 +325,14 @@ describe("HealthTab", () => {
   it("shows Healthy badges when all services are up", async () => {
     renderAdmin();
     const badges = await screen.findAllByText("Healthy");
-    expect(badges.length).toBe(5); // Database, guacd, Session Engine, Vault, Schema
+    expect(badges.length).toBe(4); // Database, Session Engine, Vault, Schema
   });
 
   it("shows Unhealthy badges when services are down", async () => {
     vi.mocked(getServiceHealth).mockResolvedValue(healthDown);
     renderAdmin();
     const unhealthy = await screen.findAllByText("Unhealthy");
-    expect(unhealthy.length).toBe(2); // Database, guacd
+    expect(unhealthy.length).toBe(1); // Database
     expect(screen.getByText("Not Configured")).toBeInTheDocument(); // Vault
     const unavailable = screen.getAllByText("Unavailable");
     expect(unavailable.length).toBeGreaterThanOrEqual(1); // Schema badge + status text
@@ -365,14 +353,6 @@ describe("HealthTab", () => {
   it("shows vault address when configured", async () => {
     renderAdmin();
     expect(await screen.findByText("http://vault:8200")).toBeInTheDocument();
-  });
-
-  it("shows pool size from metrics", async () => {
-    renderAdmin();
-    // Scoped to its own row: the Session Engine card renders a native
-    // session count too, so a bare findByText is ambiguous.
-    const poolSize = await screen.findByText("Pool Size");
-    expect(poolSize.parentElement).toHaveTextContent("2");
   });
 
   it("shows retry button when health fails", async () => {
@@ -434,7 +414,7 @@ describe("HealthTab", () => {
     vi.mocked(getMetrics).mockResolvedValue(metricsOk);
     await user.click(screen.getByText("Retry"));
     const badges = await screen.findAllByText("Healthy");
-    expect(badges.length).toBe(5);
+    expect(badges.length).toBe(4);
   });
 
   it("shows last checked timestamp", async () => {

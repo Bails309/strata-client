@@ -1,88 +1,5 @@
 services:
-  # ── 1. Custom guacd (FreeRDP 3 + Kerberos) ──────────────────────────
-  guacd:
-    build:
-      context: ./guacd
-      dockerfile: Dockerfile
-    image: strata/custom-guacd:latest
-    restart: unless-stopped
-    networks:
-      - guac-internal
-    volumes:
-      - guac-recordings:/var/lib/guacamole/recordings
-      - guac-drive:/var/lib/guacamole/drive
-      - krb5-config:/etc/krb5
-      - backend-config:/app/config:ro
-    environment:
-      - KRB5_CONFIG=/etc/krb5/krb5.conf
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - SETGID
-      - SETUID
-      # DAC_OVERRIDE / CHOWN / FOWNER: the entrypoint runs as root and
-      # chowns /var/lib/guacamole/{recordings,drive} to guacd:guacd before
-      # su-exec drops privileges. su-exec strips all capabilities on uid
-      # change, so guacd itself must own the directory to be able to
-      # write recordings. DAC_OVERRIDE is kept as defence-in-depth for
-      # the brief root window in the entrypoint; without these caps
-      # guacd hits EACCES and logs
-      # "Creation of recording failed: Exhausted all possible unique suffixes".
-      - DAC_OVERRIDE
-      - CHOWN
-      - FOWNER
-    deploy:
-      resources:
-        limits:
-          cpus: "2"
-          memory: 4G
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 4822 || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
-
-  # ── 1b. Additional guacd sidecar
-  # To use, set GUACD_INSTANCES=guacd-2:4822 in your .env file.
-  # You can duplicate this block for guacd-3, guacd-4, etc.
-  guacd-2:
-    build:
-      context: ./guacd
-      dockerfile: Dockerfile
-    image: strata/custom-guacd:latest
-    restart: unless-stopped
-    profiles:
-      - scale
-    networks:
-      - guac-internal
-    volumes:
-      - guac-recordings:/var/lib/guacamole/recordings
-      - guac-drive:/var/lib/guacamole/drive
-      - krb5-config:/etc/krb5
-      - backend-config:/app/config:ro
-    environment:
-      - KRB5_CONFIG=/etc/krb5/krb5.conf
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - SETGID
-      - SETUID
-      # See main `guacd` service for rationale.
-      - DAC_OVERRIDE
-      - CHOWN
-      - FOWNER
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 4822 || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-
-  # ── 2. Rust Backend (Proxy / API) ───────────────────────────────────
+  # ── 1. Rust Backend (Proxy / API) ───────────────────────────────────
   #
   # Built from backend/Dockerfile — the unified image that
   # ships with Xvnc + Chromium baked in. The Web Browser Session
@@ -135,16 +52,10 @@ services:
     environment:
       - RUST_LOG=${RUST_LOG:-info}
       - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-strata}:${POSTGRES_PASSWORD:-strata_default}@postgres-local:5432/${POSTGRES_DB:-strata}}
-      - GUACD_HOST=guacd
-      - GUACD_PORT=4822
-      - GUACD_INSTANCES=${GUACD_INSTANCES:-}
-      # ── Native session engine (v2.0.0) ──
-      # guacd stays the default and the fallback. A protocol with no
-      # compiled native engine is never routed natively regardless of
-      # what these say. See .env for the rollout switches.
-      - STRATA_SESSION_ENGINE=${STRATA_SESSION_ENGINE:-guacd}
-      - STRATA_SESSION_NATIVE_PERCENT=${STRATA_SESSION_NATIVE_PERCENT:-0}
-      - STRATA_SESSION_NATIVE_HOSTS=${STRATA_SESSION_NATIVE_HOSTS:-}
+      # ── Session engine ──
+      # Blank means every compiled protocol. Naming a subset refuses the
+      # rest — there is no fallback, so an omitted protocol is refused,
+      # not routed elsewhere.
       - STRATA_SESSION_NATIVE_PROTOCOLS=${STRATA_SESSION_NATIVE_PROTOCOLS:-}
       - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME:-admin}
       - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-}
@@ -173,9 +84,9 @@ services:
       - STRATA_WEB_XVNC_PATH=/usr/bin/Xvnc
       - STRATA_WEB_CHROMIUM_PATH=/usr/bin/chromium
       - STRATA_WEB_LOGIN_SCRIPTS_DIR=/var/lib/strata/web-login-scripts
-      # Hostname guacd uses to reach the spawned Xvnc listener. Must
-      # be the backend's service name on the docker network — guacd
-      # is a sibling container, so 127.0.0.1 won't work.
+      # Hostname the session engine uses to reach the spawned Xvnc
+      # listener. Must be the backend's service name on the docker
+      # network.
       - STRATA_WEB_VNC_HOST=${STRATA_WEB_VNC_HOST:-backend}
       # VDI (docker-spawned desktops) — DISABLED at this layer; flip
       # to true via docker-compose.vdi.yml which also mounts docker.sock.
@@ -208,11 +119,6 @@ services:
           cpus: "2"
           memory: 2G
     depends_on:
-      # Not required: with STRATA_SESSION_ENGINE=native-only there is no
-      # guacd to wait for, and the backend must still start.
-      guacd:
-        condition: service_healthy
-        required: false
       vault:
         condition: service_healthy
       postgres-local:

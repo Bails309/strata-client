@@ -225,73 +225,7 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
           </div>
         </div>
 
-        {/* guacd Gateway */}
-        <div
-          className="rounded-xl p-5 flex flex-col gap-4"
-          style={{
-            background: "var(--color-surface-secondary)",
-            border: "1px solid var(--color-glass-border)",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.15), inset 0 1px 0 var(--color-glass-highlight)",
-          }}
-        >
-          <div className="flex items-center justify-between">
-            <div style={iconStyle("#f59e0b")}>
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-              </svg>
-            </div>
-            <span
-              className={`badge ${
-                !health.guacd.in_use
-                  ? "badge-accent"
-                  : health.guacd.reachable
-                    ? "badge-success"
-                    : "badge-error"
-              }`}
-            >
-              {!health.guacd.in_use
-                ? "Not in use"
-                : health.guacd.reachable
-                  ? "Healthy"
-                  : "Unhealthy"}
-            </span>
-          </div>
-          <div>
-            <h3 className="text-sm font-semibold text-txt-primary mb-0.5">guacd</h3>
-            <p className="text-xs text-txt-tertiary">
-              {health.guacd.in_use
-                ? "Remote Desktop Gateway"
-                : "Native session engine — sessions do not use guacd"}
-            </p>
-          </div>
-          <div className="mt-auto space-y-2 text-xs">
-            <div className="flex justify-between">
-              <span className="text-txt-tertiary">Host</span>
-              <span className="font-mono text-txt-secondary">{health.guacd.host}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-txt-tertiary">Port</span>
-              <span className="font-mono text-txt-secondary">{health.guacd.port}</span>
-            </div>
-            {metrics && (
-              <div className="flex justify-between">
-                <span className="text-txt-tertiary">Pool Size</span>
-                <span className="font-semibold text-txt-primary">{metrics.guacd_pool_size}</span>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Native session engine */}
+        {/* Session engine */}
         <div
           className="rounded-xl p-5 flex flex-col gap-4"
           style={{
@@ -322,14 +256,14 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
             <span
               className={`badge ${
                 health.engine.protocols.length === 0
-                  ? "badge-accent"
+                  ? "badge-error"
                   : health.engine.terminal_font
                     ? "badge-success"
                     : "badge-warning"
               }`}
             >
               {health.engine.protocols.length === 0
-                ? "Not in use"
+                ? "No protocols"
                 : health.engine.terminal_font
                   ? "Healthy"
                   : "Degraded"}
@@ -339,15 +273,11 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
             <h3 className="text-sm font-semibold text-txt-primary mb-0.5">Session Engine</h3>
             <p className="text-xs text-txt-tertiary">
               {health.engine.protocols.length === 0
-                ? "Native engine off — sessions are served by guacd"
+                ? "No protocol is enabled — every session will be refused"
                 : "Native Rust engine"}
             </p>
           </div>
           <div className="mt-auto space-y-2 text-xs">
-            <div className="flex justify-between">
-              <span className="text-txt-tertiary">Mode</span>
-              <span className="font-mono text-txt-secondary">{health.engine.mode}</span>
-            </div>
             <div className="flex justify-between gap-3">
               <span className="text-txt-tertiary shrink-0">Serving</span>
               <span className="font-mono text-txt-secondary text-right break-all">
@@ -370,18 +300,6 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
                 {health.engine.terminal_font ? "Found" : "Missing"}
               </span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-txt-tertiary">guacd fallback</span>
-              <span className="font-semibold text-txt-primary">
-                {health.engine.guacd_fallback ? "Available" : "None"}
-              </span>
-            </div>
-            {metrics && (
-              <div className="flex justify-between">
-                <span className="text-txt-tertiary">Native sessions</span>
-                <span className="font-semibold text-txt-primary">{metrics.native_sessions}</span>
-              </div>
-            )}
           </div>
         </div>
 

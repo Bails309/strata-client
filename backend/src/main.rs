@@ -68,16 +68,6 @@ async fn main() -> anyhow::Result<()> {
 
     let vault = resolve_vault_config(&persisted);
 
-    let guacd_host = std::env::var("GUACD_HOST")
-        .ok()
-        .or_else(|| persisted.as_ref().and_then(|c| c.guacd_host.clone()))
-        .unwrap_or_else(|| "guacd".into());
-    let guacd_port: u16 = std::env::var("GUACD_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .or_else(|| persisted.as_ref().and_then(|c| c.guacd_port))
-        .unwrap_or(4822);
-
     // ── Connect to database ──
     tracing::info!("Connecting to database …");
     let db = Database::connect(&db_url, db_ssl_mode.as_deref(), db_ca_cert.as_deref()).await?;
@@ -198,24 +188,6 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // ── Parse additional guacd instances ──
-    let guacd_instances: Vec<String> = std::env::var("GUACD_INSTANCES")
-        .ok()
-        .map(|s| {
-            s.split(',')
-                .map(|h| h.trim().to_string())
-                .filter(|h| !h.is_empty())
-                .collect()
-        })
-        .or_else(|| persisted.as_ref().map(|c| c.guacd_instances.clone()))
-        .unwrap_or_default();
-
-    let guacd_pool =
-        services::guacd_pool::GuacdPool::new(&guacd_host, guacd_port, &guacd_instances);
-    if guacd_pool.len() > 1 {
-        tracing::info!("guacd pool: {} instances configured", guacd_pool.len());
-    }
-
     // ── Persist config (secrets are skip_serializing — only safe fields go to disk) ──
     let cfg = AppConfig {
         database_url: db_url,
@@ -223,9 +195,6 @@ async fn main() -> anyhow::Result<()> {
         database_ssl_mode: db_ssl_mode,
         database_ca_cert: db_ca_cert,
         vault: vault.clone(),
-        guacd_host: Some(guacd_host),
-        guacd_port: Some(guacd_port),
-        guacd_instances,
         jwt_secret: Some(jwt_secret.clone()),
     };
     cfg.save(&config_path)
@@ -308,7 +277,6 @@ async fn main() -> anyhow::Result<()> {
         config: Some(cfg),
         db: Some(db),
         session_registry: services::session_registry::SessionRegistry::new(),
-        guacd_pool: Some(guacd_pool),
         file_store: services::file_store::FileStore::new(std::path::PathBuf::from(
             "/tmp/strata-files",
         ))

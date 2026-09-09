@@ -1157,6 +1157,7 @@ async fn connect_engine(
     let spec = TargetSpec {
         protocol,
         hostname: handshake.hostname.clone(),
+        connect_addr: handshake.connect_addr,
         port: handshake.port,
         username: handshake.username.clone().unwrap_or_default(),
         secret: SecretString::from(handshake.password.clone().unwrap_or_default()),
@@ -1204,6 +1205,11 @@ fn sftp_config(handshake: &HandshakeParams) -> Option<SftpConfig> {
         .unwrap_or_default();
 
     let mut config = SftpConfig::new(hostname.clone(), port, username);
+    // Only reuse the resolved address when SFTP goes to the same host as
+    // the session; `sftp-hostname` names a different machine.
+    if hostname == handshake.hostname {
+        config.connect_addr = handshake.connect_addr;
+    }
     config.password = get("sftp-password")
         .map(SecretString::from)
         .or_else(|| handshake.password.clone().map(SecretString::from));
@@ -1510,6 +1516,7 @@ mod tests {
             extra.insert(HOST_KEY_PARAM.to_owned(), fp.to_owned());
         }
         HandshakeParams {
+            connect_addr: None,
             protocol: protocol.to_owned(),
             hostname: "host.internal".to_owned(),
             port: 22,

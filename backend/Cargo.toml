@@ -115,6 +115,15 @@ scopeguard = "1"
 urlencoding = "2.1"
 tempfile = "3"
 sysinfo = "0.38"
+# Target hostname resolution against operator-configured nameservers.
+# The container's own resolver has to stay pointed at Docker's embedded
+# DNS to find postgres/vault/clamav, so target lookups are done here
+# instead. rustls features off: this resolves plain DNS, and pulling a
+# second TLS stack in would duplicate the one ironrdp already uses.
+hickory-resolver = { version = "0.25", default-features = false, features = [
+  "system-config",
+  "tokio",
+] }
 # Magic-number / MIME detection for uploads (W3-6)
 infer = { version = "0.19", default-features = false }
 # Prometheus /metrics endpoint (W3-12)

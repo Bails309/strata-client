@@ -180,7 +180,7 @@ impl KubeEngine {
                 .expect("static header value is valid"),
         );
 
-        let stream = TcpStream::connect((spec.hostname.as_str(), spec.port)).await?;
+        let stream = TcpStream::connect((spec.dial_host().as_str(), spec.port)).await?;
 
         let connector = if config.use_ssl {
             Some(Connector::Rustls(Arc::new(tls_config(&config)?)))

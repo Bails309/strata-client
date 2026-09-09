@@ -159,6 +159,7 @@ mod tests {
 
     fn spec() -> TargetSpec {
         TargetSpec {
+            connect_addr: None,
             protocol: Protocol::Rdp,
             hostname: "host.internal".to_owned(),
             port: 3389,

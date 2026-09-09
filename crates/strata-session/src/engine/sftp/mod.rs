@@ -46,6 +46,8 @@ const STATUS_NOT_FOUND: i32 = 0x0404;
 pub struct SftpConfig {
     /// Host running the SFTP service. Defaults to the session's target.
     pub hostname: String,
+    /// Address to dial, when the caller resolved `hostname` itself.
+    pub connect_addr: Option<std::net::IpAddr>,
     /// Port for the SSH connection carrying SFTP.
     pub port: u16,
     /// Account used for the transfer, which need not be the session's.
@@ -93,6 +95,7 @@ impl SftpConfig {
     pub fn new(hostname: String, port: u16, username: String) -> Self {
         Self {
             hostname,
+            connect_addr: None,
             port,
             username,
             password: None,
@@ -131,11 +134,13 @@ impl SftpEngine {
         let checker = HostKeyChecker {
             policy: config.host_keys.clone(),
         };
+        let dial_host = config
+            .connect_addr
+            .map_or_else(|| config.hostname.clone(), |ip| ip.to_string());
         let ssh_config = Arc::new(client::Config::default());
-        let mut handle =
-            client::connect(ssh_config, (config.hostname.as_str(), config.port), checker)
-                .await
-                .map_err(map_russh)?;
+        let mut handle = client::connect(ssh_config, (dial_host.as_str(), config.port), checker)
+            .await
+            .map_err(map_russh)?;
 
         authenticate(&mut handle, &config).await?;
 

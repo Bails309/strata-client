@@ -63,6 +63,7 @@ fn spec(password: &str) -> TargetSpec {
 
 fn spec_for(host: &str, password: &str) -> TargetSpec {
     TargetSpec {
+        connect_addr: None,
         protocol: Protocol::Rdp,
         hostname: host.to_owned(),
         port: std::env::var("STRATA_RDP_TEST_PORT")

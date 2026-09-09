@@ -487,6 +487,7 @@ async fn session_thread(
 impl RdpSession {
     /// Connect, authenticate over CredSSP, and reach the active stage.
     async fn connect(spec: TargetSpec, config: &RdpConfig) -> Result<Self, EngineError> {
+        let dial_host = spec.dial_host();
         let TargetSpec {
             hostname,
             port,
@@ -554,7 +555,7 @@ impl RdpSession {
         // Nothing below may observe the credential.
         drop(secret);
 
-        let stream = TcpStream::connect((hostname.as_str(), port))
+        let stream = TcpStream::connect((dial_host.as_str(), port))
             .await
             .map_err(EngineError::Transport)?;
         // The Client Info PDU carries our own address; the target only
@@ -1346,13 +1347,18 @@ pub struct DiscoveredCertificate {
 /// proof of anything.
 pub async fn discover_certificate(
     hostname: &str,
+    connect_addr: Option<std::net::IpAddr>,
     port: u16,
     timeout: Duration,
 ) -> Result<DiscoveredCertificate, EngineError> {
     use sha2::Digest as _;
 
+    // Same split as a session: dial the resolved address, present the
+    // name, so the certificate that comes back is the one a session
+    // would be asked to trust.
+    let dial_host = connect_addr.map_or_else(|| hostname.to_owned(), |ip| ip.to_string());
     let probe = async {
-        let stream = TcpStream::connect((hostname, port))
+        let stream = TcpStream::connect((dial_host.as_str(), port))
             .await
             .map_err(EngineError::Transport)?;
         let client_addr = stream.local_addr().map_err(EngineError::Transport)?;
@@ -1577,6 +1583,7 @@ mod tests {
 
         let factory = RdpEngineFactory::new(RdpConfig::default());
         let spec = TargetSpec {
+            connect_addr: None,
             protocol: Protocol::Ssh,
             hostname: "host.internal".to_owned(),
             port: 22,

@@ -49,6 +49,7 @@ fn required(name: &str) -> String {
 
 fn spec(password: &str) -> TargetSpec {
     TargetSpec {
+        connect_addr: None,
         protocol: Protocol::Ssh,
         hostname: required("STRATA_SSH_TEST_HOST"),
         port: std::env::var("STRATA_SSH_TEST_PORT")

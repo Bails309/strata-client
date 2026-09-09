@@ -374,7 +374,7 @@ async fn open_socket(spec: &TargetSpec, config: &VncConfig) -> Result<TcpStream,
         return accept_reverse(spec.port, config.listen_timeout).await;
     }
 
-    let mut stream = TcpStream::connect((spec.hostname.as_str(), spec.port))
+    let mut stream = TcpStream::connect((spec.dial_host().as_str(), spec.port))
         .await
         .map_err(EngineError::Transport)?;
 
@@ -584,6 +584,7 @@ mod tests {
         });
 
         let spec = TargetSpec {
+            connect_addr: None,
             protocol: Protocol::Vnc,
             hostname: "127.0.0.1".to_owned(),
             port,

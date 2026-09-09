@@ -13,6 +13,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use secrecy::SecretString;
+use std::net::IpAddr;
 
 use crate::error::EngineError;
 
@@ -72,6 +73,14 @@ pub struct TargetSpec {
     pub protocol: Protocol,
     /// Target hostname or address.
     pub hostname: String,
+    /// Address to open the socket to, when the caller resolved the
+    /// hostname itself.
+    ///
+    /// `hostname` is still what gets presented for TLS verification and
+    /// the Kerberos SPN, so pre-resolving does not turn a name-based
+    /// handshake into an address-based one. `None` leaves resolution to
+    /// the system resolver.
+    pub connect_addr: Option<IpAddr>,
     /// Target port.
     pub port: u16,
     /// Account to authenticate as.
@@ -82,6 +91,16 @@ pub struct TargetSpec {
     pub width: u32,
     /// Initial display height in pixels.
     pub height: u32,
+}
+
+impl TargetSpec {
+    /// What to hand a socket constructor: the resolved address when the
+    /// caller supplied one, otherwise the hostname.
+    #[must_use]
+    pub fn dial_host(&self) -> String {
+        self.connect_addr
+            .map_or_else(|| self.hostname.clone(), |ip| ip.to_string())
+    }
 }
 
 impl std::fmt::Debug for TargetSpec {

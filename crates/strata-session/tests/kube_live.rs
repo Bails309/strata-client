@@ -90,6 +90,7 @@ fn config() -> KubeConfig {
 
 fn spec() -> TargetSpec {
     TargetSpec {
+        connect_addr: None,
         protocol: Protocol::KubeExec,
         hostname: required("STRATA_KUBE_TEST_HOST"),
         port: std::env::var("STRATA_KUBE_TEST_PORT")

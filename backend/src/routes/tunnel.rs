@@ -1213,9 +1213,24 @@ pub async fn ws_tunnel(
         }
     }
 
+    // ── Target resolution ────────────────────────────────────────────
+    // Only for operator-typed hostnames. `web` and `vdi` have already had
+    // their hostname replaced with an internally spawned endpoint, which
+    // is reachable through Docker's own resolver and would not be in a
+    // corporate zone.
+    let connect_addr = if protocol == "web" || protocol == "vdi" {
+        None
+    } else {
+        match crate::services::dns::load(&db.pool).await {
+            Some(cfg) => crate::services::dns::resolve(&cfg, &final_hostname).await,
+            None => None,
+        }
+    };
+
     let handshake = HandshakeParams {
         protocol: wire_protocol,
         hostname: final_hostname,
+        connect_addr,
         port: final_safe_port,
         username: final_username,
         password: final_password,

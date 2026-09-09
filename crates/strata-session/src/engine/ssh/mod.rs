@@ -425,9 +425,13 @@ impl SshEngine {
             policy: config.host_keys.clone(),
         };
 
-        let session = client::connect(client_config, (spec.hostname.as_str(), spec.port), handler)
-            .await
-            .map_err(map_russh)?;
+        let session = client::connect(
+            client_config,
+            (spec.dial_host().as_str(), spec.port),
+            handler,
+        )
+        .await
+        .map_err(map_russh)?;
 
         let TargetSpec {
             username,
@@ -1135,6 +1139,7 @@ mod tests {
 
         let factory = SshEngineFactory::new(SshConfig::with_fingerprints(vec![]));
         let spec = TargetSpec {
+            connect_addr: None,
             protocol: Protocol::Rdp,
             hostname: "host.internal".to_owned(),
             port: 3389,

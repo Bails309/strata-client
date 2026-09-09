@@ -50,6 +50,10 @@ pub struct NvrContext {
 pub struct HandshakeParams {
     pub protocol: String,
     pub hostname: String,
+    /// Address to dial, when the tunnel route resolved `hostname` against
+    /// operator-configured nameservers. `hostname` is still what reaches
+    /// TLS verification and the Kerberos SPN.
+    pub connect_addr: Option<std::net::IpAddr>,
     pub port: u16,
     pub username: Option<String>,
     pub password: Option<String>,

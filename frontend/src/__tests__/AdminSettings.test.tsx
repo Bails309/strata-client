@@ -3140,7 +3140,10 @@ describe("NetworkTab", () => {
         dns_search_domains: "corp.local",
       });
     });
-    expect(await screen.findByText(/Restart required/)).toBeInTheDocument();
+    expect(await screen.findByText(/Saved/)).toBeInTheDocument();
+    // The confirmation has to name the servers, because nothing else in
+    // the UI shows which resolver a session actually used.
+    expect(screen.getByText(/10\.0\.0\.1/)).toBeInTheDocument();
   });
 
   it("saves DNS settings without restart notice", async () => {

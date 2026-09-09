@@ -85,15 +85,21 @@ export default function NetworkTab({
 
   const searchDomainError = validateSearchDomains();
 
+  const dnsServerList = dnsServers
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
   return (
     <div className="card mt-6">
       <div className="flex items-center justify-between p-4 bg-surface-secondary/50 border-b border-border mb-6 -mx-7 -mt-7">
         <div>
           <h3 className="text-lg font-semibold text-txt-primary">Network &amp; DNS Settings</h3>
           <p className="text-sm text-txt-secondary mt-0.5">
-            Configure custom DNS servers for the guacd proxy containers. This is required when
-            target servers use internal DNS zones (e.g. <code>.dmz.local</code>) that Docker&apos;s
-            built-in DNS cannot resolve.
+            Configure the DNS servers the session engine resolves target hostnames with. This is
+            required when targets sit in an internal zone (e.g. <code>.dmz.local</code>) that the
+            host&apos;s resolver does not serve, or are entered as short names that only resolve
+            with a search suffix.
           </p>
         </div>
       </div>
@@ -104,9 +110,10 @@ export default function NetworkTab({
             Custom DNS Servers
           </h4>
           <p className="text-sm text-txt-secondary mb-4">
-            When enabled, your DNS server IPs are applied to the guacd containers so they can
-            resolve internal hostnames the same way your host operating system does. This preserves
-            hostname-based authentication (including Kerberos/NLA).
+            When enabled, your DNS server IPs are applied to the backend container so it resolves
+            internal hostnames the same way your host operating system does. Targets are still
+            dialled by name, so hostname-based authentication (including Kerberos/NLA) and TLS
+            certificate verification are unaffected.
           </p>
           <div className="form-group">
             <label
@@ -127,7 +134,7 @@ export default function NetworkTab({
                   Enable Custom DNS
                 </span>
                 <p className="text-txt-secondary text-sm mt-0.5">
-                  Apply custom nameservers to the guacd proxy containers.
+                  Apply custom nameservers to the backend&apos;s target lookups.
                 </p>
               </div>
             </label>
@@ -187,24 +194,34 @@ export default function NetworkTab({
               <h5 className="text-sm font-medium text-txt-primary mb-2">How it works</h5>
               <ol className="text-sm text-txt-secondary space-y-1 list-decimal list-inside">
                 <li>You configure your internal DNS server IPs here and save</li>
-                <li>The DNS configuration is written to a shared config volume</li>
-                <li>After restarting guacd, it reads the custom DNS config at startup</li>
-                <li>guacd resolves hostnames using your DNS servers — just like your host OS</li>
+                <li>The session engine resolves target hostnames against them</li>
+                <li>
+                  Short names are expanded with the search suffix, so{" "}
+                  <code>server01</code> reaches <code>server01.example.local</code>
+                </li>
+                <li>
+                  Targets are still dialled by name, so Kerberos/NLA and TLS certificate checks are
+                  unaffected
+                </li>
               </ol>
+              <p className="text-sm text-txt-secondary mt-3">
+                Applies to the next session started — no restart. If a lookup fails the engine
+                falls back to the system resolver rather than refusing the session, so a
+                mistyped nameserver degrades rather than takes everything down.
+              </p>
             </div>
           </div>
         )}
       </div>
 
       {restartNeeded && (
-        <div className="mt-4 rounded-md px-4 py-3 bg-warning/10 border border-warning/30">
-          <p className="text-sm font-medium text-warning">Restart required</p>
+        <div className="mt-4 rounded-md px-4 py-3 bg-success/10 border border-success/30">
+          <p className="text-sm font-medium text-success">Saved</p>
           <p className="text-sm text-txt-secondary mt-1">
-            DNS settings have been saved. Restart the guacd service(s) to apply:
+            Target hostnames will resolve against{" "}
+            {dnsServerList.length > 0 ? dnsServerList.join(", ") : "the system resolver"} from the
+            next session onwards. Sessions already running keep the address they connected with.
           </p>
-          <code className="block mt-2 text-sm bg-surface-secondary px-3 py-2 rounded font-mono">
-            docker-compose restart guacd
-          </code>
         </div>
       )}
 

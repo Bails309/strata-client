@@ -35,11 +35,11 @@ release that delivered them, then are removed. In practice:
 ### Kubernetes Pod Console
 
 **Status:** Proposed
-**Area:** Protocols · guacd
+**Area:** Protocols · Session engine
 
 Native terminal execution inside Kubernetes pods without requiring SSH or
 tunnels to the node. Uses the backend's Kubernetes client to pipe stdin/stdout
-to the guacd WebSocket stream.
+to the session WebSocket stream.
 
 ---
 

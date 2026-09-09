@@ -995,6 +995,15 @@ export interface DatabaseHealth {
   latency_ms: number | null;
 }
 
+export interface EngineHealth {
+  mode: string;
+  protocols: string[];
+  withheld: string[];
+  /** SSH and Kubernetes sessions are refused without a terminal font. */
+  terminal_font: boolean;
+  guacd_fallback: boolean;
+}
+
 export interface GuacdHealth {
   /** False when the native engine serves every session, in which case an
    * unreachable daemon is expected rather than a fault. */
@@ -1064,6 +1073,7 @@ export interface ServiceHealth {
   version?: string;
   database: DatabaseHealth;
   guacd: GuacdHealth;
+  engine: EngineHealth;
   vault: VaultHealth;
   schema: SchemaHealth;
   /**

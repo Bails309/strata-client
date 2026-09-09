@@ -27,7 +27,7 @@ use tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 
-use crate::engine::keymap::{keysym_to_bytes, CellSize, Modifiers};
+use crate::engine::keymap::{keysym_to_bytes_with, Backspace, CellSize, Modifiers};
 use crate::engine::{EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec};
 use crate::error::EngineError;
 
@@ -46,6 +46,8 @@ const RIGHT: u8 = 0x04;
 /// Per-connection Kubernetes settings.
 #[derive(Clone)]
 pub struct KubeConfig {
+    /// What the BackSpace key sends, from `backspace`.
+    pub backspace: Backspace,
     /// Namespace holding the pod.
     pub namespace: String,
     /// Pod to attach to.
@@ -79,6 +81,7 @@ pub struct KubeConfig {
 impl Default for KubeConfig {
     fn default() -> Self {
         Self {
+            backspace: Backspace::default(),
             namespace: "default".to_owned(),
             pod: String::new(),
             container: None,
@@ -253,7 +256,9 @@ impl ProtocolEngine for KubeEngine {
                 {
                     return self.paste().await;
                 }
-                if let Some(bytes) = keysym_to_bytes(keysym, self.modifiers) {
+                if let Some(bytes) =
+                    keysym_to_bytes_with(keysym, self.modifiers, self.config.backspace)
+                {
                     self.send(STDIN, &bytes).await?;
                 }
             }

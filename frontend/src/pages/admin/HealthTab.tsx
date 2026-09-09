@@ -291,6 +291,100 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
           </div>
         </div>
 
+        {/* Native session engine */}
+        <div
+          className="rounded-xl p-5 flex flex-col gap-4"
+          style={{
+            background: "var(--color-surface-secondary)",
+            border: "1px solid var(--color-glass-border)",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.15), inset 0 1px 0 var(--color-glass-highlight)",
+          }}
+        >
+          <div className="flex items-center justify-between">
+            <div style={iconStyle("#6366f1")}>
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <rect x="2" y="3" width="20" height="14" rx="2" />
+                <path d="M8 21h8M12 17v4" />
+              </svg>
+            </div>
+            {/* The engine has no port to probe. The only thing that can be
+                unhealthy rather than merely off is a missing terminal font,
+                which refuses SSH and Kubernetes sessions outright. */}
+            <span
+              className={`badge ${
+                health.engine.protocols.length === 0
+                  ? "badge-accent"
+                  : health.engine.terminal_font
+                    ? "badge-success"
+                    : "badge-warning"
+              }`}
+            >
+              {health.engine.protocols.length === 0
+                ? "Not in use"
+                : health.engine.terminal_font
+                  ? "Healthy"
+                  : "Degraded"}
+            </span>
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-txt-primary mb-0.5">Session Engine</h3>
+            <p className="text-xs text-txt-tertiary">
+              {health.engine.protocols.length === 0
+                ? "Native engine off — sessions are served by guacd"
+                : "Native Rust engine"}
+            </p>
+          </div>
+          <div className="mt-auto space-y-2 text-xs">
+            <div className="flex justify-between">
+              <span className="text-txt-tertiary">Mode</span>
+              <span className="font-mono text-txt-secondary">{health.engine.mode}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-txt-tertiary shrink-0">Serving</span>
+              <span className="font-mono text-txt-secondary text-right break-all">
+                {health.engine.protocols.length > 0 ? health.engine.protocols.join(", ") : "—"}
+              </span>
+            </div>
+            {health.engine.withheld.length > 0 && (
+              <div className="flex justify-between gap-3">
+                <span className="text-txt-tertiary shrink-0">Withheld</span>
+                <span className="font-mono text-warning text-right break-all">
+                  {health.engine.withheld.join(", ")}
+                </span>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <span className="text-txt-tertiary">Terminal font</span>
+              <span
+                className={`font-semibold ${health.engine.terminal_font ? "text-txt-primary" : "text-warning"}`}
+              >
+                {health.engine.terminal_font ? "Found" : "Missing"}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-txt-tertiary">guacd fallback</span>
+              <span className="font-semibold text-txt-primary">
+                {health.engine.guacd_fallback ? "Available" : "None"}
+              </span>
+            </div>
+            {metrics && (
+              <div className="flex justify-between">
+                <span className="text-txt-tertiary">Native sessions</span>
+                <span className="font-semibold text-txt-primary">{metrics.native_sessions}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Vault */}
         <div
           className="rounded-xl p-5 flex flex-col gap-4"

@@ -65,6 +65,24 @@ pub struct RoutingPolicy {
 }
 
 impl RoutingPolicy {
+    /// Protocols this build can serve natively.
+    #[must_use]
+    pub fn available(&self) -> &HashSet<Protocol> {
+        &self.available
+    }
+
+    /// Protocols this deployment allows the native engine to serve.
+    #[must_use]
+    pub fn eligible(&self) -> &HashSet<Protocol> {
+        &self.eligible
+    }
+
+    /// Whether the native engine is switched on at all.
+    #[must_use]
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
     /// A policy that routes everything to `guacd`.
     ///
     /// This is the safe default and the state the kill switch returns

@@ -26,7 +26,7 @@ use russh::{Channel, ChannelMsg, Disconnect};
 use secrecy::{ExposeSecret, SecretString};
 use tokio::sync::{mpsc, Mutex};
 
-use crate::engine::keymap::{keysym_to_bytes, CellSize, Modifiers};
+use crate::engine::keymap::{keysym_to_bytes_with, Backspace, CellSize, Modifiers};
 use crate::engine::{EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec};
 use crate::error::EngineError;
 
@@ -64,6 +64,8 @@ pub struct SshConfig {
     pub host_keys: HostKeyPolicy,
     /// `TERM` value announced to the remote shell.
     pub term: String,
+    /// What the BackSpace key sends, from `backspace`.
+    pub backspace: Backspace,
     /// Command to run instead of an interactive shell.
     pub command: Option<String>,
     /// Value for `TZ` on the channel, so timestamps match the operator
@@ -110,6 +112,7 @@ impl SshConfig {
         Self {
             host_keys: HostKeyPolicy::Fingerprints(fingerprints),
             term: "xterm-256color".to_owned(),
+            backspace: Backspace::default(),
             command: None,
             timezone: None,
             cell: CellSize::default(),
@@ -139,6 +142,13 @@ impl SshConfig {
             self.term = term;
         }
         self.timezone = timezone.filter(|t| !t.trim().is_empty());
+        self
+    }
+
+    /// What the BackSpace key sends.
+    #[must_use]
+    pub fn with_backspace(mut self, backspace: Backspace) -> Self {
+        self.backspace = backspace;
         self
     }
 
@@ -768,7 +778,9 @@ impl ProtocolEngine for SshEngine {
                 {
                     return self.paste().await;
                 }
-                if let Some(bytes) = keysym_to_bytes(keysym, self.modifiers) {
+                if let Some(bytes) =
+                    keysym_to_bytes_with(keysym, self.modifiers, self.config.backspace)
+                {
                     self.write(bytes).await?;
                 }
             }

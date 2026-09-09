@@ -157,6 +157,7 @@ import {
 const healthOk = {
   database: { connected: true, mode: "local", host: "localhost", latency_ms: 5 },
   guacd: { in_use: true, reachable: true, host: "guacd", port: 4822 },
+  engine: { mode: "native-only", protocols: ["rdp", "ssh"], withheld: [], terminal_font: true, guacd_fallback: false },
   vault: { configured: true, mode: "local", address: "http://vault:8200" },
   schema: { status: "in_sync", applied_migrations: 28, expected_migrations: 28 },
   uptime_secs: 3600,
@@ -166,6 +167,7 @@ const healthOk = {
 const healthDown = {
   database: { connected: false, mode: "local", host: "localhost", latency_ms: null },
   guacd: { in_use: true, reachable: false, host: "guacd", port: 4822 },
+  engine: { mode: "native-only", protocols: ["rdp", "ssh"], withheld: [], terminal_font: true, guacd_fallback: false },
   vault: { configured: false, mode: "", address: "" },
   schema: { status: "unavailable", applied_migrations: 0, expected_migrations: 28 },
   uptime_secs: 0,
@@ -335,7 +337,7 @@ describe("HealthTab", () => {
   it("shows Healthy badges when all services are up", async () => {
     renderAdmin();
     const badges = await screen.findAllByText("Healthy");
-    expect(badges.length).toBe(4); // Database, guacd, Vault, Schema
+    expect(badges.length).toBe(5); // Database, guacd, Session Engine, Vault, Schema
   });
 
   it("shows Unhealthy badges when services are down", async () => {
@@ -367,7 +369,10 @@ describe("HealthTab", () => {
 
   it("shows pool size from metrics", async () => {
     renderAdmin();
-    expect(await screen.findByText("2")).toBeInTheDocument();
+    // Scoped to its own row: the Session Engine card renders a native
+    // session count too, so a bare findByText is ambiguous.
+    const poolSize = await screen.findByText("Pool Size");
+    expect(poolSize.parentElement).toHaveTextContent("2");
   });
 
   it("shows retry button when health fails", async () => {
@@ -429,7 +434,7 @@ describe("HealthTab", () => {
     vi.mocked(getMetrics).mockResolvedValue(metricsOk);
     await user.click(screen.getByText("Retry"));
     const badges = await screen.findAllByText("Healthy");
-    expect(badges.length).toBe(4);
+    expect(badges.length).toBe(5);
   });
 
   it("shows last checked timestamp", async () => {
@@ -2450,10 +2455,13 @@ describe("ConnectionForm protocol sections", () => {
     // Display is collapsed by default — click to expand
     // Use getByRole to distinguish from the "Display" tab
     await user.click(screen.getByRole("button", { name: /▸ Display/ }));
-    expect(screen.getByText("Font Name")).toBeInTheDocument();
+    // Font Name was withdrawn in migration 088 — honouring a family name
+    // needs fontconfig, which is C. Font Size is honoured and stays.
+    expect(screen.getByText("Font Size")).toBeInTheDocument();
+    expect(screen.queryByText("Font Name")).not.toBeInTheDocument();
     // Click again to collapse
     await user.click(screen.getByRole("button", { name: /▾ Display/ }));
-    expect(screen.queryByText("Font Name")).not.toBeInTheDocument();
+    expect(screen.queryByText("Font Size")).not.toBeInTheDocument();
   });
 
   it("shows VNC protocol sections when protocol changed to VNC", async () => {

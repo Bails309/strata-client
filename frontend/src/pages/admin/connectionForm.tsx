@@ -257,20 +257,6 @@ export function RdpSections({
             />
           </Field>
           <Field
-            label="Timezone"
-            title="The timezone that the client should send to the server for configuring the local time display, in IANA format (e.g. America/New_York)."
-          >
-            <Select
-              value={ex("timezone")}
-              onChange={(v) => setEx("timezone", v)}
-              placeholder="System default"
-              options={[
-                { value: "", label: "System default" },
-                ...getTimezones().map((tz) => ({ value: tz, label: tz })),
-              ]}
-            />
-          </Field>
-          <Field
             label="Client Name"
             title="The name of the client to present to the RDP server. Typically not required."
           >
@@ -281,23 +267,6 @@ export function RdpSections({
               title="The name of the client to present to the RDP server. Typically not required."
             />
           </Field>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Enable multi-touch support, allowing touch events from the client to be forwarded to the remote desktop."
-            >
-              <input
-                type="checkbox"
-                checked={ex("enable-touch") === "true"}
-                onChange={(e) => setEx("enable-touch", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Enable multi-touch
-            </label>
-          </div>
         </FieldGrid>
       </Section>
 
@@ -1075,17 +1044,6 @@ export function SshSections({
                 { value: "white-black", label: "White on black" },
                 { value: "gray-black", label: "Gray on black" },
               ]}
-            />
-          </Field>
-          <Field
-            label="Font Name"
-            title="The name of the font to use in the terminal. This must be a font available on the guacd server."
-          >
-            <input
-              value={ex("font-name")}
-              onChange={(e) => setEx("font-name", e.target.value)}
-              placeholder="monospace"
-              title="The name of the font to use in the terminal. This must be a font available on the guacd server."
             />
           </Field>
           <Field label="Font Size" title="The size of the font to use in the terminal, in points.">
@@ -2048,17 +2006,6 @@ export function KubernetesSections({
               ]}
             />
           </Field>
-          <Field
-            label="Font Name"
-            title="The name of the font to use in the terminal. Must be available on the guacd server."
-          >
-            <input
-              value={ex("font-name")}
-              onChange={(e) => setEx("font-name", e.target.value)}
-              placeholder="monospace"
-              title="The name of the font to use in the terminal. Must be available on the guacd server."
-            />
-          </Field>
           <Field label="Font Size" title="The size of the font to use in the terminal, in points.">
             <input
               type="number"
@@ -2078,17 +2025,6 @@ export function KubernetesSections({
               onChange={(e) => setEx("scrollback", e.target.value)}
               placeholder="1000"
               title="The maximum number of lines of terminal scrollback. Defaults to 1000."
-            />
-          </Field>
-          <Field
-            label="Terminal Type"
-            title="The terminal emulator type string passed to the pod via the TERM environment variable. Defaults to xterm-256color."
-          >
-            <input
-              value={ex("terminal-type")}
-              onChange={(e) => setEx("terminal-type", e.target.value)}
-              placeholder="xterm-256color"
-              title="The terminal emulator type string passed to the pod via the TERM environment variable. Defaults to xterm-256color."
             />
           </Field>
           <Field

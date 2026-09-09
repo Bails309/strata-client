@@ -30,7 +30,7 @@ use strata_session::actor::{
     AuditSink, GuacRecordingSink, NullAuditSink, RecordingPolicy, SessionActor, SessionConfig,
     SessionHandle,
 };
-use strata_session::engine::keymap::CellSize;
+use strata_session::engine::keymap::{Backspace, CellSize};
 use strata_session::engine::kube::{KubeConfig, KubeEngineFactory};
 use strata_session::engine::rdp::layouts::keyboard_layout_id;
 use strata_session::engine::rdp::{RdpConfig, RdpEngineFactory, RdpPerformance};
@@ -124,7 +124,6 @@ const SSH_PARAMS_IGNORED_NATIVELY: &[&str] = &[
     "enable-agent",
     "locale",
     "font-name",
-    "backspace",
 ];
 
 /// Read the connection's clipboard encoding.
@@ -174,15 +173,22 @@ const VNC_PARAMS_IGNORED_NATIVELY: &[&str] = &[
 ///
 /// The terminal is drawn by the client, and the exec API has no say in
 /// how it looks.
-const KUBE_PARAMS_IGNORED_NATIVELY: &[&str] = &["font-name", "backspace", "terminal-type"];
+const KUBE_PARAMS_IGNORED_NATIVELY: &[&str] = &["font-name", "terminal-type"];
 
 /// Parameters that cost only fidelity.
 ///
 /// The session still works, so these are not worth giving up the native
 /// engine over — but an administrator who set one should be able to
 /// find out why it made no difference.
-const RDP_PARAMS_IGNORED_NATIVELY: &[&str] =
-    &["color-depth", "force-lossless", "timezone", "enable-touch"];
+/// Parameters that cost only fidelity.
+///
+/// The session still works, so these are not worth giving up the native
+/// engine over — but an administrator who set one should be able to
+/// find out why it made no difference.
+///
+/// `force-lossless` is absent because the encoder only ever emits PNG,
+/// so the connection already gets what it asked for.
+const RDP_PARAMS_IGNORED_NATIVELY: &[&str] = &["timezone", "enable-touch"];
 
 /// Whether a parameter is set to something meaningful.
 fn is_set(value: &str) -> bool {
@@ -258,6 +264,31 @@ fn flag_or(handshake: &HandshakeParams, key: &str, default: bool) -> bool {
         .extra
         .get(key)
         .map_or(default, |v| matches!(v.trim(), "true" | "1"))
+}
+
+/// What the BackSpace key sends, from the connection's `backspace`.
+///
+/// An unrecognised value keeps DEL rather than guessing: guacd names
+/// exactly the two code points, so anything else is a typo, and the
+/// wrong choice here breaks line editing on every session.
+fn backspace(handshake: &HandshakeParams) -> Backspace {
+    handshake
+        .extra
+        .get("backspace")
+        .and_then(|raw| Backspace::from_param(raw))
+        .unwrap_or_default()
+}
+
+/// Bits per pixel to request, from the connection's `color-depth`.
+///
+/// Only the four depths guacd offers are accepted; anything else keeps
+/// the default, because a value the server rejects costs the session.
+fn color_depth(handshake: &HandshakeParams) -> Option<u32> {
+    handshake
+        .extra
+        .get("color-depth")
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .filter(|d| matches!(d, 8 | 16 | 24 | 32))
 }
 
 /// Terminal appearance, from the connection's `color-scheme` and
@@ -418,6 +449,70 @@ fn eligible_protocols(raw: Option<&str>, available: &HashSet<Protocol>) -> HashS
 /// timeout rather than the reason.
 pub fn guacd_available() -> bool {
     fallback_available(&std::env::var("STRATA_SESSION_ENGINE").unwrap_or_default())
+}
+
+/// What the native engine can serve, for the admin health page.
+#[derive(serde::Serialize)]
+pub struct EngineHealth {
+    /// `STRATA_SESSION_ENGINE`, or `guacd` when unset.
+    pub mode: String,
+    /// Protocols this deployment will route natively, sorted.
+    pub protocols: Vec<&'static str>,
+    /// Protocols compiled in but held back by configuration.
+    pub withheld: Vec<&'static str>,
+    /// Whether the terminal rasteriser can find a font. SSH and
+    /// Kubernetes sessions are refused without one, so this is the only
+    /// part of the engine that can be unhealthy rather than merely off.
+    pub terminal_font: bool,
+    /// Whether a connection the engine cannot serve still has somewhere
+    /// to go.
+    pub guacd_fallback: bool,
+}
+
+/// Report what the engine is able to serve right now.
+pub fn engine_health() -> EngineHealth {
+    fn name(protocol: Protocol) -> &'static str {
+        match protocol {
+            Protocol::Ssh => "ssh",
+            Protocol::Rdp => "rdp",
+            Protocol::Vnc => "vnc",
+            Protocol::KubeExec => "kubernetes",
+        }
+    }
+
+    let policy = policy();
+    let enabled = policy.enabled();
+    let mut protocols: Vec<&'static str> = if enabled {
+        policy
+            .available()
+            .intersection(policy.eligible())
+            .copied()
+            .map(name)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    protocols.sort_unstable();
+
+    let mut withheld: Vec<&'static str> = policy
+        .available()
+        .iter()
+        .filter(|p| !enabled || !policy.eligible().contains(p))
+        .map(|p| name(*p))
+        .collect();
+    withheld.sort_unstable();
+
+    EngineHealth {
+        mode: std::env::var("STRATA_SESSION_ENGINE")
+            .ok()
+            .map(|m| m.trim().to_ascii_lowercase())
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| "guacd".to_owned()),
+        protocols,
+        withheld,
+        terminal_font: TerminalFont::discover(DEFAULT_FONT_SIZE_PX).is_ok(),
+        guacd_fallback: guacd_available(),
+    }
 }
 
 fn fallback_available(mode: &str) -> bool {
@@ -1251,6 +1346,7 @@ async fn connect_target(
                         handshake.extra.get("terminal-type").cloned(),
                         handshake.extra.get("timezone").cloned(),
                     )
+                    .with_backspace(backspace(handshake))
                     .with_command(handshake.extra.get("command").cloned()),
             );
             let engine = factory
@@ -1293,6 +1389,7 @@ async fn connect_target(
                 disable_copy: flag(handshake, "disable-copy"),
                 disable_paste: flag(handshake, "disable-paste"),
                 cert_policy: rdp_cert_policy(handshake).map_err(AppError::Validation)?,
+                color_depth: color_depth(handshake),
                 performance: RdpPerformance {
                     wallpaper: flag(handshake, "enable-wallpaper"),
                     theming: flag(handshake, "enable-theming"),
@@ -1347,6 +1444,7 @@ async fn connect_target(
         Protocol::KubeExec => {
             warn_ignored_params(handshake, KUBE_PARAMS_IGNORED_NATIVELY, "kubernetes");
             let factory = KubeEngineFactory::new(KubeConfig {
+                backspace: backspace(handshake),
                 namespace: handshake
                     .extra
                     .get("namespace")
@@ -1486,6 +1584,65 @@ mod tests {
     /// SHA-256 of the empty input: a real digest, so it parses, without
     /// needing a certificate fixture.
     const A_FINGERPRINT: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    #[test]
+    fn the_backspace_key_follows_the_connection() {
+        let mut hs = handshake("ssh", None);
+        assert_eq!(backspace(&hs), Backspace::Delete);
+
+        hs.extra.insert("backspace".into(), "8".into());
+        assert_eq!(backspace(&hs), Backspace::Backspace);
+
+        hs.extra.insert("backspace".into(), "127".into());
+        assert_eq!(backspace(&hs), Backspace::Delete);
+
+        // Anything else keeps DEL: the wrong code here breaks line
+        // editing on every session, so a typo must not pick for us.
+        for junk in ["", "  ", "del", "0"] {
+            hs.extra.insert("backspace".into(), junk.into());
+            assert_eq!(backspace(&hs), Backspace::Delete, "{junk:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_colour_depths_guacd_offers_are_accepted() {
+        let mut hs = handshake("rdp", None);
+        assert_eq!(color_depth(&hs), None);
+
+        for depth in [8u32, 16, 24, 32] {
+            hs.extra.insert("color-depth".into(), depth.to_string());
+            assert_eq!(color_depth(&hs), Some(depth));
+        }
+        // A depth the server would reject costs the session, so an
+        // unknown value keeps the default rather than being forwarded.
+        for junk in ["1", "31", "64", "true", ""] {
+            hs.extra.insert("color-depth".into(), junk.into());
+            assert_eq!(color_depth(&hs), None, "{junk:?}");
+        }
+    }
+
+    #[test]
+    fn the_ignored_lists_hold_only_what_is_genuinely_unimplemented() {
+        // Honoured now.
+        for honoured in ["backspace", "font-size", "color-scheme", "scrollback"] {
+            assert!(
+                !SSH_PARAMS_IGNORED_NATIVELY.contains(&honoured),
+                "{honoured}"
+            );
+            assert!(
+                !KUBE_PARAMS_IGNORED_NATIVELY.contains(&honoured),
+                "{honoured}"
+            );
+        }
+        assert!(!RDP_PARAMS_IGNORED_NATIVELY.contains(&"color-depth"));
+        // Already satisfied: the encoder only ever emits PNG.
+        assert!(!RDP_PARAMS_IGNORED_NATIVELY.contains(&"force-lossless"));
+        // Removed from the editor in migration 088 rather than left
+        // acting on nothing once guacd goes.
+        for dropped in ["enable-h264", "resize-method"] {
+            assert!(!RDP_PARAMS_IGNORED_NATIVELY.contains(&dropped), "{dropped}");
+        }
+    }
 
     #[test]
     fn the_terminal_follows_the_connections_colour_scheme_and_scrollback() {
@@ -2186,14 +2343,14 @@ mod tests {
         let mut params = handshake("rdp", None);
         params
             .extra
-            .insert("color-depth".to_owned(), "32".to_owned());
+            .insert("timezone".to_owned(), "Europe/London".to_owned());
         params
             .extra
-            .insert("timezone".to_owned(), "Europe/London".to_owned());
+            .insert("enable-touch".to_owned(), "true".to_owned());
         assert!(preflight(Protocol::Rdp, &params).is_ok());
         assert_eq!(
             params_in_use(&params, RDP_PARAMS_IGNORED_NATIVELY),
-            vec!["color-depth", "timezone"]
+            vec!["timezone", "enable-touch"]
         );
     }
 

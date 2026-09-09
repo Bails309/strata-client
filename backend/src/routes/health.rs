@@ -95,6 +95,7 @@ pub struct ServiceHealth {
     pub version: &'static str,
     pub database: DatabaseHealth,
     pub guacd: GuacdHealth,
+    pub engine: crate::session_engine::EngineHealth,
     pub vault: VaultHealth,
     pub schema: SchemaHealth,
     pub av: AvHealth,
@@ -349,6 +350,7 @@ pub async fn service_health(
             host: guacd_host,
             port: guacd_port,
         },
+        engine: crate::session_engine::engine_health(),
         vault: VaultHealth {
             configured: vault_configured,
             address: vault_addr,
@@ -607,6 +609,7 @@ mod tests {
                 host: "guacd".into(),
                 port: 4822,
             },
+            engine: crate::session_engine::engine_health(),
             vault: VaultHealth {
                 configured: true,
                 address: "http://vault:8200".into(),

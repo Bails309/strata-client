@@ -76,8 +76,53 @@ impl Modifiers {
 /// Returns `None` for keys with no terminal representation (modifiers,
 /// unmapped function keys), which the caller should simply drop.
 #[must_use]
+/// What the BackSpace key sends, from guacd's `backspace` parameter.
+///
+/// DEL is the default because it is what xterm sends and what readline
+/// expects; BS is offered because some older hosts are configured the
+/// other way and guacd lets an administrator choose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Backspace {
+    /// `0x7f`.
+    #[default]
+    Delete,
+    /// `0x08`.
+    Backspace,
+}
+
+impl Backspace {
+    /// Read guacd's parameter, which names the code point directly.
+    #[must_use]
+    pub fn from_param(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "127" => Some(Self::Delete),
+            "8" => Some(Self::Backspace),
+            _ => None,
+        }
+    }
+
+    fn byte(self) -> u8 {
+        match self {
+            Self::Delete => 0x7f,
+            Self::Backspace => 0x08,
+        }
+    }
+}
+
+/// Translate an X11 keysym into the bytes a PTY expects.
 pub fn keysym_to_bytes(keysym: u32, mods: Modifiers) -> Option<Vec<u8>> {
-    let mut out = named_key(keysym).or_else(|| printable(keysym, mods))?;
+    keysym_to_bytes_with(keysym, mods, Backspace::default())
+}
+
+/// As [`keysym_to_bytes`], honouring the connection's backspace choice.
+pub fn keysym_to_bytes_with(keysym: u32, mods: Modifiers, backspace: Backspace) -> Option<Vec<u8>> {
+    const BACKSPACE_KEYSYM: u32 = 0xff08;
+
+    let mut out = if keysym == BACKSPACE_KEYSYM {
+        vec![backspace.byte()]
+    } else {
+        named_key(keysym).or_else(|| printable(keysym, mods))?
+    };
 
     // Alt is transmitted as an ESC prefix ("meta sends escape"), which
     // is what readline and every TUI expects.

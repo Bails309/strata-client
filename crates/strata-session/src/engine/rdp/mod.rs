@@ -92,6 +92,9 @@ use crate::tls::CertPolicy;
 /// Events buffered from the session thread before it applies backpressure.
 const EVENT_QUEUE_DEPTH: usize = 256;
 
+/// Bits per pixel requested when the connection does not say.
+pub const DEFAULT_COLOR_DEPTH: u32 = 32;
+
 /// Input events buffered towards the session thread.
 const INPUT_QUEUE_DEPTH: usize = 256;
 
@@ -121,6 +124,12 @@ pub struct RdpConfig {
     pub disable_copy: bool,
     /// Never carry the client's clipboard to the target.
     pub disable_paste: bool,
+    /// Bits per pixel to request, from `color-depth`.
+    ///
+    /// `None` keeps [`DEFAULT_COLOR_DEPTH`]. Lower depths cost fidelity
+    /// but compress better, which is the only reason to set one now that
+    /// the H.264 negotiation this used to gate has gone.
+    pub color_depth: Option<u32>,
     /// What the connection accepts from the target's TLS certificate.
     ///
     /// Most RDP hosts are self-signed, so plain system-store
@@ -188,6 +197,7 @@ impl Default for RdpConfig {
             read_only: false,
             disable_copy: false,
             disable_paste: false,
+            color_depth: None,
             cert_policy: CertPolicy::default(),
         }
     }
@@ -520,7 +530,7 @@ impl RdpSession {
             // because it fixed anything observable.
             bitmap: Some(BitmapConfig {
                 lossy_compression: false,
-                color_depth: 32,
+                color_depth: config.color_depth.unwrap_or(DEFAULT_COLOR_DEPTH),
                 codecs: client_codecs_capabilities(&["remotefx:off"])
                     .expect("a fixed codec list cannot fail to parse"),
             }),

@@ -24,6 +24,7 @@ const health = (over: Partial<ServiceHealth> = {}): ServiceHealth => ({
   version: "1.5.3",
   database: { connected: true, mode: "external", host: "db.local", latency_ms: 4 },
   guacd: { in_use: true, reachable: true, host: "guacd", port: 4822 },
+  engine: { mode: "native-only", protocols: ["rdp", "ssh"], withheld: [], terminal_font: true, guacd_fallback: false },
   vault: { configured: true, mode: "vault", address: "https://vault" },
   schema: { status: "ok", applied_migrations: 44, expected_migrations: 44 },
   av: { backend: "off", enabled: false, reachable: false, fail_mode: "block", address: null },

@@ -195,7 +195,8 @@ test.describe('Metrics', () => {
     expect(res.ok()).toBe(true);
     const body = await res.json();
     expect(typeof body.active_sessions).toBe('number');
-    expect(typeof body.guacd_pool_size).toBe('number');
+    expect(typeof body.total_bytes_down).toBe('number');
+    expect(typeof body.native_recommended).toBe('number');
   });
 });
 
@@ -208,7 +209,8 @@ test.describe('Admin Health', () => {
     const body = await res.json();
     expect(body.database).toBeTruthy();
     expect(typeof body.database.connected).toBe('boolean');
-    expect(body.guacd).toBeTruthy();
+    expect(body.engine).toBeTruthy();
+    expect(Array.isArray(body.engine.protocols)).toBe(true);
     expect(body.vault).toBeTruthy();
   });
 });

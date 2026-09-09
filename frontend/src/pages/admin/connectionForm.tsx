@@ -885,7 +885,7 @@ export function RdpSections({
                 <input
                   value={ex("kerberos-cache")}
                   onChange={(e) => setEx("kerberos-cache", e.target.value)}
-                  placeholder="/tmp/krb5cc_guacd"
+                  placeholder="/tmp/krb5cc_strata"
                   title="The file path for the Kerberos credential cache. Leave blank for default."
                 />
               </Field>
@@ -897,9 +897,9 @@ export function RdpSections({
             When set to <strong>Default (auto-detect)</strong>, the client and server negotiate the
             best authentication method via SPNEGO. Realms configured in the{" "}
             <strong>Kerberos</strong> tab are written to the shared{" "}
-            <code className="text-zinc-300">krb5.conf</code> which guacd uses automatically —
-            Kerberos-only servers will use Kerberos; servers that support NTLM will negotiate
-            normally.
+            <code className="text-zinc-300">krb5.conf</code> which the session engine uses
+            automatically — Kerberos-only servers will use Kerberos; servers that support NTLM will
+            negotiate normally.
           </p>
         )}
       </Section>
@@ -1503,7 +1503,7 @@ export function VncSections({
 //
 // Roadmap item `protocols-web-sessions` (shipped in v0.30.0). A
 // `web` connection launches an ephemeral Chromium kiosk inside an
-// Xvnc display and tunnels it through guacd as a standard VNC
+// Xvnc display and serves it through the session engine as a standard VNC
 // session — the differences from a normal VNC connection are entirely
 // server-side, but admins configure them through the fields below.
 // All values land in `connections.extra` JSONB alongside the regular
@@ -1643,7 +1643,7 @@ export function WebSections({
 //
 // Roadmap item `protocols-vdi-containers` (shipped in v0.30.0). A
 // `vdi` connection launches a Strata-managed Docker container running
-// xrdp on port 3389 and tunnels it through guacd as a standard RDP
+// xrdp on port 3389 and serves it through the session engine as a standard RDP
 // session. Operator constraints (image whitelist, CPU/memory caps,
 // idle timeout, env injection, persistent home) all land in
 // `connections.extra`.

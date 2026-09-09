@@ -80,7 +80,7 @@ body:
         Output from the affected container(s). Examples:
         ```
         docker compose logs --tail=200 backend
-        docker compose logs --tail=200 guacd
+        docker compose logs --tail=200 backend
         docker compose logs --tail=200 frontend
         ```
         **Redact** any tokens, real hostnames, real usernames, or credentials before pasting.

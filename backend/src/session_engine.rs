@@ -1,21 +1,18 @@
-//! Dual-stack bridge to the native Rust session engine.
+//! Bridge from the WebSocket tunnel to the native Rust session engine.
 //!
-//! `guacd` still serves every session by default. When
-//! [`strata_session::routing`] says otherwise, [`run_native`] takes the
-//! WebSocket instead and drives `crates/strata-session` in-process.
+//! [`run_native`] takes the WebSocket and drives `crates/strata-session`
+//! in-process. A protocol the engine cannot serve is refused with the
+//! reason (see [`select_native`]) rather than routed elsewhere — there is
+//! nowhere else to route it since guacd was removed (ADR-0015).
 //!
 //! The bridge speaks Guacamole Wire Compatibility Mode, so the browser
-//! cannot tell which engine it reached — that is the whole point of
-//! Phase 2 (ADR-0015). Rollback is `STRATA_SESSION_ENGINE=guacd`.
+//! talks to it exactly as it did to the daemon.
 //!
 //! ## Environment
 //!
 //! | Variable | Meaning |
 //! | --- | --- |
-//! | `STRATA_SESSION_ENGINE` | `guacd` (default), `canary`, or `native` |
-//! | `STRATA_SESSION_NATIVE_PERCENT` | canary rollout, 0-100, bucketed per target host |
-//! | `STRATA_SESSION_NATIVE_HOSTS` | comma-separated hosts always served natively |
-//! | `STRATA_SESSION_NATIVE_PROTOCOLS` | comma-separated protocols eligible for the rollout |
+//! | `STRATA_SESSION_NATIVE_PROTOCOLS` | comma-separated protocols the engine may serve; unset means every compiled engine |
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -57,22 +54,21 @@ use crate::tunnel::{HandshakeParams, NvrContext};
 /// How often the revocation / duration watchdog runs.
 const WATCHDOG_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Hard ceiling on a single session, matching the `guacd` path.
+/// Hard ceiling on a single session.
 const MAX_TUNNEL_DURATION: Duration = Duration::from_secs(8 * 60 * 60);
 
 /// Connection parameter naming the target's accepted host keys.
 ///
 /// SHA-256 fingerprints in OpenSSH's `SHA256:base64` form, comma
-/// separated. Without it the native SSH engine has nothing to verify
-/// against and the session falls back to `guacd`.
+/// separated. Without it, and without [`OPENSSH_HOST_KEY_PARAM`], the
+/// SSH engine has nothing to verify against and refuses the session.
 const HOST_KEY_PARAM: &str = "host-key-fingerprint";
 
-/// guacd's own host key parameter, holding a full OpenSSH public key.
+/// Connection parameter holding a full OpenSSH public key.
 ///
-/// Read as a fallback so a connection configured for guacd verifies the
-/// same host when it is routed natively, matching how [`KDC_URL_PARAM`]
-/// is shared between the two engines.
-pub(crate) const GUACD_HOST_KEY_PARAM: &str = "host-key";
+/// Read as a fallback beside [`HOST_KEY_PARAM`] so a connection
+/// configured before the engine was rewritten verifies the same host.
+pub(crate) const OPENSSH_HOST_KEY_PARAM: &str = "host-key";
 
 /// Connection parameter naming the KDC for Kerberos authentication.
 ///
@@ -695,8 +691,8 @@ fn host_key_fingerprints(handshake: &HandshakeParams) -> Vec<String> {
         return explicit;
     }
 
-    // Fall back to the key guacd is already given. An administrator has
-    // no way to produce a SHA256 fingerprint from the admin panel, and
+    // Fall back to the full OpenSSH key an administrator can paste. There
+    // is no way to produce a SHA256 fingerprint from the admin panel, and
     // requiring one would mean every existing SSH connection had to be
     // re-entered before it could run natively.
     //
@@ -705,7 +701,7 @@ fn host_key_fingerprints(handshake: &HandshakeParams) -> Vec<String> {
     // the first would fail whenever the other was chosen.
     handshake
         .extra
-        .get(GUACD_HOST_KEY_PARAM)
+        .get(OPENSSH_HOST_KEY_PARAM)
         .map(|raw| {
             raw.lines()
                 .flat_map(|line| line.split(','))

@@ -1557,7 +1557,7 @@ pub async fn survey_ssh_host_keys(
             // Held for the probe only; the permit is released on drop.
             let _permit = limit.acquire().await;
             let stored = extra
-                .get(crate::session_engine::GUACD_HOST_KEY_PARAM)
+                .get(crate::session_engine::OPENSSH_HOST_KEY_PARAM)
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_owned();

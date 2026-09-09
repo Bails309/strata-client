@@ -142,7 +142,7 @@ async-trait = "0.1"
 strata-protocol = { path = "../crates/strata-protocol" }
 
 # Native Rust session engine (ADR-0015). Dormant unless
-# STRATA_SESSION_ENGINE selects it; guacd serves every session by default.
+# STRATA_SESSION_NATIVE_PROTOCOLS narrows which protocols it will serve.
 strata-session = { path = "../crates/strata-session", features = ["ssh", "rdp", "vnc", "kubernetes", "sftp", "terminal"] }
 secrecy = { workspace = true }
 

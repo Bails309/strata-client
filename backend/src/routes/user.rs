@@ -2476,7 +2476,7 @@ pub async fn connection_info(
     };
 
     // Match the strict "only explicit true = enabled" semantics used by
-    // `tunnel.rs::full_param_map` so the UI, backend, and guacd all agree.
+    // `session_engine` so the UI and backend agree.
     let extra_obj = extra.as_ref().and_then(|e| e.as_object());
     let sftp_setting = extra_obj
         .and_then(|o| o.get("enable-sftp"))

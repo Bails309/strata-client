@@ -8,6 +8,9 @@ pub const PROTOCOL_VERSION_MAJOR: u16 = 1;
 /// Minor version of the link protocol. Backward-compatible additions bump this.
 pub const PROTOCOL_VERSION_MINOR: u16 = 0;
 
+/// Wire string for the protocol version, e.g. `"strata-link/1.0"`.
+pub const PROTOCOL_VERSION_STR: &str = "strata-link/1.0";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -27,6 +30,3 @@ mod tests {
         assert_eq!(PROTOCOL_VERSION_MINOR, 0);
     }
 }
-
-/// Wire string for the protocol version, e.g. `"strata-link/1.0"`.
-pub const PROTOCOL_VERSION_STR: &str = "strata-link/1.0";

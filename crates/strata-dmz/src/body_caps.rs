@@ -76,7 +76,7 @@ pub fn parse(input: &str) -> Result<Vec<Rule>, String> {
     }
     // Pre-sort by descending prefix length so `lookup` short-circuits
     // on the first match (longest-prefix-first).
-    out.sort_by(|a, b| b.prefix_len.cmp(&a.prefix_len));
+    out.sort_by_key(|r| std::cmp::Reverse(r.prefix_len));
     Ok(out)
 }
 

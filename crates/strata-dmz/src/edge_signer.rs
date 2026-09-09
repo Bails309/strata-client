@@ -135,20 +135,6 @@ pub struct HmacEdgeSigner {
 }
 
 impl HmacEdgeSigner {
-    /// Construct from raw key bytes + link id + a trusted-proxy list
-    /// of bare `IpAddr`s. Each entry is treated as a host route
-    /// (`/32` for IPv4, `/128` for IPv6).
-    pub fn new(key: Zeroizing<Vec<u8>>, link_id: String, trusted_proxies: Vec<IpAddr>) -> Self {
-        let nets = trusted_proxies
-            .into_iter()
-            .filter_map(|ip| {
-                let prefix = if ip.is_ipv4() { 32 } else { 128 };
-                TrustedNet::new(ip, prefix)
-            })
-            .collect();
-        Self::with_networks(key, link_id, nets)
-    }
-
     /// Construct from pre-parsed CIDR networks.
     pub fn with_networks(
         key: Zeroizing<Vec<u8>>,
@@ -319,7 +305,7 @@ impl EdgeSigner for HmacEdgeSigner {
                 Some(v) if !v.is_empty() => v,
                 _ => continue,
             };
-            let header_name = HeaderName::from_static(*name);
+            let header_name = HeaderName::from_static(name);
             if let Ok(hv) = HeaderValue::from_str(v) {
                 headers.insert(header_name, hv);
             }
@@ -376,14 +362,15 @@ fn resolve_client_ip(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
     use strata_protocol::edge_header::{verify, EDGE_HEADERS_CANONICAL};
 
     fn signer() -> HmacEdgeSigner {
-        HmacEdgeSigner::new(
+        // Built the way `main` builds it, so the tests exercise the
+        // parsing path production actually takes.
+        HmacEdgeSigner::from_config(
             Zeroizing::new(b"k".repeat(32)),
             "dmz-test".to_string(),
-            vec![IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))],
+            &["10.0.0.1".to_string()],
         )
     }
 

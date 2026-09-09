@@ -104,7 +104,7 @@ error. Patch files are pinned to LF line endings via
 because byte-sensitive unified-diff hunks fail to apply when CRLF
 sneaks in via `core.autocrlf=true` on Windows.
 
-Multiple guacd instances can be deployed using the `--profile scale` Docker Compose profile (e.g. `guacd-2`). The backend distributes connections across instances using a round-robin `GuacdPool`.
+Multiple `guacd` instances could be deployed via the `--profile scale` Compose profile (e.g. `guacd-2`), with the backend round-robining across them through a `GuacdPool`. Neither the profile nor the pool exists in v2.0.0.
 
 Volumes:
 
@@ -186,17 +186,17 @@ The central orchestrator. Responsibilities:
   - **Global Security Headers (v1.8.2/1.8.3)** — implements a global `tower-http` middleware that applies `Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate` to every API response. Public-facing headers (`Server`, `X-Powered-By`, and `Content-Security-Policy: frame-ancestors`) are managed at the Nginx gateway layer via NJS (v1.8.3).
   - **Enforcement** — strict backend policy check on every login attempt ensures disabled methods cannot be accessed.
 - **Vault** — envelope encryption for stored credentials via Vault Transit
-- **Tunnel** — bidirectional WebSocket ↔ TCP proxy to guacd with protocol handshake injection; supports H.264 GFX pipeline parameters for RDP
-- **guacd pool** — round-robin connection distribution across multiple guacd instances (`GuacdPool`)
+- **Session engine** — in-process RDP / VNC / SSH / SFTP / Kubernetes implementations ([`crates/strata-session`](../crates/strata-session/)) driving a Guacamole-style instruction stream over the WebSocket; supports H.264 GFX passthrough for RDP
+- **Tunnel** — authenticates the WebSocket upgrade, resolves the target, and hands the socket to the engine ([`backend/src/tunnel.rs`](../backend/src/tunnel.rs), ~190 lines since v2.0.0)
 - **Metrics** — per-session bandwidth tracking (bytes in/out) with aggregate metrics endpoint
 - **Config push** — generates `krb5.conf` (multi-realm), toggles recordings, manages SSO settings
 - **AD sync** — scheduled LDAP/LDAPS queries against Active Directory to discover and import computer accounts; supports simple bind and Kerberos keytab auth, custom CA certificates, multiple search bases per source, gMSA/MSA exclusion filters, and configurable connection defaults (RDP performance flags, session recording parameters)
 - **Password management** — privileged account password checkout and rotation for AD-managed service accounts; configurable password generation policy, LDAP `unicodePwd` reset, Vault-sealed credential storage, approval workflows with explicit account-to-role scoping (each approval role is mapped to specific managed AD accounts), dedicated "Search Base OUs" for user discovery (allowing separate scoping from device discovery), **scheduled future-dated checkouts** (requests between now + 30 s and now + 14 days sit idle with no credential material until the scheduled moment, at which point the existing 60-second expiration worker activates them), **emergency approval bypass (break-glass)** per AD sync config — gated by `pm_allow_emergency_bypass`, requires ≥ 10-character justification, **hard-capped at 30 minutes** server-side, writes a dedicated `checkout.emergency_bypass` audit event, surfaces an ⚡ Emergency badge across Credentials and Approvals views, background workers for checkout expiration and zero-knowledge auto-rotation, requester username resolution for approver visibility, and decided-by tracking with self-approval detection
 - **Connection health checks** — background TCP probing of every connection's hostname:port every 2 minutes; results (online/offline/unknown) persisted and exposed via API for dashboard status indicators
-- **DNS configuration** — admin-configurable DNS servers and search domains written to a shared Docker volume as `resolv.conf`; guacd containers apply this on startup for internal hostname resolution; Docker's embedded DNS is preserved as fallback
+- **DNS configuration** — admin-configurable nameservers and search suffixes used by the session engine to resolve **target** hostnames in-process; applies to new sessions with no restart. Strata's own infrastructure lookups stay on Docker's embedded resolver. See [Target hostname resolution](#target-hostname-resolution-v200).
 - **Quick Share (file store)** — session-scoped temporary file CDN; files uploaded via multipart POST are stored on disk, each keyed by a random unguessable token. Download endpoint is unauthenticated (the token is the capability). Files are automatically cleaned up when the tunnel disconnects. Limits: 20 files per session, 500 MB each. The frontend Quick Share panel is **protocol-aware (v1.3.0+)**: SSH / Telnet sessions render the copy-snippet as `curl -fLOJ '<url>'` (paste-into-shell friendly); RDP / VNC / web kiosks render the bare HTTPS URL. A "Copy as" `Select` dropdown lets the operator override per-session: `URL`, `curl`, `wget --content-disposition`, or `Invoke-WebRequest -Uri … -OutFile … (Windows)`. **v1.12.0+:** every upload is streamed through a pluggable antivirus scanner before it lands in the session file store. Three backends ship (`off` default, `clamav` over the `clamd` INSTREAM TCP wire protocol against the opt-in bundled sidecar, and `command` for exec-driven engines like Defender / Sophos / ESET). Fail-closed by default; infected verdicts always reject; blocked uploads emit a `file.av_blocked` audit event with the signature name. See [av-scanning.md](av-scanning.md) and [ADR-0011](adr/ADR-0011-av-scanning.md). **v1.12.1+ refinements:** (1) `AppError::AvScanFailed` is now mapped to a friendly, engine-classified user-facing message via `Verdict::user_facing_block_message()` (infected → "Your file was blocked by the antivirus scanner (<signature>)", timeout → "the scanner did not respond in time", transport error → "the scanner is unreachable", missing signatures → "the scanner's signature database isn't loaded yet", everything else → a generic "the scanner returned an error"), so end users never see raw stderr or `clamd` panic strings. (2) The frontend exposes scanner health without `docker exec` via a new `GET /api/admin/health/av` endpoint and an **AV Health** card on the Admin → Health tab (engine, version, signature freshness, last-seen, error-since timestamp). (3) The Admin → **AV-Blocked Files** tab unifies inbound `file.av_blocked` audit rows and outbound `outbound_shares` rows with `av_scan_status IN ('infected','error')` into a single audit grid keyed off `GET /api/admin/files/av-blocked`. (4) The Quick Share outbound copy-snippet flow now renders an indeterminate **Awaiting AV scan** progress bar on each pending row, and the curl / PowerShell snippets explicitly disable `Expect: 100-continue` (`-H 'Expect:'` on curl, `$client.DefaultRequestHeaders.ExpectContinue = $false` on .NET `HttpClient`) so a stale-token 400 from the public ingest router doesn't swallow the byte-stream before the progress meter has anything to draw.
 - **Outbound Quick-Share (approval-gated, v1.11.0+)** — separate, audited pipeline for files **leaving** a remote session. Two ingest paths feed the same backend service:
-  - **Drive-channel interception** — `SessionManager.client.onfile` buffers any file guacd pushes back over the RDP / SFTP drive channel (`Guacamole.BlobReader` → `Blob` → `File` → `FormData`) and POSTs it to `POST /api/user/outbound-shares` with the active session_id, connection_id, and pending justification. Behaviour is gated on the active role granting `can_use_quick_share_outbound`; otherwise the legacy auto-download path is preserved.
+  - **Drive-channel interception** — `SessionManager.client.onfile` buffers any file the engine pushes back over the RDP / SFTP drive channel (`Guacamole.BlobReader` → `Blob` → `File` → `FormData`) and POSTs it to `POST /api/user/outbound-shares` with the active session_id, connection_id, and pending justification. Behaviour is gated on the active role granting `can_use_quick_share_outbound`; otherwise the legacy auto-download path is preserved.
   - **HTTPS upload-command (tokenised)** — for sites where group policy disables RDP / SFTP drive redirection at the target. The SPA mints a single-use, 10-minute upload token via `POST /api/user/outbound-shares/ingest-token` (auth + CSRF), the panel renders the token into a `curl` / `curl.exe` / PowerShell 7 `-Form` one-liner, and the user pastes the snippet inside the remote session shell. The remote-session shell POSTs the file at `POST /api/outbound-shares/ingest/{token}` on the **public router** (no cookie auth, no CSRF — the path-segment token IS the auth). The handler atomically consumes the token (`UPDATE … SET used_at = now() WHERE token = $1 AND used_at IS NULL AND expires_at > now()`), re-verifies the minter's `can_use_quick_share_outbound` permission, then hands off to the same `services::outbound_shares::submit` pipeline as the drive-channel path. Tokens are 32-byte URL-safe base64 (~192 bits of entropy), bound at mint time to the user + session + connection + justification, rate-limited 10 mints/minute/user, and reaped daily by the `user_cleanup` worker.
 
   Backend pipeline: a fresh 256-bit DEK is generated per submission; the plaintext is AES-256-GCM-encrypted with that DEK; the DEK is sealed by Vault Transit and stored in `outbound_shares.sealed_dek`; the ciphertext is written to the staging directory (`STRATA_OUTBOUND_SHARES_DIR`, default `/tmp/strata-outbound-shares` with platform-temp-dir fallback). A built-in DLP heuristic computes a score and a list of reasons against the plaintext; if `dlp_score ≤ AUTO_APPROVE_THRESHOLD` and the per-user `outbound_share_requires_approval = false`, the share is auto-released with a single-use download token. Otherwise it sits in `status = 'pending'` until a super-admin (`can_manage_system`) or a delegated approver (`outbound_share_approvers`) decides via `POST /api/admin/outbound-shares/{id}/decide`. Denied or expired shares trigger a periodic worker that zeroises the sealed DEK and deletes the ciphertext file so the staging blob cannot be recovered from a forensic disk image.
@@ -253,7 +253,7 @@ Pages:
 
 - **Setup Wizard** — first-boot database and Vault configuration with bundled/external/skip vault mode selector
 - **Dashboard** — user's connections with connect/credential vault, multi-select for tiled view, last-accessed tracking, favorites filter, group view toggle (flat list or collapsible group headers), and connection health status indicators (green/red/gray dots showing online/offline/unknown from background TCP probes). The **My Connections** search input matches against connection `name`, `hostname`, `description`, **and assigned tag names** (v1.12.9+ — fourth `||` clause on the `filtered` `useMemo` predicate, lazily building a `Map<tagId, tagName.toLowerCase()>` from the existing `allTags` derivation; placeholder reads `Search name, host, description or tag`). The dedicated tag-chip filter row immediately below the search composes with the query via `AND`. **(v1.8.3)** Preference and settings providers are mounted inside the authentication boundary to eliminate 401 log noise on the login screen.
-- **Session Client** — HTML5 Canvas via `guacamole-common-js` (vendored 1.6.0 bundle with H.264 GFX passthrough; v0.28.0+) with clipboard sync (including pop-out windows) routed through a single serialised sender with a receive-side stall watchdog whose window is asymmetric — 2 s while no data has arrived, 10 s once blobs are flowing, republishing on each pause so a large transfer that merely stalls still completes (v1.14.6+) — an 8 MiB per-connection `guacd` clipboard buffer negotiated and logged at handshake, and opt-in content-free diagnostics (v1.14.4+), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Quick Share, Keyboard, etc.) into a sleek right-side overlay, **Command Palette** (`Ctrl+K`) for instant connection search and launch from any session, **keyboard shortcut proxy** (Right Ctrl → Win key, `Ctrl+Alt+\`` → Win+Tab), **Keyboard Lock API** for capturing OS-level shortcuts in fullscreen over HTTPS, **display tags** (optional per-connection colored badge on session thumbnails, user-assignable via a tag picker dropdown), **dynamic browser tab title** (shows the active session's server name, e.g. "SERVER01 — Strata"), pop-out windows that persist across navigation with automatic screen-change detection and re-scaling, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with ~30 fps `setInterval`render loop (avoids`requestAnimationFrame`throttling when popups have focus),`MutationObserver`-based cursor sync across all secondary windows, horizontal-only layout (all monitors arranged left-to-right regardless of physical vertical position — best supported configuration is all landscape monitors side by side; monitors above or below appear as slices to the right), aggregate height capped to primary monitor height for taskbar visibility, `moveTo`/`resizeTo`/`requestFullscreen`auto-maximize on secondary popups, live`screenschange`detection for hot-plugged monitors, screen count detection shown in the toolbar tooltip, Chrome popup-blocker bypass via in-gesture`getScreenDetails()`for 3+ monitors, and Brave/privacy-browser compatibility, Quick Share panel (conditional on file transfer enabled) with drag-and-drop upload and one-click copy-to-clipboard download URLs, expired credential renewal at connect time, and automatic redirect to the next active session when one ends. (The legacy`forceDisplayRepaint()` ghost-pixel mitigation and the manual **Refresh display** button from v0.25.1–v0.27.x have been retired — H.264 passthrough eliminates the underlying ghost class.)
+- **Session Client** — HTML5 Canvas via `guacamole-common-js` (vendored 1.6.0 bundle) with clipboard sync (including pop-out windows) routed through a single serialised sender with a receive-side stall watchdog whose window is asymmetric — 2 s while no data has arrived, 10 s once blobs are flowing, republishing on each pause so a large transfer that merely stalls still completes (v1.14.6+) — an 8 MiB per-connection `guacd` clipboard buffer negotiated and logged at handshake, and opt-in content-free diagnostics (v1.14.4+), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Quick Share, Keyboard, etc.) into a sleek right-side overlay, **Command Palette** (`Ctrl+K`) for instant connection search and launch from any session, **keyboard shortcut proxy** (Right Ctrl → Win key, `Ctrl+Alt+\`` → Win+Tab), **Keyboard Lock API** for capturing OS-level shortcuts in fullscreen over HTTPS, **display tags** (optional per-connection colored badge on session thumbnails, user-assignable via a tag picker dropdown), **dynamic browser tab title** (shows the active session's server name, e.g. "SERVER01 — Strata"), pop-out windows that persist across navigation with automatic screen-change detection and re-scaling, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with ~30 fps `setInterval`render loop (avoids`requestAnimationFrame`throttling when popups have focus),`MutationObserver`-based cursor sync across all secondary windows, horizontal-only layout (all monitors arranged left-to-right regardless of physical vertical position — best supported configuration is all landscape monitors side by side; monitors above or below appear as slices to the right), aggregate height capped to primary monitor height for taskbar visibility, `moveTo`/`resizeTo`/`requestFullscreen`auto-maximize on secondary popups, live`screenschange`detection for hot-plugged monitors, screen count detection shown in the toolbar tooltip, Chrome popup-blocker bypass via in-gesture`getScreenDetails()`for 3+ monitors, and Brave/privacy-browser compatibility, Quick Share panel (conditional on file transfer enabled) with drag-and-drop upload and one-click copy-to-clipboard download URLs, expired credential renewal at connect time, and automatic redirect to the next active session when one ends. (The legacy`forceDisplayRepaint()` ghost-pixel mitigation and the manual **Refresh display** button from v0.25.1–v0.27.x have been retired — H.264 passthrough eliminates the underlying ghost class.)
 - **Tiled View** — multi-connection grid layout with per-tile focus, keyboard broadcast, and inline credential prompts
 - **NVR Player** — admin-only read-only session observer with 5-minute rewind buffer plus a per-session persistent-state log (v1.9.4) that salvages drawing instructions as they age out of the ring buffer so newly-joining observers reconstruct the full canvas instead of seeing a black frame; supports replay→live transition and timeline controls
 - **Sessions** — unified role-based page with Live Sessions and Recording History tabs; users see their own sessions, admins see all with kill/observe/rewind controls
@@ -304,66 +304,72 @@ Alternatively, users can connect to an **external Vault instance** by selecting 
 sequenceDiagram
     autonumber
     participant B as Browser
-    participant BE as Backend
-    participant G as guacd
+    participant BE as Backend (router)
+    participant SE as Session engine (in-process)
     participant T as Target
-    B->>BE: WS upgrade
-    BE->>G: TCP connect (4822)
-    BE->>G: Guac handshake (select + connect with injected creds)
-    G->>T: RDP / SSH / VNC
-    Note over B,T: Bidirectional binary frames<br/>B ⇄ BE ⇄ G ⇄ T
+    B->>BE: WS upgrade (+ single-use ticket)
+    BE->>BE: RBAC check, decrypt credentials from Vault
+    BE->>SE: spawn SessionActor with TargetSpec
+    SE->>T: RDP / SSH / VNC / K8s (dials resolved address, presents hostname)
+    Note over B,T: Guacamole-style instructions<br/>B ⇄ BE ⇄ SE ⇄ T
 ```
 
-#### Proxy loop: decoupled sink + bounded channel
+> **Changed in v2.0.0.** There was a fourth participant here: a `guacd`
+> process reached over TCP 4822, to which the backend sent a `select` +
+> `connect` handshake with the plaintext password injected. Both the hop and
+> the handshake are gone. Note what this removes from the diagram besides a
+> box \u2014 credentials no longer cross a process boundary in the clear, and there
+> is no socket between the router and the engine on which to interpose.
 
-The tunnel proxy in [`backend/src/tunnel.rs`](../backend/src/tunnel.rs)
-does not drive the `axum::WebSocket` directly from the main
-`tokio::select!` loop. Doing so would couple output-path backpressure
-to the input path: when guacd floods bitmap updates (e.g. the Windows
-Win+Arrow window-snap animation, which emits a burst of draw
-instructions in ~200 ms), the browser's WebSocket receive buffer
-fills, `ws.send().await` inside the `tcp_read` arm blocks, and _while
-it is blocked_ the `ws.recv()` arm cannot run. Mouse/keyboard events
-from the browser then queue up in the kernel TCP buffer and arrive at
-guacd in bursts — users perceive this as rendering freezes, mouse
-"acceleration," and keyboard lag.
+#### Session loop: bounded queues, one task per session
 
-The actual architecture decouples the sink from the select loop:
+The loop lives in
+[`backend/src/session_engine.rs`](../backend/src/session_engine.rs) and the
+`SessionActor` in
+[`crates/strata-session/src/actor/session.rs`](../crates/strata-session/src/actor/session.rs).
+The concern that shaped the old proxy loop still applies and is still
+addressed, just at a different seam.
 
-```mermaid
-flowchart TB
-    subgraph Session["proxy_session()"]
-        WS["ws (axum::WebSocket)"]
-        WS -->|.split()| Sink["ws_sink"]
-        WS -->|.split()| Stream["ws_stream"]
-        Sink --> Writer["writer_task<br/><sub>tokio::spawn</sub>"]
-        Channel(["mpsc::Message(1024)"])
-        SelectLoop["tokio::select! loop<br/><sub>tcp_read → text assembly → ws_tx.send<br/>ws_stream.next() → tcp_write<br/>kill_rx → ws_tx.send(err)<br/>shared_input_rx → tcp_write<br/>ping_interval → ws_tx.send(ping)<br/>writer_task join → loop exit</sub>"]
-        SelectLoop -->|"ws_tx.send"| Channel
-        Channel --> Writer
-        Stream --> SelectLoop
-    end
-```
+The problem: if the output path and the input path share a single point of
+backpressure, a burst of draw instructions (the Windows Win+Arrow window-snap
+animation emits one in ~200 ms) fills the browser's receive buffer, the send
+blocks, and *while it is blocked* the loop cannot service client input. Mouse
+and keyboard events queue in the kernel buffer and arrive in bursts. Users
+perceive this as rendering freezes, mouse "acceleration" and keyboard lag \u2014 a
+performance complaint that sounds like a network problem and is not.
 
-- **`ws.split()`** separates the WebSocket into `ws_sink` (owned
-  permanently by the writer task) and `ws_stream` (polled by the
-  select loop's input arm).
-- **`tokio::sync::mpsc::channel::<Message>(1024)`** is the handoff
-  point. 1024 messages is generous runway for any sustained draw
-  rate; only a pathologically slow browser can back it up, and even
-  then `ws_tx.send().await` yields (the future-returning send gives
-  back control to the executor so the select can continue polling
-  `ws_stream`/`shared_input_rx`).
-- **Writer task** runs a trivial `while let Some(msg) = ws_rx.recv()`
-  → `ws_sink.send(msg).await` loop. All I/O latency on the output
-  path lives inside this task; the main select loop never awaits
-  `ws_sink` directly.
-- **Shutdown path** drops `ws_tx`, which causes `ws_rx.recv()` to
-  return `None` and the writer task to flush + close the sink. A
-  2 s `tokio::time::timeout` + `writer_task.abort()` fallback covers
-  the case where the sink is wedged.
+The structure that prevents it:
 
-Additional tunnel details:
+- **`ws.split()`** separates the socket into `sink` and `stream`, polled by
+  different arms of one `tokio::select!`.
+- **The engine never touches the socket.** `SessionActor::spawn` returns an
+  `mpsc::Receiver<ClientFrame>`; the actor produces frames into a **bounded**
+  channel (`CLIENT_QUEUE_DEPTH`) and the loop drains it. A browser too slow to
+  keep up applies backpressure to the actor, not to the client-input arm.
+- **One task per session.** Each session is an independent `tokio::spawn`,
+  which is what replaces `guacd`'s process-per-connection isolation. A panic
+  is caught at the task boundary and closes that session alone.
+- **Observers and the NVR ring buffer** are fed from the same frame the
+  operator receives, so a watcher cannot see something the operator did not.
+
+Additional session details:
+
+- Instructions are delimited by `;` and can split across reads. `GuacDecoder`
+  ([`crates/strata-session/src/transport/decoder.rs`](../crates/strata-session/src/transport/decoder.rs))
+  buffers the remainder.
+- The decode buffer is hard-capped at **16 MiB** (`DEFAULT_DECODE_LIMIT`).
+  Exceeding it closes the session rather than clearing the buffer \u2014 resuming
+  mid-token is not safe.
+- **Gateway shutdown drops the socket** rather than sending a clean
+  disconnect. This is deliberate and easy to get wrong: a disconnect
+  instruction tells the browser the *target* hung up, which suppresses its
+  automatic reconnect. An abrupt close is both the truth and the behaviour
+  that lets the client recover on its own once the backend is back.
+- Keepalives: `Ping` every 15 s, disconnect if no `Pong` within 30 s.
+- Per-session bandwidth counters (`bytes_down`, `bytes_up`) are updated
+  atomically on every frame and flushed to `recordings` at session end.
+  These were named `bytes_from_guacd` / `bytes_to_guacd` until v2.0.0;
+  migration `089` renames the columns and carries the values across.
 
 - **Web-protocol kiosk eviction (v1.3.0+).** When `protocol == "web"`,
   the tunnel route in [`backend/src/routes/tunnel.rs`](../backend/src/routes/tunnel.rs)
@@ -383,17 +389,11 @@ Additional tunnel details:
   until the reaper caught up.
 
 - Guacamole instructions are delimited by `;` and can be split across
-  TCP reads. The proxy maintains a `pending: Vec<u8>` that is drained
-  up to the last `;` on each read (via `Vec::drain`, which is O(n) on
-  the remainder — meaningfully cheaper than the previous `to_vec()`
-  reallocation on large bitmap floods).
-- The pending buffer is hard-capped at 16 MiB. Exceeding the cap emits
-  a Guacamole `error "Protocol error: instruction exceeds pending
-buffer" "521"` instruction to the browser and closes the tunnel.
-  The old behaviour of silently calling `pending.clear()` is unsafe
-  because the stream would resume mid-token.
+  reads. `GuacDecoder` buffers the remainder rather than re-allocating,
+  which matters under a bitmap flood.
 - The tunnel ingests non-ASCII WS frames via `str::from_utf8` before
-  forwarding; invalid bytes are logged and dropped.
+  forwarding; invalid bytes end the session rather than being dropped
+  silently.
 - Keepalives: `Ping` every 15 s, disconnect if no `Pong` within 30 s.
 - Per-session bandwidth counters (`bytes_down`, `bytes_up`)
   are updated atomically on every read/write for the session-metrics
@@ -413,10 +413,44 @@ buffer" "521"` instruction to the browser and closes the tunnel.
   that path. Full prose at
   [`docs/security.md` § WebSocket-tunnel auth watchdog](security.md#websocket-tunnel-auth-watchdog-v132-revised-v141).
 
-#### H.264 GFX passthrough (v0.28.0+)
+#### H.264 GFX passthrough (v0.28.0 – v1.14.6; removed in v2.0.0)
 
-As of v0.28.0, RDP H.264 frames travel **end-to-end without a server-side
-transcode step**. The path is:
+> **This capability is not in v2.0.0.** It is documented as removed rather
+> than deleted, because it is the one user-visible thing the migration cost,
+> and an operator who upgrades and finds the `enable-h264` toggle missing
+> deserves to find out why here rather than by reading a migration file.
+>
+> **What replaced it.** The RDP engine
+> ([`crates/strata-session/src/engine/rdp`](../crates/strata-session/src/engine/rdp/))
+> maintains a full-desktop framebuffer, reports changed rectangles, and
+> PNG-encodes them — the same shape `guacd` used for the bitmap path.
+> Migration `087` strips `enable-h264` from every connection's `extra` map.
+> Nothing was withdrawn in practice: the parameter defaulted to `false` and no
+> connection in this deployment had it set.
+>
+> **Why it was dropped rather than ported.** Not for lack of a route.
+> `ironrdp-pdu` 0.6 — the version this tree pins — already carries the
+> MS-RDPEGFX PDUs including `Avc420BitmapStream`, `Avc444BitmapStream` and the
+> AVC codec ids, and the browser client still understands the custom `h264`
+> instruction. What is missing is channel orchestration: `ironrdp-egfx` wants
+> `pdu` 0.9 / `dvc` 0.8 / `core` 0.2, beyond the pin held by the `picky`/`russh`
+> conflict, so it would have to be written over `ironrdp-dvc` 0.4.
+>
+> The decisive argument was testability. H.264 requires the **server** to
+> encode — xrdp built with x264, or Windows with an AVC hardware encoder — and
+> no target available here does. Shipping an untestable video path in a
+> privileged-access gateway is a poor trade, and the measured gain is smaller
+> than the old release notes implied: the native encoder runs at **0.077 bytes
+> per pixel**, roughly 39:1, about **230 kbps** for an active desktop.
+>
+> **If you need it**, stay on v1.14.6 and open an issue describing the target
+> that encodes AVC444, which is the missing piece for building it properly.
+
+<details>
+<summary>Historical — the passthrough pipeline (v0.28.0 – v1.14.6)</summary>
+
+RDP H.264 frames travelled **end-to-end without a server-side transcode
+step**. The path was:
 
 ```mermaid
 flowchart TB
@@ -438,98 +472,47 @@ The four cooperating components:
    (SHA `7a13504c2b051ec651d39e1068dc7174dc796f97`). Hooks FreeRDP's
    RDPGFX `SurfaceCommand` callback, queues AVC NAL units on each
    `guac_display_layer`, and emits them as a custom `4.h264` Guacamole
-   instruction during the per-frame flush. **Supersedes** the v0.27.0
+   instruction during the per-frame flush. **Superseded** the v0.27.0
    `004-refresh-on-noop-size.patch` at the same path.
 2. **Vendored `guacamole-common-js` 1.6.0**
    ([`frontend/src/lib/guacamole-vendor.js`](../frontend/src/lib/guacamole-vendor.js)) —
-   bundles `H264Decoder` (line ~13408), the `4.h264` opcode handler
-   (line ~16755), and a sync-point gate `waitForPending` (line ~17085)
-   that prevents the decoder being asked to flush before its pending-
-   frame queue has drained. **Stock `guacamole-common-js` does not handle
-   the `h264` opcode**; the vendored bundle is required.
-3. **Backend RDP defaults** ([`backend/src/tunnel.rs`](../backend/src/tunnel.rs)) —
-   `full_param_map()` seeds `color-depth=32`, `disable-gfx=true`,
-   `enable-h264=false`, `force-lossless=false`, `cursor=local`, plus
-   the explicit `enable-*` / `disable-*` toggles that FreeRDP's
-   `settings.c` requires (empty ≠ `"false"` in many guacd code paths).
-   These defaults match the upstream
-   [sol1/rustguac](https://github.com/sol1/rustguac) baseline that
-   Strata's custom guacd is patched against, so a brand-new
-   connection with no admin overrides behaves identically to a
-   stock rustguac deployment. The per-connection `extras` allowlist
-   permits `disable-gfx`, `disable-offscreen-caching`, `disable-auth`,
-   `enable-h264`, `force-lossless`, and the related GFX toggles so
-   the admin UI can override defaults per connection. The handshake
-   driver gates `video/h264` mimetype advertisement on the resolved
-   `enable-h264` value, so leaving GFX disabled or H.264 disabled
-   will silently fall back to the bitmap path even on AVC444-capable
-   hosts.
-4. **Connection-form GFX/H.264 interlock (v1.1.0+)** — the RDP
-   Codecs panel of `frontend/src/pages/admin/connectionForm.tsx`
-   renders the _Enable graphics pipeline (GFX)_ checkbox as ticked
-   only when `disable-gfx === "false"` (i.e. it reflects what the
-   backend will actually negotiate, not the absence of a value).
-   The companion _Enable H.264 (AVC444)_ checkbox is rendered
-   disabled whenever GFX is off — the `video/h264` mimetype cannot
-   be negotiated without GFX. Ticking H.264 forces
-   `disable-gfx="false"` for you, and unticking GFX clears any
-   previously-set `enable-h264`, so the form cannot be saved into
-   an unreachable state. The `AdSyncTab.tsx` default-parameter
-   editor mirrors this interlock so AD-synced connections inherit
-   the same UX. See `CHANGELOG.md` 1.1.0 for the full UX
-   rationale.
+   bundles `H264Decoder`, the `4.h264` opcode handler, and a sync-point
+   gate `waitForPending` that prevented the decoder being asked to flush
+   before its pending-frame queue had drained. **Stock
+   `guacamole-common-js` does not handle the `h264` opcode**; the vendored
+   bundle is still shipped, because the rest of it is what the client uses.
+3. **Backend RDP defaults** — `full_param_map()` seeded `color-depth=32`,
+   `disable-gfx=true`, `enable-h264=false`, `force-lossless=false`,
+   `cursor=local`, plus the explicit `enable-*` / `disable-*` toggles that
+   FreeRDP's `settings.c` required (empty ≠ `"false"` in many guacd code
+   paths). The handshake driver gated `video/h264` mimetype advertisement
+   on the resolved `enable-h264` value, so leaving GFX or H.264 disabled
+   fell back to the bitmap path silently even on AVC444-capable hosts.
+4. **Connection-form GFX/H.264 interlock (v1.1.0+)** — the RDP Codecs panel
+   rendered _Enable graphics pipeline (GFX)_ as ticked only when
+   `disable-gfx === "false"`, and disabled _Enable H.264 (AVC444)_ whenever
+   GFX was off, so the form could not be saved into an unreachable state.
 5. **Windows host AVC444 configuration** — the helper script
-   [`docs/Configure-RdpAvc444.ps1`](Configure-RdpAvc444.ps1) audits
-   the host registry, detects whether a hardware GPU is usable, and
-   prompts before applying the recommended values. The full operator
-   runbook is [`docs/h264-passthrough.md`](h264-passthrough.md).
+   [`docs/Configure-RdpAvc444.ps1`](Configure-RdpAvc444.ps1) audits the host
+   registry, detects whether a hardware GPU is usable, and prompts before
+   applying the recommended values. Operator runbook:
+   [`docs/h264-passthrough.md`](h264-passthrough.md).
 
-The passthrough path **eliminates** the cross-frame ghost class that
-v0.27.0's Refresh Rect mitigation (below) targeted: there is no
-intermediate transcode step that can lose state across frames. The
-v0.27.0 Refresh Display button has been retired from the Session Bar.
-
-### Backend SSH defaults (v1.3.1+)
-
-`full_param_map()` in [`backend/src/tunnel.rs`](../backend/src/tunnel.rs)
-also seeds a parallel set of defaults for `protocol == "ssh"`
-connections so a brand-new SSH connection behaves identically to
-the upstream [sol1/rustguac](https://github.com/sol1/rustguac)
-baseline:
-
-| Parameter               | Default          | Why                                                                                                                                                                        |
-| ----------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `terminal-type`         | `xterm-256color` | Exported as `TERM` on the remote PTY. Without it OpenSSH defaults to `TERM=linux`, which does not advertise `smcup`/`rmcup` and breaks `nano` / `less` alt-screen restore. |
-| `color-scheme`          | `gray-black`     | Rustguac-default SGR palette; without it guacd falls back to `black-white` and inverts most users' expectations.                                                           |
-| `scrollback`            | `1000`           | Lifts guacd's in-buffer line count from its built-in default (~256) to 1000.                                                                                               |
-| `font-name`             | `monospace`      | Rustguac parity.                                                                                                                                                           |
-| `font-size`             | `12`             | Rustguac parity.                                                                                                                                                           |
-| `backspace`             | `127`            | DEL — what every modern Linux distro ships as the SSH default; stops `^?` characters appearing on Backspace.                                                               |
-| `locale`                | `en_US.UTF-8`    | Required for UTF-8 box-drawing characters in `htop`, `mc`, `tmux` status bars.                                                                                             |
-| `server-alive-interval` | `0`              | Disables guacd-side keepalives — Guacamole's own keep-alive instructions already provide liveness.                                                                         |
-
-The corresponding three keys (`color-scheme`, `locale`,
-`server-alive-interval`) have been added to
-`is_allowed_guacd_param` so admin overrides via the per-connection
-`extras` map can set them explicitly. The SFTP wiring lives in
-the same `if self.protocol == "ssh"` branch so all SSH-only
-parameter logic is in one place.
-
-Verification flows in priority order:
+Verification flowed in priority order:
 
 1. **Authoritative** — Windows Event Viewer →
-   `Applications and Services Logs > Microsoft > Windows >
-RemoteDesktopServices-RdpCoreTS > Operational`:
+   `Applications and Services Logs > Microsoft > Windows > RemoteDesktopServices-RdpCoreTS > Operational`:
    - Event ID **162** = AVC444 mode active
    - Event ID **170** = hardware encoding active
-2. guacd logs include `H.264 passthrough enabled for RDPGFX channel`
-3. WebSocket trace shows `4.h264,…` instructions in DevTools Network
-4. `client._h264Decoder?.stats()` shows `framesDecoded > 0`
+2. guacd logs included `H.264 passthrough enabled for RDPGFX channel`
+3. WebSocket trace showed `4.h264,…` instructions in DevTools Network
+4. `client._h264Decoder?.stats()` showed `framesDecoded > 0`
 
-If the host is not configured for AVC444, `enable-h264=true` is a
-no-op: guacd loads the H.264 hook (visible in logs) but no
-`SurfaceCommand` callbacks fire and the session falls back silently to
-the bitmap path.
+If the host was not configured for AVC444, `enable-h264=true` was a no-op:
+guacd loaded the H.264 hook (visible in logs) but no `SurfaceCommand`
+callbacks fired and the session fell back silently to the bitmap path.
+
+</details>
 
 **Known limitation — DevTools-induced ghosting**: Chromium-based
 browsers throttle GPU-canvas compositing and `requestAnimationFrame`
@@ -539,13 +522,38 @@ resembles a codec problem but is not. Closing DevTools (or detaching
 to a separate window) restores normal compositor behaviour. This is
 not fixable in the Strata client.
 
+### Backend SSH defaults (v1.3.1+)
+
+The SSH engine seeds a set of defaults so a brand-new SSH connection
+behaves sensibly without admin configuration:
+
+| Parameter               | Default          | Why                                                                                                                                                                        |
+| ----------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `terminal-type`         | `xterm-256color` | Exported as `TERM` on the remote PTY. Without it OpenSSH defaults to `TERM=linux`, which does not advertise `smcup`/`rmcup` and breaks `nano` / `less` alt-screen restore. |
+| `color-scheme`          | `gray-black`     | Without it the palette falls back to `black-white` and inverts most users' expectations.                                                                                   |
+| `scrollback`            | `1000`           | Lifts the in-buffer line count above the historical ~256 default.                                                                                                          |
+| `font-name`             | `monospace`      | Resolved through `fontdue` against `fonts-dejavu-core`, which the backend image installs explicitly rather than inheriting from Chromium's dependency closure.             |
+| `font-size`             | `12`             | Drives the terminal rasteriser's glyph cache.                                                                                                                              |
+| `backspace`             | `127`            | DEL — what every modern Linux distro ships as the SSH default; stops `^?` characters appearing on Backspace, and matches xterm. Sending BS instead breaks `readline` editing on essentially every modern target. |
+| `locale`                | `en_US.UTF-8`    | Required for UTF-8 box-drawing characters in `htop`, `mc`, `tmux` status bars.                                                                                             |
+| `server-alive-interval` | `0`              | Disables engine-side keepalives — the tunnel's own ping/pong already provides liveness.                                                                                    |
+
+> **Note.** `terminal_font` on `GET /api/admin/health` reports whether a
+> usable monospace face was found. `false` breaks SSH and Kubernetes
+> rendering outright, which is why it is surfaced on the Health page rather
+> than left to a log line.
+
 #### H.264 GFX reference-frame corruption (recovery path in v0.27.0)
 
-> **Status — superseded by v0.28.0.** Retained for historical context.
-> The cross-frame ghost class described below cannot occur with the
-> v0.28.0 passthrough decoder, because there is no intermediate
-> server-side transcode step to lose state across frames. The Refresh
-> Display button has been retired from the Session Bar.
+> **Status — historical.** Superseded by the v0.28.0 passthrough decoder,
+> and moot since v2.0.0: with no H.264 pipeline at all, there is no
+> delta-compressed reference chain to desynchronise. Both the forked-guacd
+> patch and the Refresh Display button are gone. Retained for context,
+> because the failure mode is a good illustration of why an untestable
+> video path was not worth carrying into the rewrite.
+
+<details>
+<summary>Historical — Refresh Rect ghost recovery (v0.27.0)</summary>
 
 With `enable-gfx-h264=true` (the default for RDP connections), FreeRDP
 hands decoded H.264 NAL units to guacamole-common-js's `VideoPlayer`
@@ -594,6 +602,8 @@ frontend change is also safe to run against an un-patched guacd (the
 compositor nudge still fires, the sendSize is a harmless no-op). The
 extension is invisible at the wire-protocol layer.
 
+</details>
+
 ### Envelope Encryption (Credential Save)
 
 ```
@@ -612,7 +622,8 @@ extension is invisible at the wire-protocol layer.
 2. Rust sends wrapped DEK to Vault POST /transit/decrypt/guac-master-key
 3. Vault returns plaintext DEK
 4. Rust decrypts password with DEK (AES-256-GCM)
-5. Rust injects plaintext password into guacd handshake
+5. Rust hands the plaintext password to the in-process session engine
+   (`secrecy::SecretString`; never crosses a process boundary, redacted in `Debug`)
 6. Rust zeroizes DEK and password from memory
 ```
 
@@ -1181,7 +1192,7 @@ sequenceDiagram
     alt cache hit and not expired
         DB-->>BE: sealed password
         BE->>Vault: decrypt envelope
-        BE-->>UI: bind to guacd, no SG call
+        BE-->>UI: start session, no SG call
     else cache miss or caching disabled
         BE->>Vault: unseal A2A secrets / user token
         BE->>SG: GET Me/ActionableRequests (preflight)
@@ -1203,7 +1214,7 @@ sequenceDiagram
             BE->>DB: UPDATE credential_profiles.expires_at
         end
         BE->>DB: safeguard_checkout_audit (success)
-        BE-->>UI: bind to guacd
+        BE-->>UI: start session
     end
 ```
 
@@ -1351,7 +1362,6 @@ switch back on lights the entire surface up in a single step.
 ```
 strata-client/
 ├── .github/workflows/     CI/CD pipelines
-│   └── build-guacd.yml    Automated guacd image build
 ├── backend/               Rust backend
 │   ├── Cargo.toml
 │   ├── Dockerfile
@@ -1377,7 +1387,7 @@ strata-client/
 │           ├── audit.rs       Hash-chained audit logging
 │           ├── auth.rs        OIDC token validation
 │           ├── checkouts.rs   Password checkout lifecycle + rotation workers
-│           ├── guacd_pool.rs  Round-robin guacd pool
+│           ├── dns.rs         Target-hostname resolution against admin-set nameservers
 │           ├── health_check.rs  Background TCP health probes for connections
 │           ├── kerberos.rs    Multi-realm krb5.conf generation
 │           ├── middleware.rs   JWT auth + admin middleware
@@ -1415,9 +1425,10 @@ strata-client/
 │       └── pages/         Page components (Dashboard, Documentation, SessionClient, AdminSettings, AuditLogs, Approvals, Login, SetupWizard, SharedViewer)
 │           ├── admin/     One module per Admin Settings tab (Security, Network, Display, SSO, Kerberos, Recordings, Vault, Tags, Health, Sessions, Passwords, AdSync, Access) plus the shared connection-form helpers
 │           └── credentials/  Credentials page child components (RequestCheckoutForm, ProfileEditor)
-├── guacd/                 Custom guacd build
-│   ├── Dockerfile
-│   └── entrypoint.sh     DNS config + privilege drop wrapper
+├── crates/                Workspace crates
+│   ├── strata-session/    In-process session engine (RDP / VNC / SSH / SFTP / K8s)
+│   ├── strata-protocol/   Guacamole instruction + media envelope codecs
+│   └── strata-dmz/        DMZ edge proxy
 ├── certs/                 TLS certificates (mount for HTTPS)
 ├── docker-compose.yml     Full stack orchestration
 ├── CHANGELOG.md
@@ -1445,7 +1456,7 @@ flowchart TB
         DMZ["• TLS 1.3 termination<br/>• SPA static serving<br/>• OIDC redirect handler<br/>• Rate limiting<br/>• mTLS <em>server</em> (link side, inbound only)"]
     end
     subgraph InternalNode["INTERNAL NODE (strata-backend)"]
-        Internal["• Axum + RBAC + Vault<br/>• Postgres + guacd<br/>• Outbound link client (initiates the dial)"]
+        Internal["• Axum + RBAC + Vault<br/>• Postgres + session engine<br/>• Outbound link client (initiates the dial)"]
     end
     Internal -.->|"link (mTLS) outbound from internal"| DMZ
 ```
@@ -1506,7 +1517,7 @@ host's link port.
   WebSocket upgrade against `127.0.0.1:8080` (overridable via
   `STRATA_DMZ_LOOPBACK_ADDR`), so the existing
   `/api/tunnel/{connection_id}` axum handler runs unchanged. The
-  guacd connection therefore originates from the **internal node's**
+  connection to the target therefore originates from the **internal node's**
   IP, not the DMZ node's IP — exactly as a single-node deployment
   behaves. WebSocket streams cannot be sized by the
   `MAX_REQUEST_BODY_BYTES` / `MAX_PROXY_BODY_BYTES` buffers used on
@@ -1595,13 +1606,19 @@ numbered ADRs under [adr/](adr/):
 | [ADR-0001](adr/ADR-0001-rate-limit-single-instance.md) | Rate-limit state: single-instance constraint with promotion criteria                                           |
 | [ADR-0002](adr/ADR-0002-csrf-samesite-strict.md)       | CSRF strategy: `SameSite=Strict` as the compensating control                                                   |
 | [ADR-0003](adr/ADR-0003-feature-flags-deferred.md)     | Feature flags: boolean `settings` keys instead of a dedicated table                                            |
-| [ADR-0004](adr/ADR-0004-guacd-connection-model.md)     | guacd connection model, protocol-parameter allow-list, and trust boundaries                                    |
+| [ADR-0004](adr/ADR-0004-guacd-connection-model.md)     | guacd connection model, protocol-parameter allow-list, and trust boundaries. **Superseded by ADR-0015.**       |
 | [ADR-0005](adr/ADR-0005-jwt-refresh-token-sessions.md) | JWT + refresh-token TTLs, single-use rotation, forced-logout lever                                             |
 | [ADR-0006](adr/ADR-0006-vault-transit-envelope.md)     | Vault Transit envelope (`vault:<base64>`), rotate + rewrap path                                                |
 | [ADR-0007](adr/ADR-0007-emergency-bypass-checkouts.md) | Emergency approval bypass and scheduled-start checkouts                                                        |
 | [ADR-0008](adr/ADR-0008-notification-pipeline.md)      | Transactional-email subsystem: MJML/mrml renderer, Vault-sealed SMTP password, opt-out semantics, retry worker |
 | [ADR-0009](adr/ADR-0009-dmz-deployment-mode.md)        | DMZ deployment mode: public-facing dumb-proxy, reverse-tunnel link, signed edge headers                        |
+| [ADR-0010](adr/ADR-0010-dmz-phase6-hardening.md)       | DMZ phase-6 hardening                                                                                          |
+| [ADR-0011](adr/ADR-0011-persistent-jwt-secrets.md)     | Persistent JWT signing secrets across container restarts                                                       |
 | [ADR-0011](adr/ADR-0011-av-scanning.md)                | Antivirus scanning trait: pluggable backends (`off`/`clamav`/`command`), fail-closed default, opt-in sidecar   |
+| [ADR-0012](adr/ADR-0012-njs-security-hardening.md)     | NJS security hardening at the nginx layer                                                                      |
+| [ADR-0013](adr/ADR-0013-vitest-environment-stabilization.md) | Vitest environment stabilisation                                                                          |
+| [ADR-0014](adr/ADR-0014-co-pilot-two-websocket-split.md) | Co-pilot: two-WebSocket split for observation vs. control                                                    |
+| [ADR-0015](adr/ADR-0015-native-rust-session-engine.md) | **Native Rust session engine replacing guacd (v2.0.0).** Supersedes ADR-0004.                                  |
 
 ## Operational Runbooks
 
@@ -1709,8 +1726,8 @@ pin the boundary conditions.
 ## Remote → local clipboard stall watchdog (v1.14.1)
 
 The remote → local clipboard path is a Guacamole **stream**, not a
-single instruction. When text is copied inside the remote desktop,
-`guacd` emits `clipboard,<idx>,text/plain;`, then one or more
+single instruction. When text is copied inside the remote desktop, the
+session engine emits `clipboard,<idx>,text/plain;`, then one or more
 `blob,<idx>,<base64>;` instructions carrying the UTF-8 payload in
 chunks, and finally `end,<idx>;` to close the stream. The frontend
 handler `client.onclipboard` in
@@ -1727,13 +1744,13 @@ Windows advertises the available formats but does not produce the
 actual bytes until a consumer requests a specific format. If the
 clipboard owner is an app that renders lazily (Chrome, Edge, VS Code,
 most terminals) and a _subsequent_ copy interrupts the in-flight
-format-data request, or if FreeRDP's CLIPRDR state machine becomes
-wedged after many transfers, `guacd` can open the stream and deliver
+format-data request, or if the CLIPRDR state machine becomes
+wedged after many transfers, the engine can open the stream and deliver
 zero or a partial set of `blob`s and then **never emit `end`**. The
 reader's `onend` never fires, `writeText()` is never called, and the
 local clipboard silently retains its previous contents. Nothing is
 logged, no `onerror` fires, and the only recovery is a full reconnect
-(which spawns a fresh `guacd` process with a clean CLIPRDR channel).
+(which establishes a clean CLIPRDR channel).
 Large multi-blob transfers are statistically more exposed to this —
 they keep the channel busy longer and are more likely to be
 interrupted — but the stall itself is size-independent.
@@ -1747,7 +1764,7 @@ v1.14.1 wraps the receive path in a **per-stream stall watchdog**:
   `CLIPBOARD_OPEN_STALL_MS` (2 s) applies while zero blobs have been
   received — that is the wedged-CLIPRDR signature and 2 s is ample to
   recognise it. `CLIPBOARD_BLOB_STALL_MS` (10 s) applies once data is
-  flowing: `guacd` emits the whole clipboard as one back-to-back burst
+  flowing: the engine emits the whole clipboard as one back-to-back burst
   of 4 KiB blobs out of a single in-memory buffer, so a gap between
   blobs is transport backpressure rather than a wedge.
 - If `end` arrives first, the flush is normal and unchanged.
@@ -1757,10 +1774,10 @@ v1.14.1 wraps the receive path in a **per-stream stall watchdog**:
   re-published in full, so a transfer that merely paused still ends up
   complete on the clipboard.
 - The stream is only **abandoned** — ack-closed via
-  `stream.sendAck(...)` so `guacd` can release the orphaned index — on
+  `stream.sendAck(...)` so the engine can release the orphaned index — on
   a stall window that saw no new data at all. A `console.warn`
   (`clipboard stream N stalled after M blob(s), K chars — abandoning
-transfer`) is logged for correlation with server-side `guacd` logs;
+transfer`) is logged for correlation with the backend log;
   the intermediate partial flush logs `… paused …, still listening`.
 - A **no-clobber guard** ensures a stall that received _zero_ blobs
   never overwrites the local clipboard — an empty flush would wipe
@@ -1777,7 +1794,7 @@ transfer`) is logged for correlation with server-side `guacd` logs;
 The watchdog is a resilience layer over the receive path only; the
 local → remote (paste) path, the pop-out clipboard path, and the
 CLIPRDR channel on the server side are unchanged. It cannot un-wedge
-`guacd`'s clipboard state — that remains a server-side concern — but
+the remote's clipboard state — that remains a target-side concern — but
 it guarantees the user receives whatever text did arrive instead of
 silently stale content, and it makes every future occurrence visible.
 Three regression tests in
@@ -1787,61 +1804,71 @@ complete-payload-after-a-pause behaviours.
 
 ## Clipboard size ceiling — `clipboard-buffer-size`
 
-`guacd` allocates **one fixed-size clipboard buffer per connection**,
-and that buffer is the hard ceiling on how much text can cross in
-either direction. Overrunning it produces no error instruction, no
-client-side `onerror`, and nothing in `guacd`'s log at default
-verbosity — but the two directions fail **differently**, which matters
-when reading a diagnostic trace:
+The ceiling is **8 MiB per direction**, applied symmetrically:
+`MAX_CLIPBOARD_BYTES` in
+[`crates/strata-session/src/actor/session.rs`](../crates/strata-session/src/actor/session.rs)
+and mirrored in
+[`engine/rdp/clipboard.rs`](../crates/strata-session/src/engine/rdp/clipboard.rs).
+Overrunning it **truncates and logs**, in both directions. It is a
+compile-time constant, not a negotiated parameter, so there is nothing to
+configure and nothing that can silently fail to be applied.
+
+| Bound                | Value             | Where                                                             |
+| -------------------- | ----------------- | ------------------------------------------------------------------- |
+| Per-direction ceiling | 8 MiB (`8388608`) | `MAX_CLIPBOARD_BYTES`                                              |
+| Wire chunk size       | 4 KiB             | blob size on the instruction stream                                |
+| Protocol element cap  | 8192 bytes        | `Guacamole.StringWriter` re-splits to stay inside it               |
+
+Chunking on the wire is separate from and much smaller than the ceiling:
+the engine emits 4 KiB blobs, and the browser sends 4096-char chunks from
+`clipboardSync.ts`, each re-split by `Guacamole.StringWriter` to stay
+inside the Guacamole protocol's 8192-byte per-element limit.
+
+<details>
+<summary>Historical — how this failed under guacd (up to v1.14.6)</summary>
+
+This is worth keeping on the record, because it was genuinely difficult to
+attribute from a user report.
+
+`guacd` allocated **one fixed-size clipboard buffer per connection**,
+and that buffer was the hard ceiling in either direction. Overrunning it
+produced no error instruction, no client-side `onerror`, and nothing in
+`guacd`'s log at default verbosity — and the two directions failed
+**differently**:
 
 - **Remote → local (copy out) — dropped wholesale.**
-  `guac_rdp_cliprdr_format_data_response()` converts the incoming
+  `guac_rdp_cliprdr_format_data_response()` converted the incoming
   UTF-16 into a buffer of exactly `clipboard-buffer-size` bytes.
   `guac_iconv()` returns 0 when the output fills before it reaches the
-  null terminator, and the reset/append/send calls sit **inside** that
-  `if`. A copy that overruns therefore emits **no `clipboard` stream
-  at all** — the browser sees nothing whatsoever, not a short payload.
+  null terminator, and the reset/append/send calls sat **inside** that
+  `if`. A copy that overran therefore emitted **no `clipboard` stream
+  at all** — the browser saw nothing whatsoever, not a short payload.
 - **Local → remote (paste in) — truncated.**
-  `guac_rdp_clipboard_blob_handler()` calls
-  `guac_common_clipboard_append()`, which clamps to the remaining
-  space. The paste lands with its tail missing. Note the outbound
-  conversion is UTF-8 → UTF-16, so the *effective* ceiling on this
-  direction is roughly **half** the buffer.
+  `guac_rdp_clipboard_blob_handler()` called
+  `guac_common_clipboard_append()`, which clamped to the remaining
+  space. Note the outbound conversion is UTF-8 → UTF-16, so the
+  *effective* ceiling on this direction was roughly **half** the buffer.
 
-In a `strataClipboard` dump the difference is unmistakable: an
-overrun copy leaves **zero `dir: "in"` entries**, whereas a stalled
-transfer leaves `stream-paused` / `stream-stalled` with a short
-`chars`.
+In a `strataClipboard` dump the difference was unmistakable: an
+overrun copy left **zero `dir: "in"` entries**, whereas a stalled
+transfer left `stream-paused` / `stream-stalled` with a short `chars`.
 
 | Bound                                   | Value                | Where                                                     |
 | --------------------------------------- | -------------------- | --------------------------------------------------------- |
 | `guacd` default (parameter unset)       | 256 KiB (`262144`)   | `GUAC_COMMON_CLIPBOARD_MIN_LENGTH`                        |
 | `guacd` maximum (larger values clamped) | 50 MB (`52428800`)   | `GUAC_COMMON_CLIPBOARD_MAX_LENGTH`                        |
-| **Strata default**                      | 8 MiB (`8388608`)    | `DEFAULT_CLIPBOARD_BUFFER_BYTES` in `backend/src/tunnel.rs` |
-| Deployment override                     | env                  | `STRATA_CLIPBOARD_BUFFER_BYTES`, clamped to the range above |
-| Per-connection override                 | admin-set            | `extra["clipboard-buffer-size"]`, whitelisted by `is_allowed_guacd_param()` |
+| Strata default                          | 8 MiB (`8388608`)    | `DEFAULT_CLIPBOARD_BUFFER_BYTES`                          |
+| Deployment override                     | env                  | `STRATA_CLIPBOARD_BUFFER_BYTES`                           |
+| Per-connection override                 | admin-set            | `extra["clipboard-buffer-size"]`                          |
 
-The effective value is logged at every handshake — `clipboard buffer
-size negotiated with guacd` at INFO, or a WARN when `guacd` did not
-advertise the parameter (in which case transfers silently fall back to
-the 256 KiB default). `docker compose logs backend | grep -i clipboard`
-answers "what ceiling is this connection actually running under?"
-without needing to reproduce anything.
+The sting was that the parameter had to be **advertised** by `guacd` to
+have any effect. The Guacamole handshake only carries values for
+parameters the server lists in its `args` response, so one the running
+build did not support was silently discarded — which is how RDP sat at
+the 256 KiB default for several releases while Strata believed it was
+sending 8 MiB.
 
-Strata sets `clipboard-buffer-size` for **every** protocol, not just
-RDP — the parameter is in the arg list for `rdp`, `vnc`, `ssh`,
-`telnet` and `kubernetes` alike, and `guacd` ignores parameters it did
-not advertise, so applying it unconditionally is safe. Before this it
-was RDP-only, which left SSH/VNC sessions on the 256 KiB default: a
-single ~8,000-line PEM bundle or a moderately sized script overran it
-and was silently clipped.
-
-Chunking on the wire is separate from and much smaller than this
-ceiling: `guacd` emits 4 KiB blobs
-(`GUAC_COMMON_CLIPBOARD_BLOCK_SIZE`), and the browser sends 4096-char
-chunks from `clipboardSync.ts`, each re-split by
-`Guacamole.StringWriter` to stay inside the Guacamole protocol's
-8192-byte per-element limit.
+</details>
 
 
 ## Local → remote clipboard serialisation (v1.14.4)
@@ -1862,7 +1889,7 @@ and opened its own clipboard stream. Because the large-payload path
 awaits between chunks, the `blob` instructions of the concurrent
 streams interleave on the wire.
 
-`guacd`'s RDP clipboard is a **single shared buffer**: the `clipboard`
+Windows' RDP clipboard is a **single shared buffer**: the `clipboard`
 instruction resets it and every `blob` appends to it, regardless of
 stream index. Interleaved streams therefore splice two payloads
 together and announce the result over CLIPRDR twice. Windows'
@@ -1870,8 +1897,8 @@ clipboard owner (`rdpclip.exe`) can be left waiting on a format-data
 response that never matches, at which point **both copy and paste stay
 dead for the remainder of the Windows session**. Reconnecting the
 tunnel does not help — the wedged state lives in the Windows session,
-not in `guacd` — which is why the only reliable recovery was to log off
-the Windows session and log back in, restarting `rdpclip.exe`.
+not in the gateway — which is why the only reliable recovery was to log
+off the Windows session and log back in, restarting `rdpclip.exe`.
 
 [`clipboardSync.ts`](../frontend/src/components/clipboardSync.ts) is
 now the single transmission path. Every caller routes through
@@ -1890,7 +1917,7 @@ now the single transmission path. Every caller routes through
   same text.
 
 `resetRemoteClipboardEcho` is called whenever a client reaches the
-`CONNECTED` state. A freshly-spawned `guacd` has an empty clipboard,
+`CONNECTED` state. A freshly-started session has an empty clipboard,
 and when RDP reattaches to an already-logged-on Windows session the
 CLIPRDR channel is renegotiated from scratch, so the frontend must
 forget what it believed the remote held or the first push after a
@@ -1929,24 +1956,22 @@ Outbound events are `queued`, `skip-duplicate`, `skip-disconnected`,
 `stream-open`, `stream-end`, `stream-stalled`, `ignored-mimetype` and
 `local-write-failed`.
 
-**Backend.** Setting `STRATA_CLIPBOARD_TRACE=1` on the backend enables
-`ClipboardTracer` in [`tunnel.rs`](../backend/src/tunnel.rs), which
-walks every instruction batch in both directions using the protocol's
-own length prefixes and logs clipboard stream lifecycles. What to look
-for in a trace:
+**Backend.** Removed in v2.0.0. `STRATA_CLIPBOARD_TRACE` and its
+`ClipboardTracer` walked every instruction batch crossing the socket to
+`guacd`; there is no such socket now, and the tracer went with the daemon.
+The browser-side buffer above is the primary diagnostic.
 
-- `clipboard stream opened while another is still open in the same direction`
-  — two transfers interleaving; the condition described above.
-- A `stream-open` with no matching `stream-end` — the remote never
+Two of the four failure modes the tracer existed to catch are now
+structurally impossible \u2014 interleaved transfers splicing payloads, and an
+oversize copy being discarded rather than truncated \u2014 because the engine
+gives each direction its own ceiling and logs a truncation. The remaining
+two are properties of the *target*, not the gateway, and stay visible in
+the browser buffer:
+
+- A `stream-open` with no matching `stream-end` \u2014 the remote never
   finished the transfer (the delayed-render CLIPRDR hang).
-- `blobs=0` on a completed inbound stream — the remote announced a
+- `blobs=0` on a completed inbound stream \u2014 the remote announced a
   format and then produced nothing.
-- `clipboard stream never received end` at teardown — outstanding
-  transfers abandoned when the tunnel closed.
-- `clipboard stream ack reported an error` — `guacd` rejected a chunk.
-
-Correlate with `guacd`'s own CLIPRDR logging by raising its log level
-(`GUACD_LOG_LEVEL=debug`) in the same window.
 
 ## OIDC discovery and JWKS cache consolidation (v1.6.1)
 
@@ -1992,14 +2017,13 @@ supervises a workload on the user's behalf:
   [`vdi.md`](vdi.md).
 - **Kubernetes Pod Console** (`kubernetes` protocol, v1.4.0) —
   `kubectl attach` / `kubectl exec` into a named pod, rendered as a
-  terminal via Guacamole's built-in `kubernetes` client. The custom
-  guacd image already builds `libguac-client-kubernetes.so` (gated by a
-  Dockerfile guard that fails the build if the .so is missing — see
-  `guacd/Dockerfile`). Connection extras carry `pod`, `namespace`,
+  terminal via the engine's `kubernetes` client
+  ([`crates/strata-session/src/engine/kube`](../crates/strata-session/src/engine/kube/)).
+  Connection extras carry `pod`, `namespace`,
   `container`, `exec-command`, `use-ssl`, `ca-cert` and `client-cert`;
   the matching `client-key` private bytes live exclusively in a
   Vault-encrypted credential profile and are remapped from the
-  profile's password slot into the guacd `client-key` parameter at
+  profile's password slot into the `client-key` parameter at
   handshake time (see `routes/tunnel.rs`). Operators import their
   `~/.kube/config` via `POST /api/admin/kubernetes/parse-kubeconfig`,
   which extracts the cluster server URL, namespace, CA cert and
@@ -2023,7 +2047,7 @@ flowchart TB
     Xvnc -->|DISPLAY| Chromium["chromium --kiosk<br/><sub>--user-data-dir=…<br/>--remote-debugging-address=127.0.0.1<br/>--remote-debugging-port={cdp}<br/>--host-rules='…'<br/>{url}</sub>"]
     Profile --> Chromium
     Chromium --> CDP["Login script runner<br/><sub>over CDP (localhost-only)</sub>"]
-    Xvnc -.->|"guacd attaches to vnc://127.0.0.1:{5900+display}"| Guacd([guacd])
+    Xvnc -.->|"VNC engine attaches to vnc://127.0.0.1:{5900+display}"| Engine([session engine])
 ```
 
 Allocator state machine: `WebDisplayAllocator` keeps a `BTreeSet<u8>`

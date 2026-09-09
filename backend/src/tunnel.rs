@@ -113,34 +113,18 @@ impl HandshakeParams {
             base.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
 
         if self.protocol == "rdp" {
-            // FreeRDP 3 GFX pipeline — enables H.264 hardware/software encoding
-            // for significantly lower bandwidth usage on modern RDP hosts.
-            // `enable-h264` is added by guacd patch 004-h264-display-worker, and
-            // activates raw H.264 NAL passthrough to the browser's WebCodecs
-            // VideoDecoder, eliminating server-side decode/re-encode (and the
-            // tile-cache ghosting that came with it).
-            //
-            // The full set below mirrors rustguac's RDP defaults verbatim
-            // (sol1/rustguac src/guacd.rs handshake builder). Those defaults
-            // are what actually get H.264 to flow on Windows hosts: in
-            // particular `color-depth=32` is mandatory for FreeRDP to enable
-            // AVC444 negotiation, and the `enable-*` toggles must be set
-            // explicitly (empty != "false" everywhere in guacd's settings.c).
+            // These defaults mirror rustguac's RDP block (sol1/rustguac
+            // src/guacd.rs handshake builder), so a connection behaves the
+            // same on the guacd path as it does there.
             m.entry("color-depth".into()).or_insert_with(|| "32".into());
-            // RDPGFX (graphics pipeline) and H.264 are OPT-IN, matching rustguac's
-            // per-entry defaults. Forcing them on for every RDP connection causes
-            // tile-cache ghosting on Windows hosts that don't actually support
-            // H.264 / AVC444 (e.g. servers without a GPU and without the AVC444
-            // registry config): FreeRDP advertises the codec, the server
-            // negotiates RDPGFX, then can't deliver H.264 and falls back into a
-            // corrupted progressive-codec bitmap-cache state — Notepad fragments
-            // bleed into Chrome, switching apps doesn't repaint cleanly, etc.
-            // Per-connection extras can re-enable GFX/H.264 for servers that
-            // genuinely support them.
+            // RDPGFX stays off. Advertising it to a host that cannot
+            // deliver the codec it then negotiates leaves FreeRDP in a
+            // corrupted progressive-codec bitmap-cache state — Notepad
+            // fragments bleed into Chrome, switching apps does not repaint
+            // cleanly. H.264 passthrough was removed in migration 087, so
+            // there is nothing left that needs the pipeline on.
             m.entry("disable-gfx".into())
                 .or_insert_with(|| "true".into());
-            m.entry("enable-h264".into())
-                .or_insert_with(|| "false".into());
             m.entry("force-lossless".into())
                 .or_insert_with(|| "false".into());
             m.entry("cursor".into()).or_insert_with(|| "local".into());
@@ -300,7 +284,6 @@ fn is_allowed_guacd_param(name: &str) -> bool {
             | "enable-desktop-composition"
             | "enable-menu-animations"
             | "enable-gfx"
-            | "enable-h264"
             | "clipboard-buffer-size"
             | "resize-method"
             | "server-layout"
@@ -746,8 +729,8 @@ async fn handle_guac_handshake(
 
     tracing::debug!("guacd args: {:?}", arg_names);
 
-    // Build the resolved param map up front so the video handshake can mirror
-    // the connect-time `enable-h264` value (matches rustguac's behaviour).
+    // Build the resolved param map up front so the connect instruction
+    // and the handshake agree on every value.
     let param_map = handshake.full_param_map();
 
     // Step 3: Send client handshake instructions (size, audio, video, image, timezone)
@@ -755,19 +738,15 @@ async fn handle_guac_handshake(
     let w = handshake.width.to_string();
     let h = handshake.height.to_string();
     let d = handshake.dpi.to_string();
-    // Only advertise H.264 to guacd when the resolved RDP params actually have
-    // `enable-h264=true`. Advertising it unconditionally on servers that can't
-    // deliver H.264 (no GPU, no AVC444 registry config) causes RDPGFX to
-    // negotiate a codec it then can't honour, which corrupts the bitmap cache
-    // and produces persistent ghost tiles across the desktop. rustguac gates
-    // this the same way — see sol1/rustguac src/guacd.rs `send_handshake`.
-    let h264_enabled = handshake.protocol == "rdp"
-        && param_map.get("enable-h264").map(String::as_str) == Some("true");
-    let video_mimetypes: &[&str] = if h264_enabled { &["video/h264"] } else { &[] };
+    // H.264 is never advertised. The native engine has no GFX pipeline,
+    // and on the guacd path advertising it to a host that cannot deliver
+    // it makes RDPGFX negotiate a codec it then fails to honour, which
+    // corrupts the bitmap cache into persistent ghost tiles. Nothing
+    // enabled it, so there is no behaviour to preserve.
     let client_handshake: Vec<Vec<u8>> = vec![
         guac_instruction("size", &[&w, &h, &d]),
         guac_instruction("audio", &["audio/L16", "audio/L8"]),
-        guac_instruction("video", video_mimetypes),
+        guac_instruction("video", &[]),
         guac_instruction("image", &["image/png", "image/jpeg", "image/webp"]),
         guac_instruction("timezone", &[&display_timezone]),
     ];
@@ -1648,7 +1627,9 @@ mod tests {
         // (matches rustguac) — forcing them on for every RDP connection
         // produces tile-cache ghosting on hosts without H.264/AVC444 support.
         assert_eq!(m["disable-gfx"], "true");
-        assert_eq!(m["enable-h264"], "false");
+        // Removed in migration 087; the native engine has no GFX pipeline
+        // and nothing had it enabled.
+        assert!(!m.contains_key("enable-h264"));
         assert_eq!(m["color-depth"], "32");
         // Clipboard
         assert_eq!(m["disable-copy"], "false");

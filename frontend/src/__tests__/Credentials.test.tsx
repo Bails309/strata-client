@@ -84,7 +84,7 @@ function renderCredentials() {
 
 const vaultConfigured = {
   database: { connected: true, mode: "local", host: "localhost", latency_ms: 5 },
-  guacd: { reachable: true, host: "guacd", port: 4822 },
+  guacd: { in_use: true, reachable: true, host: "guacd", port: 4822 },
   vault: { configured: true, mode: "local", address: "http://localhost" },
   schema: { status: "in_sync", applied_migrations: 28, expected_migrations: 28 },
   uptime_secs: 3600,
@@ -92,7 +92,7 @@ const vaultConfigured = {
 };
 const vaultNotConfigured = {
   database: { connected: true, mode: "local", host: "localhost", latency_ms: 5 },
-  guacd: { reachable: true, host: "guacd", port: 4822 },
+  guacd: { in_use: true, reachable: true, host: "guacd", port: 4822 },
   vault: { configured: false, mode: "local", address: "http://localhost" },
   schema: { status: "in_sync", applied_migrations: 28, expected_migrations: 28 },
   uptime_secs: 3600,

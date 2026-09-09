@@ -23,7 +23,7 @@ vi.mock("../api", async () => {
 const health = (over: Partial<ServiceHealth> = {}): ServiceHealth => ({
   version: "1.5.3",
   database: { connected: true, mode: "external", host: "db.local", latency_ms: 4 },
-  guacd: { reachable: true, host: "guacd", port: 4822 },
+  guacd: { in_use: true, reachable: true, host: "guacd", port: 4822 },
   vault: { configured: true, mode: "vault", address: "https://vault" },
   schema: { status: "ok", applied_migrations: 44, expected_migrations: 44 },
   av: { backend: "off", enabled: false, reachable: false, fail_mode: "block", address: null },
@@ -91,6 +91,18 @@ describe("HealthTab", () => {
     expect(getServiceHealth).toHaveBeenCalledTimes(1);
     expect(getMetrics).toHaveBeenCalledTimes(1);
     expect(getCertificates).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports guacd as not in use rather than unhealthy when the native engine serves sessions", async () => {
+    // Under native-only the daemon is meant to be absent. Showing it red
+    // trains operators to ignore a card that is supposed to mean
+    // something.
+    (getServiceHealth as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      health({ guacd: { in_use: false, reachable: false, host: "guacd", port: 4822 } })
+    );
+    render(<HealthTab onNavigateVault={onNavigateVault} />);
+    expect(await screen.findByText("Not in use")).toBeInTheDocument();
+    expect(screen.queryByText("Unhealthy")).not.toBeInTheDocument();
   });
 
   it("survives partial outages — metrics or certs failure does not blank the page", async () => {

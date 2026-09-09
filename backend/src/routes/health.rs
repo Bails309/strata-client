@@ -113,6 +113,11 @@ pub struct DatabaseHealth {
 
 #[derive(Serialize)]
 pub struct GuacdHealth {
+    /// Whether this deployment routes anything to guacd at all.
+    ///
+    /// False under `native-only`, where an unreachable daemon is the
+    /// expected state rather than a fault worth alarming on.
+    pub in_use: bool,
     pub reachable: bool,
     pub host: String,
     pub port: u16,
@@ -244,7 +249,12 @@ pub async fn service_health(
         .and_then(|c| c.guacd_host.clone())
         .unwrap_or_else(|| "guacd".into());
     let guacd_port = s.config.as_ref().and_then(|c| c.guacd_port).unwrap_or(4822);
-    let guacd_reachable = check_tcp(&guacd_host, guacd_port).await;
+    // Only probed when something could still be routed there. Under
+    // native-only the daemon is meant to be absent, so dialling it would
+    // cost a connect timeout on every health poll to report a fault that
+    // is not one.
+    let guacd_in_use = crate::session_engine::guacd_available();
+    let guacd_reachable = guacd_in_use && check_tcp(&guacd_host, guacd_port).await;
 
     // ── Vault ──
     let (vault_configured, vault_addr, vault_mode) = if let Some(ref cfg) = s.config {
@@ -334,6 +344,7 @@ pub async fn service_health(
             latency_ms: db_latency_ms,
         },
         guacd: GuacdHealth {
+            in_use: guacd_in_use,
             reachable: guacd_reachable,
             host: guacd_host,
             port: guacd_port,
@@ -591,6 +602,7 @@ mod tests {
                 latency_ms: Some(5),
             },
             guacd: GuacdHealth {
+                in_use: false,
                 reachable: false,
                 host: "guacd".into(),
                 port: 4822,
@@ -756,6 +768,7 @@ mod tests {
     #[test]
     fn guacd_health_serializes() {
         let h = GuacdHealth {
+            in_use: true,
             reachable: true,
             host: "guacd".into(),
             port: 4822,

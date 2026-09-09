@@ -68,7 +68,7 @@ const ANSI16: [Pixel; 16] = [
 const CUBE_STEPS: [u8; 6] = [0, 95, 135, 175, 215, 255];
 
 /// Colour scheme for one session.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Palette {
     /// Default text colour.
     pub foreground: Pixel,
@@ -89,6 +89,29 @@ impl Default for Palette {
 }
 
 impl Palette {
+    /// Build a palette from guacd's `color-scheme` parameter.
+    ///
+    /// The four schemes guacd defines, named the same way, so a
+    /// connection configured for either engine renders the same.
+    /// Unrecognised values return `None` rather than a guess.
+    #[must_use]
+    pub fn from_scheme(scheme: &str) -> Option<Self> {
+        let (fg, bg) = match scheme.trim().to_ascii_lowercase().as_str() {
+            "black-white" => (Pixel::new(0, 0, 0), Pixel::new(255, 255, 255)),
+            "white-black" => (Pixel::new(255, 255, 255), Pixel::new(0, 0, 0)),
+            "gray-black" | "grey-black" => (Pixel::new(170, 170, 170), Pixel::new(0, 0, 0)),
+            "green-black" => (Pixel::new(0, 255, 0), Pixel::new(0, 0, 0)),
+            _ => return None,
+        };
+        Some(Self {
+            foreground: fg,
+            background: bg,
+            // Matching the text keeps the block readable whatever the
+            // scheme inverts.
+            cursor: fg,
+        })
+    }
+
     /// Resolve a cell colour to pixels.
     #[must_use]
     pub fn resolve(&self, color: Color) -> Pixel {

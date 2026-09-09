@@ -1269,7 +1269,13 @@ export default function AccessTab({
               Protocol Parameters
             </h4>
             {formCore.protocol === "rdp" && (
-              <RdpSections extra={formExtra} setExtra={setFormExtra} ex={ex} setEx={setEx} />
+              <RdpSections
+                extra={formExtra}
+                setExtra={setFormExtra}
+                ex={ex}
+                setEx={setEx}
+                connectionId={formId}
+              />
             )}
             {formCore.protocol === "ssh" && (
               <SshSections ex={ex} setEx={setEx} connectionId={formId} />

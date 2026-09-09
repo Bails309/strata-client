@@ -43,6 +43,24 @@ pub const DEFAULT_FONT_SIZE_PX: f32 = 16.0;
 /// Scrollback retained by the emulator.
 const SCROLLBACK_LINES: usize = 5_000;
 
+/// Terminal appearance, as the connection's parameters describe it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalAppearance {
+    /// Colours, from `color-scheme`.
+    pub palette: Palette,
+    /// Lines of history, from `scrollback`.
+    pub scrollback: usize,
+}
+
+impl Default for TerminalAppearance {
+    fn default() -> Self {
+        Self {
+            palette: Palette::default(),
+            scrollback: SCROLLBACK_LINES,
+        }
+    }
+}
+
 /// Grid geometry, the shape `alacritty_terminal` wants.
 #[derive(Debug, Clone, Copy)]
 struct TermSize {
@@ -120,6 +138,17 @@ impl TerminalRenderer {
     /// Create a renderer over a `cols` x `rows` grid.
     #[must_use]
     pub fn new(font: TerminalFont, cols: usize, rows: usize) -> Self {
+        Self::with_appearance(font, cols, rows, &TerminalAppearance::default())
+    }
+
+    /// Create a renderer with an explicit palette and scrollback depth.
+    #[must_use]
+    pub fn with_appearance(
+        font: TerminalFont,
+        cols: usize,
+        rows: usize,
+        appearance: &TerminalAppearance,
+    ) -> Self {
         let cols = cols.max(1);
         let rows = rows.max(1);
         let size = TermSize {
@@ -130,7 +159,7 @@ impl TerminalRenderer {
         Self {
             term: Term::new(
                 Config {
-                    scrolling_history: SCROLLBACK_LINES,
+                    scrolling_history: appearance.scrollback,
                     ..Config::default()
                 },
                 &size,
@@ -138,7 +167,7 @@ impl TerminalRenderer {
             ),
             parser: Processor::new(),
             font,
-            palette: Palette::default(),
+            palette: appearance.palette,
             cell,
             cols,
             rows,
@@ -539,10 +568,28 @@ impl RasterisingEngine {
         width_px: u32,
         height_px: u32,
     ) -> Self {
+        Self::with_appearance(
+            inner,
+            font,
+            width_px,
+            height_px,
+            &TerminalAppearance::default(),
+        )
+    }
+
+    /// Wrap `inner` with an explicit palette and scrollback depth.
+    #[must_use]
+    pub fn with_appearance(
+        inner: Box<dyn ProtocolEngine>,
+        font: TerminalFont,
+        width_px: u32,
+        height_px: u32,
+        appearance: &TerminalAppearance,
+    ) -> Self {
         let cell = font.metrics();
         let cols = (width_px / cell.width.max(1)).max(1) as usize;
         let rows = (height_px / cell.height.max(1)).max(1) as usize;
-        let renderer = TerminalRenderer::new(font, cols, rows);
+        let renderer = TerminalRenderer::with_appearance(font, cols, rows, appearance);
 
         // The client needs a correctly sized layer before any image
         // lands on it, so the first event out is always the geometry.

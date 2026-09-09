@@ -1773,6 +1773,83 @@ pub async fn discover_connection_host_key(
     }))
 }
 
+/// What an RDP target presented, for an operator to approve or pin.
+#[derive(serde::Serialize)]
+pub struct DiscoveredCertificateResponse {
+    pub fingerprint: String,
+    pub subject: String,
+    pub issuer: String,
+    pub not_after: String,
+    pub self_signed: bool,
+}
+
+/// `POST /api/admin/connections/{id}/certificate` — read a target's RDP certificate.
+///
+/// RDP presents its certificate only after the X.224 negotiation, so
+/// `openssl s_client` cannot fetch one. Without this an administrator has
+/// no way to fill in the pinned-fingerprint field short of provoking a
+/// failed connection and reading the value out of the error.
+///
+/// As with the SSH host key, the result is returned and never stored: it
+/// arrives over the very channel it is meant to protect, so it is the
+/// start of a human decision rather than proof of anything. Host and port
+/// come from the stored connection, so this cannot probe arbitrary
+/// addresses.
+pub async fn discover_connection_certificate(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<DiscoveredCertificateResponse>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
+    let db = require_running(&state).await?;
+
+    let row: (String, String, i32) = sqlx::query_as(
+        "SELECT protocol, hostname, port FROM connections \
+         WHERE id = $1 AND soft_deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
+
+    let (protocol, hostname, port) = row;
+    // `vdi` reaches its container over RDP, so it has a certificate too.
+    if !matches!(protocol.to_ascii_lowercase().as_str(), "rdp" | "vdi") {
+        return Err(AppError::Validation(format!(
+            "certificates apply to rdp connections, not {protocol}"
+        )));
+    }
+
+    let port = u16::try_from(port).map_err(|_| AppError::Validation("invalid port".into()))?;
+    let cert = strata_session::engine::rdp::discover_certificate(
+        &hostname,
+        port,
+        std::time::Duration::from_secs(10),
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("could not read the certificate: {e}")))?;
+
+    audit::log(
+        &db.pool,
+        Some(user.id),
+        "connection.certificate_read",
+        &json!({
+            "id": id.to_string(),
+            "hostname": hostname,
+            "fingerprint": cert.fingerprint,
+        }),
+    )
+    .await?;
+
+    Ok(Json(DiscoveredCertificateResponse {
+        fingerprint: cert.fingerprint,
+        subject: cert.subject,
+        issuer: cert.issuer,
+        not_after: cert.not_after,
+        self_signed: cert.self_signed,
+    }))
+}
+
 /// When the request targets the `vdi` protocol, parse the image-whitelist
 /// from `system_settings` and reject any image that is not exactly listed.
 /// Emits an `AUDIT_VDI_IMAGE_REJECTED` audit event on rejection so an

@@ -249,13 +249,29 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
                 <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
               </svg>
             </div>
-            <span className={`badge ${health.guacd.reachable ? "badge-success" : "badge-error"}`}>
-              {health.guacd.reachable ? "Healthy" : "Unhealthy"}
+            <span
+              className={`badge ${
+                !health.guacd.in_use
+                  ? "badge-accent"
+                  : health.guacd.reachable
+                    ? "badge-success"
+                    : "badge-error"
+              }`}
+            >
+              {!health.guacd.in_use
+                ? "Not in use"
+                : health.guacd.reachable
+                  ? "Healthy"
+                  : "Unhealthy"}
             </span>
           </div>
           <div>
             <h3 className="text-sm font-semibold text-txt-primary mb-0.5">guacd</h3>
-            <p className="text-xs text-txt-tertiary">Remote Desktop Gateway</p>
+            <p className="text-xs text-txt-tertiary">
+              {health.guacd.in_use
+                ? "Remote Desktop Gateway"
+                : "Native session engine — sessions do not use guacd"}
+            </p>
           </div>
           <div className="mt-auto space-y-2 text-xs">
             <div className="flex justify-between">

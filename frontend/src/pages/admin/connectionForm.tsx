@@ -8,6 +8,8 @@ import {
   TrustedCaPickerEntry,
   discoverHostKey,
   DiscoveredHostKey,
+  discoverCertificate,
+  DiscoveredCertificate,
 } from "../../api";
 import { RDP_KEYBOARD_LAYOUTS } from "./rdpKeyboardLayouts";
 
@@ -73,13 +75,34 @@ export function RdpSections({
   setExtra: _setExtra,
   ex,
   setEx,
+  connectionId,
 }: {
   extra: Record<string, string>;
   setExtra: (v: Record<string, string>) => void;
   ex: (k: string) => string;
   setEx: (k: string, v: string) => void;
+  /** Null while adding: there is no saved host to read a certificate from yet. */
+  connectionId?: string | null;
 }) {
   const trustedCas = useTrustedCas();
+  const [certProbe, setCertProbe] = useState<DiscoveredCertificate | null>(null);
+  const [certProbing, setCertProbing] = useState(false);
+  const [certProbeError, setCertProbeError] = useState("");
+
+  async function fetchCertificate() {
+    if (!connectionId) return;
+    setCertProbing(true);
+    setCertProbeError("");
+    setCertProbe(null);
+    try {
+      setCertProbe(await discoverCertificate(connectionId));
+    } catch (e) {
+      setCertProbeError(e instanceof Error ? e.message : "Could not read the certificate");
+    } finally {
+      setCertProbing(false);
+    }
+  }
+
   return (
     <>
       <Section title="Authentication" defaultOpen>
@@ -164,6 +187,60 @@ export function RdpSections({
           Hex or <code>SHA256:</code> base64 are both accepted. A value that is not a whole SHA-256
           digest is rejected when the session starts, rather than silently pinning nothing.
         </p>
+        <div className="mt-3">
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={!connectionId || certProbing}
+            onClick={fetchCertificate}
+            title={
+              connectionId
+                ? "Connect to the target and read the certificate it presents."
+                : "Save the connection first — there is no host to read a certificate from yet."
+            }
+          >
+            {certProbing ? "Reading…" : "Read certificate from target"}
+          </button>
+          {certProbeError && <div className="text-xs text-danger mt-2">{certProbeError}</div>}
+          {certProbe && (
+            <div className="mt-2 text-xs space-y-1">
+              <div>
+                <span className="opacity-60">Subject </span>
+                <span className="font-mono break-all">{certProbe.subject}</span>
+              </div>
+              <div>
+                <span className="opacity-60">Issuer </span>
+                <span className="font-mono break-all">{certProbe.issuer}</span>
+                {certProbe.self_signed && <span className="opacity-60"> (self-signed)</span>}
+              </div>
+              <div>
+                <span className="opacity-60">Expires </span>
+                <span className="font-mono">{certProbe.not_after}</span>
+              </div>
+              <div>
+                <span className="opacity-60">SHA-256 </span>
+                <span className="font-mono break-all">{certProbe.fingerprint}</span>
+              </div>
+              <p className="opacity-60">
+                Read over the same unverified connection it would protect, so check it against the
+                host before pinning it.
+              </p>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  const existing = ex("cert-fingerprints").trim();
+                  setEx(
+                    "cert-fingerprints",
+                    existing ? `${existing}\n${certProbe.fingerprint}` : certProbe.fingerprint
+                  );
+                }}
+              >
+                Pin this fingerprint
+              </button>
+            </div>
+          )}
+        </div>
       </Section>
 
       <Section title="Basic Settings">
@@ -289,47 +366,6 @@ export function RdpSections({
               />
               Read-only (view only)
             </label>
-          </div>
-          <div className="form-group !mb-0 col-span-2">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className={`flex items-center gap-2 ${ex("disable-gfx") !== "false" ? "opacity-50" : ""}`}
-              title="H.264 GFX passthrough sends raw H.264 NAL units to the browser's WebCodecs VideoDecoder, dramatically reducing bandwidth on modern RDP hosts. Off by default because it requires the Windows host to actually support H.264 — either a GPU is present, or AVC444 has been enabled in the registry (run docs/Configure-RdpAvc444.ps1 on the host). Enabling this on a host without H.264 capability causes RDPGFX to negotiate a codec it can't deliver, producing persistent ghost tiles. Requires the graphics pipeline (GFX) to be enabled."
-            >
-              <input
-                type="checkbox"
-                checked={ex("enable-h264") === "true"}
-                disabled={ex("disable-gfx") !== "false"}
-                onChange={(e) => {
-                  if (e.target.checked) {
-                    setEx("enable-h264", "true");
-                    // H.264 requires GFX — ensure it's explicitly enabled.
-                    if (ex("disable-gfx") !== "false") setEx("disable-gfx", "false");
-                  } else {
-                    setEx("enable-h264", "");
-                  }
-                }}
-                className="checkbox"
-              />
-              Enable H.264 codec (browser-side passthrough, lower bandwidth)
-            </label>
-            {ex("enable-h264") === "true" && (
-              <p className="text-xs text-amber-400/90 mt-1 ml-6">
-                ⚠ Requires AVC444 to be configured on the Windows host (run{" "}
-                <code className="font-mono">docs/Configure-RdpAvc444.ps1</code> on the server){" "}
-                <strong>or</strong> a GPU available to the RDP session. Enabling this on a host that
-                does not support H.264 will cause rendering corruption (ghost tiles bleeding across
-                the desktop).
-              </p>
-            )}
-            {ex("disable-gfx") !== "false" && (
-              <p className="text-xs text-txt-tertiary mt-1 ml-6">
-                Disabled because the graphics pipeline (GFX) is turned off in Performance — H.264
-                only works inside GFX.
-              </p>
-            )}
           </div>
         </FieldGrid>
       </Section>
@@ -564,13 +600,7 @@ export function RdpSections({
                 type="checkbox"
                 checked={ex("disable-gfx") === "false"}
                 onChange={(e) => {
-                  if (e.target.checked) {
-                    setEx("disable-gfx", "false");
-                  } else {
-                    setEx("disable-gfx", "true");
-                    // H.264 lives inside GFX — turn it off too.
-                    if (ex("enable-h264") === "true") setEx("enable-h264", "");
-                  }
+                  setEx("disable-gfx", e.target.checked ? "false" : "true");
                 }}
                 className="checkbox"
               />

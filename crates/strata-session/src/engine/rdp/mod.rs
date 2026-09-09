@@ -1305,6 +1305,84 @@ fn clamp_coord(value: i32, max: u16) -> u16 {
     value.clamp(0, i32::from(max.saturating_sub(1))) as u16
 }
 
+/// What an RDP target presented, for an operator to approve or pin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredCertificate {
+    /// SHA-256 of the DER, lowercase hex with `:` separators — the form
+    /// `openssl x509 -fingerprint -sha256` prints and the connection
+    /// editor accepts.
+    pub fingerprint: String,
+    /// Certificate subject, for a human to recognise the host by.
+    pub subject: String,
+    /// Certificate issuer. Self-signed when it matches the subject.
+    pub issuer: String,
+    /// Expiry, as the certificate states it.
+    pub not_after: String,
+    /// Whether issuer and subject match, which is the usual case for RDP.
+    pub self_signed: bool,
+}
+
+/// Read the certificate an RDP target presents.
+///
+/// There is no way to obtain this by hand: RDP only presents its
+/// certificate after the X.224 negotiation, so `openssl s_client` cannot
+/// fetch one. Without this, pinning a fingerprint means provoking a
+/// failed connection and reading the value out of the error, which is a
+/// poor way to configure a security control.
+///
+/// The certificate is returned, never stored, and deliberately not
+/// verified — it is fetched over the very channel it is meant to
+/// protect, so it is the starting point for a human decision rather than
+/// proof of anything.
+pub async fn discover_certificate(
+    hostname: &str,
+    port: u16,
+    timeout: Duration,
+) -> Result<DiscoveredCertificate, EngineError> {
+    use sha2::Digest as _;
+
+    let probe = async {
+        let stream = TcpStream::connect((hostname, port))
+            .await
+            .map_err(EngineError::Transport)?;
+        let client_addr = stream.local_addr().map_err(EngineError::Transport)?;
+        let mut framed = TokioFramed::new(stream);
+        let mut connector = ClientConnector::new(default_connector_config(), client_addr);
+
+        // Only the X.224 exchange runs, which precedes authentication —
+        // the blank credentials in the default config are never offered.
+        let _ = ironrdp_tokio::connect_begin(&mut framed, &mut connector)
+            .await
+            .map_err(map_connector)?;
+
+        let initial = framed.into_inner_no_leftover();
+        let (_stream, cert) = tls::upgrade(initial, hostname, &CertPolicy::Ignore)
+            .await
+            .map_err(EngineError::Transport)?;
+        Ok::<_, EngineError>(cert)
+    };
+
+    let cert = tokio::time::timeout(timeout, probe).await.map_err(|_| {
+        EngineError::Protocol(format!("{hostname}:{port} did not answer in time"))
+    })??;
+
+    let der = {
+        use x509_cert::der::Encode as _;
+        cert.to_der()
+            .map_err(|e| EngineError::Protocol(format!("certificate is not encodable: {e}")))?
+    };
+    let subject = cert.tbs_certificate.subject.to_string();
+    let issuer = cert.tbs_certificate.issuer.to_string();
+
+    Ok(DiscoveredCertificate {
+        fingerprint: crate::tls::format_fingerprint(&sha2::Sha256::digest(&der)),
+        self_signed: subject == issuer,
+        not_after: cert.tbs_certificate.validity.not_after.to_string(),
+        subject,
+        issuer,
+    })
+}
+
 fn default_connector_config() -> ConnectorConfig {
     ConnectorConfig {
         desktop_size: DesktopSize {

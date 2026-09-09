@@ -996,6 +996,9 @@ export interface DatabaseHealth {
 }
 
 export interface GuacdHealth {
+  /** False when the native engine serves every session, in which case an
+   * unreachable daemon is expected rather than a fault. */
+  in_use: boolean;
   reachable: boolean;
   host: string;
   port: number;
@@ -1182,6 +1185,24 @@ export interface DiscoveredHostKey {
  */
 export const discoverHostKey = (id: string) =>
   request<DiscoveredHostKey>(`/admin/connections/${id}/host-key`, { method: "POST" });
+
+export interface DiscoveredCertificate {
+  fingerprint: string;
+  subject: string;
+  issuer: string;
+  not_after: string;
+  self_signed: boolean;
+}
+
+/**
+ * Read the TLS certificate an RDP target currently presents.
+ *
+ * RDP only offers its certificate after the X.224 negotiation, so this
+ * cannot be done with `openssl s_client`. Returned for review rather than
+ * saved, for the same reason as the SSH host key above.
+ */
+export const discoverCertificate = (id: string) =>
+  request<DiscoveredCertificate>(`/admin/connections/${id}/certificate`, { method: "POST" });
 
 /** One SSH connection, and how its stored key compares to the live one. */
 export interface HostKeySurveyRow {

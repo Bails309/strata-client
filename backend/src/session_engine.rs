@@ -42,7 +42,9 @@ use strata_session::engine::vnc::{
 use strata_session::engine::{EngineFactory, Protocol, ProtocolEngine, TargetSpec};
 use strata_session::protocol::ServerInstruction;
 use strata_session::routing::{RoutingPolicy, SessionBackend};
-use strata_session::terminal::{RasterisingEngine, TerminalFont, Typescript, DEFAULT_FONT_SIZE_PX};
+use strata_session::terminal::{
+    Palette, RasterisingEngine, TerminalAppearance, TerminalFont, Typescript, DEFAULT_FONT_SIZE_PX,
+};
 use strata_session::tls::CertPolicy;
 use strata_session::transport::{ClientFrame, GuacDecoder, GuacWireEncoder};
 use strata_session::wol;
@@ -88,6 +90,10 @@ const AUTH_PACKAGE_PARAM: &str = "auth-pkg";
 /// connection configured for one engine means the same on the other.
 const CERT_FINGERPRINTS_PARAM: &str = "cert-fingerprints";
 
+/// Upper bound on `scrollback`, which the server holds in memory for the
+/// life of the session.
+const MAX_SCROLLBACK_LINES: usize = 100_000;
+
 /// The PEM of the connection's attached trusted-CA bundle.
 ///
 /// Not an administrator-facing parameter: the connection stores a
@@ -117,10 +123,7 @@ const SSH_PARAMS_IGNORED_NATIVELY: &[&str] = &[
     // and cost the native engine as well.
     "enable-agent",
     "locale",
-    "color-scheme",
     "font-name",
-    "font-size",
-    "scrollback",
     "backspace",
 ];
 
@@ -171,28 +174,15 @@ const VNC_PARAMS_IGNORED_NATIVELY: &[&str] = &[
 ///
 /// The terminal is drawn by the client, and the exec API has no say in
 /// how it looks.
-const KUBE_PARAMS_IGNORED_NATIVELY: &[&str] = &[
-    "color-scheme",
-    "font-name",
-    "font-size",
-    "scrollback",
-    "backspace",
-    "terminal-type",
-];
+const KUBE_PARAMS_IGNORED_NATIVELY: &[&str] = &["font-name", "backspace", "terminal-type"];
 
 /// Parameters that cost only fidelity.
 ///
 /// The session still works, so these are not worth giving up the native
 /// engine over — but an administrator who set one should be able to
 /// find out why it made no difference.
-const RDP_PARAMS_IGNORED_NATIVELY: &[&str] = &[
-    "color-depth",
-    "enable-h264",
-    "force-lossless",
-    "timezone",
-    "enable-touch",
-    "resize-method",
-];
+const RDP_PARAMS_IGNORED_NATIVELY: &[&str] =
+    &["color-depth", "force-lossless", "timezone", "enable-touch"];
 
 /// Whether a parameter is set to something meaningful.
 fn is_set(value: &str) -> bool {
@@ -231,6 +221,20 @@ fn warn_unsupported_rdp_params(handshake: &HandshakeParams) {
              the session works but will not match how it is configured"
         );
     }
+    // `display-update` is what the engine does: the Display Control
+    // channel is always attached, so the desktop follows the browser
+    // window. Only the reconnect strategy is unimplemented, and warning
+    // about the one we do implement would be noise.
+    if handshake
+        .extra
+        .get("resize-method")
+        .is_some_and(|m| m.trim().eq_ignore_ascii_case("reconnect"))
+    {
+        tracing::warn!(
+            "connection asks for resize-method=reconnect; the native engine resizes over the \
+             Display Control channel instead, which does not drop the session"
+        );
+    }
 }
 
 /// Read a checkbox-style parameter using guacd's truthiness rules.
@@ -254,6 +258,59 @@ fn flag_or(handshake: &HandshakeParams, key: &str, default: bool) -> bool {
         .extra
         .get(key)
         .map_or(default, |v| matches!(v.trim(), "true" | "1"))
+}
+
+/// Terminal appearance, from the connection's `color-scheme` and
+/// `scrollback` parameters.
+///
+/// An unrecognised scheme keeps the default rather than guessing, and
+/// says so — guacd names exactly four, so anything else is a typo.
+fn terminal_appearance(handshake: &HandshakeParams) -> TerminalAppearance {
+    let mut appearance = TerminalAppearance::default();
+
+    if let Some(raw) = handshake.extra.get("color-scheme").map(|s| s.trim()) {
+        if !raw.is_empty() {
+            match Palette::from_scheme(raw) {
+                Some(palette) => appearance.palette = palette,
+                None => tracing::warn!(
+                    scheme = raw,
+                    "unknown color-scheme; the terminal keeps its default colours"
+                ),
+            }
+        }
+    }
+
+    if let Some(lines) = handshake
+        .extra
+        .get("scrollback")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
+        // Clamped: the history is held per session, so an unbounded
+        // value here is a memory cost paid by the server.
+        appearance.scrollback = lines.min(MAX_SCROLLBACK_LINES);
+    }
+
+    appearance
+}
+
+/// Terminal glyph size in pixels, from the connection's `font-size`.
+///
+/// guacd takes points and renders at 96 DPI; the rasteriser takes pixels
+/// directly, so the conversion is the same 4/3 ratio a browser uses.
+/// Clamped rather than rejected: an out-of-range value should not cost
+/// the session, and a terminal nobody can read is not an improvement.
+fn terminal_font_size(handshake: &HandshakeParams) -> f32 {
+    const MIN_PX: f32 = 8.0;
+    const MAX_PX: f32 = 72.0;
+
+    handshake
+        .extra
+        .get("font-size")
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .filter(|pt| pt.is_finite() && *pt > 0.0)
+        .map_or(DEFAULT_FONT_SIZE_PX, |pt| {
+            (pt * 4.0 / 3.0).clamp(MIN_PX, MAX_PX)
+        })
 }
 
 /// The process-wide rollout policy, read from the environment once.
@@ -495,7 +552,7 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
                 ));
             }
             // Only SSH needs the rasteriser, and only in wire mode.
-            TerminalFont::discover(DEFAULT_FONT_SIZE_PX).map_err(|e| e.to_string())?;
+            TerminalFont::discover(terminal_font_size(handshake)).map_err(|e| e.to_string())?;
             Ok(())
         }
         Protocol::Rdp => {
@@ -549,7 +606,7 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
                 );
             }
             // Only the terminal engines need the rasteriser.
-            TerminalFont::discover(DEFAULT_FONT_SIZE_PX).map_err(|e| e.to_string())?;
+            TerminalFont::discover(terminal_font_size(handshake)).map_err(|e| e.to_string())?;
             Ok(())
         }
     }
@@ -1201,11 +1258,16 @@ async fn connect_target(
                 .await
                 .map_err(|e| AppError::Internal(format!("native ssh connect: {e}")))?;
 
-            let font = TerminalFont::discover(DEFAULT_FONT_SIZE_PX)
+            let font = TerminalFont::discover(terminal_font_size(handshake))
                 .map_err(|e| AppError::Internal(format!("terminal font: {e}")))?;
 
-            let mut rasteriser =
-                RasterisingEngine::new(engine, font, handshake.width, handshake.height);
+            let mut rasteriser = RasterisingEngine::with_appearance(
+                engine,
+                font,
+                handshake.width,
+                handshake.height,
+                &terminal_appearance(handshake),
+            );
             if let Some(typescript) = open_typescript(handshake).await? {
                 rasteriser = rasteriser.with_typescript(typescript);
             }
@@ -1322,11 +1384,16 @@ async fn connect_target(
                 .await
                 .map_err(|e| AppError::Internal(format!("native kubernetes connect: {e}")))?;
 
-            let font = TerminalFont::discover(DEFAULT_FONT_SIZE_PX)
+            let font = TerminalFont::discover(terminal_font_size(handshake))
                 .map_err(|e| AppError::Internal(format!("terminal font: {e}")))?;
 
-            let mut rasteriser =
-                RasterisingEngine::new(engine, font, handshake.width, handshake.height);
+            let mut rasteriser = RasterisingEngine::with_appearance(
+                engine,
+                font,
+                handshake.width,
+                handshake.height,
+                &terminal_appearance(handshake),
+            );
             if let Some(typescript) = open_typescript(handshake).await? {
                 rasteriser = rasteriser.with_typescript(typescript);
             }
@@ -1419,6 +1486,101 @@ mod tests {
     /// SHA-256 of the empty input: a real digest, so it parses, without
     /// needing a certificate fixture.
     const A_FINGERPRINT: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    #[test]
+    fn the_terminal_follows_the_connections_colour_scheme_and_scrollback() {
+        let mut hs = handshake("ssh", None);
+        let default = terminal_appearance(&hs);
+        assert_eq!(default.palette, Palette::default());
+
+        hs.extra.insert("color-scheme".into(), "green-black".into());
+        hs.extra.insert("scrollback".into(), "250".into());
+        let tuned = terminal_appearance(&hs);
+        assert_eq!(tuned.palette, Palette::from_scheme("green-black").unwrap());
+        assert_eq!(tuned.scrollback, 250);
+    }
+
+    #[test]
+    fn an_unknown_colour_scheme_keeps_the_default_rather_than_guessing() {
+        let mut hs = handshake("ssh", None);
+        hs.extra.insert("color-scheme".into(), "mauve".into());
+        assert_eq!(terminal_appearance(&hs).palette, Palette::default());
+    }
+
+    #[test]
+    fn scrollback_is_capped_because_the_server_holds_it() {
+        // The history lives in the session actor, so an unbounded value
+        // here is memory the server pays for, not the client.
+        let mut hs = handshake("ssh", None);
+        hs.extra.insert("scrollback".into(), "100000000".into());
+        assert_eq!(terminal_appearance(&hs).scrollback, MAX_SCROLLBACK_LINES);
+
+        // Junk keeps the default rather than zeroing the history.
+        hs.extra.insert("scrollback".into(), "lots".into());
+        assert_eq!(
+            terminal_appearance(&hs).scrollback,
+            TerminalAppearance::default().scrollback
+        );
+    }
+
+    #[test]
+    fn the_terminal_font_follows_the_connections_font_size() {
+        // guacd takes points at 96 DPI; the rasteriser takes pixels, so
+        // the same 4/3 ratio a browser uses.
+        let mut hs = handshake("ssh", None);
+        assert_eq!(terminal_font_size(&hs), DEFAULT_FONT_SIZE_PX);
+
+        hs.extra.insert("font-size".into(), "12".into());
+        assert_eq!(terminal_font_size(&hs), 16.0);
+
+        hs.extra.insert("font-size".into(), " 9 ".into());
+        assert_eq!(terminal_font_size(&hs), 12.0);
+    }
+
+    #[test]
+    fn an_unusable_font_size_is_clamped_rather_than_failing_the_session() {
+        // A terminal nobody can read is not an improvement on one that
+        // ignored the setting, and neither is refusing to connect.
+        let mut hs = handshake("ssh", None);
+        for (value, expect) in [("1", 8.0), ("9999", 72.0)] {
+            hs.extra.insert("font-size".into(), value.into());
+            assert_eq!(terminal_font_size(&hs), expect, "font-size {value}");
+        }
+        for junk in ["", "  ", "big", "-4", "0", "NaN"] {
+            hs.extra.insert("font-size".into(), junk.into());
+            assert_eq!(
+                terminal_font_size(&hs),
+                DEFAULT_FONT_SIZE_PX,
+                "font-size {junk:?} should fall back to the default"
+            );
+        }
+    }
+
+    #[test]
+    fn font_size_is_no_longer_reported_as_ignored() {
+        // It is honoured now, so warning about it would send an
+        // administrator looking for a problem that does not exist.
+        assert!(!SSH_PARAMS_IGNORED_NATIVELY.contains(&"font-size"));
+        assert!(!KUBE_PARAMS_IGNORED_NATIVELY.contains(&"font-size"));
+        // Honoured now, so warning about them would send an
+        // administrator looking for a problem that does not exist.
+        for honoured in ["color-scheme", "scrollback"] {
+            assert!(
+                !SSH_PARAMS_IGNORED_NATIVELY.contains(&honoured),
+                "{honoured}"
+            );
+            assert!(
+                !KUBE_PARAMS_IGNORED_NATIVELY.contains(&honoured),
+                "{honoured}"
+            );
+        }
+        // Display Control is always attached, so display-update is what
+        // the engine already does.
+        assert!(!RDP_PARAMS_IGNORED_NATIVELY.contains(&"resize-method"));
+        // Removed outright rather than left as a toggle acting on
+        // nothing: the native engine has no GFX pipeline.
+        assert!(!RDP_PARAMS_IGNORED_NATIVELY.contains(&"enable-h264"));
+    }
 
     #[test]
     fn a_blank_protocol_list_means_every_compiled_protocol() {
@@ -2027,11 +2189,11 @@ mod tests {
             .insert("color-depth".to_owned(), "32".to_owned());
         params
             .extra
-            .insert("enable-h264".to_owned(), "true".to_owned());
+            .insert("timezone".to_owned(), "Europe/London".to_owned());
         assert!(preflight(Protocol::Rdp, &params).is_ok());
         assert_eq!(
             params_in_use(&params, RDP_PARAMS_IGNORED_NATIVELY),
-            vec!["color-depth", "enable-h264"]
+            vec!["color-depth", "timezone"]
         );
     }
 

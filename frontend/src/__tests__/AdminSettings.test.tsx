@@ -156,7 +156,7 @@ import {
 
 const healthOk = {
   database: { connected: true, mode: "local", host: "localhost", latency_ms: 5 },
-  guacd: { reachable: true, host: "guacd", port: 4822 },
+  guacd: { in_use: true, reachable: true, host: "guacd", port: 4822 },
   vault: { configured: true, mode: "local", address: "http://vault:8200" },
   schema: { status: "in_sync", applied_migrations: 28, expected_migrations: 28 },
   uptime_secs: 3600,
@@ -165,7 +165,7 @@ const healthOk = {
 
 const healthDown = {
   database: { connected: false, mode: "local", host: "localhost", latency_ms: null },
-  guacd: { reachable: false, host: "guacd", port: 4822 },
+  guacd: { in_use: true, reachable: false, host: "guacd", port: 4822 },
   vault: { configured: false, mode: "", address: "" },
   schema: { status: "unavailable", applied_migrations: 0, expected_migrations: 28 },
   uptime_secs: 0,

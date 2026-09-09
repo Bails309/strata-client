@@ -1,5 +1,29 @@
 # H.264 GFX passthrough
 
+> **Removed in v2.0.0. This page is retained as history.**
+>
+> H.264 passthrough was a property of the patched `guacd` image
+> (`004-h264-display-worker.patch`), which no longer exists. The native RDP
+> engine has no GFX pipeline: it advertises `disable-gfx`, because
+> advertising a codec the engine cannot then deliver leaves FreeRDP in a
+> corrupted progressive-codec bitmap-cache state — fragments of one window
+> bleeding into another, and switching applications not repainting cleanly.
+>
+> The parameter was dropped in migration `087` after confirming **no
+> connection in any deployment had it set**, so nothing observable changed.
+> The pilot telemetry that informed the decision measured the native
+> encoder at **0.077 bytes per pixel**, which is why re-adding a lossy
+> codec path was not treated as urgent.
+>
+> Nothing below is live. It describes how the feature worked up to
+> v1.14.6, and is kept because the Windows-host GPO configuration
+> ([`Configure-RdpAvc444.ps1`](Configure-RdpAvc444.ps1)) is still a useful
+> reference for anyone diagnosing RDP codec negotiation, and because the
+> reasoning is cited from [ADR-0015](adr/ADR-0015-native-rust-session-engine.md).
+>
+> A native GFX/AVC444 pipeline is a candidate for a future release; it is
+> blocked on `ironrdp-egfx`, which the pinned `ironrdp 0.7` predates.
+
 Strata's RDP pipeline streams **raw H.264 NAL units** from the Windows host all
 the way to the browser's `VideoDecoder` (WebCodecs API). There is no
 server-side decode/re-encode step. This document covers the moving parts, the

@@ -25,7 +25,7 @@
 | -------- | ----------------------------------------------------------------- |
 | CPU      | 4 vCPUs                                                           |
 | RAM      | 8 GB                                                              |
-| Disk     | 50 GB SSD (faster database queries and guacd I/O)                 |
+| Disk     | 50 GB SSD (faster database queries and recording I/O)             |
 | Network  | 100 Mbps+                                                         |
 | OS       | Linux (Debian/Ubuntu or Alpine-based) for best Docker performance |
 
@@ -40,7 +40,7 @@
 
 For large deployments, consider:
 
-- **guacd scaling** — add sidecar instances via `GUACD_INSTANCES` (each guacd instance handles ~10–15 concurrent RDP sessions with H.264)
+- **Horizontal scaling** — run additional backend instances behind the gateway. Since v2.0.0 sessions are served in-process, so scaling the backend scales the session tier; there is no separate daemon pool to size. See [High Availability](#high-availability).
 - **External PostgreSQL** — managed database with connection pooling
 - **Session recordings** — allocate additional disk proportional to session count and retention period (~50–200 MB/hour per session depending on activity)
 
@@ -48,13 +48,18 @@ For large deployments, consider:
 
 | Container        | CPU        | RAM        | Notes                                                                  |
 | ---------------- | ---------- | ---------- | ---------------------------------------------------------------------- |
-| `guacd`          | High       | 200–500 MB | Heaviest consumer — FreeRDP + H.264 encoding per session               |
-| `backend`        | Low        | 100–200 MB | Async Rust — very efficient; NVR buffers add ~50 MB per active session |
+| `backend`        | Medium     | See below  | Serves every session in-process; NVR buffers add ~50 MB per active session |
 | `frontend`       | Minimal    | 30 MB      | Static file serving + reverse proxy via nginx                          |
 | `postgres-local` | Low–Medium | 200–500 MB | Depends on audit log volume                                            |
 | `vault`          | Minimal    | 50 MB      | Transit encrypt/decrypt only                                           |
 
-> **Note:** guacd is the primary bottleneck. Each concurrent RDP session with H.264 GFX uses approximately 1 CPU core at peak. SSH and VNC sessions are significantly lighter.
+> **Sizing a session (v2.0.0+).** A session costs **two 1920×1080 framebuffers
+> at 4 bytes per pixel plus about 8 MB of channel and encoder state — roughly
+> 24 MB** — rather than a process carrying FreeRDP, cairo surfaces and a worker
+> thread per core. This figure is measured from what the engine allocates, not
+> estimated, and the admin **Sessions** tab reports the host's capacity from it
+> directly. SSH, VNC and Kubernetes sessions are lighter still: a terminal
+> session holds a character grid, not a framebuffer.
 
 ## Quick Start (Development / Evaluation)
 
@@ -484,31 +489,46 @@ If your target RDP hosts require Kerberos/NLA authentication:
 3. Mark one realm as the default
 4. Save — the backend generates `krb5.conf` aggregating all realms and writes it to the shared volume
 
-The `guacd` container reads `KRB5_CONFIG=/etc/krb5/krb5.conf` at runtime. Multiple realms are supported for cross-forest or multi-domain environments.
+The backend writes `krb5.conf` to the shared volume and reads it via `KRB5_CONFIG` at runtime. Multiple realms are supported for cross-forest or multi-domain environments.
 
 ### 7. DNS Configuration
 
-If your target RDP/SSH hosts use internal DNS names (e.g. `.local`, `.dmz.local`, `.internal`) that Docker's default DNS resolver cannot resolve:
+If your target RDP/SSH hosts use internal DNS names (e.g. `.local`, `.dmz.local`, `.internal`) that the container's default resolver cannot resolve:
 
 1. Navigate to **Admin → Network**
 2. Enable **Custom DNS**
 3. Enter one or more DNS server IP addresses (comma-separated), e.g. `10.0.0.1, 10.0.0.2`
 4. Enter your DNS search domains (comma-separated), e.g. `example.local, corp.example.com`
-5. Click **Save**
-6. Restart guacd containers to apply:
-   ```bash
-   docker compose restart guacd
-   # If using sidecar scaling:
-   docker compose restart guacd guacd-2
-   ```
+5. Click **Save** — this takes effect on the **next session**. No restart.
 
-**How it works:** The backend validates the DNS IPs and search domains, saves them to the database, and writes a `resolv.conf` file to the shared `backend-config` Docker volume. Docker's embedded DNS resolver (`127.0.0.11`) is always appended as a fallback nameserver, so existing connections that resolve via public DNS or Docker service discovery continue working without reconfiguration. On startup, each guacd container's entrypoint copies this file to `/etc/resolv.conf`, enabling hostname resolution for internal domains.
+**How it works (v2.0.0+).** The session engine resolves *target* hostnames
+itself against the nameservers you configure, applying the search suffix to
+short names. Strata's own infrastructure lookups — `postgres-local`, `vault`,
+`clamav` — continue to use the container's resolver.
+
+Only the network socket uses the resolved address. The **hostname** is still
+what reaches TLS certificate verification and the Kerberos SPN, so
+pre-resolving does not turn a name-based handshake into an address-based one;
+NLA against Active Directory is unaffected.
+
+A lookup that fails logs a warning and falls back to the system resolver rather
+than refusing the session, so a mistyped nameserver degrades one hop instead of
+taking every connection down.
 
 > [!IMPORTANT]
-> **Search domains are required for `.local` zones.** The `.local` TLD is special — without a `search` directive in `resolv.conf`, many systems won't resolve bare hostnames against `.local` domains. The search domain field is equivalent to the `Domains=` directive in `systemd-resolved` on your host OS. For example, with `example.local` as a search domain, a connection targeting `server01` will resolve as `server01.example.local`.
+> **Search domains are required for `.local` zones.** The `.local` TLD is special — without a search suffix, a bare hostname will not resolve against a `.local` domain. The search domain field is equivalent to the `Domains=` directive in `systemd-resolved` on your host OS. For example, with `example.local` as a search domain, a connection targeting `server01` resolves as `server01.example.local`.
 
 > [!NOTE]
-> DNS changes require a guacd container restart to take effect. Active sessions on the restarted containers will be disconnected.
+> **Changed in v2.0.0.** Before v2.0.0 these settings were written to a
+> `resolv.conf` in a shared volume, which the `guacd` containers copied over
+> their own at startup — so a change required restarting `guacd` and dropping
+> every session on it. `guacd` is gone, and the backend cannot use the same
+> trick: it reaches postgres, vault and clamav through Docker's embedded
+> resolver at `127.0.0.11`, so replacing its `resolv.conf` would lose them, and
+> *appending* your servers after `127.0.0.11` does not work either because glibc
+> only advances to the next nameserver on timeout or SERVFAIL, never on the
+> NXDOMAIN Docker returns for a name it does not know. Resolving in-process is
+> what makes the setting both correct and restart-free.
 
 ### 8. Active Directory LDAP Sync
 
@@ -590,6 +610,67 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 ## Upgrading
 
 ### Version-specific upgrade notes
+
+#### v1.14.6 → v2.0.0 (guacd removed; native Rust session engine)
+
+**This is a major release.** Sessions are now served in-process by native Rust
+engines and the `guacd` containers are gone. Read this before upgrading.
+
+```bash
+cd strata-client
+git pull
+docker compose up -d --build --remove-orphans
+```
+
+`--remove-orphans` matters if you previously ran the `scale` profile: the
+`guacd` and `guacd-2` services no longer exist in the compose file, and without
+it Docker leaves the old containers running and idle.
+
+**What happens automatically**
+
+- The `guacd` containers are stopped and removed.
+- Migrations `081`–`089` apply at backend start. `089` renames
+  `recordings.bytes_from_guacd` / `bytes_to_guacd` to `bytes_down` / `bytes_up`,
+  **carrying the values across** — historical per-recording bandwidth survives.
+  `082`–`088` clear connection parameters that no longer do anything.
+- Existing `.guac` recordings keep playing. The browser is unchanged; no client
+  update, no forced re-login.
+- Recordings written before the upgrade are still owned by the old
+  `guacd:guacd` group. The backend entrypoint keeps its supplementary-group
+  handling for exactly this reason, so playback and the retention sweeper
+  continue to work on them.
+
+**What you must check afterwards**
+
+1. **Admin → Health → Session Engine.** `Serving` should list every protocol you
+   use. Anything under `Withheld` is being **refused**, not routed elsewhere —
+   the cause is `STRATA_SESSION_NATIVE_PROTOCOLS`. `Terminal font` must read
+   *Found*, or SSH and Kubernetes sessions will be refused.
+2. **SSH connections need a host key.** There is no trust-on-first-use path.
+   The connection editor can read a target's keys so you can approve one.
+3. **RDP targets must support NLA.** A target that will not do CredSSP is now
+   refused rather than downgraded — see the CHANGELOG for why that downgrade
+   was unsafe.
+
+**Configuration that is now ignored** (harmless if left in place):
+`STRATA_SESSION_ENGINE`, `STRATA_SESSION_NATIVE_PERCENT`,
+`STRATA_SESSION_NATIVE_HOSTS`, `GUACD_HOST`, `GUACD_PORT`, `GUACD_INSTANCES`,
+`STRATA_CLIPBOARD_BUFFER_BYTES`, `STRATA_CLIPBOARD_TRACE`. The `guacd_*` keys in
+`config.toml` are ignored on load rather than rejected, so an existing config
+file needs no edit.
+
+**API consumers**: `GET /api/admin/health` no longer returns `guacd`, and
+`GET /api/admin/metrics` drops the per-engine split and renames the bandwidth
+counters. See [api-reference.md](api-reference.md) and the
+[CHANGELOG](../CHANGELOG.md#200--2026-09-09).
+
+**Custom DNS** needs no action — the settings you already saved are now read
+directly by the engine, and no longer need a restart to apply.
+
+**Rollback.** There is no configuration switch back to `guacd`; it is not in the
+image. Rolling back means deploying the previous tag. Migration `089` is a column
+rename, so a v1.14.6 backend against a v2.0.0 database will not find
+`bytes_from_guacd` — restore the database alongside the image if you roll back.
 
 #### v1.14.4 → v1.14.5 (Dependency security: `h2` HTTP/2 DoS, `nanoid` infinite loop)
 

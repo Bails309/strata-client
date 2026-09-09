@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
-## [Unreleased] — v2.0.0 — Native Rust session engine
+## [2.0.0] — 2026-09-09 — Native Rust session engine
+
+### Major Release — Apache Guacamole's `guacd` is gone; every protocol is served by native Rust
 
 ### Phase 1 — `crates/strata-session` foundation
 
@@ -169,7 +171,216 @@ session. This phase lands the foundation:
     frames cropped from a real framebuffer, input accepted, credential
     rejection, and a clean disconnect.
 
-The VNC bridge is still to come.
+### Phase 3 — VNC, Kubernetes and file transfer
+
+With SSH and RDP proven, the remaining three protocol surfaces moved
+across. Each one was the last thing keeping a `guacd` process alive for
+its protocol.
+
+- **VNC engine (`vnc-rs`)** — replaces `libguac-client-vnc`. Supports the
+  standard RFB security types, **repeaters** (the `dest-host` /
+  `dest-port` handshake used by UltraVNC-style relays, which reads a
+  fixed-width field before anything else — a short write leaves it
+  waiting and the session simply hangs), and **reverse connections**,
+  where the gateway listens and the target dials in.
+  - Clipboard is transcoded to the encoding the connection asks for.
+    RFB predates Unicode and specifies Latin-1; a connection configured
+    for UTF-8 gets UTF-8, and one left on the default gets bytes the
+    target will actually render.
+  - The desktop is painted **opaquely**. The first implementation left
+    the alpha channel as the framebuffer supplied it, which the browser
+    composited against the page background — a working desktop that
+    looked washed out.
+- **Kubernetes exec engine** — replaces `libguac-client-kubernetes`, the
+  last protocol still on `guacd`. Attaches to a pod over
+  `v4.channel.k8s.io`, with client-certificate authentication.
+  - A **password-protected client key** is now accepted. The previous
+    behaviour silently failed to authenticate, because the key was passed
+    through unparsed and the TLS stack rejected it with an error that
+    named neither the key nor the passphrase.
+  - Verified against a real API server
+    (`crates/strata-session/tests/kube_live.rs`).
+- **SFTP file transfer (`russh-sftp`)** — a native engine that *decorates*
+  any protocol rather than being one, so file transfer no longer depends
+  on which session type is open. Directory listing, upload and download,
+  with path-escape protection relative to the configured root.
+  - This replaced **RDP drive redirection and printer redirection**,
+    which were removed rather than reimplemented. Two transfer mechanisms
+    with different permission models, different audit trails and
+    different failure modes is worse than one that works everywhere;
+    `docs/adr/` records the reasoning.
+- **Server-side typescripts** — a connection asking for
+  `typescript-path` now gets one, written by the terminal engine.
+- **Wake-on-LAN and a configured SSH command** — `wol-send-packet` and
+  friends wake a sleeping target before the connection attempt, and a
+  connection carrying a command runs it instead of an interactive shell.
+
+### Phase 4 — parameter parity, then subtraction
+
+The engine could serve every protocol, but a connection carrying a
+parameter the engine ignored would have run and quietly behaved
+differently. Rather than leave that to be discovered in production, every
+parameter `guacd` accepted was audited and put in one of two states:
+**honoured**, or **removed from the product**.
+
+Honoured in this phase: `color-depth`, `force-lossless`, `backspace`,
+`color-scheme`, `font-name`, `font-size`, `scrollback`, `terminal-type`,
+`resize-method`, `server-alive-interval`, `locale`, the `wol-*` family,
+the `recording-*` family, `swap-red-blue`, `cursor`, `read-only`,
+`clipboard-buffer-size`, `cert-tofu`, `cert-fingerprints`, `auth-pkg`,
+`kdc-url`, `kerberos-cache`, and the Kubernetes `namespace` / `pod` /
+`container` / `exec-command` / `use-ssl` / `ca-cert` / `client-cert` set.
+
+Removed, each with a migration that clears the parameter from existing
+connections so the admin UI cannot keep offering a control that does
+nothing:
+
+| Migration | Removed | Why |
+| --------- | ------- | --- |
+| `082` | Unsupported RDP parameters | Never reached the target on the pinned `guacd` either. |
+| `084` | RD Gateway (`gateway-*`) | A second, unaudited hop around the gateway's own access control. |
+| `085` | RemoteApp, microphone input | RemoteApp needs an alternate shell channel; audio input is a data-exfiltration path a PAM gateway should not open by default. |
+| `086` | Drive/printer redirection, dead clipboard params | Superseded by the one SFTP path. |
+| `087` | H.264 passthrough | Advertising a codec the engine cannot deliver corrupts the bitmap cache into persistent ghost tiles. No connection had it set. |
+| `088` | `timezone` (RDP), `enable-touch`, `font-name` (kube), `terminal-type` (kube) | Mapping IANA zones onto `TIME_ZONE_INFORMATION` needs the CLDR table and a partial mapping puts the *wrong* time in the session; multi-touch needs an RDPEI crate that does not exist at the pinned version. |
+
+**Certificate trust for RDP** landed here too, and is the one place the
+native engine is stricter than `guacd` by design. A connection can now
+verify the target against an uploaded CA bundle or a pinned SHA-256
+fingerprint, with precedence **pin > CA bundle > ignore-cert**. Because
+RDP only presents its certificate after the X.224 negotiation — so
+`openssl s_client` cannot fetch one — the admin UI can read it directly
+from the target rather than requiring an operator to provoke a failed
+connection and copy the fingerprint out of the error.
+
+### Phase 5 — removing the daemon
+
+- **`guacd` is gone.** The Guacamole handshake (`select` → `args` →
+  `connect`), the parameter allowlist, the instruction encoder and
+  parser, and the clipboard tracer are all deleted, along with the
+  `guacd/` build context and its five FreeRDP patches, the round-robin
+  `GuacdPool`, the `guacd` and `guacd-2` compose services, the `scale`
+  profile, and the `build-guacd.yml` workflow.
+- **The browser is unaffected.** It still speaks the Guacamole wire
+  protocol; only the thing on this side of it changed. Recordings remain
+  in the `.guac` format and existing ones still play.
+- **Routing kept its per-protocol kill switch.**
+  `STRATA_SESSION_NATIVE_PROTOCOLS` survives because it is the control
+  that caught `kubernetes` being silently left out of an earlier rollout.
+  Unset means every compiled engine. The rollout percentage and pinned
+  host list did not survive: bucketing by hostname is meaningless once
+  there is nowhere else to route.
+- **A refusal now says why.** With no fallback, a connection the engine
+  cannot serve is refused with the reason — the protocol, or the
+  parameter — instead of being handed to a daemon that may not be
+  running and surfacing as a connection timeout.
+- **Custom DNS was rebuilt, not dropped.** `guacd` resolved every target,
+  so its container's `resolv.conf` was what mattered, and its entrypoint
+  copied one in from a volume the backend wrote. Removing it took the
+  feature with it silently: the Network tab kept accepting nameservers
+  and a search suffix, kept saving them, and nothing read them. The
+  backend cannot simply do what `guacd` did — it reaches postgres, vault
+  and clamav through Docker's embedded resolver, so overwriting its
+  `resolv.conf` would lose them, and appending servers after `127.0.0.11`
+  does not help because glibc only moves to the next nameserver on
+  timeout or SERVFAIL, never on the NXDOMAIN Docker returns. The engine
+  now resolves targets itself against the configured nameservers, leaving
+  infrastructure lookups on the system resolver. Only the socket uses the
+  result: the **hostname** still reaches TLS verification and the
+  Kerberos SPN, so pre-resolving does not turn a name-based handshake
+  into an address-based one and break NLA against Active Directory.
+
+### Scope & safety
+
+**This is a major release and it removes things.** Read this section
+before upgrading.
+
+Removed environment variables — all now ignored, none fatal if left set:
+
+| Variable | Replacement |
+| -------- | ----------- |
+| `STRATA_SESSION_ENGINE` | none; the native engine is the only engine |
+| `STRATA_SESSION_NATIVE_PERCENT` | none |
+| `STRATA_SESSION_NATIVE_HOSTS` | none |
+| `GUACD_HOST`, `GUACD_PORT`, `GUACD_INSTANCES` | none |
+| `STRATA_CLIPBOARD_BUFFER_BYTES` | none; the engine caps a transfer at 8 MiB per direction and says so when it truncates |
+| `STRATA_CLIPBOARD_TRACE` | `window.strataClipboard` in the browser |
+
+`config.toml` keeps working: the `guacd_host`, `guacd_port` and
+`guacd_instances` keys are simply ignored on load rather than rejected.
+
+**API changes.** `GET /api/admin/health` no longer returns `guacd`.
+`GET /api/admin/metrics` drops the per-engine split (`native_sessions`,
+`guacd_sessions`, `guacd_bytes_down`/`_up`, `guacd_by_protocol`,
+`native_bytes_down`/`_up`, `native_by_protocol`, `guacd_pool_size`,
+`recommended_per_instance`) — with one engine there is nothing to split.
+Bandwidth counters are renamed off the removed daemon:
+
+| Before | After |
+| ------ | ----- |
+| `bytes_from_guacd` | `bytes_down` |
+| `bytes_to_guacd` | `bytes_up` |
+| `total_bytes_from_guacd` | `total_bytes_down` |
+| `total_bytes_to_guacd` | `total_bytes_up` |
+
+**Schema.** Migrations `081`–`089`. `081` adds `recordings.engine` so a
+session can be attributed to what served it; historical rows keep the
+value `guacd` deliberately, because they were. `089` renames
+`recordings.bytes_from_guacd`/`bytes_to_guacd` to `bytes_down`/`bytes_up`,
+carrying the values across rather than resetting them; it is guarded on
+the old column name, so a database that never ran `029` applies it as a
+no-op. `082`–`088` clear removed connection parameters.
+
+**Dependencies.** Adds `ironrdp`, `russh`, `russh-sftp`, `vnc-rs`,
+`alacritty_terminal`, `winnow` and `hickory-resolver`; removes the entire
+`guacd` image and its FreeRDP build. `ironrdp` is pinned at 0.7 by a
+`picky`/`russh` version conflict, recorded as `TODO(v2)` in `Cargo.toml`
+and in [ADR-0016](docs/adr/).
+
+**Behavioural changes that are deliberate, not regressions:**
+
+- **RDP requires NLA.** A target that will not do CredSSP is refused
+  rather than downgraded to an in-session login screen.
+- **SSH requires a host key.** There is no trust-on-first-use path. The
+  admin UI can survey a target's keys so this is a decision rather than a
+  hunt.
+- A non-NLA `security` setting and `dpi` are carried but not applied, and
+  both are now reported in the log rather than silently dropped.
+
+### Testing
+
+- **1280 backend, 203 session, 77 DMZ, 46 protocol unit tests**; 1598
+  frontend tests across 78 files; `cargo fmt`, `clippy -D warnings`,
+  `tsc` and `eslint` clean.
+- **Live-target integration suites**, all `#[ignore]`d so the default run
+  needs no infrastructure: `ssh_live.rs` against a real OpenSSH server,
+  `rdp_live.rs` against both a FreeRDP shadow server and an xrdp that
+  cannot do NLA (which is what proves the refusal), `kube_live.rs`
+  against a real API server, and two DNS tests proving search-suffix
+  expansion and fail-open on a dead nameserver.
+- **Fuzz harnesses** for the instruction parser, the streaming decoder
+  and the media envelope.
+
+### Deploy
+
+```sh
+git pull && docker compose up -d --build
+```
+
+Operator notes:
+
+- **`docker compose up -d --build` removes the `guacd` containers.** They
+  are no longer in the compose file. Use `--remove-orphans` if you
+  previously ran the `scale` profile.
+- Migrations `081`–`089` apply automatically at backend start.
+- **Check the Session Engine card** on the admin Health page after
+  upgrading. `Serving` should list every protocol you use; anything under
+  `Withheld` is being refused, and the cause is
+  `STRATA_SESSION_NATIVE_PROTOCOLS`.
+- **SSH connections need a host key** before they will run. The
+  connection editor can read one from the target.
+- If you use **custom DNS**, no action is needed — the settings you
+  already saved are now read by the engine directly.
 
 ## [1.14.6] — 2026-08-19
 

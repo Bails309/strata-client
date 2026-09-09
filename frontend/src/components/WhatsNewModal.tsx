@@ -29,6 +29,53 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.0.0",
+    subtitle:
+      "Major release — Apache Guacamole's guacd daemon is gone, and every session is now served by a native Rust engine running inside the backend. For four years the session tier was a separate C daemon spoken to over TCP: FreeRDP, libssh2, libvncclient and a patched Guacamole build, running as its own container. This release replaces all of it with native Rust engines, all running in-process. Nothing changes in your browser — the client still speaks the Guacamole wire protocol, existing recordings still play, and your connections keep their settings. Two behaviours are deliberately stricter than guacd was, and both are security decisions rather than regressions: RDP now requires NLA, and SSH now requires a host key. RDP also gains real certificate trust, every parameter guacd ever accepted is now either honoured or removed from the product outright, and the custom DNS feature was rebuilt to work without the daemon that used to provide it.",
+    sections: [
+      {
+        title: "What replaced what",
+        description:
+          "RDP is now served by ironrdp, SSH by russh, VNC by vnc-rs, Kubernetes pod consoles by a native exec client, and file transfer by russh-sftp. All five run as Tokio tasks inside the backend process rather than as a separate daemon, which removes the largest block of unmanaged C in the product along with the five FreeRDP patches that were needed to keep it working. The browser side is unchanged by design: the wire protocol the client speaks is the same one it spoke before, so no client update is required and recordings made under the old engine still play under the new one.",
+      },
+      {
+        title: "RDP now requires NLA, and fails closed without it",
+        description:
+          "The engine advertises CredSSP only. Offering the legacy TLS security layer alongside it lets a server negotiate down to that layer, and on it the RDP connection completes before any credential is checked — authentication moves to a login screen inside the session. A live test against a server that cannot do NLA caught exactly this: a deliberately wrong password produced a healthy, apparently authenticated session. For a privileged-access gateway that is the wrong failure mode, so a target that will not do CredSSP is now refused outright. This is also why NLA cannot be optional: RDP certificates are self-signed as a matter of course, so it is CredSSP's binding to the server's public key that actually authenticates the target.",
+      },
+      {
+        title: "SSH now requires a host key, and can find one for you",
+        description:
+          "There is deliberately no accept-anything mode, because an SSH gateway that skips host key verification is a man-in-the-middle waiting to happen. To keep that from being a chore, the connection editor can survey a target and show every key it offers, so approving one is a decision made from real data rather than a value hunted out of a failed connection. Several keys can be pinned at once, which matters because a host usually offers more than one type and which gets used comes out of negotiation — pinning only the first would fail whenever the other was chosen.",
+      },
+      {
+        title: "Certificate trust for RDP connections",
+        description:
+          "A connection can now verify its target against an uploaded CA bundle or a pinned SHA-256 fingerprint, with a pin taking precedence over a bundle and both taking precedence over the ignore-certificate setting. Because RDP only presents its certificate after the X.224 negotiation, ordinary TLS tools cannot fetch one, which previously meant provoking a failed connection and reading the fingerprint out of the error message. Strata now reads the certificate from the target directly and shows it to you, so pinning is a deliberate choice rather than a workaround.",
+      },
+      {
+        title: "Every parameter is now honoured, or gone",
+        description:
+          "An admin control that silently does nothing is worse than one that is absent, so every connection parameter guacd ever accepted was audited and put into one of two states. Most are now honoured natively, including colour depth, terminal appearance, backspace behaviour, scrollback, Wake-on-LAN, recording shape and the full Kubernetes set. The rest were removed from the product, each with a migration that clears it from existing connections so the editor cannot keep offering it: RD Gateway, RemoteApp, microphone input, drive and printer redirection, H.264 passthrough, RDP timezone and multi-touch. Drive and printer redirection were replaced by a single SFTP file-transfer path that works across every protocol, rather than two mechanisms with different permission models and different audit trails.",
+      },
+      {
+        title: "Custom DNS was rebuilt, not dropped",
+        description:
+          "guacd resolved every target, so its container's resolver configuration was what mattered, and removing the daemon took the feature with it silently — the Network tab kept accepting nameservers and a search suffix, kept saving them, and nothing read them. The engine now resolves target hostnames itself against your configured servers, expanding short names with your search suffix, while lookups for Strata's own database and vault stay on the container's resolver. Only the network socket uses the resolved address: the hostname itself still reaches certificate verification and the Kerberos service principal name, so authentication against Active Directory is unaffected. A lookup that fails falls back to the system resolver rather than refusing the session, so a mistyped nameserver degrades one step instead of taking every connection down.",
+      },
+      {
+        title: "Capacity figures are now measured rather than estimated",
+        description:
+          "A session used to cost a separate process carrying FreeRDP, cairo surfaces and a worker thread per core, which is why the old capacity panel showed a blended estimate. A session now costs two framebuffers — the live one and the previous frame used to narrow the target's damage rectangles — plus a small amount of channel and encoder state. The admin capacity panel reports a figure derived from what the engine actually allocates, and the health page gains a Session Engine card showing which protocols are being served, which are held back by configuration, and whether the terminal renderer can find a font.",
+      },
+      {
+        title: "Upgrading",
+        description:
+          "Rebuilding removes the guacd containers for you, and database migrations apply automatically at startup. The one thing worth checking afterwards is the Session Engine card on the admin Health page: Serving should list every protocol you use, and anything listed under Withheld is being refused rather than routed elsewhere, because there is no longer anywhere else to route it. SSH connections need a host key recorded before they will run. If you use custom DNS, no action is needed — the settings you already saved are now read directly by the engine.",
+      },
+    ],
+  },
+  {
     version: "1.14.6",
     subtitle:
       "Patch release — large RDP clipboard copies were being thrown away entirely, and the setting meant to prevent that had never worked for RDP. A user reported that copying a 12,000-line PowerShell script did not reach the local clipboard, while a 50-line block, or an 8,000-line certificate file, was fine. The file measured 12,747 lines and 281,852 characters. This looked like a third instalment of the v1.14.1 clipboard stall and the v1.14.4 clipboard race, and it was neither: the diagnostic buffer added in v1.14.4 showed no inbound clipboard events at all for the failing copy, while two small copies in the same capture completed normally. guacd had not truncated the transfer, it had never announced one. The root cause is that guacd allocates one fixed-size clipboard buffer per connection and discards an oversize copy wholesale rather than truncating it, and the parameter Strata has been sending since v1.3.x to raise that ceiling has never existed for RDP in the pinned guacd. Fixed by moving guacd to an upstream build that accepts it, reworking the stall watchdog so a paused transfer completes, and making the ceiling visible and configurable. The guacd image rebuild is mandatory and existing sessions must reconnect.",

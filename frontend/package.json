@@ -22,7 +22,7 @@
     "guacamole-common-js": "^1.5.0",
     "i18next": "^26.4.2",
     "marked": "^18.0.12",
-    "mermaid": "^11.16.1",
+    "mermaid": "^12.0.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-i18next": "^17.0.13",

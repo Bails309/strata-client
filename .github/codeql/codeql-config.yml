@@ -20,3 +20,12 @@ query-filters:
   # constants (b"peanuts", b"saltysalt", and static IV).
   - exclude:
       id: rust/hard-coded-cryptographic-value
+  # actions/unpinned-tag flags SLSA GitHub Generator reusable workflows
+  # (slsa-framework/slsa-github-generator) in release.yml. The SLSA framework
+  # normative specification requires semantic version tags (e.g., @v2.1.0) so
+  # slsa-verifier can authenticate the builder identity; pinning to a commit SHA
+  # breaks SLSA provenance generation and verification. All other repository actions
+  # are pinned to full commit SHAs.
+  - exclude:
+      id: actions/unpinned-tag
+

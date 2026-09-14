@@ -158,6 +158,16 @@ impl SshConfig {
         self.command = command.filter(|c| !c.trim().is_empty());
         self
     }
+
+    /// Cell geometry used to turn the client's pixel size into a PTY
+    /// grid. Must match the renderer's font metrics in Wire
+    /// Compatibility Mode, or the shell draws to a grid of a different
+    /// shape than the one on screen.
+    #[must_use]
+    pub fn with_cell_size(mut self, cell: CellSize) -> Self {
+        self.cell = cell;
+        self
+    }
 }
 
 /// Verifies the target's host key against the configured policy.

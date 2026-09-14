@@ -38,6 +38,10 @@ import {
   createConnection,
   updateConnection,
   deleteConnection,
+  discoverHostKey,
+  discoverCertificate,
+  surveySshHostKeys,
+  approveSshHostKeys,
   getConnectionFolders,
   createConnectionFolder,
   updateConnectionFolder,
@@ -561,6 +565,68 @@ describe("API endpoint functions", () => {
     await deleteConnection("c1");
     expect(lastCall(fn).url).toBe("/api/admin/connections/c1");
     expect(lastCall(fn).method).toBe("DELETE");
+  });
+
+  it("discoverHostKey sends POST /api/admin/connections/:id/host-key", async () => {
+    const mockKey = {
+      algorithm: "ssh-ed25519",
+      fingerprint: "SHA256:abc",
+      public_key: "ssh-ed25519 AAA...",
+    };
+    const fn = mockFetch(mockKey);
+    const res = await discoverHostKey("c1");
+    expect(lastCall(fn).url).toBe("/api/admin/connections/c1/host-key");
+    expect(lastCall(fn).method).toBe("POST");
+    expect(res).toEqual(mockKey);
+  });
+
+  it("discoverCertificate sends POST /api/admin/connections/:id/certificate", async () => {
+    const mockCert = {
+      fingerprint: "SHA256:def",
+      subject: "CN=rdp.example.com",
+      issuer: "CN=Internal CA",
+      not_after: "2027-01-01T00:00:00Z",
+      self_signed: false,
+    };
+    const fn = mockFetch(mockCert);
+    const res = await discoverCertificate("c1");
+    expect(lastCall(fn).url).toBe("/api/admin/connections/c1/certificate");
+    expect(lastCall(fn).method).toBe("POST");
+    expect(res).toEqual(mockCert);
+  });
+
+  it("surveySshHostKeys sends POST /api/admin/connections/host-keys", async () => {
+    const mockSurvey = [
+      {
+        id: "c1",
+        name: "ssh-srv",
+        hostname: "ssh.example.com",
+        port: 22,
+        status: "matches" as const,
+        algorithm: "ssh-ed25519",
+        fingerprint: "SHA256:abc",
+        public_key: "ssh-ed25519 AAA...",
+        error: null,
+      },
+    ];
+    const fn = mockFetch(mockSurvey);
+    const res = await surveySshHostKeys();
+    expect(lastCall(fn).url).toBe("/api/admin/connections/host-keys");
+    expect(lastCall(fn).method).toBe("POST");
+    expect(res).toEqual(mockSurvey);
+  });
+
+  it("approveSshHostKeys sends PUT /api/admin/connections/host-keys with payload", async () => {
+    const fn = mockFetch({ approved: 2 });
+    const payload = [
+      { id: "c1", public_key: "ssh-ed25519 AAA..." },
+      { id: "c2", public_key: "ssh-ed25519 BBB..." },
+    ];
+    const res = await approveSshHostKeys(payload);
+    expect(lastCall(fn).url).toBe("/api/admin/connections/host-keys");
+    expect(lastCall(fn).method).toBe("PUT");
+    expect(JSON.parse(lastCall(fn).body!)).toEqual(payload);
+    expect(res).toEqual({ approved: 2 });
   });
 
   // ── Connection Folders ─────────────────────────────

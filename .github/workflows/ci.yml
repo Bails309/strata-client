@@ -197,13 +197,15 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-v2-
 
       - name: Check formatting
-        # Scoped to the strata-backend package so this job stays focused on
-        # the existing backend; DMZ/protocol crates have their own coverage
-        # in dmz-deps.yml.
-        run: cargo fmt -p strata-backend -- --check
+        # Backend and native session engine crates
+        run: |
+          cargo fmt -p strata-backend -- --check
+          cargo fmt -p strata-session -- --check
 
       - name: Clippy lint
-        run: cargo clippy -p strata-backend --all-targets -- -D warnings
+        run: |
+          cargo clippy -p strata-backend --all-targets -- -D warnings
+          cargo clippy -p strata-session --all-targets -- -D warnings
 
       - name: Run unit tests
         run: cargo test -p strata-backend -- --test-threads=1
@@ -224,6 +226,17 @@ jobs:
         # than slipping through to release builds.
         working-directory: .
         run: cargo test -p strata-dmz
+
+      - name: Run strata-session unit tests
+        # Native Rust session engine (ADR-0015) replacing guacd.
+        # Exercise protocol decoding, keystroke mapping, font rasteriser,
+        # and actor state machine unit tests on the PR critical path.
+        working-directory: .
+        run: cargo test -p strata-session --lib
+
+      - name: Check strata-session fuzz targets compile
+        working-directory: .
+        run: cargo check --manifest-path crates/strata-session/fuzz/Cargo.toml
 
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin --locked
@@ -377,7 +390,7 @@ jobs:
       - name: Enforce E2E test count floor
         working-directory: e2e
         env:
-          E2E_TEST_FLOOR: '140'
+          E2E_TEST_FLOOR: '157'
         run: |
           COUNT=$(npx playwright test --list --reporter=json | node -e "let s='';process.stdin.on('data',c=>s+=c).on('end',()=>{const j=JSON.parse(s);const walk=(suites,n=0)=>suites.reduce((acc,su)=>acc+(su.specs?.length||0)+walk(su.suites||[],0),n);console.log(walk(j.suites||[]));})")
           echo "Discovered $COUNT E2E tests (floor: $E2E_TEST_FLOOR)"

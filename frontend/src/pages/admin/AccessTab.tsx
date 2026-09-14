@@ -287,7 +287,7 @@ export default function AccessTab({
   }
 
   /** Review panel for the SSH host key survey. */
-  function HostKeySurveyPanel() {
+  function renderHostKeySurveyPanel() {
     if (!survey) return null;
     const missing = survey.filter((r) => r.status === "missing");
     const differs = survey.filter((r) => r.status === "differs");
@@ -299,7 +299,10 @@ export default function AccessTab({
         unreachable: "var(--color-txt-tertiary)",
       }[status];
       return (
-        <span className="text-[0.6rem] font-bold uppercase tracking-wider" style={{ color: colour }}>
+        <span
+          className="text-[0.6rem] font-bold uppercase tracking-wider"
+          style={{ color: colour }}
+        >
           {status}
         </span>
       );
@@ -357,7 +360,11 @@ export default function AccessTab({
             </thead>
             <tbody>
               {survey.map((row) => (
-                <tr key={row.id} className="border-t" style={{ borderColor: "var(--color-border)" }}>
+                <tr
+                  key={row.id}
+                  className="border-t"
+                  style={{ borderColor: "var(--color-border)" }}
+                >
                   <td className="py-1 pr-2">{row.name}</td>
                   <td className="py-1 pr-2 text-txt-secondary">
                     {row.hostname}:{row.port}
@@ -367,9 +374,7 @@ export default function AccessTab({
                     <code className="break-all text-txt-secondary">
                       {row.fingerprint ?? row.error ?? "—"}
                     </code>
-                    {row.algorithm && (
-                      <span className="text-txt-tertiary"> ({row.algorithm})</span>
-                    )}
+                    {row.algorithm && <span className="text-txt-tertiary"> ({row.algorithm})</span>}
                   </td>
                   <td className="py-1">
                     {(row.status === "missing" || row.status === "differs") && (
@@ -1036,7 +1041,7 @@ export default function AccessTab({
               </button>
             </div>
           </div>
-          {survey && <HostKeySurveyPanel />}
+          {renderHostKeySurveyPanel()}
           <div className="mb-3">
             <input
               value={connSearch}

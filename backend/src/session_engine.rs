@@ -27,7 +27,7 @@ use strata_session::actor::{
     AuditSink, GuacRecordingSink, NullAuditSink, RecordingPolicy, SessionActor, SessionConfig,
     SessionHandle,
 };
-use strata_session::engine::keymap::{Backspace, CellSize};
+use strata_session::engine::keymap::Backspace;
 use strata_session::engine::kube::{KubeConfig, KubeEngineFactory};
 use strata_session::engine::rdp::layouts::keyboard_layout_id;
 use strata_session::engine::rdp::{RdpConfig, RdpEngineFactory, RdpPerformance};
@@ -1281,8 +1281,17 @@ async fn connect_target(
     match protocol {
         Protocol::Ssh => {
             warn_ignored_params(handshake, SSH_PARAMS_IGNORED_NATIVELY, "ssh");
+
+            // Loaded before the PTY is requested: the shell's rows and
+            // columns are derived from the same cell geometry the
+            // rasteriser draws with, so `nano`'s help bar lands on the
+            // row the client actually sees.
+            let font = TerminalFont::discover(terminal_font_size(handshake))
+                .map_err(|e| AppError::Internal(format!("terminal font: {e}")))?;
+
             let factory = SshEngineFactory::new(
                 SshConfig::with_fingerprints(host_key_fingerprints(handshake))
+                    .with_cell_size(font.metrics().into())
                     .with_private_key(
                         handshake
                             .extra
@@ -1306,9 +1315,6 @@ async fn connect_target(
                 .connect(spec)
                 .await
                 .map_err(|e| AppError::Internal(format!("native ssh connect: {e}")))?;
-
-            let font = TerminalFont::discover(terminal_font_size(handshake))
-                .map_err(|e| AppError::Internal(format!("terminal font: {e}")))?;
 
             let mut rasteriser = RasterisingEngine::with_appearance(
                 engine,
@@ -1396,6 +1402,13 @@ async fn connect_target(
         }
         Protocol::KubeExec => {
             warn_ignored_params(handshake, KUBE_PARAMS_IGNORED_NATIVELY, "kubernetes");
+
+            // Loaded before the exec stream is opened, for the same
+            // reason as SSH above: the remote grid has to match the one
+            // the rasteriser draws.
+            let font = TerminalFont::discover(terminal_font_size(handshake))
+                .map_err(|e| AppError::Internal(format!("terminal font: {e}")))?;
+
             let factory = KubeEngineFactory::new(KubeConfig {
                 backspace: backspace(handshake),
                 namespace: handshake
@@ -1425,7 +1438,7 @@ async fn connect_target(
                     .get("client-key-password")
                     .filter(|p| !p.is_empty())
                     .map(|p| SecretString::from(p.clone())),
-                cell: CellSize::default(),
+                cell: font.metrics().into(),
                 read_only: flag(handshake, "read-only"),
                 disable_copy: flag(handshake, "disable-copy"),
                 disable_paste: flag(handshake, "disable-paste"),
@@ -1434,9 +1447,6 @@ async fn connect_target(
                 .connect(spec)
                 .await
                 .map_err(|e| AppError::Internal(format!("native kubernetes connect: {e}")))?;
-
-            let font = TerminalFont::discover(terminal_font_size(handshake))
-                .map_err(|e| AppError::Internal(format!("terminal font: {e}")))?;
 
             let mut rasteriser = RasterisingEngine::with_appearance(
                 engine,

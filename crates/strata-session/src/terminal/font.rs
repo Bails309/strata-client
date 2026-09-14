@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use fontdue::{Font, FontSettings};
 
+use crate::engine::keymap::CellSize;
 use crate::error::EngineError;
 
 /// Locations searched by [`TerminalFont::discover`], in order.
@@ -53,6 +54,15 @@ pub struct CellMetrics {
     pub height: u32,
     /// Distance from the cell's top edge to the baseline.
     pub baseline: u32,
+}
+
+impl From<CellMetrics> for CellSize {
+    fn from(metrics: CellMetrics) -> Self {
+        Self {
+            width: metrics.width,
+            height: metrics.height,
+        }
+    }
 }
 
 /// A loaded monospace font plus its glyph cache.

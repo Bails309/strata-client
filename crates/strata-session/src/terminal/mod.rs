@@ -784,6 +784,27 @@ mod tests {
         assert!(w > 0 && h > 0);
     }
 
+    /// The PTY's grid comes from `CellSize`, the rendered grid from the
+    /// font's own metrics. If the two disagree the remote shell draws to
+    /// a differently-shaped screen than the one on the client's canvas —
+    /// `nano`'s help bar ends up mid-screen with file text through it.
+    #[test]
+    fn the_pty_grid_matches_the_rendered_grid() {
+        use crate::engine::keymap::CellSize;
+
+        let renderer = renderer(80, 24);
+        let cell: CellSize = renderer.cell_metrics().into();
+
+        for (w, h) in [(640, 480), (1024, 768), (1600, 768), (1920, 1080), (7, 3)] {
+            let (cols, rows) = renderer.grid_for(w, h);
+            assert_eq!(
+                cell.to_grid(w, h),
+                (cols as u32, rows as u32),
+                "grid mismatch at {w}x{h}"
+            );
+        }
+    }
+
     #[test]
     fn control_sequences_never_panic() {
         let mut renderer = renderer(20, 5);

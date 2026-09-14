@@ -142,6 +142,7 @@ mod tests {
     use crate::transport::GuacWireEncoder;
     use secrecy::SecretString;
 
+    // codeql[rust/hard-coded-cryptographic-value] Test-only HMAC key used for unit tests.
     const KEY: &[u8] = b"edge-hmac-key-for-tests";
 
     fn manager() -> SessionManager {

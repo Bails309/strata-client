@@ -587,6 +587,7 @@ mod tests {
         "-----END ENCRYPTED PRIVATE KEY-----\n"
     );
 
+    // codeql[rust/hard-coded-cryptographic-value] Test-only password for decrypting encrypted test fixture key.
     const KEY_PASSWORD: &str = "strata-test";
 
     #[test]

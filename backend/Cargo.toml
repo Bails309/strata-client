@@ -120,7 +120,7 @@ sysinfo = "0.38"
 # DNS to find postgres/vault/clamav, so target lookups are done here
 # instead. rustls features off: this resolves plain DNS, and pulling a
 # second TLS stack in would duplicate the one ironrdp already uses.
-hickory-resolver = { version = "0.25", default-features = false, features = [
+hickory-resolver = { version = "0.26", default-features = false, features = [
   "system-config",
   "tokio",
 ] }

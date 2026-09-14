@@ -52,9 +52,11 @@ use aes::cipher::{block_padding::Pkcs7, BlockModeEncrypt, KeyIvInit};
 pub const CHROMIUM_V10_PREFIX: &[u8] = b"v10";
 
 /// PBKDF2 password — fixed in Chromium source.
+// codeql[rust/hard-coded-cryptographic-value] Fixed in Chromium source for Linux basic profile OSCrypt compatibility.
 const CHROMIUM_PBKDF2_PASSWORD: &[u8] = b"peanuts";
 
 /// PBKDF2 salt — fixed in Chromium source.
+// codeql[rust/hard-coded-cryptographic-value] Fixed in Chromium source for Linux basic profile OSCrypt compatibility.
 const CHROMIUM_PBKDF2_SALT: &[u8] = b"saltysalt";
 
 /// PBKDF2 iteration count — fixed in Chromium source. Yes, one. This
@@ -78,6 +80,7 @@ type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 /// re-use it without re-running PBKDF2 in every assertion.
 pub(crate) fn chromium_basic_key() -> [u8; KEY_LEN] {
     let mut key = [0u8; KEY_LEN];
+    // codeql[rust/hard-coded-cryptographic-value] Deterministic key derivation required by Chromium's Linux password store specification.
     pbkdf2::pbkdf2_hmac::<sha1::Sha1>(
         CHROMIUM_PBKDF2_PASSWORD,
         CHROMIUM_PBKDF2_SALT,
@@ -96,6 +99,7 @@ pub(crate) fn chromium_basic_key() -> [u8; KEY_LEN] {
 /// ```
 pub fn encrypt_chromium_v10(plaintext: &[u8]) -> Vec<u8> {
     let key = chromium_basic_key();
+    // codeql[rust/hard-coded-cryptographic-value] Fixed IV (16 spaces) required by Chromium Linux OSCrypt specification.
     let iv = [0x20u8; IV_LEN];
     let cipher = Aes128CbcEnc::new(&key.into(), &iv.into());
     let ct = cipher.encrypt_padded_vec::<Pkcs7>(plaintext);
@@ -114,6 +118,7 @@ pub(crate) fn decrypt_chromium_v10(blob: &[u8]) -> Result<Vec<u8>, &'static str>
         .strip_prefix(CHROMIUM_V10_PREFIX)
         .ok_or("missing v10 prefix")?;
     let key = chromium_basic_key();
+    // codeql[rust/hard-coded-cryptographic-value] Fixed IV (16 spaces) required by Chromium Linux OSCrypt specification.
     let iv = [0x20u8; IV_LEN];
     let cipher = Aes128CbcDec::new(&key.into(), &iv.into());
     cipher

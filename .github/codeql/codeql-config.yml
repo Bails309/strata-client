@@ -15,3 +15,8 @@ query-filters:
   # and Guacamole wire protocol disconnection notices in strata-session.
   - exclude:
       id: rust/cleartext-logging
+  # rust/hard-coded-cryptographic-value flags unit test fixtures (mock keys/passwords
+  # in #[cfg(test)] modules) and Chromium Linux OSCrypt specification compatibility
+  # constants (b"peanuts", b"saltysalt", and static IV).
+  - exclude:
+      id: rust/hard-coded-cryptographic-value

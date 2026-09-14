@@ -245,7 +245,7 @@ pub async fn jit_checkout(
     let secrets = config::load_secrets(pool, vault).await?;
     let identity = client::a2a_identity(&secrets)?;
     let http = client::build_client(&cfg, identity)?;
-    let base = client::base_url(&cfg);
+    let base = client::base_url(&cfg)?;
 
     let bearer = match cfg.auth_mode {
         config::AuthMode::PerUserBrowser => {
@@ -628,7 +628,7 @@ pub async fn release_pending(
     let secrets = config::load_secrets(pool, vault).await?;
     let identity = client::a2a_identity(&secrets)?;
     let http = client::build_client(&cfg, identity)?;
-    let base = client::base_url(&cfg);
+    let base = client::base_url(&cfg)?;
 
     let bearer = match cfg.auth_mode {
         config::AuthMode::PerUserBrowser => {
@@ -896,7 +896,7 @@ pub async fn jit_checkin(
     let secrets = config::load_secrets(pool, vault).await?;
     let identity = client::a2a_identity(&secrets)?;
     let http = client::build_client(&cfg, identity)?;
-    let base = client::base_url(&cfg);
+    let base = client::base_url(&cfg)?;
 
     // Mirror jit_checkout's auth-mode branching so a checkin performed
     // on a per_user_browser deployment still works (the user's token
@@ -1005,7 +1005,7 @@ pub async fn check_request_validity(
     let secrets = config::load_secrets(pool, vault).await?;
     let identity = client::a2a_identity(&secrets)?;
     let http = client::build_client(&cfg, identity)?;
-    let base = client::base_url(&cfg);
+    let base = client::base_url(&cfg)?;
 
     // Prefer A2A: it doesn't expire and doesn't depend on the user's
     // browser sign-in being recent.

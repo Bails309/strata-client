@@ -421,9 +421,7 @@ export function SessionManagerProvider({
         // so navigator.clipboard.writeText() is denied by the browser. Use
         // the popup window's clipboard API instead since it has focus.
         const popout =
-          session._popout && !session._popout.window.closed
-            ? session._popout.window
-            : undefined;
+          session._popout && !session._popout.window.closed ? session._popout.window : undefined;
         const target = popout ?? window;
         const writer = target.navigator.clipboard;
         if (!writer) {

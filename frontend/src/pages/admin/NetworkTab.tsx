@@ -196,8 +196,8 @@ export default function NetworkTab({
                 <li>You configure your internal DNS server IPs here and save</li>
                 <li>The session engine resolves target hostnames against them</li>
                 <li>
-                  Short names are expanded with the search suffix, so{" "}
-                  <code>server01</code> reaches <code>server01.example.local</code>
+                  Short names are expanded with the search suffix, so <code>server01</code> reaches{" "}
+                  <code>server01.example.local</code>
                 </li>
                 <li>
                   Targets are still dialled by name, so Kerberos/NLA and TLS certificate checks are
@@ -205,9 +205,9 @@ export default function NetworkTab({
                 </li>
               </ol>
               <p className="text-sm text-txt-secondary mt-3">
-                Applies to the next session started — no restart. If a lookup fails the engine
-                falls back to the system resolver rather than refusing the session, so a
-                mistyped nameserver degrades rather than takes everything down.
+                Applies to the next session started — no restart. If a lookup fails the engine falls
+                back to the system resolver rather than refusing the session, so a mistyped
+                nameserver degrades rather than takes everything down.
               </p>
             </div>
           </div>

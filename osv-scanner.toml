@@ -34,3 +34,15 @@ across the workspace, even those not selected for compilation.
 This is a documented false positive and will be removed if/when sqlx
 drops `rsa` from its umbrella crate manifest.
 """
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0192"
+reason = """
+`ttf-parser` is unmaintained (informational advisory, no vulnerability). It
+arrives via `fontdue`, the glyph rasteriser the session engine's terminal
+renderer uses for Guacamole Wire Compatibility Mode. The parser only ever
+sees font files we ship in the container image, never network input, so an
+unmaintained advisory carries no reachable risk here. Revisit if a vulnerability
+is ever filed against it.
+"""
+

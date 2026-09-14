@@ -568,9 +568,12 @@ mod tests {
     #[test]
     fn the_client_key_is_not_printable() {
         let mut config = config();
-        config.client_key = Some(SecretString::from("-----BEGIN PRIVATE KEY-----"));
+        config.client_key = Some(SecretString::from("super-secret-client-key-material"));
         let printed = format!("{config:?}");
-        assert!(!printed.contains("BEGIN PRIVATE KEY"), "{printed}");
+        assert!(
+            !printed.contains("super-secret-client-key-material"),
+            "{printed}"
+        );
         assert!(printed.contains("redacted"), "{printed}");
     }
 

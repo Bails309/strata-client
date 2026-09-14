@@ -14,3 +14,11 @@
 # appears on HEAD, but gitleaks still flags it in the diff history of
 # this PR. Cannot authenticate against any Safeguard appliance.
 9f7d75c2fa18a049537009656356b661139a6f4e:docs/api-reference.md:generic-api-key:1727
+
+# False positive: PEM header placeholder ("-----BEGIN PRIVATE KEY-----")
+# with no key body or payload, used in the_client_key_is_not_printable unit
+# test to assert that SecretString redacts private key content when formatted
+# with Debug. Contains no key material and cannot authenticate against anything.
+# Replaced on HEAD with a non-PEM test string.
+0a8e12b9e5fd75e0963fd26526adff0927f2902d:crates/strata-session/src/engine/kube/mod.rs:private-key:571
+

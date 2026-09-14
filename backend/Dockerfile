@@ -36,7 +36,7 @@
 #   rustguac's `useradd -m -d /home/rustguac` choice.
 
 # ── Build stage ────────────────────────────────────────────────────────
-FROM rust:1.98-slim-trixie@sha256:cc0448b41c3b7b7fea44f5dc50eacba729a56db365b65b7bd5e8a82d5b3db078 AS builder
+FROM rust:1.98-slim-trixie@sha256:bce1476d4be4d78b83705bc5f428b86d640eeeea33e9dadafbc037b5703a53bf AS builder
 
 # Build deps. pkg-config + openssl-dev for native sqlx/openssl crates;
 # libsasl2-dev + libkrb5-dev because the backend's GSSAPI code links

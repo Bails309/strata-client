@@ -38,13 +38,14 @@ with each other:
 | `frontend/package.json`                    | `version`                                                                    |
 | `frontend/package-lock.json`               | top-level `version` **and** `packages[""].version`                            |
 | `Cargo.toml`                               | `[workspace.package] version`                                                |
-| `Cargo.lock`                               | the `strata-backend`, `strata-dmz`, **and** `strata-protocol` package entries |
+| `Cargo.lock`                               | the `strata-backend`, `strata-dmz`, `strata-protocol` **and** `strata-session` package entries |
 
 Notes:
 
-- The three workspace crates use `version.workspace = true`, so their `Cargo.toml`
+- The four workspace crates use `version.workspace = true`, so their `Cargo.toml`
   files need no edit — but their `Cargo.lock` entries are literal strings and **do**.
-  The fuzz crate stays at `0.0.0` and must not be bumped.
+  The fuzz crate stays at `0.0.0` and must not be bumped. `strata-session` joined
+  the workspace in v2.0.0; this table listed only three crates until then.
 - The **root** `package-lock.json` is easy to forget because the root package has
   almost no dependencies. It silently sat at `1.8.4` from v1.8.4 until v1.14.5 for
   exactly this reason.

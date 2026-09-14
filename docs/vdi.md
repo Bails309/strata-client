@@ -7,7 +7,7 @@
 > TLS / resize handling) shipped in v0.30.0.
 
 Strata Client can launch a Strata-managed Docker container running
-`xrdp` and tunnel it to the user as a standard guacd RDP session. The
+`xrdp` and tunnel it to the user as a standard RDP session. The
 container provides a full Linux desktop with a persistent home
 directory, operator-controlled CPU / memory limits, and ephemeral
 auto-provisioned credentials so the user never has to type a password
@@ -59,14 +59,14 @@ administration of an existing host, prefer plain RDP or SSH.
 ## Architecture
 
 ```
-   +------------+    HTTPS     +-------------+    Guac proto   +----------+
-   |  Browser   |------------->|  Strata     |---------------->|  guacd   |
-   |  (user)    |<-- WSS ------|  backend    |<----------------|  (RDP)   |
-   +------------+              +------+------+                 +----+-----+
-                                      |                              |
-                                      | bollard 0.18                 | RDP
-                                      | (unix-socket xport)          |
-                                      v                              |
+   +------------+    HTTPS     +-------------------+
+   |  Browser   |------------->|  Strata backend   |
+   |  (user)    |<-- WSS ------|  + session engine |
+   +------------+              +----+---------+----+
+                                    |         |
+                     bollard 0.18   |         | RDP
+                (unix-socket xport) |         |
+                                    v         |
                               +------------------+                   |
                               |  /var/run/       |                   |
                               |   docker.sock    |                   |

@@ -94,7 +94,7 @@ pub async fn status(State(state): State<SharedState>) -> Json<StatusResponse> {
 pub struct ServiceHealth {
     pub version: &'static str,
     pub database: DatabaseHealth,
-    pub guacd: GuacdHealth,
+    pub engine: crate::session_engine::EngineHealth,
     pub vault: VaultHealth,
     pub schema: SchemaHealth,
     pub av: AvHealth,
@@ -109,13 +109,6 @@ pub struct DatabaseHealth {
     /// Sanitized – host:port/dbname only, no credentials
     pub host: String,
     pub latency_ms: Option<u64>,
-}
-
-#[derive(Serialize)]
-pub struct GuacdHealth {
-    pub reachable: bool,
-    pub host: String,
-    pub port: u16,
 }
 
 #[derive(Serialize)]
@@ -237,15 +230,6 @@ pub async fn service_health(
         (0, "unavailable".into())
     };
 
-    // ── guacd ──
-    let guacd_host = s
-        .config
-        .as_ref()
-        .and_then(|c| c.guacd_host.clone())
-        .unwrap_or_else(|| "guacd".into());
-    let guacd_port = s.config.as_ref().and_then(|c| c.guacd_port).unwrap_or(4822);
-    let guacd_reachable = check_tcp(&guacd_host, guacd_port).await;
-
     // ── Vault ──
     let (vault_configured, vault_addr, vault_mode) = if let Some(ref cfg) = s.config {
         if let Some(ref v) = cfg.vault {
@@ -333,11 +317,7 @@ pub async fn service_health(
             host: db_host,
             latency_ms: db_latency_ms,
         },
-        guacd: GuacdHealth {
-            reachable: guacd_reachable,
-            host: guacd_host,
-            port: guacd_port,
-        },
+        engine: crate::session_engine::engine_health(),
         vault: VaultHealth {
             configured: vault_configured,
             address: vault_addr,
@@ -590,11 +570,7 @@ mod tests {
                 host: "localhost:5432/strata".into(),
                 latency_ms: Some(5),
             },
-            guacd: GuacdHealth {
-                reachable: false,
-                host: "guacd".into(),
-                port: 4822,
-            },
+            engine: crate::session_engine::engine_health(),
             vault: VaultHealth {
                 configured: true,
                 address: "http://vault:8200".into(),
@@ -624,7 +600,6 @@ mod tests {
         let json = serde_json::to_value(&health).unwrap();
         assert_eq!(json["database"]["connected"], true);
         assert_eq!(json["database"]["latency_ms"], 5);
-        assert_eq!(json["guacd"]["port"], 4822);
         assert_eq!(json["vault"]["mode"], "local");
         assert_eq!(json["schema"]["status"], "in_sync");
         assert_eq!(json["av"]["backend"], "off");
@@ -754,18 +729,6 @@ mod tests {
     }
 
     #[test]
-    fn guacd_health_serializes() {
-        let h = GuacdHealth {
-            reachable: true,
-            host: "guacd".into(),
-            port: 4822,
-        };
-        let json = serde_json::to_value(&h).unwrap();
-        assert_eq!(json["reachable"], true);
-        assert_eq!(json["host"], "guacd");
-    }
-
-    #[test]
     fn vault_health_serializes() {
         let h = VaultHealth {
             configured: false,
@@ -807,7 +770,6 @@ mod tests {
             config: None,
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
-            guacd_pool: None,
             file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                 "/tmp/strata-files",
             ))
@@ -862,7 +824,6 @@ mod tests {
             config: None,
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
-            guacd_pool: None,
             file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                 "/tmp/strata-files",
             ))
@@ -889,9 +850,6 @@ mod tests {
         assert_eq!(result.database.mode, "unknown");
         assert_eq!(result.database.host, "—");
         assert!(result.database.latency_ms.is_none());
-        assert_eq!(result.guacd.host, "guacd");
-        assert_eq!(result.guacd.port, 4822);
-        assert!(!result.guacd.reachable);
         assert!(!result.vault.configured);
         assert_eq!(result.schema.status, "unavailable");
         assert_eq!(result.environment, "production");
@@ -907,9 +865,6 @@ mod tests {
             database_ssl_mode: None,
             database_ca_cert: None,
             vault: None,
-            guacd_host: Some("my-guacd".into()),
-            guacd_port: Some(9999),
-            guacd_instances: vec![],
             jwt_secret: None,
         };
         let state: SharedState = Arc::new(RwLock::new(crate::services::app_state::AppState {
@@ -917,7 +872,6 @@ mod tests {
             config: Some(cfg),
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
-            guacd_pool: None,
             file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                 "/tmp/strata-files",
             ))
@@ -943,8 +897,6 @@ mod tests {
         assert!(!result.database.connected);
         assert_eq!(result.database.mode, "external");
         assert_eq!(result.database.host, "dbhost:5432/testdb");
-        assert_eq!(result.guacd.host, "my-guacd");
-        assert_eq!(result.guacd.port, 9999);
         assert!(!result.vault.configured);
     }
 
@@ -964,9 +916,6 @@ mod tests {
                 mode: crate::config::VaultMode::Local,
                 unseal_key: None,
             }),
-            guacd_host: None,
-            guacd_port: None,
-            guacd_instances: vec![],
             jwt_secret: None,
         };
         let state: SharedState = Arc::new(RwLock::new(crate::services::app_state::AppState {
@@ -974,7 +923,6 @@ mod tests {
             config: Some(cfg),
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
-            guacd_pool: None,
             file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                 "/tmp/strata-files",
             ))
@@ -1002,8 +950,5 @@ mod tests {
         assert!(result.vault.configured);
         assert_eq!(result.vault.address, "http://vault:8200");
         assert_eq!(result.vault.mode, "local");
-        // Default guacd values
-        assert_eq!(result.guacd.host, "guacd");
-        assert_eq!(result.guacd.port, 4822);
     }
 }

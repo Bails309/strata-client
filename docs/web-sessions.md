@@ -7,7 +7,7 @@
 
 Strata Client can launch ephemeral, kiosk-mode Chromium instances inside
 an isolated `Xvnc` display and tunnel them to the user as a standard
-guacd VNC session. From the user's point of view it is a tab in the
+VNC session driven by the in-process engine. From the user's point of view it is a tab in the
 browser; from the operator's point of view it is an audit-logged,
 recording-eligible session over which they retain full network and
 content controls.
@@ -52,13 +52,11 @@ prefer giving them a full VDI desktop instead — see
 ```mermaid
 flowchart LR
     Browser["Browser (user)"]
-    Browser <-->|"HTTPS / WSS"| Backend
-    Backend["Strata backend"]
-    Backend <-->|"Guac proto"| Guacd
-    Guacd["guacd (VNC)"]
+    Browser <-->|"HTTPS / WSS (Guac proto)"| Backend
+    Backend["Strata backend<br/><sub>+ in-process VNC engine</sub>"]
     Backend -->|"spawn / supervise"| Display
     Display["Xvnc display :100..:199<br/>+ Chromium<br/><sub>--kiosk<br/>--user-data-dir<br/>--host-rules<br/>--remote-debug 127.0.0.1</sub>"]
-    Guacd -->|"VNC"| Display
+    Backend -->|"VNC to 127.0.0.1:{5900+display}"| Display
 ```
 
 Key properties:
@@ -113,7 +111,7 @@ Key properties:
   ([`backend/src/services/web_cdp.rs`](../backend/src/services/web_cdp.rs))
   drives the configured login script
   ([`backend/src/services/web_login_script.rs`](../backend/src/services/web_login_script.rs))
-  before guacd attaches, so SSO redirect chains complete invisibly.
+  before the engine attaches, so SSO redirect chains complete invisibly.
 - **Spawn pipeline registry** —
   [`backend/src/services/web_runtime.rs`](../backend/src/services/web_runtime.rs)
   reuses live process pairs across reconnects against the same
@@ -136,7 +134,7 @@ selected as the protocol. The fields land in `connections.extra` (JSONB):
 | Trusted CA        | `trusted_ca_id`   | Optional UUID into `trusted_ca_bundles`. Selected via dropdown (v1.2.0). Empty ⇒ OS default trust store. |
 
 The connection's hostname / port fields are unused on the wire — the
-backend allocates a localhost VNC display and tunnels guacd to that.
+backend allocates a localhost VNC display and attaches the VNC engine to it.
 
 ### Egress allow-list (system-wide)
 
@@ -298,7 +296,7 @@ same connection returned the stale (closed-tab) handle.
 ## Login scripts
 
 A login script is a server-side automation that drives the kiosk
-before guacd attaches. It is invoked via the localhost-only CDP
+before the engine attaches. It is invoked via the localhost-only CDP
 socket. The runner ships with a typed step set
 ([`backend/src/services/web_login_script.rs`](../backend/src/services/web_login_script.rs))
 and a context-substitution mini-language for inlining the per-session

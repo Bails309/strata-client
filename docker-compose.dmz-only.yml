@@ -17,7 +17,7 @@
 #                          │                       no public IP)
 #                          └────────────────── initiated outbound
 #
-# This overlay does NOT bring up a frontend, backend, guacd, postgres,
+# This overlay does NOT bring up a frontend, backend, postgres,
 # or vault. Compare to:
 #   - docker-compose.dmz.yml       — single-host eval (DMZ + backend on one host)
 #   - docker-compose.dmz-edge.yml  — two-host with public SPA (DMZ + frontend)

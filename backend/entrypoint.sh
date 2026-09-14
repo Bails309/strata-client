@@ -11,13 +11,12 @@ set -euo pipefail
 # Fix ownership on mount points (needed when volumes were created by
 # root). The `|| true` swallows EACCES on read-only mounts.
 #
-# NB: We deliberately do NOT chown /var/lib/guacamole here. That volume
-# is shared with the guacd container, which writes recording files as
-# its own `guacd:guacd` (gid 101). Re-chowning to strata:strata would
-# (a) race with in-flight guacd writes and (b) destroy the gid signal
-# the supplementary-group block below uses to grant strata read
-# (and, since the Azure-sync sweeper landed, write) access to
-# recordings.
+# NB: We deliberately do NOT chown /var/lib/guacamole here. On a
+# deployment upgraded from the guacd era that volume still holds
+# recordings written as `guacd:guacd` (gid 101). Re-chowning to
+# strata:strata would destroy the gid signal the supplementary-group
+# block below uses to grant strata read (and, since the Azure-sync
+# sweeper landed, write) access to those files.
 chown -R strata:strata /app/config 2>/dev/null || true
 chown -R strata:strata /etc/krb5 2>/dev/null || true
 
@@ -58,8 +57,8 @@ if [ -S /var/run/docker.sock ]; then
 fi
 
 # ── Recording playback + sweeper access ──────────────────────────────
-# guacd writes session recordings into the shared `guac-recordings`
-# volume as its in-container `guacd:guacd` user (typically uid/gid
+# Upgrade compatibility. Recordings written before guacd was removed
+# are owned by its in-container `guacd:guacd` user (typically uid/gid
 # 100/101) with mode 0640 — group-only read. The backend interacts
 # with this directory two ways:
 #
@@ -74,18 +73,18 @@ fi
 #      requires write+execute on the *parent directory*, not the file
 #      itself — so even with group-read on the .guac the dir must be g+w.
 #
-# To match the writer's gid we create a local group with the same
-# numeric id (looked up off the recordings directory at runtime, since
-# different guacd builds may pick a different system gid) and add
+# To match the legacy writer's gid we create a local group with the
+# same numeric id (looked up off the recordings directory at runtime,
+# since different guacd builds picked different system gids) and add
 # strata to it as a supplementary group. We then widen the directory
 # itself to g+w (so unlink works) and set g+s so any file created
-# later inherits the gid — keeping the writer/reader group invariant
+# later inherits the gid — keeping the reader/writer group invariant
 # stable across container restarts. Mirrors the docker.sock pattern
 # above.
 RECORDINGS_DIR=/var/lib/guacamole/recordings
 if [ -d "$RECORDINGS_DIR" ]; then
-    # Find a guacd-written file to read its gid; fall back to the dir's
-    # gid if the volume is empty on first boot.
+    # Find a pre-existing recording to read its gid; fall back to the
+    # dir's gid if the volume is empty on first boot.
     #
     # NB: `find ... | head -n1` races with SIGPIPE — once `head` closes
     # its stdin after the first line, `find` keeps writing and gets

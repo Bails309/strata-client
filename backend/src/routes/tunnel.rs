@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::middleware::AuthUser;
-use crate::services::{recordings, settings, tunnel_tickets, vault};
+use crate::services::{recordings, tunnel_tickets, vault};
 use crate::tunnel::{self, HandshakeParams, NvrContext};
 
 /// Per-user rate limiter for WebSocket tunnel connections.
@@ -249,15 +249,14 @@ pub async fn ws_tunnel(
     }
 
     // Read state
-    let (db, config, guacd_pool) = {
+    let (db, config) = {
         let s = state.read().await;
         if s.phase != BootPhase::Running {
             return Err(AppError::SetupRequired);
         }
         let db = s.db.clone().ok_or(AppError::SetupRequired)?;
         let cfg = s.config.clone().ok_or(AppError::SetupRequired)?;
-        let pool = s.guacd_pool.clone();
-        (db, cfg, pool)
+        (db, cfg)
     };
 
     // Verify the user has access to this connection via their role
@@ -297,7 +296,7 @@ pub async fn ws_tunnel(
             .await?
             .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
-    // Parse extra JSONB into a HashMap for guacd params
+    // Parse extra JSONB into a HashMap of connection parameters
     let mut extra = crate::tunnel::json_to_string_map(&extra_json);
 
     // ── Safeguard JIT branch ────────────────────────────────────────
@@ -613,17 +612,6 @@ pub async fn ws_tunnel(
         None
     };
 
-    let guacd_host: String;
-    let guacd_port: u16;
-    if let Some(ref pool) = guacd_pool {
-        let (h, p) = pool.next();
-        guacd_host = h.to_string();
-        guacd_port = p;
-    } else {
-        guacd_host = config.guacd_host.clone().unwrap_or_else(|| "guacd".into());
-        guacd_port = config.guacd_port.unwrap_or(4822);
-    };
-
     // ── Resolve credentials ──────────────────────────────────────────
 
     // If the ticket carries a one-off credential_profile_id, decrypt those
@@ -772,17 +760,16 @@ pub async fn ws_tunnel(
     let has_creds = final_password.is_some();
 
     let debug_msg = format!(
-        "Tunnel creds: username={:?}, has_password={}, domain={:?}, protocol={}",
-        &final_username, has_creds, &domain, &protocol
+        "Tunnel creds: username={final_username:?}, has_password={has_creds}, domain={domain:?}, protocol={protocol}"
     );
     tracing::debug!(msg = debug_msg);
 
     // ── VDI: auto-provision ephemeral credentials ──
     // VDI containers are Strata-controlled on both sides of the auth
     // chain (the entrypoint materialises the local Linux account from
-    // `VDI_USERNAME`/`VDI_PASSWORD`, guacd authenticates against xrdp
-    // with the same pair). There's nothing for the operator to "log
-    // in to", so prompting them for credentials is meaningless UX —
+    // `VDI_USERNAME`/`VDI_PASSWORD`, the session engine authenticates
+    // against xrdp with the same pair). There's nothing for the operator
+    // to "log in to", so prompting them for credentials is meaningless UX —
     // generate a fresh per-session pair instead. The username is
     // derived from the Strata user's name so `whoami` inside the
     // desktop matches the operator they already authenticated as.
@@ -842,7 +829,7 @@ pub async fn ws_tunnel(
     // `vdi`  → `rdp` (xrdp inside the spawned container)
     // The original (`web`/`vdi`) is preserved on `nvr_protocol` below so
     // recordings keep the operator-facing label. The wire-level protocol
-    // is what guacd negotiates against.
+    // is what the session engine connects with.
     let wire_protocol = match protocol.as_str() {
         "web" => "vnc".to_string(),
         "vdi" => "rdp".to_string(),
@@ -850,29 +837,58 @@ pub async fn ws_tunnel(
     };
 
     // ── Kubernetes: vault password slot carries the PEM-encoded client
-    // private key. guacd's `kubernetes` protocol has no password arg —
-    // it uses `client-cert` + `client-key` for SSL client auth — so we
+    // private key. The `kubernetes` protocol has no password arg — it
+    // uses `client-cert` + `client-key` for SSL client auth — so we
     // move the resolved secret into `extra["client-key"]` and clear the
     // password so it isn't forwarded as a stray protocol arg. The
     // public `client-cert` and `ca-cert` already flow through `extra`
     // via the connection editor (both are PEM-encoded X.509 certs and
     // are public material; only the private key needs Vault Transit
-    // envelope encryption). See `tunnel.rs::is_allowed_guacd_param`.
+    // envelope encryption).
     let (final_username, final_password) = if wire_protocol == "kubernetes" {
         if let Some(key_pem) = final_password {
             extra.insert("client-key".into(), key_pem);
         }
         // Username is meaningless for the kubernetes protocol; drop it
-        // so guacd doesn't see a phantom arg.
+        // so the engine doesn't see a phantom arg.
         (None, None)
     } else {
         (final_username, final_password)
     };
 
+    // ── RDP: resolve the attached trusted-CA bundle into the PEM the
+    // native engine verifies against. Done here, like the web kiosk's
+    // equivalent lookup further down, so `session_engine` stays
+    // sqlx-free. The PEM is consumed in-process and is never forwarded
+    // on the wire.
+    if wire_protocol == "rdp" {
+        if let Some(id) = extra
+            .get("trusted_ca_id")
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .and_then(|v| uuid::Uuid::parse_str(v).ok())
+        {
+            match crate::services::trusted_ca::get(&db.pool, id).await? {
+                Some(ca) => {
+                    extra.insert(crate::session_engine::TRUSTED_CA_PEM_PARAM.into(), ca.pem);
+                }
+                // Failing closed: the connection asks to verify against
+                // a bundle that no longer exists, and carrying on would
+                // silently downgrade it to whatever the `ignore-cert`
+                // box happens to say.
+                None => {
+                    return Err(AppError::Validation(format!(
+                        "connection references trusted CA {id}, which no longer exists"
+                    )))
+                }
+            }
+        }
+    }
+
     // ── rustguac parity Phase 3: ensure VDI container is running ──
     // For `vdi` connections, ask the driver to spawn (or reuse) the
     // per-(connection,user) container. We override hostname/port with
-    // the driver-returned endpoint so guacd connects to the spawned
+    // the driver-returned endpoint so the engine connects to the spawned
     // container instead of the operator-typed hostname (which on the
     // `vdi` profile is intentionally a no-op placeholder).
     //
@@ -957,8 +973,8 @@ pub async fn ws_tunnel(
         // detects immediate crashes (B11), runs the configured login
         // script if any (D1–D4), registers the handle. The returned
         // endpoint is `127.0.0.1:{5900+display}`, which we hand to
-        // guacd in place of the operator-typed hostname/port (which
-        // for `web` is a no-op placeholder, same as for `vdi`).
+        // the session engine in place of the operator-typed hostname/port
+        // (which for `web` is a no-op placeholder, same as for `vdi`).
         let cfg = match crate::services::web_session::WebSessionConfig::from_extra(&extra_json) {
             Some(c) => c,
             None => {
@@ -1169,8 +1185,8 @@ pub async fn ws_tunnel(
     // would happily record bytes to disk for a session with no DB row,
     // producing an orphaned file the cleanup task never sees. Await it
     // here, *before* the handshake is built, so that on INSERT failure we
-    // can clear `recording_name` and the handshake never asks guacd to
-    // open a recording file we can't finalize.
+    // can clear `recording_name` and the handshake never asks the engine
+    // to open a recording file we can't finalize.
     if let Some(ref rn) = recording_name {
         if let Err(e) = recordings::insert_start(
             &db.pool,
@@ -1197,9 +1213,24 @@ pub async fn ws_tunnel(
         }
     }
 
+    // ── Target resolution ────────────────────────────────────────────
+    // Only for operator-typed hostnames. `web` and `vdi` have already had
+    // their hostname replaced with an internally spawned endpoint, which
+    // is reachable through Docker's own resolver and would not be in a
+    // corporate zone.
+    let connect_addr = if protocol == "web" || protocol == "vdi" {
+        None
+    } else {
+        match crate::services::dns::load(&db.pool).await {
+            Some(cfg) => crate::services::dns::resolve(&cfg, &final_hostname).await,
+            None => None,
+        }
+    };
+
     let handshake = HandshakeParams {
         protocol: wire_protocol,
         hostname: final_hostname,
+        connect_addr,
         port: final_safe_port,
         username: final_username,
         password: final_password,
@@ -1208,17 +1239,11 @@ pub async fn ws_tunnel(
         ignore_cert,
         recording_path,
         recording_name: recording_name.clone(),
-        create_recording_path: true,
         width: effective_width,
         height: effective_height,
         dpi: effective_dpi,
         extra,
     };
-
-    // Fetch timezone for the Guacamole handshake
-    let display_timezone = settings::get(&db.pool, "display_timezone")
-        .await?
-        .unwrap_or_else(|| "UTC".to_string());
 
     let audit_pool = db.pool.clone();
     // Capture for the web-kiosk eviction after the WebSocket closes.
@@ -1278,11 +1303,8 @@ pub async fn ws_tunnel(
             // (frontend calls /auth/logout which revokes both access &
             let proxy_result = tunnel::proxy(
                 socket,
-                &guacd_host,
-                guacd_port,
                 handshake,
                 Some(nvr),
-                display_timezone,
                 watchdog_token.clone(),
                 user_id,
             )
@@ -1755,7 +1777,7 @@ mod tests {
     /// Regression: an empty ticket (no password, no username) must NOT
     /// trigger the fallback-username path. Otherwise SSH connections with
     /// no preselected credentials get a free "username=<strata user>"
-    /// silently injected into the guacd handshake, the SSH server
+    /// silently injected into the handshake, the SSH server
     /// short-circuits the in-band username prompt and only asks for a
     /// password — leaving the operator no way to specify the actual remote
     /// account they want to log in as.

@@ -108,16 +108,3 @@ updates:
     labels:
       - "dependencies"
       - "docker"
-
-  # Container base images — guacd
-  - package-ecosystem: "docker"
-    directory: "/guacd"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "06:00"
-      timezone: "Europe/London"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "docker"

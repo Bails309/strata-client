@@ -371,7 +371,7 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                             >
                               <path d="M12 5v14m-7-7l7 7 7-7" />
                             </svg>
-                            {(session.bytes_from_guacd / 1024 / 1024).toFixed(1)} MB
+                            {(session.bytes_down / 1024 / 1024).toFixed(1)} MB
                           </span>
                           <span className="text-[0.7rem] text-txt-tertiary flex items-center gap-1">
                             <svg
@@ -385,7 +385,7 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                             >
                               <path d="M12 19V5m-7 7l7-7 7 7" />
                             </svg>
-                            {(session.bytes_to_guacd / 1024).toFixed(1)} KB
+                            {(session.bytes_up / 1024).toFixed(1)} KB
                           </span>
                         </div>
                       </td>
@@ -564,6 +564,11 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                     )}
                     {isAdmin && (
                       <th className="p-4 text-left text-xs font-semibold uppercase tracking-wider text-txt-tertiary">
+                        Engine
+                      </th>
+                    )}
+                    {isAdmin && (
+                      <th className="p-4 text-left text-xs font-semibold uppercase tracking-wider text-txt-tertiary">
                         Storage
                       </th>
                     )}
@@ -602,6 +607,19 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                           {r.client_ip && r.client_ip !== "unknown" ? (
                             <span className="text-sm font-mono text-txt-primary">
                               {r.client_ip}
+                            </span>
+                          ) : (
+                            <span className="text-sm italic text-txt-tertiary">Unknown</span>
+                          )}
+                        </td>
+                      )}
+                      {isAdmin && (
+                        <td className="p-4">
+                          {r.engine ? (
+                            <span
+                              className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${r.engine === "native" ? "bg-accent-dim text-accent" : "bg-surface-tertiary text-txt-tertiary"}`}
+                            >
+                              {r.engine}
                             </span>
                           ) : (
                             <span className="text-sm italic text-txt-tertiary">Unknown</span>

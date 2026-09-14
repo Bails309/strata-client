@@ -284,10 +284,13 @@ pub async fn update(
 pub async fn delete(pool: &PgPool, id: Uuid) -> Result<bool, AppError> {
     // Refuse to delete a CA still referenced by a connection so admins
     // don't silently break a kiosk.
+    //
+    // Deliberately not filtered by protocol: RDP connections attach a
+    // bundle from the same list, and a protocol-scoped check here would
+    // let a CA be deleted out from under one of them.
     let in_use: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM connections
-          WHERE protocol = 'web'
-            AND (extra->>'trusted_ca_id') = $1::text",
+          WHERE (extra->>'trusted_ca_id') = $1::text",
     )
     .bind(id.to_string())
     .fetch_one(pool)
@@ -295,7 +298,7 @@ pub async fn delete(pool: &PgPool, id: Uuid) -> Result<bool, AppError> {
     .unwrap_or(0);
     if in_use > 0 {
         return Err(AppError::Validation(format!(
-            "Cannot delete: this CA is still attached to {in_use} web connection(s)"
+            "Cannot delete: this CA is still attached to {in_use} connection(s)"
         )));
     }
 

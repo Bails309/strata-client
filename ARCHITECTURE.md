@@ -17,13 +17,11 @@ flowchart LR
     Nginx["Nginx Gateway<br/><sub>:80 :443</sub>"]
     Nginx -->|/api/*<br/>WebSocket tunnel| Backend
     Nginx -->|/* SPA assets| Frontend
-    Backend["Rust Backend<br/>Axum + Tokio<br/><sub>auth · RBAC · audit · recording</sub>"]
+    Backend["Rust Backend<br/>Axum + Tokio<br/><sub>auth · RBAC · audit · recording<br/>session engine</sub>"]
     Frontend["Frontend container<br/><sub>nginx + static SPA</sub>"]
-    Backend -->|TCP 4822| Guacd
-    Guacd["guacd pool<br/><sub>FreeRDP 3 · Kerberos · K8s · H.264</sub>"]
     Backend --> Postgres["PostgreSQL 16"]
     Backend --> Vault["HashiCorp Vault 1.19<br/><sub>Transit</sub>"]
-    Guacd -->|RDP/VNC/SSH/<br/>K8s API| Targets["Target hosts"]
+    Backend -->|RDP/VNC/SSH/<br/>K8s API| Targets["Target hosts"]
 ```
 
 ## Containers
@@ -31,8 +29,7 @@ flowchart LR
 | Container        | Tech                           | Role                                                                                                                                                                                    |
 | ---------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `frontend`       | Nginx + static React SPA       | TLS termination, `/api/*` reverse proxy, SPA delivery.                                                                                                                                  |
-| `backend`        | Rust (Axum + Tokio + sqlx)     | REST API, WebSocket tunnel, OIDC, RBAC, audit, recording, web kiosk + VDI orchestration.                                                                                                |
-| `guacd` (pool)   | Custom Alpine image, FreeRDP 3 | Apache Guacamole protocol daemon. Round-robin pool for horizontal scale.                                                                                                                |
+| `backend`        | Rust (Axum + Tokio + sqlx)     | REST API, WebSocket tunnel, native session engine (RDP/VNC/SSH/K8s), OIDC, RBAC, audit, recording, web kiosk + VDI orchestration.                                                        |
 | `postgres-local` | PostgreSQL 16                  | Optional bundled DB; can be swapped for an external Postgres at any time.                                                                                                               |
 | `vault`          | HashiCorp Vault 1.19           | Optional bundled Vault, auto-initialised, auto-unsealed; Transit engine for envelope encryption.                                                                                        |
 | `clamav`         | ClamAV `clamd` (opt-in)        | Opt-in via the `av` Docker compose profile; scans every Quick Share upload over `clamav:3310` INSTREAM. Internal-only network exposure. See [docs/av-scanning.md](docs/av-scanning.md). |
@@ -41,17 +38,16 @@ flowchart LR
 
 1. **Browser ↔ Nginx** — TLS terminated at Nginx; everything beyond is on a private Docker network (`guac-internal`).
 2. **Nginx ↔ Backend** — `/api/*` over plaintext on the internal bridge; auth enforced by every handler.
-3. **Backend ↔ guacd** — TCP 4822, internal-only; backend builds the parameter map and validates it through `is_allowed_guacd_param()` before forwarding.
-4. **Backend ↔ Vault** — Transit-engine API; the backend never sees raw KEKs, only wraps/unwraps DEKs.
-5. **Backend ↔ Postgres** — `sqlx` parameterised queries only; no string-built SQL.
-6. **guacd ↔ target hosts** — RDP/VNC/SSH/Telnet/K8s-API; outbound from the `guacd` container to whatever the connection points at.
+3. **Backend ↔ Vault** — Transit-engine API; the backend never sees raw KEKs, only wraps/unwraps DEKs.
+4. **Backend ↔ Postgres** — `sqlx` parameterised queries only; no string-built SQL.
+5. **Backend ↔ target hosts** — RDP/VNC/SSH/K8s-API; outbound from the `backend` container to whatever the connection points at. RDP always negotiates CredSSP/NLA, so a target that will not do NLA fails closed rather than downgrading to an in-session login screen.
 
 ## Key data flows
 
 - **Authentication** — OIDC (Authorization Code + PKCE) or local username/password. Access token (20 min) + refresh cookie (8 h, `HttpOnly`). Tokens signed with a persistent `JWT_SECRET` for stability across restarts. Tokens validated by JWT middleware on every privileged route. See [docs/security.md](docs/security.md).
-- **Connection tunnel** — Browser opens a WebSocket to `/api/tunnel/...`; backend authenticates the JWT, materialises a `connections` row + per-user credential profile, builds the guacd handshake (`select` → `connect` arguments), forwards bytes both ways, mirrors the stream into the recording writer, and runs the auth watchdog (revocation polling + `MAX_TUNNEL_DURATION = 8h`). See [docs/architecture.md](docs/architecture.md#connection-tunnel) and [docs/security.md](docs/security.md#websocket-tunnel-auth-watchdog-v132-revised-v141).
+- **Connection tunnel** — Browser opens a WebSocket to `/api/tunnel/...`; backend authenticates the JWT, materialises a `connections` row + per-user credential profile, opens the target connection with the native session engine, forwards frames both ways, mirrors the stream into the recording writer, and runs the auth watchdog (revocation polling + `MAX_TUNNEL_DURATION = 8h`). A protocol the engine cannot serve is refused with the reason rather than routed elsewhere. See [docs/architecture.md](docs/architecture.md#connection-tunnel) and [docs/security.md](docs/security.md#websocket-tunnel-auth-watchdog-v132-revised-v141).
 
-- **Clipboard sync** — Both directions are Guacamole streams (`clipboard` → `blob`… → `end`) proxied verbatim by the backend. The remote → local path carries a per-stream stall watchdog for RDP CLIPRDR channels that open a transfer and never terminate it (v1.14.1; window made asymmetric in v1.14.6 so a transfer that merely pauses completes rather than being abandoned). The local → remote path is **serialised** through a single sender: `guacd`'s RDP clipboard is one shared buffer that cannot multiplex streams, so overlapping transfers splice their payloads and can wedge the Windows-side `rdpclip.exe` for the rest of the logged-on session — a state that survives reconnecting (v1.14.4). That same shared buffer is a **hard size ceiling**, and overrunning it fails silently and asymmetrically: remote → local is **dropped wholesale** (the publishing calls sit inside a conversion success branch that is skipped), local → remote **truncates** at roughly half the buffer. Strata requests 8 MiB per connection via `clipboard-buffer-size`, clamped to `guacd`'s accepted range and logged at every handshake — a parameter `guacd` does not advertise is silently ignored, which capped RDP at 256 KiB until the `guacd` pin moved in v1.14.6. Opt-in, content-free tracing on both ends: `window.strataClipboard` in the browser and `STRATA_CLIPBOARD_TRACE=1` on the backend. See [docs/architecture.md](docs/architecture.md#clipboard-size-ceiling--clipboard-buffer-size).
+- **Clipboard sync** — Both directions are Guacamole streams (`clipboard` → `blob`… → `end`), which is still the wire protocol the browser speaks. The engine caps a transfer at 8 MiB per direction and says so when it truncates, rather than dropping an oversize copy silently as the guacd path did. Opt-in, content-free tracing in the browser via `window.strataClipboard`. See [docs/architecture.md](docs/architecture.md).
 
 - **DMZ link liveness (split‑topology)** — When deployed in DMZ mode the backend dials an outbound HTTP/2-over-mTLS link to the `strata-dmz` relay. To avoid long-lived half-open sockets the link supervisor applies two complementary probes: a kernel-level TCP keepalive (30 s idle → 10 s probe interval) on the `TcpStream` and an application-level HTTP/2 PING watchdog that PINGs the peer every 30 s with a 10 s deadline. On probe failure the connection is gracefully shut down and the supervisor immediate reconnects, restoring public request service within ~60 s. See [CHANGELOG.md](CHANGELOG.md#1108--2026-06-03) for full rationale and operator guidance.
 
@@ -64,7 +60,7 @@ flowchart LR
 
 ## Where to read next
 
-- **[docs/architecture.md](docs/architecture.md)** — full container, network, and data-flow detail; per-patch breakdown of the custom guacd image; the H.264 GFX passthrough pipeline; the web-kiosk and VDI runtimes.
+- **[docs/architecture.md](docs/architecture.md)** — full container, network, and data-flow detail; the native session engine; the web-kiosk and VDI runtimes.
 - **[docs/security.md](docs/security.md)** — threat model, encryption details, RBAC matrix, auth watchdog, audit chain, PAM workflow.
 - **[docs/api-reference.md](docs/api-reference.md)** — REST + WebSocket surface, request/response shapes, audit-event enum.
 - **[docs/deployment.md](docs/deployment.md)** — production deployment, version-by-version upgrade notes, HA notes.

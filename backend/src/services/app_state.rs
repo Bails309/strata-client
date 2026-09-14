@@ -6,7 +6,6 @@ use crate::config::AppConfig;
 use crate::db::Database;
 use crate::services::av::{FailMode as AvFailMode, Scanner as AvScanner};
 use crate::services::file_store::FileStore;
-use crate::services::guacd_pool::GuacdPool;
 use crate::services::session_registry::SessionRegistry;
 use crate::services::vdi::VdiDriver;
 use crate::services::web_runtime::WebRuntimeRegistry;
@@ -23,7 +22,6 @@ pub struct AppState {
     pub config: Option<AppConfig>,
     pub db: Option<Database>,
     pub session_registry: SessionRegistry,
-    pub guacd_pool: Option<GuacdPool>,
     pub file_store: FileStore,
     /// Allocator for X-display numbers used by `web` connections (Phase
     /// 2 of rustguac parity, see `services/web_session.rs`).
@@ -103,7 +101,6 @@ mod tests {
             config: None,
             db: None,
             session_registry: SessionRegistry::new(),
-            guacd_pool: None,
             file_store: FileStore::new(std::path::PathBuf::from("/tmp/strata-files")).await,
             web_displays: Arc::new(WebDisplayAllocator::new()),
             web_runtime: Arc::new(WebRuntimeRegistry::new(

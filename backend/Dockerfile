@@ -154,6 +154,11 @@ FROM debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e2982
 #
 # Chromium pulls fonts-liberation, libnss3, libnspr4, and libdbus-1-3
 # as transitive dependencies — they don't need explicit listing.
+#
+# fonts-dejavu-core IS listed explicitly: strata-session's terminal
+# rasteriser needs a monospace font on disk to render SSH sessions for
+# Guacamole Wire Compatibility Mode, and inheriting one from Chromium's
+# dependency closure would break silently the day that closure changes.
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
         ca-certificates \
         gosu \
@@ -176,6 +181,7 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
         libossp-uuid16 \
         libvorbis0a \
         libvorbisenc2 \
+        fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 
@@ -240,7 +246,7 @@ EXPOSE 8080
 ENV HOME=/home/strata
 
 COPY backend/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
 

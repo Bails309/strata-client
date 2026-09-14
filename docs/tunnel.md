@@ -6,7 +6,7 @@ This page documents the WebSocket tunnel endpoint and the tunnel-ticket convenie
 
 - Endpoint: `GET /api/tunnel/:connection_id` (WebSocket upgrade).
 - Auth: Requires `Authorization: Bearer <token>` or a valid session cookie.
-- Behaviour: backend authenticates the caller, creates/loads a runtime `connection` session row, resolves credential profiles, constructs the Guacamole `select` and `connect` argument map, and proxies bytes bidirectionally between the browser and the selected `guacd` instance. The tunnel also mirrors bytes into the recording writer and participates in the auth watchdog (revocation polling + `MAX_TUNNEL_DURATION`).
+- Behaviour: backend authenticates the caller, creates/loads a runtime `connection` session row, resolves credential profiles, builds a `TargetSpec`, and hands the socket to the in-process session engine (v2.0.0; previously it constructed a Guacamole `select`/`connect` argument map and proxied bytes to a `guacd` instance). The tunnel also mirrors frames into the recording writer and participates in the auth watchdog (revocation polling + `MAX_TUNNEL_DURATION`).
 
 ## Tunnel tickets (one-off sessions)
 

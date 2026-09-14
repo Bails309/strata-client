@@ -554,8 +554,7 @@ impl Stream for RecvStreamBody {
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Ready(Some(Err(e))) => {
                 tracing::debug!(error = %e, "upstream response data frame errored");
-                Poll::Ready(Some(Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                Poll::Ready(Some(Err(std::io::Error::other(
                     "upstream response stream error",
                 ))))
             }
@@ -567,8 +566,7 @@ impl Stream for RecvStreamBody {
                         remaining = this.remaining,
                         "upstream response exceeded proxy body cap mid-stream"
                     );
-                    return Poll::Ready(Some(Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    return Poll::Ready(Some(Err(std::io::Error::other(
                         "upstream response exceeded proxy body cap",
                     ))));
                 }
@@ -1118,8 +1116,10 @@ mod tests {
                 .handshake::<_, Bytes>(server_io)
                 .await
                 .expect("h2 server handshake");
-            while let Some(item) = conn.accept().await {
-                let body_tx = body_tx;
+            // Exactly one stream is served: `body_tx` is a oneshot and
+            // is moved into the handler. The accept loop below then
+            // keeps driving flow control for the rest of the connection.
+            if let Some(item) = conn.accept().await {
                 tokio::spawn(async move {
                     let (request, mut respond) = item.expect("h2 accept");
                     let (_p, mut body) = request.into_parts();
@@ -1134,7 +1134,6 @@ mod tests {
                     let mut send = respond.send_response(resp, false).expect("send response");
                     send.send_data(Bytes::new(), true).expect("send EOS");
                 });
-                break;
             }
             while conn.accept().await.is_some() {}
         });

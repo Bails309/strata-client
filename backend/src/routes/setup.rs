@@ -156,22 +156,12 @@ pub async fn initialize(
     };
 
     // Build and persist config
-    let guacd_host = std::env::var("GUACD_HOST").unwrap_or_else(|_| "guacd".into());
-    let guacd_port: u16 =
-        crate::config::parse_port_with_default(std::env::var("GUACD_PORT").ok().as_deref(), 4822);
-
-    let guacd_instances: Vec<String> =
-        crate::config::parse_guacd_instances(&std::env::var("GUACD_INSTANCES").unwrap_or_default());
-
     let cfg = AppConfig {
         database_url: db_url,
         database_mode: db_mode,
         database_ssl_mode: db_ssl_mode,
         database_ca_cert: db_ca_cert,
         vault,
-        guacd_host: Some(guacd_host),
-        guacd_port: Some(guacd_port),
-        guacd_instances,
         jwt_secret: std::env::var("JWT_SECRET").ok(),
     };
 

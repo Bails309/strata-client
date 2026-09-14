@@ -47,6 +47,7 @@ const FIXTURES: Array<Omit<ConnFixture, 'id'>> = [
   { protocol: 'rdp', port: 3389, extra: { security: 'nla', 'ignore-cert': true } },
   { protocol: 'ssh', port: 22, extra: { 'enable-sftp': true } },
   { protocol: 'vnc', port: 5900, extra: { 'cursor': 'remote' } },
+  { protocol: 'kubernetes', port: 443, extra: { 'kube-namespace': 'default', 'kube-pod': 'test-pod', 'kube-container': 'test-container' } },
 ];
 
 const created: ConnFixture[] = [];
@@ -201,5 +202,78 @@ test.describe('RBAC: limited user cannot ticket a connection it cannot see', () 
       data: { connection_id: conn.id },
     });
     expect(res.status()).toBe(403);
+  });
+});
+
+test.describe('Host Key & Certificate Discovery API Contracts', () => {
+  test('discover-host-key rejects non-SSH connections with 400', async ({ request }) => {
+    const rdpConn = created.find((c) => c.protocol === 'rdp');
+    test.skip(!rdpConn, 'RDP fixture missing');
+    const res = await request.post(`/api/admin/connections/${rdpConn!.id}/host-key`, {
+      headers: adminHeaders(),
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain('host keys apply to ssh connections');
+  });
+
+  test('discover-certificate rejects non-RDP connections with 400', async ({ request }) => {
+    const sshConn = created.find((c) => c.protocol === 'ssh');
+    test.skip(!sshConn, 'SSH fixture missing');
+    const res = await request.post(`/api/admin/connections/${sshConn!.id}/certificate`, {
+      headers: adminHeaders(),
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain('certificates apply to rdp connections');
+  });
+
+  test('survey-ssh-host-keys returns survey rows for all SSH connections', async ({ request }) => {
+    const res = await request.post('/api/admin/connections/host-keys', {
+      headers: adminHeaders(),
+    });
+    expect(res.ok()).toBe(true);
+    const survey = await res.json();
+    expect(Array.isArray(survey)).toBe(true);
+    const sshConn = created.find((c) => c.protocol === 'ssh');
+    if (sshConn) {
+      const found = survey.find((r: { id: string }) => r.id === sshConn.id);
+      expect(found).toBeTruthy();
+      expect(found.hostname).toBe('10.99.99.50');
+      expect(found.port).toBe(22);
+      expect(['missing', 'matches', 'differs', 'unreachable']).toContain(found.status);
+    }
+  });
+
+  test('approve-ssh-host-keys rejects malformed public key with 400', async ({ request }) => {
+    const sshConn = created.find((c) => c.protocol === 'ssh');
+    test.skip(!sshConn, 'SSH fixture missing');
+    const res = await request.put('/api/admin/connections/host-keys', {
+      headers: adminHeaders(),
+      data: [{ id: sshConn!.id, public_key: 'not-a-valid-ssh-key' }],
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain('not an OpenSSH public key');
+  });
+
+  test('approve-ssh-host-keys accepts valid ed25519 public key', async ({ request }) => {
+    const sshConn = created.find((c) => c.protocol === 'ssh');
+    test.skip(!sshConn, 'SSH fixture missing');
+    const validKey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl e2e-test@strata';
+    const res = await request.put('/api/admin/connections/host-keys', {
+      headers: adminHeaders(),
+      data: [{ id: sshConn!.id, public_key: validKey }],
+    });
+    expect(res.ok()).toBe(true);
+    const body = await res.json();
+    expect(body.approved).toBe(1);
+
+    const getRes = await request.get('/api/admin/connections', { headers: adminHeaders() });
+    expect(getRes.ok()).toBe(true);
+    const list = await getRes.json();
+    const found = list.find((c: { id: string }) => c.id === sshConn!.id);
+    expect(found).toBeTruthy();
+    expect(found.extra['host-key']).toBe(validKey);
   });
 });

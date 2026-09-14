@@ -23,7 +23,7 @@ vi.mock("../api", async () => {
 const health = (over: Partial<ServiceHealth> = {}): ServiceHealth => ({
   version: "1.5.3",
   database: { connected: true, mode: "external", host: "db.local", latency_ms: 4 },
-  guacd: { reachable: true, host: "guacd", port: 4822 },
+  engine: { protocols: ["rdp", "ssh"], withheld: [], terminal_font: true },
   vault: { configured: true, mode: "vault", address: "https://vault" },
   schema: { status: "ok", applied_migrations: 44, expected_migrations: 44 },
   av: { backend: "off", enabled: false, reachable: false, fail_mode: "block", address: null },
@@ -34,13 +34,13 @@ const health = (over: Partial<ServiceHealth> = {}): ServiceHealth => ({
 
 const metrics = (over: Partial<MetricsSummary> = {}): MetricsSummary => ({
   active_sessions: 2,
-  total_bytes_from_guacd: 0,
-  total_bytes_to_guacd: 0,
+  total_bytes_down: 0,
+  total_bytes_up: 0,
   sessions_by_protocol: { ssh: 2 },
-  guacd_pool_size: 4,
-  recommended_per_instance: 8,
   system_total_memory: 8 * 1024 * 1024 * 1024,
   system_cpu_cores: 4,
+  native_ram_per_session_mb: 24,
+  native_recommended: 90,
   ...over,
 });
 
@@ -81,6 +81,16 @@ describe("HealthTab", () => {
     expect(getServiceHealth).toHaveBeenCalledTimes(1);
     expect(getMetrics).toHaveBeenCalledTimes(1);
     expect(getCertificates).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the engine as unhealthy when no protocol is enabled", async () => {
+    // With no fallback left, an empty protocol list means every session
+    // is refused — that is a fault, not an idle state.
+    (getServiceHealth as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      health({ engine: { protocols: [], withheld: ["rdp", "ssh"], terminal_font: true } })
+    );
+    render(<HealthTab onNavigateVault={onNavigateVault} />);
+    expect(await screen.findByText("No protocols")).toBeInTheDocument();
   });
 
   it("survives partial outages — metrics or certs failure does not blank the page", async () => {

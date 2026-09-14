@@ -2,7 +2,15 @@ import { useState, useEffect } from "react";
 import Select from "../../components/Select";
 import { Field } from "../../components/Field";
 import { getTimezones } from "../../utils/time";
-import { getVdiImages, getTrustedCasForPicker, TrustedCaPickerEntry } from "../../api";
+import {
+  getVdiImages,
+  getTrustedCasForPicker,
+  TrustedCaPickerEntry,
+  discoverHostKey,
+  DiscoveredHostKey,
+  discoverCertificate,
+  DiscoveredCertificate,
+} from "../../api";
 import { RDP_KEYBOARD_LAYOUTS } from "./rdpKeyboardLayouts";
 
 // ── Helper: Collapsible Section ─────────────────────────────────────
@@ -37,6 +45,29 @@ export function FieldGrid({ children }: { children: React.ReactNode }) {
   return <div className="grid grid-cols-2 gap-x-4 gap-y-2">{children}</div>;
 }
 
+// ── Helper: stored CA bundles for the trust pickers ─────────────────
+
+/**
+ * Populated lazily so the widget shows up even if the user lacks Manage
+ * System — the slim picker route is open to any authenticated user.
+ * Failures are silenced because an empty list simply hides the dropdown.
+ */
+function useTrustedCas(): TrustedCaPickerEntry[] {
+  const [trustedCas, setTrustedCas] = useState<TrustedCaPickerEntry[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    getTrustedCasForPicker()
+      .then((rows) => {
+        if (!cancelled) setTrustedCas(rows);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return trustedCas;
+}
+
 // ── RDP Parameter Sections ──────────────────────────────────────────
 
 export function RdpSections({
@@ -44,12 +75,34 @@ export function RdpSections({
   setExtra: _setExtra,
   ex,
   setEx,
+  connectionId,
 }: {
   extra: Record<string, string>;
   setExtra: (v: Record<string, string>) => void;
   ex: (k: string) => string;
   setEx: (k: string, v: string) => void;
+  /** Null while adding: there is no saved host to read a certificate from yet. */
+  connectionId?: string | null;
 }) {
+  const trustedCas = useTrustedCas();
+  const [certProbe, setCertProbe] = useState<DiscoveredCertificate | null>(null);
+  const [certProbing, setCertProbing] = useState(false);
+  const [certProbeError, setCertProbeError] = useState("");
+
+  async function fetchCertificate() {
+    if (!connectionId) return;
+    setCertProbing(true);
+    setCertProbeError("");
+    setCertProbe(null);
+    try {
+      setCertProbe(await discoverCertificate(connectionId));
+    } catch (e) {
+      setCertProbeError(e instanceof Error ? e.message : "Could not read the certificate");
+    } finally {
+      setCertProbing(false);
+    }
+  }
+
   return (
     <>
       <Section title="Authentication" defaultOpen>
@@ -91,63 +144,103 @@ export function RdpSections({
         </FieldGrid>
       </Section>
 
-      <Section title="Remote Desktop Gateway">
+      <Section title="Certificate Trust">
+        <p className="text-xs opacity-60 mb-2">
+          Most RDP hosts present a self-signed certificate that the public trust store cannot
+          validate. Rather than ignoring it, identify the host by attaching the CA that issued its
+          certificate, or by pinning the certificate itself. Either takes precedence over{" "}
+          <strong>Ignore server certificate</strong> above.
+        </p>
         <FieldGrid>
           <Field
-            label="Gateway Hostname"
-            title="The hostname of the Remote Desktop Gateway to tunnel the RDP connection through."
+            className="form-group !mb-0 col-span-2"
+            label="Trusted CA"
+            title="A stored CA bundle to trust in addition to the system store, for hosts whose certificate chains to a private root. Manage entries under Admin → Trusted CAs."
           >
-            <input
-              value={ex("gateway-hostname")}
-              onChange={(e) => setEx("gateway-hostname", e.target.value)}
-              placeholder="gw.example.com"
-              title="The hostname of the Remote Desktop Gateway to tunnel the RDP connection through."
+            <Select
+              value={ex("trusted_ca_id")}
+              onChange={(v) => setEx("trusted_ca_id", v)}
+              options={[
+                { value: "", label: "— Use system default trust store —" },
+                ...trustedCas.map((c) => ({
+                  value: c.id,
+                  label: c.subject ? `${c.name} (${c.subject})` : c.name,
+                })),
+              ]}
             />
           </Field>
           <Field
-            label="Gateway Port"
-            title="The port of the Remote Desktop Gateway. By default, this is 443."
+            className="form-group !mb-0 col-span-2"
+            label="Pinned certificate fingerprints (one per line)"
+            title="SHA-256 fingerprints of the exact certificates this connection will accept. When set, the certificate chain is not consulted — this is how a self-signed host is identified, and it is the same trust model as the SSH host keys pinned on SSH connections."
           >
-            <input
-              type="number"
-              value={ex("gateway-port")}
-              onChange={(e) => setEx("gateway-port", e.target.value)}
-              placeholder="443"
-              title="The port of the Remote Desktop Gateway. By default, this is 443."
-            />
-          </Field>
-          <Field
-            label="Gateway Domain"
-            title="The domain to use when authenticating with the Remote Desktop Gateway."
-          >
-            <input
-              value={ex("gateway-domain")}
-              onChange={(e) => setEx("gateway-domain", e.target.value)}
-              title="The domain to use when authenticating with the Remote Desktop Gateway."
-            />
-          </Field>
-          <Field
-            label="Gateway Username"
-            title="The username to use when authenticating with the Remote Desktop Gateway."
-          >
-            <input
-              value={ex("gateway-username")}
-              onChange={(e) => setEx("gateway-username", e.target.value)}
-              title="The username to use when authenticating with the Remote Desktop Gateway."
-            />
-          </Field>
-          <Field
-            label="Gateway Password"
-            title="The password to use when authenticating with the Remote Desktop Gateway."
-          >
-            <input
-              type="password"
-              value={ex("gateway-password")}
-              onChange={(e) => setEx("gateway-password", e.target.value)}
-              title="The password to use when authenticating with the Remote Desktop Gateway."
+            <textarea
+              value={ex("cert-fingerprints")}
+              onChange={(e) => setEx("cert-fingerprints", e.target.value)}
+              rows={3}
+              placeholder={"AA:BB:CC:…  (openssl x509 -fingerprint -sha256)"}
+              className="font-mono text-xs"
             />
           </Field>
         </FieldGrid>
+        <p className="text-xs opacity-60 mt-2">
+          Hex or <code>SHA256:</code> base64 are both accepted. A value that is not a whole SHA-256
+          digest is rejected when the session starts, rather than silently pinning nothing.
+        </p>
+        <div className="mt-3">
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={!connectionId || certProbing}
+            onClick={fetchCertificate}
+            title={
+              connectionId
+                ? "Connect to the target and read the certificate it presents."
+                : "Save the connection first — there is no host to read a certificate from yet."
+            }
+          >
+            {certProbing ? "Reading…" : "Read certificate from target"}
+          </button>
+          {certProbeError && <div className="text-xs text-danger mt-2">{certProbeError}</div>}
+          {certProbe && (
+            <div className="mt-2 text-xs space-y-1">
+              <div>
+                <span className="opacity-60">Subject </span>
+                <span className="font-mono break-all">{certProbe.subject}</span>
+              </div>
+              <div>
+                <span className="opacity-60">Issuer </span>
+                <span className="font-mono break-all">{certProbe.issuer}</span>
+                {certProbe.self_signed && <span className="opacity-60"> (self-signed)</span>}
+              </div>
+              <div>
+                <span className="opacity-60">Expires </span>
+                <span className="font-mono">{certProbe.not_after}</span>
+              </div>
+              <div>
+                <span className="opacity-60">SHA-256 </span>
+                <span className="font-mono break-all">{certProbe.fingerprint}</span>
+              </div>
+              <p className="opacity-60">
+                Read over the same unverified connection it would protect, so check it against the
+                host before pinning it.
+              </p>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  const existing = ex("cert-fingerprints").trim();
+                  setEx(
+                    "cert-fingerprints",
+                    existing ? `${existing}\n${certProbe.fingerprint}` : certProbe.fingerprint
+                  );
+                }}
+              >
+                Pin this fingerprint
+              </button>
+            </div>
+          )}
+        </div>
       </Section>
 
       <Section title="Basic Settings">
@@ -164,20 +257,6 @@ export function RdpSections({
             />
           </Field>
           <Field
-            label="Timezone"
-            title="The timezone that the client should send to the server for configuring the local time display, in IANA format (e.g. America/New_York)."
-          >
-            <Select
-              value={ex("timezone")}
-              onChange={(v) => setEx("timezone", v)}
-              placeholder="System default"
-              options={[
-                { value: "", label: "System default" },
-                ...getTimezones().map((tz) => ({ value: tz, label: tz })),
-              ]}
-            />
-          </Field>
-          <Field
             label="Client Name"
             title="The name of the client to present to the RDP server. Typically not required."
           >
@@ -188,50 +267,6 @@ export function RdpSections({
               title="The name of the client to present to the RDP server. Typically not required."
             />
           </Field>
-          <Field
-            label="Initial Program"
-            title="The full path to the program to run immediately upon connecting. Not needed for normal desktop sessions."
-          >
-            <input
-              value={ex("initial-program")}
-              onChange={(e) => setEx("initial-program", e.target.value)}
-              title="The full path to the program to run immediately upon connecting. Not needed for normal desktop sessions."
-            />
-          </Field>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Connect to the administrator console (Session 0) of the RDP server. This is the physical console session."
-            >
-              <input
-                type="checkbox"
-                checked={ex("console") === "true"}
-                onChange={(e) => setEx("console", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Administrator console
-            </label>
-          </div>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Enable multi-touch support, allowing touch events from the client to be forwarded to the remote desktop."
-            >
-              <input
-                type="checkbox"
-                checked={ex("enable-touch") === "true"}
-                onChange={(e) => setEx("enable-touch", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Enable multi-touch
-            </label>
-          </div>
         </FieldGrid>
       </Section>
 
@@ -301,69 +336,11 @@ export function RdpSections({
               Read-only (view only)
             </label>
           </div>
-          <div className="form-group !mb-0 col-span-2">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className={`flex items-center gap-2 ${ex("disable-gfx") !== "false" ? "opacity-50" : ""}`}
-              title="H.264 GFX passthrough sends raw H.264 NAL units to the browser's WebCodecs VideoDecoder, dramatically reducing bandwidth on modern RDP hosts. Off by default because it requires the Windows host to actually support H.264 — either a GPU is present, or AVC444 has been enabled in the registry (run docs/Configure-RdpAvc444.ps1 on the host). Enabling this on a host without H.264 capability causes RDPGFX to negotiate a codec it can't deliver, producing persistent ghost tiles. Requires the graphics pipeline (GFX) to be enabled."
-            >
-              <input
-                type="checkbox"
-                checked={ex("enable-h264") === "true"}
-                disabled={ex("disable-gfx") !== "false"}
-                onChange={(e) => {
-                  if (e.target.checked) {
-                    setEx("enable-h264", "true");
-                    // H.264 requires GFX — ensure it's explicitly enabled.
-                    if (ex("disable-gfx") !== "false") setEx("disable-gfx", "false");
-                  } else {
-                    setEx("enable-h264", "");
-                  }
-                }}
-                className="checkbox"
-              />
-              Enable H.264 codec (browser-side passthrough, lower bandwidth)
-            </label>
-            {ex("enable-h264") === "true" && (
-              <p className="text-xs text-amber-400/90 mt-1 ml-6">
-                ⚠ Requires AVC444 to be configured on the Windows host (run{" "}
-                <code className="font-mono">docs/Configure-RdpAvc444.ps1</code> on the server){" "}
-                <strong>or</strong> a GPU available to the RDP session. Enabling this on a host that
-                does not support H.264 will cause rendering corruption (ghost tiles bleeding across
-                the desktop).
-              </p>
-            )}
-            {ex("disable-gfx") !== "false" && (
-              <p className="text-xs text-txt-tertiary mt-1 ml-6">
-                Disabled because the graphics pipeline (GFX) is turned off in Performance — H.264
-                only works inside GFX.
-              </p>
-            )}
-          </div>
         </FieldGrid>
       </Section>
 
       <Section title="Clipboard">
         <FieldGrid>
-          <Field
-            label="Normalize Clipboard"
-            title="Controls how line endings in clipboard content are normalized. 'Preserve' keeps original line endings, 'Unix' converts to LF, 'Windows' converts to CRLF."
-          >
-            <Select
-              value={ex("normalize-clipboard")}
-              onChange={(v) => setEx("normalize-clipboard", v)}
-              placeholder="Default (preserve)"
-              options={[
-                { value: "", label: "Default (preserve)" },
-                { value: "preserve", label: "Preserve" },
-                { value: "unix", label: "Unix (LF)" },
-                { value: "windows", label: "Windows (CRLF)" },
-              ]}
-            />
-          </Field>
-          <div className="form-group !mb-0" />
           <div className="form-group !mb-0">
             <span className="block" aria-hidden="true">
               &nbsp;
@@ -418,144 +395,6 @@ export function RdpSections({
                 className="checkbox"
               />
               Disable audio playback
-            </label>
-          </div>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Enables audio input (microphone) support, allowing the user's local microphone to be used within the remote desktop session."
-            >
-              <input
-                type="checkbox"
-                checked={ex("enable-audio-input") === "true"}
-                onChange={(e) => setEx("enable-audio-input", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Enable audio input (microphone)
-            </label>
-          </div>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Enables printer redirection. PDF documents sent to the redirected printer will be available for download via the Guacamole menu."
-            >
-              <input
-                type="checkbox"
-                checked={ex("enable-printing") === "true"}
-                onChange={(e) => setEx("enable-printing", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Enable printing
-            </label>
-          </div>
-          <Field
-            label="Printer Name"
-            title="The name of the redirected printer device. This will be the name of the printer as it appears on the remote desktop."
-          >
-            <input
-              value={ex("printer-name")}
-              onChange={(e) => setEx("printer-name", e.target.value)}
-              placeholder="Strata Printer"
-              title="The name of the redirected printer device. This will be the name of the printer as it appears on the remote desktop."
-            />
-          </Field>
-        </FieldGrid>
-        <hr className="border-0 border-t border-border my-3" />
-        <FieldGrid>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Enables file transfer over a virtual drive. Files can be transferred to/from the remote desktop using the Guacamole menu."
-            >
-              <input
-                type="checkbox"
-                checked={ex("enable-drive") === "true"}
-                onChange={(e) => setEx("enable-drive", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Enable drive / file transfer
-            </label>
-          </div>
-          <Field
-            label="Drive Name"
-            title="The name of the filesystem used for transferred files. This is the name the virtual drive will have within the remote desktop."
-          >
-            <input
-              value={ex("drive-name")}
-              onChange={(e) => setEx("drive-name", e.target.value)}
-              placeholder="Shared Drive"
-              title="The name of the filesystem used for transferred files. This is the name the virtual drive will have within the remote desktop."
-            />
-          </Field>
-          <Field
-            label="Drive Path"
-            title="The directory on the guacd server in which transferred files should be stored."
-          >
-            <input
-              value={ex("drive-path")}
-              onChange={(e) => setEx("drive-path", e.target.value)}
-              placeholder="/var/lib/guacamole/drive"
-              title="The directory on the guacd server in which transferred files should be stored."
-            />
-          </Field>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Automatically creates the drive path directory if it does not already exist on the guacd server."
-            >
-              <input
-                type="checkbox"
-                checked={ex("create-drive-path") === "true"}
-                onChange={(e) => setEx("create-drive-path", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Auto-create drive path
-            </label>
-          </div>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Disables file downloads from the remote desktop to the local browser."
-            >
-              <input
-                type="checkbox"
-                checked={ex("disable-download") === "true"}
-                onChange={(e) => setEx("disable-download", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Disable file download
-            </label>
-          </div>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Disables file uploads from the local browser to the remote desktop."
-            >
-              <input
-                type="checkbox"
-                checked={ex("disable-upload") === "true"}
-                onChange={(e) => setEx("disable-upload", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Disable file upload
             </label>
           </div>
         </FieldGrid>
@@ -730,13 +569,7 @@ export function RdpSections({
                 type="checkbox"
                 checked={ex("disable-gfx") === "false"}
                 onChange={(e) => {
-                  if (e.target.checked) {
-                    setEx("disable-gfx", "false");
-                  } else {
-                    setEx("disable-gfx", "true");
-                    // H.264 lives inside GFX — turn it off too.
-                    if (ex("enable-h264") === "true") setEx("enable-h264", "");
-                  }
+                  setEx("disable-gfx", e.target.checked ? "false" : "true");
                 }}
                 className="checkbox"
               />
@@ -746,38 +579,7 @@ export function RdpSections({
         </FieldGrid>
       </Section>
 
-      <Section title="RemoteApp">
-        <FieldGrid>
-          <Field
-            label="Program"
-            title="The name of the RemoteApp to launch. Use '||' prefix for publishing (e.g. '||notepad'). The application must be registered as a RemoteApp on the server."
-          >
-            <input
-              value={ex("remote-app")}
-              onChange={(e) => setEx("remote-app", e.target.value)}
-              placeholder="||notepad"
-              title="The name of the RemoteApp to launch. Use '||' prefix for publishing (e.g. '||notepad'). The application must be registered as a RemoteApp on the server."
-            />
-          </Field>
-          <Field label="Working Directory" title="The working directory for the RemoteApp, if any.">
-            <input
-              value={ex("remote-app-dir")}
-              onChange={(e) => setEx("remote-app-dir", e.target.value)}
-              placeholder="C:\Users\user"
-              title="The working directory for the RemoteApp, if any."
-            />
-          </Field>
-          <Field label="Parameters" title="Command-line parameters to pass to the RemoteApp.">
-            <input
-              value={ex("remote-app-args")}
-              onChange={(e) => setEx("remote-app-args", e.target.value)}
-              title="Command-line parameters to pass to the RemoteApp."
-            />
-          </Field>
-        </FieldGrid>
-      </Section>
-
-      <Section title="Load Balancing / Preconnection">
+      <Section title="Load Balancing">
         <FieldGrid>
           <Field
             label="Load Balance Info"
@@ -787,27 +589,6 @@ export function RdpSections({
               value={ex("load-balance-info")}
               onChange={(e) => setEx("load-balance-info", e.target.value)}
               title="The load balancing info or token to send to the RDP server. Used when connecting to a load-balanced RDS farm."
-            />
-          </Field>
-          <Field
-            label="Preconnection ID"
-            title="The numeric ID of the RDP source. Used with Hyper-V and other systems that support preconnection PDUs."
-          >
-            <input
-              type="number"
-              value={ex("preconnection-id")}
-              onChange={(e) => setEx("preconnection-id", e.target.value)}
-              title="The numeric ID of the RDP source. Used with Hyper-V and other systems that support preconnection PDUs."
-            />
-          </Field>
-          <Field
-            label="Preconnection BLOB"
-            title="A text value identifying the RDP source to connect to. Used with Hyper-V or other systems supporting preconnection PDUs."
-          >
-            <input
-              value={ex("preconnection-blob")}
-              onChange={(e) => setEx("preconnection-blob", e.target.value)}
-              title="A text value identifying the RDP source to connect to. Used with Hyper-V or other systems supporting preconnection PDUs."
             />
           </Field>
         </FieldGrid>
@@ -1093,7 +874,7 @@ export function RdpSections({
                 <input
                   value={ex("kdc-url")}
                   onChange={(e) => setEx("kdc-url", e.target.value)}
-                  placeholder="kdc.example.com"
+                  placeholder="tcp://kdc.example.com:88"
                   title="The URL of the Kerberos Key Distribution Center (KDC). Leave blank to use the KDC from the matching Kerberos realm."
                 />
               </Field>
@@ -1104,7 +885,7 @@ export function RdpSections({
                 <input
                   value={ex("kerberos-cache")}
                   onChange={(e) => setEx("kerberos-cache", e.target.value)}
-                  placeholder="/tmp/krb5cc_guacd"
+                  placeholder="/tmp/krb5cc_strata"
                   title="The file path for the Kerberos credential cache. Leave blank for default."
                 />
               </Field>
@@ -1116,9 +897,9 @@ export function RdpSections({
             When set to <strong>Default (auto-detect)</strong>, the client and server negotiate the
             best authentication method via SPNEGO. Realms configured in the{" "}
             <strong>Kerberos</strong> tab are written to the shared{" "}
-            <code className="text-zinc-300">krb5.conf</code> which guacd uses automatically —
-            Kerberos-only servers will use Kerberos; servers that support NTLM will negotiate
-            normally.
+            <code className="text-zinc-300">krb5.conf</code> which the session engine uses
+            automatically — Kerberos-only servers will use Kerberos; servers that support NTLM will
+            negotiate normally.
           </p>
         )}
       </Section>
@@ -1131,10 +912,31 @@ export function RdpSections({
 export function SshSections({
   ex,
   setEx,
+  connectionId,
 }: {
   ex: (k: string) => string;
   setEx: (k: string, v: string) => void;
+  /** Null while adding: there is no saved host to read a key from yet. */
+  connectionId?: string | null;
 }) {
+  const [probe, setProbe] = useState<DiscoveredHostKey | null>(null);
+  const [probing, setProbing] = useState(false);
+  const [probeError, setProbeError] = useState("");
+
+  async function fetchHostKey() {
+    if (!connectionId) return;
+    setProbing(true);
+    setProbeError("");
+    setProbe(null);
+    try {
+      setProbe(await discoverHostKey(connectionId));
+    } catch (e) {
+      setProbeError(e instanceof Error ? e.message : "Could not read the host key");
+    } finally {
+      setProbing(false);
+    }
+  }
+
   return (
     <>
       <Section title="Authentication" defaultOpen>
@@ -1172,6 +974,59 @@ export function SshSections({
               placeholder="Server public key (optional)"
               title="The known public key of the SSH server, in OpenSSH format. If provided, the server's identity will be verified against this key."
             />
+            <div className="mt-2 flex flex-col gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  className="btn text-xs"
+                  onClick={fetchHostKey}
+                  disabled={!connectionId || probing}
+                  title={
+                    connectionId
+                      ? "Read the key this server currently presents, so it can be checked and approved."
+                      : "Save the connection first, so there is a host to read a key from."
+                  }
+                >
+                  {probing ? "Reading…" : "Fetch from server"}
+                </button>
+                <span className="text-[0.6rem] text-txt-tertiary italic">
+                  Required by the native engine, which will not connect to an unverified host.
+                </span>
+              </div>
+              {probeError && (
+                <span className="text-[0.65rem]" style={{ color: "#ef4444" }}>
+                  {probeError}
+                </span>
+              )}
+              {probe && (
+                <div
+                  className="rounded-lg px-3 py-2 grid gap-1"
+                  style={{ background: "var(--color-surface-tertiary)" }}
+                >
+                  <span className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
+                    {probe.algorithm} — check this against the host before approving
+                  </span>
+                  <code className="text-[0.7rem] break-all text-txt-primary">
+                    {probe.fingerprint}
+                  </code>
+                  <div className="flex gap-2 mt-1">
+                    <button
+                      type="button"
+                      className="btn-primary text-xs"
+                      onClick={() => {
+                        setEx("host-key", probe.public_key);
+                        setProbe(null);
+                      }}
+                    >
+                      Approve
+                    </button>
+                    <button type="button" className="btn text-xs" onClick={() => setProbe(null)}>
+                      Discard
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </Field>
         </FieldGrid>
       </Section>
@@ -1189,17 +1044,6 @@ export function SshSections({
                 { value: "white-black", label: "White on black" },
                 { value: "gray-black", label: "Gray on black" },
               ]}
-            />
-          </Field>
-          <Field
-            label="Font Name"
-            title="The name of the font to use in the terminal. This must be a font available on the guacd server."
-          >
-            <input
-              value={ex("font-name")}
-              onChange={(e) => setEx("font-name", e.target.value)}
-              placeholder="monospace"
-              title="The name of the font to use in the terminal. This must be a font available on the guacd server."
             />
           </Field>
           <Field label="Font Size" title="The size of the font to use in the terminal, in points.">
@@ -1659,7 +1503,7 @@ export function VncSections({
 //
 // Roadmap item `protocols-web-sessions` (shipped in v0.30.0). A
 // `web` connection launches an ephemeral Chromium kiosk inside an
-// Xvnc display and tunnels it through guacd as a standard VNC
+// Xvnc display and serves it through the session engine as a standard VNC
 // session — the differences from a normal VNC connection are entirely
 // server-side, but admins configure them through the fields below.
 // All values land in `connections.extra` JSONB alongside the regular
@@ -1692,22 +1536,8 @@ export function WebSections({
     setEx("allowed_domains", cleaned.length ? JSON.stringify(cleaned) : "");
   };
 
-  // Trusted CA picker — populated lazily so the widget shows up
-  // even if the user lacks Manage System (the slim picker route is
-  // open to any authenticated user). Failures are silenced because
-  // an empty list simply hides the dropdown.
-  const [trustedCas, setTrustedCas] = useState<TrustedCaPickerEntry[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    getTrustedCasForPicker()
-      .then((rows) => {
-        if (!cancelled) setTrustedCas(rows);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Trusted CA picker — shared with the RDP form.
+  const trustedCas = useTrustedCas();
 
   return (
     <>
@@ -1813,7 +1643,7 @@ export function WebSections({
 //
 // Roadmap item `protocols-vdi-containers` (shipped in v0.30.0). A
 // `vdi` connection launches a Strata-managed Docker container running
-// xrdp on port 3389 and tunnels it through guacd as a standard RDP
+// xrdp on port 3389 and serves it through the session engine as a standard RDP
 // session. Operator constraints (image whitelist, CPU/memory caps,
 // idle timeout, env injection, persistent home) all land in
 // `connections.extra`.
@@ -2176,17 +2006,6 @@ export function KubernetesSections({
               ]}
             />
           </Field>
-          <Field
-            label="Font Name"
-            title="The name of the font to use in the terminal. Must be available on the guacd server."
-          >
-            <input
-              value={ex("font-name")}
-              onChange={(e) => setEx("font-name", e.target.value)}
-              placeholder="monospace"
-              title="The name of the font to use in the terminal. Must be available on the guacd server."
-            />
-          </Field>
           <Field label="Font Size" title="The size of the font to use in the terminal, in points.">
             <input
               type="number"
@@ -2206,17 +2025,6 @@ export function KubernetesSections({
               onChange={(e) => setEx("scrollback", e.target.value)}
               placeholder="1000"
               title="The maximum number of lines of terminal scrollback. Defaults to 1000."
-            />
-          </Field>
-          <Field
-            label="Terminal Type"
-            title="The terminal emulator type string passed to the pod via the TERM environment variable. Defaults to xterm-256color."
-          >
-            <input
-              value={ex("terminal-type")}
-              onChange={(e) => setEx("terminal-type", e.target.value)}
-              placeholder="xterm-256color"
-              title="The terminal emulator type string passed to the pod via the TERM environment variable. Defaults to xterm-256color."
             />
           </Field>
           <Field

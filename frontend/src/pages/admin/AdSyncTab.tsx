@@ -612,12 +612,7 @@ export default function AdSyncTab({
                     [
                       "disable-gfx",
                       "Enable graphics pipeline (GFX)",
-                      "Enables the Graphics Pipeline Extension (RDPGFX) \u2014 the modern surface-based rendering path used for the RemoteFX progressive codec and H.264 passthrough. Off by default; the legacy bitmap pipeline is used instead, which is the safest choice for hosts without GPU/AVC444 support. Tick to force GFX on for AD-synced connections.",
-                    ],
-                    [
-                      "enable-h264",
-                      "Enable H.264 codec",
-                      "Enables H.264 passthrough to the browser's WebCodecs decoder. Requires the host to support H.264 \u2014 either a GPU is present, or AVC444 has been enabled in the registry (run docs/Configure-RdpAvc444.ps1 on the host). Ticking this also forces GFX on.",
+                      "Enables the Graphics Pipeline Extension (RDPGFX) \u2014 the modern surface-based rendering path used for the RemoteFX progressive codec. Off by default; the legacy bitmap pipeline is used instead, which is the safest choice for hosts without GPU support. Tick to force GFX on for AD-synced connections.",
                     ],
                   ] as [string, string, string][]
                 ).map(([param, label, tooltip]) => {
@@ -625,39 +620,18 @@ export default function AdSyncTab({
                   // disable-gfx uses inverted semantics: positive label ("Enable GFX"),
                   // checked === "false" means GFX explicitly enabled, "true" means disabled.
                   const isGfx = param === "disable-gfx";
-                  const isH264 = param === "enable-h264";
                   const gfxEnabled = cdMap["disable-gfx"] === "false";
                   const checked = isGfx ? gfxEnabled : cdMap[param] === "true";
-                  const disabled = isH264 && !gfxEnabled;
                   return (
-                    <label
-                      key={param}
-                      className={`flex items-center gap-2 ${disabled ? "opacity-50" : ""}`}
-                      title={tooltip}
-                    >
+                    <label key={param} className="flex items-center gap-2" title={tooltip}>
                       <input
                         type="checkbox"
                         className="checkbox"
                         checked={checked}
-                        disabled={disabled}
                         onChange={(e) => {
                           const cd = { ...(editing.connection_defaults ?? {}) };
                           if (isGfx) {
-                            if (e.target.checked) {
-                              cd["disable-gfx"] = "false";
-                            } else {
-                              cd["disable-gfx"] = "true";
-                              // H.264 lives inside GFX — turn it off too.
-                              delete cd["enable-h264"];
-                            }
-                          } else if (isH264) {
-                            if (e.target.checked) {
-                              cd["enable-h264"] = "true";
-                              // H.264 requires GFX — force it on.
-                              cd["disable-gfx"] = "false";
-                            } else {
-                              delete cd["enable-h264"];
-                            }
+                            cd["disable-gfx"] = e.target.checked ? "false" : "true";
                           } else if (e.target.checked) {
                             cd[param] = "true";
                           } else {

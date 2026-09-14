@@ -55,7 +55,7 @@ flowchart TB
         Link["• TLS 1.3 + mTLS<br/>• App-layer challenge-response<br/>• HTTP/2 framing<br/>• Stream = HTTP request"]
     end
     subgraph InternalNode["INTERNAL NODE (strata-internal)"]
-        Internal["• Existing Axum router<br/>• Existing auth / RBAC<br/>• Vault, Postgres, guacd<br/>• Audit logging<br/>• Outbound link client<br/>• Request adapter"]
+        Internal["• Existing Axum router<br/>• Existing auth / RBAC<br/>• Vault, Postgres, session engine<br/>• Audit logging<br/>• Outbound link client<br/>• Request adapter"]
     end
     DMZ --- Link
     Link --- Internal
@@ -123,10 +123,10 @@ sees a valid MAC.
   retried once on a fresh stream after a sub-5s reconnect; non-idempotent
   verbs return `502` if the link is down — same shape as nginx-in-front-of
   -axum today.
-- **WebSockets (guacd tunnel)**: on link drop the internal node holds the
-  guacd connection open for **30 seconds**. If the link reconnects within
+- **WebSockets (session tunnel)**: on link drop the internal node holds the
+  target connection open for **30 seconds**. If the link reconnects within
   that window, the user's session resumes via an opaque resume token. After
-  30s the guacd connection is torn down and the user gets the existing
+  30s the target connection is torn down and the user gets the existing
   "session ended" UX.
 - **Heartbeat**: HTTP/2 PING + a 60-second app-layer heartbeat carrying
   channel counts and metrics — the heartbeat is the metrics transport, not
@@ -173,7 +173,7 @@ features:
 
 1. **Provably minimal dependency closure.** `cargo tree -p strata-dmz`
    structurally cannot show `sqlx`, `vaultrs`, `ldap3`, `kerberos`, or
-   guacd-tunnel crates because `strata-dmz/Cargo.toml` does not depend on
+   `strata-session` because `strata-dmz/Cargo.toml` does not depend on
    them. No `#[cfg(feature)]` accidents are possible.
 2. **CI-enforceable hard constraints** (see `.github/workflows/ci.yml`):
    ```bash
@@ -204,7 +204,7 @@ features:
 | **1**  | Internal: outbound link client, request adapter, edge-header verifier, cert hot-reload, resume-token map, Prometheus metrics. | **Completed** |
 | **2**  | DMZ: link server, reverse-proxy adapter, rate limiter, connection caps, body limits, slow-loris timeouts, edge-header signer. | **Completed** |
 | **3**  | Frontend admin UI: link status, per-endpoint health, force-reconnect. DMZ operator status endpoint with separate operator credential. | **Completed** |
-| **4**  | Testing: unit, integration (docker-compose), chaos (toxiproxy), security (port scan, fuzzing, replay, header forgery), load (1k WS, 500 guacd). | **Completed** |
+| **4**  | Testing: unit, integration (docker-compose), chaos (toxiproxy), security (port scan, fuzzing, replay, header forgery), load (1k WS, 500 concurrent sessions). | **Completed** |
 | **5**  | Docs: ADR, threat model (STRIDE), runbook (cert/PSK rotation, link diagnosis, scaling), deployment guide (compose + Helm). | **Completed** |
 | **6**  | Hardening: backend mTLS cert hot-reload (W6-1), audit-log edge enrichment (W6-4), per-public-IP body-cap tuning (W6-2), completion ADR. W6-3 (Ed25519 link auth) recorded as Backlog with rationale; W6-5 (WS resume) deferred to Phase 7. See [ADR-0010](adr/ADR-0010-dmz-phase6-hardening.md). | **Completed** |
 | **7a** | **WebSocket forwarding** (RFC 8441 Extended CONNECT) — DMZ-side `ws_proxy` module detects RFC 6455 upgrades on the public listener, captures `hyper::upgrade::on(&mut req)`, opens an Extended CONNECT stream on the link, returns a correctly-computed `Sec-WebSocket-Accept` (RFC 6455 §1.3) on the public side, then runs a transparent byte-pump in both directions. Internal-side `LoopbackUpgradeHandler` accepts the Extended CONNECT and bridges it to a regular HTTP/1.1 WebSocket upgrade against `127.0.0.1:8080` (overridable via `STRATA_DMZ_LOOPBACK_ADDR`) so the existing axum router and `verify_edge_headers` middleware run unchanged. h2 server gains `enable_connect_protocol()`. Per-frame 8 MiB cap on the DMZ→public direction prevents memory amplification. | **Completed (Shipped in v1.5.2)** |
@@ -301,7 +301,7 @@ services:
 | Internal node | IdP (token / userinfo)                     | 443/tcp                 | OIDC token exchange                                 |
 | Internal node | Vault                                      | 8200/tcp                | Existing                                            |
 | Internal node | PG                                         | 5432/tcp                | Existing                                            |
-| Internal node | guacd                                      | 4822/tcp                | Existing                                            |
+| Internal node | RDP / VNC / SSH / K8s targets              | per protocol            | Existing (was via guacd pre-v2.0.0)                 |
 
 **Hardening rule:** the DMZ host's outbound firewall must permit only
 the IdP endpoint, and **must** deny any new connection to the internal

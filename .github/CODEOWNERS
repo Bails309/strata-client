@@ -22,9 +22,6 @@ Cargo.lock                          @Bails309
 /frontend/package.json              @Bails309
 /frontend/package-lock.json         @Bails309
 
-# guacd image and patches — extra scrutiny on patches.
-/guacd/                             @Bails309
-/guacd/patches/                     @Bails309
 
 # End-to-end tests
 /e2e/                               @Bails309

@@ -107,7 +107,7 @@ docker compose up -d
 docker compose ps
 ```
 
-All six services (`postgres-local`, `vault`, `backend`, `guacd`,
+All five services (`postgres-local`, `vault`, `backend`,
 `nginx`, and any recording-storage helper) must show `healthy`.
 
 ### 8. Unseal Vault
@@ -127,7 +127,7 @@ already be 5 min from your pre-check.
 2. Log in as an admin user that existed in the backup. You should
    see the same folders, connections, and recordings that existed
    at backup time.
-3. Open one connection end-to-end to confirm guacd is healthy.
+3. Open one connection end-to-end to confirm the session engine is healthy.
 4. `docker compose logs backend | grep -i error` is empty since
    boot.
 

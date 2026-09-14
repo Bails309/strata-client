@@ -10,7 +10,7 @@ For deeper coverage see [docs/architecture.md](architecture.md),
 
 ### How is Strata Client different from the Apache Guacamole reference web app?
 
-The reference webapp is a Tomcat-hosted JDBC-or-LDAP authentication shell over `guacd`. Strata replaces that shell entirely with a Rust backend, a React 19 SPA, and a Docker-native deployment, then adds the operations surface a Guacamole deployment usually has to bolt on:
+The reference webapp is a Tomcat-hosted JDBC-or-LDAP authentication shell over `guacd`. Strata replaces **both** — the shell, with a Rust backend, a React 19 SPA and a Docker-native deployment; and, since v2.0.0, the proxy daemon itself with an in-process Rust session engine. On top of that it adds the operations surface a Guacamole deployment usually has to bolt on:
 
 - OIDC SSO with dynamic JWKS validation and proactive refresh-token rotation
 - 10-permission RBAC enforced at every admin endpoint
@@ -21,7 +21,7 @@ The reference webapp is a Tomcat-hosted JDBC-or-LDAP authentication shell over `
 - First-class Web kiosk, VDI desktop container, and Kubernetes pod-console connection types
 - End-to-end H.264 GFX passthrough to the browser's WebCodecs decoder (no proxy-side transcode)
 
-`guacd` itself is the only piece carried over; we maintain a small set of patches against pinned upstream and rebuild weekly. See [the comparison table in the README](../README.md#vs-vanilla-apache-guacamole) for a side-by-side.
+As of v2.0.0, **nothing** is carried over. `guacd` was the last shared component and it has been replaced by a session engine written in Rust and compiled into the backend. The browser-facing wire protocol is still Guacamole-style instructions — that part was worth keeping, and it means existing client code is unaffected — but there is no C daemon, no vendored patch set, and no weekly image rebuild. See [the comparison table in the README](../README.md#vs-vanilla-apache-guacamole) for a side-by-side.
 
 ### What licence is this released under?
 
@@ -60,9 +60,13 @@ For evaluation: bundled is fine. For production: external. The bundled Postgres 
 
 The bundled Vault is auto-initialised, auto-unsealed, and runs the Transit engine in a single container — fine for evaluation and for small single-tenant deployments. For production with multi-tenancy, an HA cluster, or compliance requirements, run an external Vault and re-point Strata at it through the admin UI. **The KEKs themselves never leave Vault** in either mode, so the security posture is the same.
 
-### How do I scale guacd?
+### How do I scale the session engine?
 
-`docker compose --profile scale up -d` brings up a `guacd-2` sidecar; the backend round-robins across the pool. Add more by duplicating the `guacd-2` block in [docker-compose.yml](../docker-compose.yml) and listing each in `GUACD_INSTANCES`.
+You scale the **backend**, because as of v2.0.0 the engine is part of it. The `scale` compose profile, the `guacd-2` sidecar and `GUACD_INSTANCES` no longer exist.
+
+Sessions are memory-cheap and CPU-hungry, which is the opposite of the shape people usually assume. Measured at roughly **24 MB of RSS per active session**, so RAM is rarely the limit; frame encoding is, and that is CPU-bound. Size on cores, not gigabytes, and see [deployment.md § High Availability](deployment.md#high-availability) for the host table.
+
+One consequence worth planning for: the engine is stateful in the same way `guacd` was, so **restarting the backend drops active sessions**. Previously you could restart the backend without touching sessions because they lived in a separate container. That is no longer true \u2014 schedule backend upgrades in a maintenance window.
 
 ### Can I run Strata behind an existing reverse proxy?
 
@@ -79,7 +83,7 @@ Drop a `cert.pem` and `key.pem` into the `certs/` directory at the repo root and
 
 ### What's the upgrade path?
 
-Per-version upgrade notes live in [docs/deployment.md § Version-specific upgrade notes](deployment.md#version-specific-upgrade-notes). The headline rule: rebuild backend + frontend on every release; guacd only when an upgrade note explicitly says so.
+Per-version upgrade notes live in [docs/deployment.md § Version-specific upgrade notes](deployment.md#version-specific-upgrade-notes). The headline rule since v2.0.0 is simpler than it used to be: **rebuild backend + frontend on every release.** There is no longer a third image whose rebuild is conditional on an upgrade note, which was a recurring source of half-upgraded deployments.
 
 ---
 
@@ -118,7 +122,9 @@ See [docs/web-sessions.md](web-sessions.md) and [docs/vdi.md](vdi.md).
 
 ### Does Kerberos / NLA actually work?
 
-Yes. We push a dynamically-generated `krb5.conf` to the `guacd` container at runtime, with multi-realm support and per-realm KDCs and lifetimes. AD source can authenticate via simple bind (DN + password) or Kerberos keytab (`kinit` + GSSAPI); custom CA cert upload is supported for internal LDAPS.
+Yes. The engine generates Kerberos configuration in-process at connect time, with multi-realm support and per-realm KDCs and lifetimes — before v2.0.0 this was a `krb5.conf` pushed into the `guacd` container at runtime. AD source can authenticate via simple bind (DN + password) or Kerberos keytab (`kinit` + GSSAPI); custom CA cert upload is supported for internal LDAPS.
+
+> Note that the SPN is built from the connection's **hostname**, not from the address the engine dials. That distinction matters now that target hostnames are resolved against your configured nameservers rather than the container's resolver — Kerberos keeps working across that change precisely because the hostname is preserved.
 
 ### Can users span an RDP session across multiple monitors?
 
@@ -133,7 +139,7 @@ On Windows hosts with AVC444 + hardware encoding enabled, RDP H.264 is roughly a
 First establish which of the two failure modes you have, because the recovery differs:
 
 - **Only copying _from_ the remote is broken, and reconnecting fixes it.** This is a stalled clipboard transfer — RDP's CLIPRDR channel opened a transfer and never closed it, usually because the copying application renders its clipboard data lazily (Chrome, Edge, VS Code, terminals) and a second copy interrupted the first. Since v1.14.1 Strata flushes whatever arrived rather than silently leaving stale text on your clipboard, so this should now degrade to a partial copy rather than a dead one.
-- **A large copy produces _nothing at all_ — a long script or PEM bundle simply never reaches the local clipboard, while short snippets work.** This is the `clipboard-buffer-size` ceiling. `guacd` converts the incoming clipboard into a fixed-size buffer, and when it overruns, the copy is **discarded outright** rather than truncated — no error, no partial text, nothing. Strata requests 8 MiB on every protocol; `guacd`'s own fallback is only 256 KiB. Check what your connection actually negotiated with `docker compose logs backend | grep -i clipboard`, and raise it with `STRATA_CLIPBOARD_BUFFER_BYTES` if needed. In a `strataClipboard.print()` dump the signature is **zero `dir: "in"` entries** for the failed copy.
+- **A large copy produces _nothing at all_ — a long script or PEM bundle simply never reaches the local clipboard, while short snippets work.** **Fixed in v2.0.0, and it should not recur.** This was the `clipboard-buffer-size` ceiling: `guacd` converted the incoming clipboard into a fixed-size buffer and, when it overran, **discarded the copy outright** rather than truncating — no error, no partial text, nothing. Worse, the 8 MiB Strata requested was silently ignored on RDP for several releases, leaving it at `guacd`'s 256 KiB default. The engine now applies a flat 8 MiB per direction, **truncates rather than discards**, and logs when it does. If you see this on v2.0.0 or later, it is a bug — please report it with a `strataClipboard.print()` dump.
 - **Large copies arrive truncated — a long script pastes back as its first few hundred lines.** Different failure from the one above: here the text _does_ arrive, just incomplete. Look for `stream-paused` followed by `stream-stalled` in the receive trace. Builds before the asymmetric-watchdog fix abandoned the stream at the first 2-second gap, and because the odds of hitting one gap grow with payload size, only large copies were affected.
 - **Both copy _and_ paste are broken, and reconnecting does _not_ fix it.** The Windows-side clipboard service (`rdpclip.exe`) is wedged. Because reconnecting reattaches to the same still-logged-on Windows session, the tunnel is not what needs resetting — **log off the Windows session** (not just disconnect) and log back in. Prior to v1.14.4, overlapping clipboard transfers from a single click could cause this; v1.14.4 serialises clipboard pushes so it should no longer occur, but a session already stuck before the upgrade still needs the one-time log off.
 
@@ -219,7 +225,7 @@ Yes — please open an issue or a Discussion _first_ for anything non-trivial so
 
 ### Why are some upstream guacd patches still applied if you pin to a release commit?
 
-Because upstream's release commit predates fixes that we either contributed or that we need before they land in a tagged release. Each patch in [`guacd/patches/`](../guacd/patches/) has a one-line justification at the top and is enumerated in [docs/architecture.md](architecture.md) with the version each was added/removed.
+**No longer applicable as of v2.0.0.** There is no `guacd` and no `guacd/patches/`. The question is kept because the answer explains a maintenance cost that motivated the rewrite: upstream's release commit predated fixes we either contributed or needed before they landed in a tagged release, so every bump meant re-validating a patch set against a moving C codebase, and getting it wrong meant a memory-safety bug reachable from a target. The historical patch list remains enumerated in [docs/architecture.md](architecture.md) with the version each was added and removed.
 
 ### Where does the project keep architectural decisions?
 

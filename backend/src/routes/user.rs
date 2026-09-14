@@ -2476,15 +2476,12 @@ pub async fn connection_info(
     };
 
     // Match the strict "only explicit true = enabled" semantics used by
-    // `tunnel.rs::full_param_map` so the UI, backend, and guacd all agree.
+    // `session_engine` so the UI and backend agree.
     let extra_obj = extra.as_ref().and_then(|e| e.as_object());
-    let drive_setting = extra_obj
-        .and_then(|o| o.get("enable-drive"))
-        .and_then(|v| v.as_str());
     let sftp_setting = extra_obj
         .and_then(|o| o.get("enable-sftp"))
         .and_then(|v| v.as_str());
-    let file_transfer_enabled = drive_setting == Some("true") || sftp_setting == Some("true");
+    let file_transfer_enabled = sftp_setting == Some("true");
 
     let mut resp = json!({
         "protocol": protocol,
@@ -3780,7 +3777,6 @@ mod tests {
                 config: None,
                 db: None,
                 session_registry: crate::services::session_registry::SessionRegistry::new(),
-                guacd_pool: None,
                 file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                     "/tmp/strata-files",
                 ))
@@ -3813,7 +3809,6 @@ mod tests {
                 config: None,
                 db: None,
                 session_registry: crate::services::session_registry::SessionRegistry::new(),
-                guacd_pool: None,
                 file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                     "/tmp/strata-files",
                 ))

@@ -843,7 +843,7 @@ pub async fn fetch_session_stats_scalars(
             (SELECT COUNT(DISTINCT user_id) FROM cutoff_data),
             (SELECT COALESCE(AVG(duration_secs::float) / 60.0, 0.0) FROM cutoff_data WHERE duration_secs IS NOT NULL),
             (SELECT COALESCE((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_secs))::float / 60.0, 0.0) FROM cutoff_data WHERE duration_secs IS NOT NULL),
-            (SELECT COALESCE(SUM(COALESCE(bytes_from_guacd, 0) + COALESCE(bytes_to_guacd, 0)), 0)::bigint FROM cutoff_data)",
+            (SELECT COALESCE(SUM(COALESCE(bytes_down, 0) + COALESCE(bytes_up, 0)), 0)::bigint FROM cutoff_data)",
     )
     .fetch_one(pool)
     .await?;

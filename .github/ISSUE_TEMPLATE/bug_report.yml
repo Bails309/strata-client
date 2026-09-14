@@ -80,7 +80,7 @@ body:
         Output from the affected container(s). Examples:
         ```
         docker compose logs --tail=200 backend
-        docker compose logs --tail=200 guacd
+        docker compose logs --tail=200 backend
         docker compose logs --tail=200 frontend
         ```
         **Redact** any tokens, real hostnames, real usernames, or credentials before pasting.
@@ -94,7 +94,7 @@ body:
     id: context
     attributes:
       label: Additional context
-      description: Anything else useful — recent upgrade, custom guacd patches, reverse proxy in front, etc.
+      description: Anything else useful — recent upgrade, reverse proxy in front, etc.
   - type: checkboxes
     id: terms
     attributes:

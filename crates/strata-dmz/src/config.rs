@@ -115,6 +115,12 @@ pub enum ConfigError {
     },
 }
 
+/// Handshake pre-shared keys, keyed by PSK id.
+///
+/// The key bytes stay in [`Zeroizing`] so a heap dump after process
+/// exit cannot recover them.
+pub type LinkPsks = HashMap<String, Zeroizing<Vec<u8>>>;
+
 /// Validated DMZ configuration. Construct via [`DmzConfig::from_env`].
 pub struct DmzConfig {
     /// Public-facing listener address.
@@ -136,7 +142,7 @@ pub struct DmzConfig {
     /// Map of `psk_id -> key_bytes` for handshake validation.
     /// First-inserted entry is the active key; the rest are accepted
     /// during rotation.
-    pub link_psks: HashMap<String, Zeroizing<Vec<u8>>>,
+    pub link_psks: LinkPsks,
 
     /// Id of the active PSK — the first entry parsed from
     /// `STRATA_DMZ_LINK_PSKS`. Captured at parse time so we don't
@@ -435,7 +441,7 @@ fn parse_b64_key_env(var: &'static str) -> Result<Zeroizing<Vec<u8>>, ConfigErro
     Ok(Zeroizing::new(bytes))
 }
 
-fn parse_psks_env() -> Result<(HashMap<String, Zeroizing<Vec<u8>>>, String), ConfigError> {
+fn parse_psks_env() -> Result<(LinkPsks, String), ConfigError> {
     const VAR: &str = "STRATA_DMZ_LINK_PSKS";
     let raw = std::env::var(VAR).map_err(|_| ConfigError::Missing(VAR))?;
     let mut out = HashMap::new();

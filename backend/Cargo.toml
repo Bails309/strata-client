@@ -115,6 +115,15 @@ scopeguard = "1"
 urlencoding = "2.1"
 tempfile = "3"
 sysinfo = "0.38"
+# Target hostname resolution against operator-configured nameservers.
+# The container's own resolver has to stay pointed at Docker's embedded
+# DNS to find postgres/vault/clamav, so target lookups are done here
+# instead. rustls features off: this resolves plain DNS, and pulling a
+# second TLS stack in would duplicate the one ironrdp already uses.
+hickory-resolver = { version = "0.26", default-features = false, features = [
+  "system-config",
+  "tokio",
+] }
 # Magic-number / MIME detection for uploads (W3-6)
 infer = { version = "0.19", default-features = false }
 # Prometheus /metrics endpoint (W3-12)
@@ -140,6 +149,11 @@ async-trait = "0.1"
 # Phase 1a wires the edge-header verifier; the link client and resume
 # map use the rest in subsequent phases.
 strata-protocol = { path = "../crates/strata-protocol" }
+
+# Native Rust session engine (ADR-0015). Dormant unless
+# STRATA_SESSION_NATIVE_PROTOCOLS narrows which protocols it will serve.
+strata-session = { path = "../crates/strata-session", features = ["ssh", "rdp", "vnc", "kubernetes", "sftp", "terminal"] }
+secrecy = { workspace = true }
 
 # Web Browser Sessions (shipped in v0.30.0).
 # `ipnet`  — CIDR parsing for the `web_allowed_networks` egress allow-list.

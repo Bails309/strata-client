@@ -1898,7 +1898,6 @@ mod tests {
             config: None,
             db: None,
             session_registry: SessionRegistry::new(),
-            guacd_pool: None,
             file_store: FileStore::new(std::env::temp_dir().join("strata-test-logout")).await,
             web_displays: std::sync::Arc::new(
                 crate::services::web_session::WebDisplayAllocator::new(),

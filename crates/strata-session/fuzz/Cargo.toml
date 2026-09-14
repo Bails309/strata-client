@@ -1,0 +1,35 @@
+[package]
+name = "strata-session-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Detached from the workspace -- libfuzzer-sys requires nightly +
+# special profile flags that don't compose with the rest of the tree.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+strata-session = { path = ".." }
+strata-protocol = { path = "../../strata-protocol" }
+
+[[bin]]
+name = "guac_parser"
+path = "fuzz_targets/guac_parser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "guac_decoder"
+path = "fuzz_targets/guac_decoder.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "media_envelope"
+path = "fuzz_targets/media_envelope.rs"
+test = false
+doc = false

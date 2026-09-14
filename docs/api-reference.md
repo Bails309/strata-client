@@ -519,7 +519,27 @@ Configure or switch Vault mode.
 
 #### `PUT /api/admin/settings/dns`
 
-Configure custom DNS servers and search domains for guacd containers. Validated entries are saved to the database and written to a shared Docker volume as `resolv.conf`. Requires a `docker compose restart guacd` to take effect.
+Configure the nameservers and search suffixes the **session engine** uses when
+resolving target hostnames. Saved to the database and applied to new sessions
+immediately — no restart, and nothing is written to disk.
+
+> **Changed in v2.0.0.** This endpoint used to write a `resolv.conf` into a
+> shared Docker volume that the `guacd` containers copied over their own at
+> startup, so a change required `docker compose restart guacd` and dropped
+> every session on it. The backend cannot do the same thing to itself: its own
+> resolver must stay on Docker's embedded DNS (`127.0.0.11`) to find
+> `postgres-local`, `vault` and `clamav`. Appending the corporate servers is
+> not a fix either — glibc only advances to the next nameserver on timeout or
+> `SERVFAIL`, **never** on `NXDOMAIN`, which is exactly what Docker returns for
+> a name it does not know. So resolution moved into the process: the engine
+> resolves the *target* hostname through these servers
+> ([backend/src/services/dns.rs](../backend/src/services/dns.rs)) and dials the
+> resulting address, while the hostname itself still reaches TLS SNI,
+> certificate verification and the Kerberos SPN. A stale
+> `/app/config/resolv.conf` left by the old code is deleted on save so it
+> cannot be mistaken for live configuration.
+>
+> `restart_required` is retained in the response and is now always `false`.
 
 **Request Body**
 
@@ -541,16 +561,20 @@ Configure custom DNS servers and search domains for guacd containers. Validated 
 
 ```json
 {
-  "status": "ok",
-  "restart_required": true,
-  "message": "DNS configuration saved. Restart guacd containers to apply changes."
+  "status": "dns_updated",
+  "restart_required": false,
+  "message": "DNS settings saved. New sessions resolve target hostnames against these servers."
 }
 ```
 
 **Errors:**
 
 - `400 Bad Request` — invalid IPv4 address or invalid domain name
-- `500 Internal Server Error` — failed to write `resolv.conf` to the shared volume
+
+> Resolution **fails open**: if every configured nameserver is unreachable the
+> engine falls back to the container's own resolver rather than refusing the
+> connection, so a DNS outage degrades to the pre-v2.0.0 behaviour instead of
+> taking every session down with it.
 
 ### Health
 
@@ -567,10 +591,10 @@ Detailed service health status.
     "mode": "local",
     "host": "postgres-local:5432"
   },
-  "guacd": {
-    "reachable": true,
-    "host": "guacd",
-    "port": 4822
+  "engine": {
+    "protocols": ["kubernetes", "rdp", "ssh", "vnc"],
+    "withheld": [],
+    "terminal_font": true
   },
   "vault": {
     "configured": true,
@@ -579,6 +603,19 @@ Detailed service health status.
   }
 }
 ```
+
+> **Changed in v2.0.0.** The `guacd` object (`reachable`, `host`, `port`) is
+> **gone** and is not replaced by an equivalent. A TCP probe against
+> `guacd:4822` answered a question that no longer means anything, and never
+> answered the one that mattered: a reachable daemon told you nothing about
+> which protocols it had been compiled to support. `engine` reports that
+> directly.
+>
+> | Field           | Meaning                                                                                     |
+> | --------------- | ------------------------------------------------------------------------------------------- |
+> | `protocols`     | What this build will serve. Sorted.                                                          |
+> | `withheld`      | Compiled out, or disabled by `STRATA_SESSION_ENGINE`. Requests for these are **refused**, not routed elsewhere \u2014 there is nowhere else to route them. |
+> | `terminal_font` | Whether a usable monospace face was found. `false` breaks SSH and Kubernetes rendering; install `fonts-dejavu-core`. |
 
 #### `GET /api/admin/health/av` (v1.12.1+)
 
@@ -1010,8 +1047,8 @@ List all currently active tunnel sessions. Each entry includes the session's rin
     "username": "jdoe",
     "started_at": "2026-04-06T10:30:00Z",
     "buffer_depth_secs": 287,
-    "bytes_from_guacd": 52428800,
-    "bytes_to_guacd": 1048576,
+    "bytes_down": 52428800,
+    "bytes_up": 1048576,
     "remote_host": "10.0.42.7",
     "client_ip": "203.0.113.42"
   }
@@ -1054,22 +1091,30 @@ Aggregate metrics across all active tunnel sessions.
 ```json
 {
   "active_sessions": 12,
-  "total_bytes_from_guacd": 629145600,
-  "total_bytes_to_guacd": 12582912,
+  "total_bytes_down": 629145600,
+  "total_bytes_up": 12582912,
   "sessions_by_protocol": {
     "rdp": 8,
     "ssh": 3,
     "vnc": 1
-  }
+  },
+  "system_total_memory": 16365801472,
+  "system_cpu_cores": 16,
+  "native_ram_per_session_mb": 24,
+  "native_recommended": 74
 }
 ```
 
-| Field                    | Type    | Description                                                             |
-| ------------------------ | ------- | ----------------------------------------------------------------------- |
-| `active_sessions`        | integer | Total number of active tunnel sessions                                  |
-| `total_bytes_from_guacd` | integer | Cumulative bytes received from guacd across all sessions                |
-| `total_bytes_to_guacd`   | integer | Cumulative bytes sent to guacd across all sessions                      |
-| `sessions_by_protocol`   | object  | Session count grouped by protocol (rdp, ssh, vnc, web, vdi, kubernetes) |
+| Field                       | Type    | Description                                                             |
+| --------------------------- | ------- | ----------------------------------------------------------------------- |
+| `active_sessions`           | integer | Total number of active tunnel sessions                                  |
+| `total_bytes_down`          | integer | Cumulative bytes sent downstream (engine → browser) across all sessions |
+| `total_bytes_up`            | integer | Cumulative bytes received upstream (browser → engine) across all sessions |
+| `sessions_by_protocol`      | object  | Session count grouped by protocol (rdp, ssh, vnc, web, vdi, kubernetes) |
+| `system_total_memory`       | integer | Host physical memory in bytes                                           |
+| `system_cpu_cores`          | integer | Host logical CPU cores                                                  |
+| `native_ram_per_session_mb` | integer | Memory one session costs, from what the engine actually allocates       |
+| `native_recommended`        | integer | Sessions this host could serve, reserving 30% headroom                  |
 
 ---
 
@@ -1435,8 +1480,8 @@ List the calling user's own active tunnel sessions. Returns only sessions where 
     "username": "jdoe",
     "started_at": "2026-04-15T10:30:00Z",
     "buffer_depth_secs": 120,
-    "bytes_from_guacd": 5242880,
-    "bytes_to_guacd": 104857
+    "bytes_down": 5242880,
+    "bytes_up": 104857
   }
 ]
 ```
@@ -2327,7 +2372,20 @@ the row count).
 
 ### `GET /api/tunnel/:connection_id`
 
-Upgrades to a WebSocket connection that proxies bidirectional binary frames between the browser and `guacd`.
+Upgrades to a WebSocket connection carrying the Guacamole-style instruction stream between the browser and the in-process session engine.
+
+> **Changed in v2.0.0.** The **wire protocol is unchanged** — the browser still
+> speaks the `guacamole` subprotocol and existing clients need no changes. What
+> changed is what sits on the far side of it. There is no longer a TCP hop to a
+> `guacd` daemon; the instructions are produced and consumed by the engine
+> compiled into the backend
+> ([crates/strata-session](../crates/strata-session/)). The practical
+> consequences for an API consumer are that a protocol the build does not
+> support is now **refused at upgrade** rather than failing after a connect
+> handshake (query `GET /api/admin/health` → `engine.protocols` first), and
+> that `security` is accepted, recorded on the session row, and **not
+> honoured** — the engine negotiates the strongest mutually supported RDP
+> security layer regardless of what is requested.
 
 **Path Parameter**: `connection_id` (UUID) — must be a connection the user has access to via their role.
 
@@ -2346,26 +2404,30 @@ Upgrades to a WebSocket connection that proxies bidirectional binary frames betw
 
 1. **Vault-stored** — if the user has an encrypted credential saved for this connection (via `PUT /api/user/connections/:id/credential`), it is decrypted and used
 2. **Query parameters** — if `password` is supplied in the query string, it is used (with `username` falling back to the JWT username)
-3. **None** — if neither source provides credentials, the connection is attempted without authentication (SSH connections may trigger an interactive `onrequired` prompt via the Guacamole protocol; RDP connections will fail)
+3. **None** — if neither source provides credentials, the connection is attempted without authentication (SSH connections may trigger an interactive prompt inside the session; RDP connections will fail)
 
 **Flow**:
 
 1. Backend verifies the user's role grants access to the connection
-2. Backend opens a TCP connection to `guacd:4822`
-3. Backend sends Guacamole protocol `select` and `connect` instructions with:
+2. Backend resolves the target hostname against the configured nameservers (see [`PUT /api/admin/settings/dns`](#put-apiadminsettingsdns)) and dials the resulting address. The **hostname**, not the address, is what reaches TLS SNI, certificate verification and the Kerberos SPN.
+3. The engine performs the protocol's own connection handshake with:
    - Connection parameters from the database
    - Decrypted credentials from Vault (if stored), or query-string credentials
    - Recording path (if enabled)
    - Username from the JWT
-4. Binary frames are proxied bidirectionally until either side closes
+4. Instructions flow bidirectionally until either side closes
 
-> **Clipboard streaming (v1.14.1 note).** The remote → local clipboard is not a single instruction but a Guacamole stream: `guacd` sends `clipboard,<idx>,text/plain;`, then one or more `blob,<idx>,<base64>;` instructions, and finally `end,<idx>;`. The backend proxies these verbatim. The browser client (`SessionManager.tsx`) commits the payload to `navigator.clipboard` when it receives `end`. Because RDP's CLIPRDR channel can occasionally open a clipboard stream and never terminate it (delayed-rendering clipboard owners whose format-data request is interrupted, or a wedged FreeRDP CLIPRDR state), the client applies a **per-stream stall watchdog** with two windows: **2 s** while no `blob` has been received (`CLIPBOARD_OPEN_STALL_MS` — the wedged-channel signature) and **10 s** between blobs once data is flowing (`CLIPBOARD_BLOB_STALL_MS` — a gap there is transport backpressure on a large payload, not a wedge). A window that fires after real progress publishes the partial and **keeps listening**, so a transfer that merely paused still completes; only a window that sees no new data at all abandons the transfer and `sendAck`s the stream so the server can free the index. A zero-blob stall is not flushed (no-clobber guard). This is entirely client-side; the tunnel wire protocol and the backend proxy loop are unchanged. The backend's own per-instruction pending-buffer cap remains **16 MiB**.
+> **Clipboard streaming.** The remote → local clipboard is not a single instruction but a stream: the engine sends `clipboard,<idx>,text/plain;`, then one or more `blob,<idx>,<base64>;` instructions, and finally `end,<idx>;`. The browser client (`SessionManager.tsx`) commits the payload to `navigator.clipboard` when it receives `end`. Because RDP's CLIPRDR channel can occasionally open a clipboard stream and never terminate it (delayed-rendering clipboard owners whose format-data request is interrupted), the client applies a **per-stream stall watchdog** with two windows: **2 s** while no `blob` has been received (`CLIPBOARD_OPEN_STALL_MS` — the wedged-channel signature) and **10 s** between blobs once data is flowing (`CLIPBOARD_BLOB_STALL_MS` — a gap there is transport backpressure on a large payload, not a wedge). A window that fires after real progress publishes the partial and **keeps listening**, so a transfer that merely paused still completes; only a window that sees no new data at all abandons the transfer and `sendAck`s the stream so the server can free the index. A zero-blob stall is not flushed (no-clobber guard). This is entirely client-side. The engine's own per-instruction pending-buffer cap remains **16 MiB**.
 
-> **Clipboard size ceiling.** `guacd` allocates one fixed-size clipboard buffer per connection. Strata sends `clipboard-buffer-size=8388608` (8 MiB) on **every** protocol (`rdp`, `vnc`, `ssh`, `telnet`, `kubernetes`), overridable per deployment with `STRATA_CLIPBOARD_BUFFER_BYTES` or per connection via the whitelisted `clipboard-buffer-size` extra parameter; `guacd`'s own fallback is `GUAC_COMMON_CLIPBOARD_MIN_LENGTH` = **256 KiB**, and values are clamped into 256 KiB..50 MB (`GUAC_COMMON_CLIPBOARD_MAX_LENGTH`). Overrunning the buffer fails **differently per direction and silently in both**: remote → local is **dropped wholesale** — `guac_iconv()` returns 0 and `guac_rdp_cliprdr_format_data_response()` skips reset/append/send, so **no `clipboard` stream is emitted at all** — while local → remote is **truncated** by `guac_common_clipboard_append()`, at roughly half the buffer since that direction converts UTF-8 → UTF-16. The effective value is logged at each handshake (`clipboard buffer size negotiated with guacd`, or a WARN if `guacd` never advertised the parameter).
-
-> **Clipboard stream concurrency (v1.14.4 note).** The local → remote direction uses the same stream shape in reverse (`clipboard` → `blob`… → `end`), and the wire protocol permits multiple stream indices to be open simultaneously. **`guacd`'s RDP clipboard does not honour that**: it maintains a single shared buffer that the `clipboard` instruction resets and every `blob` appends to, regardless of stream index. Two overlapping clipboard streams therefore splice their payloads and re-announce the result over CLIPRDR, which can leave the Windows-side clipboard owner (`rdpclip.exe`) wedged for the remainder of the logged-on Windows session — a state that survives reconnecting the tunnel, because RDP reattaches to the same Windows session.
+> **Clipboard size ceiling (rewritten in v2.0.0).** The ceiling is **8 MiB per direction**, applied symmetrically — `MAX_CLIPBOARD_BYTES` in [`crates/strata-session/src/actor/session.rs`](../crates/strata-session/src/actor/session.rs). Overrunning it **truncates and logs**, in both directions.
 >
-> Client implementations **must serialise** local → remote clipboard transmission: open at most one clipboard stream at a time and send its `end` before opening the next. Strata's client does this in [`clipboardSync.ts`](../frontend/src/components/clipboardSync.ts). The backend proxy loop is unchanged and does not enforce this — it forwards whatever the client sends — so third-party clients speaking this tunnel are subject to the same constraint. Set `STRATA_CLIPBOARD_TRACE=1` (see [Tunnel diagnostics environment](#tunnel-diagnostics-environment)) to have the backend `WARN` when it observes overlapping clipboard streams in either direction.
+> This replaces a genuinely awkward behaviour. `guacd` allocated one fixed-size buffer per connection, and overrunning it failed *differently per direction and silently in both*: remote → local was **dropped wholesale** (`guac_iconv()` returned 0 and `guac_rdp_cliprdr_format_data_response()` skipped reset/append/send, so **no `clipboard` stream was emitted at all**), while local → remote was **truncated** by `guac_common_clipboard_append()` at roughly half the buffer, since that direction converts UTF-8 → UTF-16.
+>
+> `STRATA_CLIPBOARD_BUFFER_BYTES` and the whitelisted per-connection `clipboard-buffer-size` extra parameter are **inert**: both existed to negotiate a value with a peer that no longer exists. They are ignored rather than rejected, so an unchanged deployment config does not fail to boot.
+
+> **Clipboard stream concurrency.** The local → remote direction uses the same stream shape in reverse (`clipboard` → `blob`… → `end`), and the wire protocol permits multiple stream indices to be open simultaneously. Windows' CLIPRDR does not: the remote clipboard is a single shared buffer, so two overlapping transfers splice their payloads and can leave `rdpclip.exe` wedged for the remainder of the logged-on Windows session — a state that survives reconnecting the tunnel, because RDP reattaches to the same Windows session.
+>
+> Client implementations **must serialise** local → remote clipboard transmission: open at most one clipboard stream at a time and send its `end` before opening the next. Strata's client does this in [`clipboardSync.ts`](../frontend/src/components/clipboardSync.ts). The engine forwards whatever the client sends, so third-party clients speaking this tunnel are subject to the same constraint.
 
 **DMZ deployment mode (v1.5.2+)**: When a user reaches the backend through a public-facing `strata-dmz` edge node, this WebSocket upgrade is forwarded end-to-end through the reverse-tunnel link using **RFC 8441 Extended CONNECT** over the link's HTTP/2 connection. The DMZ proxy:
 
@@ -2491,24 +2553,38 @@ Audit row `connection.copilot_force_grant` is written on success with the share 
 
 ### Tunnel diagnostics environment
 
-| Variable                 | Default | Description                                                                                                                                                                                                                                                                                                                   |
-| ------------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `STRATA_CLIPBOARD_TRACE` | unset   | `1` / `true` enables per-tunnel clipboard stream tracing in both directions (v1.14.4+). Logs stream open / end, blob counts, payload **sizes**, ack status codes, elapsed timings, and a `WARN` when two clipboard streams overlap in the same direction. Never logs clipboard contents. Fully inert (no parsing) when unset. |
-| `STRATA_CLIPBOARD_BUFFER_BYTES` | `8388608` (8 MiB) | Clipboard buffer size requested from `guacd` via `clipboard-buffer-size`, for **every** protocol (v1.14.6+). Clamped by Strata to `guacd`'s accepted range of `262144`..`52428800` before it is sent, so the value logged at handshake is the value that takes effect. Overrunning this buffer is **not** a clean truncation on the remote → local path — see the note below. |
-
-> **The clipboard buffer is a hard ceiling, and overrunning it fails silently and asymmetrically (v1.14.6 note).** `guacd` allocates one fixed-size clipboard buffer per connection. On **remote → local**, `guac_rdp_cliprdr_format_data_response()` converts the incoming payload into a buffer of exactly this size, and the reset/append/send calls sit **inside** the conversion's success branch; `guac_iconv()` returns `0` when the output buffer fills before the input's null terminator, so an oversize copy is **dropped wholesale** — no `clipboard` instruction is emitted at all, no error, no `onerror`, and nothing logged at default verbosity. On **local → remote** the same overrun **truncates**, via `guac_common_clipboard_append()`, at roughly *half* the buffer since that direction converts UTF-8 → UTF-16. In a `strataClipboard` dump the two are trivially distinguishable: an overrun copy leaves **zero `dir: "in"` entries**, whereas a stalled transfer leaves `stream-paused` / `stream-stalled` with a short `chars`.
+> **Removed in v2.0.0.** Both variables in this section are **gone** and are
+> ignored if still set:
 >
-> **`clipboard-buffer-size` must be advertised by `guacd` to have any effect.** The Guacamole handshake only carries values for parameters `guacd` lists in its `args` response, so a parameter the running `guacd` does not support is silently discarded — which is exactly how an RDP clipboard sat at the 262,144-byte default for several releases while Strata believed it was sending 8 MiB. The backend now logs the negotiated value at `INFO` on every handshake and `WARN`s when the parameter was not advertised. To query `guacd` directly, without a session:
+> | Variable                        | Why it no longer applies                                                                                                                                                                              |
+> | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | `STRATA_CLIPBOARD_TRACE`        | Traced clipboard streams crossing the socket to `guacd`. There is no socket.                                                                                                                          |
+> | `STRATA_CLIPBOARD_BUFFER_BYTES` | Requested a buffer size from `guacd` in the handshake. There is no peer to request it from; the ceiling is a fixed 8 MiB per direction, symmetric, and a truncation is logged rather than swallowed. |
 >
-> ```sh
-> docker compose exec guacd sh -c 'printf "6.select,3.rdp;" | nc -w 2 127.0.0.1 4822'
-> ```
+> The failure modes these existed to diagnose were properties of `guacd`'s
+> single shared per-connection clipboard buffer, and are worth recording
+> because they were unusually hard to attribute at the time:
+>
+> - **Overrunning it on remote → local dropped the copy wholesale.**
+>   `guac_rdp_cliprdr_format_data_response()` converted into a fixed buffer and
+>   kept the reset/append/send calls **inside** the conversion's success branch.
+>   `guac_iconv()` returns `0` when the output fills before the input's null
+>   terminator, so an oversize copy emitted **no `clipboard` instruction at
+>   all** — no error, no `onerror`, nothing logged at default verbosity. It
+>   presented purely as "the clipboard didn't update".
+> - **The same overrun on local → remote truncated**, at roughly *half* the
+>   buffer, because that direction converts UTF-8 → UTF-16.
+> - **The parameter had to be advertised to have any effect.** The Guacamole
+>   handshake only carries values for parameters `guacd` lists in its `args`
+>   response, so one the running build did not support was silently discarded —
+>   which is how RDP sat at the 256 KiB default for several releases while
+>   Strata believed it was sending 8 MiB.
+>
+> None of these can recur: the ceiling is a constant in the engine, applied
+> identically in both directions, and enforced in code that logs when it bites.
 
-The tracer reads the variable once per tunnel at connect time, so a
-change requires restarting the backend container (or at minimum
-re-establishing the tunnels you want traced). Browser-side correlation
-is available from the session tab's devtools console via
-`strataClipboard.print()` — see
+Browser-side clipboard diagnostics are unchanged and remain the primary tool:
+`strataClipboard.print()` from the session tab's devtools console — see
 [deployment.md](deployment.md#diagnosing-clipboard-problems-v1144).
 
 ### Transport baseline (v1.14.5+)
@@ -3324,7 +3400,7 @@ required, but the response intentionally omits the PEM bytes.
 | `checkout.scheduled`              | User created a password checkout with a future `scheduled_start_at`; no credential material exists yet                                                                                                                                                                                                                                                                                                                      |
 | `checkout.emergency_bypass`       | User invoked break-glass approval bypass; checkout activated immediately without approver review (requires `pm_allow_emergency_bypass`)                                                                                                                                                                                                                                                                                     |
 | `rotation.completed`              | Automatic service account password rotation completed                                                                                                                                                                                                                                                                                                                                                                       |
-| `web.session.start`               | Chromium kiosk has been spawned, Xvnc is reachable, and guacd is about to attach. `details`: `{ connection_id, display, cdp_port }`. Added in v0.30.0                                                                                                                                                                                                                                                                       |
+| `web.session.start`               | Chromium kiosk has been spawned, Xvnc is reachable, and the VNC engine is about to attach. `details`: `{ connection_id, display, cdp_port }`. Added in v0.30.0                                                                                                                                                                                                                                                                       |
 | `web.session.end`                 | Web Session closed for any reason. `details`: `{ connection_id, display, reason }`. Added in v0.30.0. **(v1.3.0+)** The WebSocket-tunnel route now writes this with `reason: "tunnel_disconnect"` after the proxy loop returns, so closing a browser tab is now visibly audited as a session-end event.                                                                                                                     |
 | `web.autofill.write`              | Login Data SQLite was provisioned for the session. `details`: `{ connection_id, credential_id }`. Added in v0.30.0                                                                                                                                                                                                                                                                                                          |
 | `vdi.container.ensure`            | `DockerVdiDriver::ensure_container()` succeeded (spawn or reuse). `details`: `{ connection_id, container_name, image }`. Added in v0.30.0                                                                                                                                                                                                                                                                                   |
@@ -3429,7 +3505,7 @@ Create a new AD sync source.
 | `domain_override`           | string                                  | No       | null                               | Force domain on imported connections                                                                                                                                                                                                                                                   |
 | `tls_skip_verify`           | boolean                                 | No       | false                              | Skip TLS certificate verification                                                                                                                                                                                                                                                      |
 | `ca_cert_pem`               | string                                  | No       | null                               | Custom CA certificate in PEM format                                                                                                                                                                                                                                                    |
-| `connection_defaults`       | object                                  | No       | `{}`                               | Guacamole connection parameters applied to all synced connections (see below)                                                                                                                                                                                                          |
+| `connection_defaults`       | object                                  | No       | `{}`                               | Connection parameters applied to all synced connections (see below)                                                                                                                                                                                                          |
 | `sync_interval_minutes`     | integer                                 | No       | 60                                 | Background sync interval (minimum 5)                                                                                                                                                                                                                                                   |
 | `enabled`                   | boolean                                 | No       | true                               | Enable/disable this source                                                                                                                                                                                                                                                             |
 | `pm_search_bases`           | string[]                                | No       | `[]`                               | OU scopes specifically for user discovery. If empty, falls back to `search_bases`.                                                                                                                                                                                                     |
@@ -3437,7 +3513,7 @@ Create a new AD sync source.
 
 #### Connection Defaults
 
-The `connection_defaults` field accepts a JSON object of Guacamole parameter key-value pairs that are applied as the `extra` JSONB on every connection created or updated by this sync source. Supported RDP parameters include:
+The `connection_defaults` field accepts a JSON object of connection parameter key-value pairs that are applied as the `extra` JSONB on every connection created or updated by this sync source. Supported RDP parameters include:
 
 | Parameter                    | Description                                                                                                                                                                                                                                                                                                   |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

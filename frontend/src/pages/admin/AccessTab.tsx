@@ -14,6 +14,10 @@ import {
   createRole,
   createUser,
   deleteConnection,
+  getConnections,
+  surveySshHostKeys,
+  approveSshHostKeys,
+  HostKeySurveyRow,
   deleteConnectionFolder,
   deleteRole,
   deleteUser,
@@ -154,6 +158,11 @@ export default function AccessTab({
   const connPerPage = 20;
   const connFormRef = useRef<HTMLDivElement>(null);
 
+  // SSH host key survey
+  const [survey, setSurvey] = useState<HostKeySurveyRow[] | null>(null);
+  const [surveying, setSurveying] = useState(false);
+  const [surveyError, setSurveyError] = useState("");
+
   // Users list — client-side filter + pagination
   const [userSearch, setUserSearch] = useState("");
   const [userPage, setUserPage] = useState(1);
@@ -246,6 +255,146 @@ export default function AccessTab({
     safeFolderPage * folderPerPage
   );
 
+  async function runHostKeySurvey() {
+    setSurveying(true);
+    setSurveyError("");
+    try {
+      setSurvey(await surveySshHostKeys());
+    } catch (e) {
+      setSurveyError(e instanceof Error ? e.message : "Could not read the host keys");
+    } finally {
+      setSurveying(false);
+    }
+  }
+
+  /** Store the keys for the given rows, then refresh the list. */
+  async function approveRows(rows: HostKeySurveyRow[]) {
+    const keys = rows
+      .filter((r) => r.public_key)
+      .map((r) => ({ id: r.id, public_key: r.public_key as string }));
+    if (keys.length === 0) return;
+    try {
+      await approveSshHostKeys(keys);
+      // The parent holds each connection's `extra`, which now has a new
+      // host key in it; without this the edit form would show the old one.
+      for (const updated of await getConnections()) {
+        if (keys.some((k) => k.id === updated.id)) onConnectionUpdated(updated);
+      }
+      await runHostKeySurvey();
+    } catch (e) {
+      setSurveyError(e instanceof Error ? e.message : "Could not store the host keys");
+    }
+  }
+
+  /** Review panel for the SSH host key survey. */
+  function renderHostKeySurveyPanel() {
+    if (!survey) return null;
+    const missing = survey.filter((r) => r.status === "missing");
+    const differs = survey.filter((r) => r.status === "differs");
+    const badge = (status: HostKeySurveyRow["status"]) => {
+      const colour = {
+        matches: "#22c55e",
+        missing: "#f59e0b",
+        differs: "#ef4444",
+        unreachable: "var(--color-txt-tertiary)",
+      }[status];
+      return (
+        <span
+          className="text-[0.6rem] font-bold uppercase tracking-wider"
+          style={{ color: colour }}
+        >
+          {status}
+        </span>
+      );
+    };
+
+    return (
+      <div
+        className="rounded-xl p-4 mb-4 grid gap-3"
+        style={{
+          background: "var(--color-surface-secondary)",
+          border: "1px solid var(--color-glass-border)",
+        }}
+      >
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-sm font-bold">SSH host keys</span>
+          <div className="flex gap-2">
+            {missing.length > 0 && (
+              <button
+                className="btn-primary text-[0.7rem] px-2 py-1"
+                onClick={() => approveRows(missing)}
+                title="Store the key for every connection that has none. Check the fingerprints below first."
+              >
+                Approve {missing.length} new
+              </button>
+            )}
+            <button className="btn text-[0.7rem] px-2 py-1" onClick={() => setSurvey(null)}>
+              Close
+            </button>
+          </div>
+        </div>
+
+        {differs.length > 0 && (
+          <p className="text-[0.7rem]" style={{ color: "#ef4444" }}>
+            {differs.length} host{differs.length === 1 ? "" : "s"} now present a different key from
+            the one approved. That is a rebuilt host, or someone standing in front of it. Approve
+            only if you know which.
+          </p>
+        )}
+        {surveyError && (
+          <p className="text-[0.7rem]" style={{ color: "#ef4444" }}>
+            {surveyError}
+          </p>
+        )}
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-[0.7rem]">
+            <thead>
+              <tr className="text-txt-tertiary uppercase tracking-wider text-[0.6rem]">
+                <th className="text-left py-1">Connection</th>
+                <th className="text-left py-1">Host</th>
+                <th className="text-left py-1">State</th>
+                <th className="text-left py-1">Fingerprint</th>
+                <th className="text-left py-1"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {survey.map((row) => (
+                <tr
+                  key={row.id}
+                  className="border-t"
+                  style={{ borderColor: "var(--color-border)" }}
+                >
+                  <td className="py-1 pr-2">{row.name}</td>
+                  <td className="py-1 pr-2 text-txt-secondary">
+                    {row.hostname}:{row.port}
+                  </td>
+                  <td className="py-1 pr-2">{badge(row.status)}</td>
+                  <td className="py-1 pr-2">
+                    <code className="break-all text-txt-secondary">
+                      {row.fingerprint ?? row.error ?? "—"}
+                    </code>
+                    {row.algorithm && <span className="text-txt-tertiary"> ({row.algorithm})</span>}
+                  </td>
+                  <td className="py-1">
+                    {(row.status === "missing" || row.status === "differs") && (
+                      <button
+                        className="btn text-[0.65rem] px-2 py-0.5"
+                        onClick={() => approveRows([row])}
+                      >
+                        Approve
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
   function openAdd() {
     setFormMode("add");
     setFormId(null);
@@ -296,12 +445,10 @@ export default function AccessTab({
 
   // Keys whose "false" / "" state must be persisted verbatim so the backend
   // can distinguish "admin disabled it" from "legacy connection, key never set".
-  // Without this, unchecking e.g. `enable-drive` would strip the key and the
-  // tunnel layer would re-apply the RDP default of enabling the drive channel.
+  // Without this, unchecking e.g. `enable-sftp` would strip the key and the
+  // tunnel layer would re-apply the protocol default.
   const PRESERVE_FALSE_KEYS = new Set([
-    "enable-drive",
     "enable-sftp",
-    "enable-printing",
     "enable-wallpaper",
     "enable-theming",
     "enable-font-smoothing",
@@ -309,7 +456,6 @@ export default function AccessTab({
     "enable-desktop-composition",
     "enable-menu-animations",
     "enable-audio",
-    "enable-audio-input",
     "disable-audio",
     "disable-copy",
     "disable-paste",
@@ -879,10 +1025,23 @@ export default function AccessTab({
         <div className="card">
           <div className="flex justify-between items-center mb-4">
             <h2 className="!mb-0">Connections</h2>
-            <button className="btn-primary text-[0.8rem] px-3 py-1" onClick={openAdd}>
-              + Add Connection
-            </button>
+            <div className="flex gap-2">
+              {connections.some((c) => c.protocol === "ssh") && (
+                <button
+                  className="btn text-[0.8rem] px-3 py-1"
+                  onClick={runHostKeySurvey}
+                  disabled={surveying}
+                  title="Read the host key every SSH target currently presents, and compare it to the key stored on each connection."
+                >
+                  {surveying ? "Checking hosts…" : "Check SSH host keys"}
+                </button>
+              )}
+              <button className="btn-primary text-[0.8rem] px-3 py-1" onClick={openAdd}>
+                + Add Connection
+              </button>
+            </div>
           </div>
+          {renderHostKeySurveyPanel()}
           <div className="mb-3">
             <input
               value={connSearch}
@@ -1115,9 +1274,17 @@ export default function AccessTab({
               Protocol Parameters
             </h4>
             {formCore.protocol === "rdp" && (
-              <RdpSections extra={formExtra} setExtra={setFormExtra} ex={ex} setEx={setEx} />
+              <RdpSections
+                extra={formExtra}
+                setExtra={setFormExtra}
+                ex={ex}
+                setEx={setEx}
+                connectionId={formId}
+              />
             )}
-            {formCore.protocol === "ssh" && <SshSections ex={ex} setEx={setEx} />}
+            {formCore.protocol === "ssh" && (
+              <SshSections ex={ex} setEx={setEx} connectionId={formId} />
+            )}
             {formCore.protocol === "vnc" && <VncSections ex={ex} setEx={setEx} />}
             {formCore.protocol === "web" && <WebSections ex={ex} setEx={setEx} />}
             {formCore.protocol === "vdi" && <VdiSections ex={ex} setEx={setEx} />}

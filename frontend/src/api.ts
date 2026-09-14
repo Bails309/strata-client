@@ -995,10 +995,11 @@ export interface DatabaseHealth {
   latency_ms: number | null;
 }
 
-export interface GuacdHealth {
-  reachable: boolean;
-  host: string;
-  port: number;
+export interface EngineHealth {
+  protocols: string[];
+  withheld: string[];
+  /** SSH and Kubernetes sessions are refused without a terminal font. */
+  terminal_font: boolean;
 }
 
 export interface VaultHealth {
@@ -1060,7 +1061,7 @@ export interface AvHealth {
 export interface ServiceHealth {
   version?: string;
   database: DatabaseHealth;
-  guacd: GuacdHealth;
+  engine: EngineHealth;
   vault: VaultHealth;
   schema: SchemaHealth;
   /**
@@ -1165,6 +1166,71 @@ export const updateConnection = (id: string, data: Omit<Connection, "id">) =>
 
 export const deleteConnection = (id: string) =>
   request<{ status: string }>(`/admin/connections/${id}`, { method: "DELETE" });
+
+/** A host key read from a server, for an operator to approve or reject. */
+export interface DiscoveredHostKey {
+  algorithm: string;
+  fingerprint: string;
+  public_key: string;
+}
+
+/**
+ * Read the SSH host key the target currently presents.
+ *
+ * Returns it for review rather than saving it: the key arrives over the
+ * same unverified channel it is meant to protect, so a person still has
+ * to decide whether to trust it.
+ */
+export const discoverHostKey = (id: string) =>
+  request<DiscoveredHostKey>(`/admin/connections/${id}/host-key`, { method: "POST" });
+
+export interface DiscoveredCertificate {
+  fingerprint: string;
+  subject: string;
+  issuer: string;
+  not_after: string;
+  self_signed: boolean;
+}
+
+/**
+ * Read the TLS certificate an RDP target currently presents.
+ *
+ * RDP only offers its certificate after the X.224 negotiation, so this
+ * cannot be done with `openssl s_client`. Returned for review rather than
+ * saved, for the same reason as the SSH host key above.
+ */
+export const discoverCertificate = (id: string) =>
+  request<DiscoveredCertificate>(`/admin/connections/${id}/certificate`, { method: "POST" });
+
+/** One SSH connection, and how its stored key compares to the live one. */
+export interface HostKeySurveyRow {
+  id: string;
+  name: string;
+  hostname: string;
+  port: number;
+  /** `missing`, `matches`, `differs`, or `unreachable`. */
+  status: "missing" | "matches" | "differs" | "unreachable";
+  algorithm: string | null;
+  fingerprint: string | null;
+  public_key: string | null;
+  error: string | null;
+}
+
+/**
+ * Read the host key every SSH target currently presents.
+ *
+ * Stores nothing. `differs` is the row that matters once keys are
+ * approved: the host is either rebuilt or being impersonated.
+ */
+export const surveySshHostKeys = () =>
+  request<HostKeySurveyRow[]>("/admin/connections/host-keys", { method: "POST" });
+
+/** Store host keys an operator has decided to trust. */
+export const approveSshHostKeys = (keys: { id: string; public_key: string }[]) =>
+  request<{ approved: number }>("/admin/connections/host-keys", {
+    method: "PUT",
+    body: JSON.stringify(keys),
+  });
 
 // ── Connection Folders ───────────────────────────────────────────────
 
@@ -1644,8 +1710,8 @@ export interface ActiveSession {
   username: string;
   started_at: string;
   buffer_depth_secs: number;
-  bytes_from_guacd: number;
-  bytes_to_guacd: number;
+  bytes_down: number;
+  bytes_up: number;
   remote_host: string;
   client_ip: string;
 }
@@ -1676,6 +1742,9 @@ export interface HistoricalRecording {
   /** Operator's public source IP at the time the recording started.
    *  `null` for recordings created before migration 065. */
   client_ip?: string | null;
+  /** Session engine that served the recording. `null` for recordings
+   *  created before migration 081. */
+  engine?: "guacd" | "native" | null;
 }
 
 export const getRecordings = (
@@ -1840,13 +1909,15 @@ export async function buildUserNvrObserveUrl(
 
 export interface MetricsSummary {
   active_sessions: number;
-  total_bytes_from_guacd: number;
-  total_bytes_to_guacd: number;
+  total_bytes_down: number;
+  total_bytes_up: number;
   sessions_by_protocol: Record<string, number>;
-  guacd_pool_size: number;
-  recommended_per_instance: number;
   system_total_memory: number;
   system_cpu_cores: number;
+  /** Memory one session costs, from what the engine allocates. */
+  native_ram_per_session_mb: number;
+  /** Sessions this host could serve. */
+  native_recommended: number;
 }
 
 export const getMetrics = () => request<MetricsSummary>("/admin/metrics");
@@ -1920,6 +1991,8 @@ export interface SessionStats {
   avg_duration_mins: number;
   median_duration_mins: number;
   total_bandwidth_bytes: number;
+  /** Everything but `active_now` comes from recordings, so this says whether they can be non-zero. */
+  recording_enabled: boolean;
   top_connections: TopConnection[];
   top_users: TopUser[];
   daily_trend: DailyTrend[];

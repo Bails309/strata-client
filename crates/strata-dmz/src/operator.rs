@@ -11,9 +11,9 @@
 //!
 //! * `GET  /status`               — overall summary.
 //! * `GET  /links`                — JSON list of every authenticated
-//!                                  link session.
+//!   link session.
 //! * `POST /links/:link_id/disconnect` — evict a session, forcing the
-//!                                  internal-side supervisor to reconnect.
+//!   internal-side supervisor to reconnect.
 //!
 //! All responses are JSON. Errors carry `{ "error": "..." }`. The
 //! authentication failure response is deliberately bland (`401`) and

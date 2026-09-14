@@ -278,15 +278,15 @@ pub struct ActiveSession {
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub buffer: Arc<RwLock<SessionBuffer>>,
     pub broadcast_tx: broadcast::Sender<Arc<String>>,
-    /// Bytes received from guacd (server → client direction)
-    pub bytes_from_guacd: AtomicU64,
-    /// Bytes sent to guacd (client → server direction)
-    pub bytes_to_guacd: AtomicU64,
+    /// Bytes sent to the browser (server → client direction)
+    pub bytes_down: AtomicU64,
+    /// Bytes received from the browser (client → server direction)
+    pub bytes_up: AtomicU64,
     pub remote_host: String,
     pub client_ip: String,
     pub kill_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
     /// Channel for shared control viewers to inject input (mouse/keyboard)
-    /// into the owner's guacd TCP stream.
+    /// into the owner's session stream.
     pub input_tx: tokio::sync::mpsc::Sender<String>,
     /// Per-session co-pilot multiplayer room. Always present (zero-cost
     /// when idle); becomes active once any participant joins via a
@@ -335,8 +335,8 @@ pub struct SessionInfo {
     pub username: String,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub buffer_depth_secs: u64,
-    pub bytes_from_guacd: u64,
-    pub bytes_to_guacd: u64,
+    pub bytes_down: u64,
+    pub bytes_up: u64,
     pub remote_host: String,
     pub client_ip: String,
 }
@@ -400,8 +400,8 @@ impl SessionRegistry {
             started_at: chrono::Utc::now(),
             buffer: buffer.clone(),
             broadcast_tx: tx.clone(),
-            bytes_from_guacd: AtomicU64::new(0),
-            bytes_to_guacd: AtomicU64::new(0),
+            bytes_down: AtomicU64::new(0),
+            bytes_up: AtomicU64::new(0),
             remote_host,
             client_ip,
             kill_tx: Arc::new(tokio::sync::Mutex::new(Some(kill_tx))),
@@ -436,8 +436,8 @@ impl SessionRegistry {
                 username: s.username.clone(),
                 started_at: s.started_at,
                 buffer_depth_secs: depth,
-                bytes_from_guacd: s.bytes_from_guacd.load(Ordering::Relaxed),
-                bytes_to_guacd: s.bytes_to_guacd.load(Ordering::Relaxed),
+                bytes_down: s.bytes_down.load(Ordering::Relaxed),
+                bytes_up: s.bytes_up.load(Ordering::Relaxed),
                 remote_host: s.remote_host.clone(),
                 client_ip: s.client_ip.clone(),
             });
@@ -490,20 +490,20 @@ impl SessionRegistry {
         let mut by_protocol: HashMap<String, u32> = HashMap::new();
 
         for s in sessions.values() {
-            total_bytes_in += s.bytes_from_guacd.load(Ordering::Relaxed);
-            total_bytes_out += s.bytes_to_guacd.load(Ordering::Relaxed);
+            total_bytes_in += s.bytes_down.load(Ordering::Relaxed);
+            total_bytes_out += s.bytes_up.load(Ordering::Relaxed);
             *by_protocol.entry(s.protocol.clone()).or_insert(0) += 1;
         }
 
         MetricsSummary {
             active_sessions: sessions.len() as u32,
-            total_bytes_from_guacd: total_bytes_in,
-            total_bytes_to_guacd: total_bytes_out,
+            total_bytes_down: total_bytes_in,
+            total_bytes_up: total_bytes_out,
             sessions_by_protocol: by_protocol,
-            guacd_pool_size: 0, // placeholder — overridden by admin handler
-            recommended_per_instance: 20, // placeholder — overridden by admin handler
             system_total_memory: 0,
             system_cpu_cores: 0,
+            native_ram_per_session_mb: 0, // placeholder — overridden by admin handler
+            native_recommended: 0,        // placeholder — overridden by admin handler
         }
     }
 }
@@ -512,17 +512,17 @@ impl SessionRegistry {
 #[derive(Serialize, Clone)]
 pub struct MetricsSummary {
     pub active_sessions: u32,
-    pub total_bytes_from_guacd: u64,
-    pub total_bytes_to_guacd: u64,
+    pub total_bytes_down: u64,
+    pub total_bytes_up: u64,
     pub sessions_by_protocol: HashMap<String, u32>,
-    pub guacd_pool_size: u32,
-    /// Dynamically computed recommended sessions per guacd instance based on
-    /// host system resources (CPU + RAM), reserving headroom for other processes.
-    pub recommended_per_instance: u32,
     /// Total system memory in bytes (for display).
     pub system_total_memory: u64,
     /// Number of logical CPU cores (for display).
     pub system_cpu_cores: u32,
+    /// Memory one session costs, from what the engine actually allocates.
+    pub native_ram_per_session_mb: u32,
+    /// Sessions this host could serve.
+    pub native_recommended: u32,
 }
 
 #[cfg(test)]
@@ -671,37 +671,38 @@ mod tests {
             username: "admin".into(),
             started_at: chrono::Utc::now(),
             buffer_depth_secs: 120,
-            bytes_from_guacd: 5000,
-            bytes_to_guacd: 2000,
+            bytes_down: 5000,
+            bytes_up: 2000,
             remote_host: "target".into(),
             client_ip: "source".into(),
         };
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["protocol"], "rdp");
         assert_eq!(json["buffer_depth_secs"], 120);
-        assert_eq!(json["bytes_from_guacd"], 5000);
+        assert_eq!(json["bytes_down"], 5000);
     }
 
     #[test]
     fn metrics_summary_serializes() {
         let m = MetricsSummary {
             active_sessions: 3,
-            total_bytes_from_guacd: 1024,
-            total_bytes_to_guacd: 512,
+            total_bytes_down: 1024,
+            total_bytes_up: 512,
             sessions_by_protocol: {
                 let mut map = HashMap::new();
                 map.insert("rdp".into(), 2);
                 map.insert("vnc".into(), 1);
                 map
             },
-            guacd_pool_size: 5,
-            recommended_per_instance: 20,
             system_total_memory: 0,
             system_cpu_cores: 0,
+            native_ram_per_session_mb: 24,
+            native_recommended: 40,
         };
         let json = serde_json::to_value(&m).unwrap();
         assert_eq!(json["active_sessions"], 3);
-        assert_eq!(json["guacd_pool_size"], 5);
+        assert_eq!(json["native_ram_per_session_mb"], 24);
+        assert_eq!(json["native_recommended"], 40);
     }
 
     #[test]
@@ -717,8 +718,8 @@ mod tests {
         let registry = SessionRegistry::new();
         let m = registry.metrics().await;
         assert_eq!(m.active_sessions, 0);
-        assert_eq!(m.total_bytes_from_guacd, 0);
-        assert_eq!(m.total_bytes_to_guacd, 0);
+        assert_eq!(m.total_bytes_down, 0);
+        assert_eq!(m.total_bytes_up, 0);
         assert!(m.sessions_by_protocol.is_empty());
     }
 
@@ -753,6 +754,32 @@ mod tests {
         assert_eq!(m.active_sessions, 2);
         assert_eq!(*m.sessions_by_protocol.get("rdp").unwrap(), 1);
         assert_eq!(*m.sessions_by_protocol.get("vnc").unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn session_bandwidth_rolls_up_into_the_totals() {
+        let registry = SessionRegistry::new();
+        registry
+            .register(
+                "native".into(),
+                Uuid::new_v4(),
+                "C1".into(),
+                "rdp".into(),
+                Uuid::new_v4(),
+                "u1".into(),
+                "10.0.0.1".into(),
+                "1.1.1.1".into(),
+            )
+            .await;
+        let sess = registry.get("native").await.unwrap();
+        sess.bytes_down.store(900, Ordering::Relaxed);
+        sess.bytes_up.store(100, Ordering::Relaxed);
+
+        let m = registry.metrics().await;
+        assert_eq!(m.active_sessions, 1);
+        assert_eq!(*m.sessions_by_protocol.get("rdp").unwrap(), 1);
+        assert_eq!(m.total_bytes_down, 900);
+        assert_eq!(m.total_bytes_up, 100);
     }
 
     #[test]

@@ -8,7 +8,7 @@
 
 <p align="center">
   <strong>A high-performance, modernized client and proxy architecture for <a href="https://guacamole.apache.org/">Apache Guacamole</a>.</strong><br>
-  <sub>Rust backend · React SPA · Vault envelope encryption · OIDC SSO · FreeRDP 3 · Kerberos NLA · H.264 streaming</sub>
+  <sub>Rust backend · React SPA · Vault envelope encryption · OIDC SSO · native Rust session engine · Kerberos NLA</sub>
 </p>
 
 <p align="center">
@@ -51,7 +51,9 @@
 
 # Strata Client
 
-Strata Client is a modernized control plane and proxy for [Apache Guacamole](https://guacamole.apache.org/). It pairs a custom `guacd` build (FreeRDP 3, Kerberos NLA, end-to-end H.264 GFX passthrough) with a Rust backend (Axum + Tokio) and a React 19 SPA, and adds the operations surface a Guacamole deployment usually has to bolt on: OIDC SSO, granular RBAC, Vault-sealed credential storage, hash-chained audit logging, session recording with NVR-style live observation, privileged-account checkout / rotation, and first-class web-kiosk, VDI, and Kubernetes-pod connection types.
+Strata Client is an enterprise privileged-access gateway that speaks the [Apache Guacamole](https://guacamole.apache.org/) wire protocol to the browser and serves every session from a **native Rust engine** — `ironrdp`, `russh`, `vnc-rs` and a native Kubernetes exec client — running in-process on Tokio. It pairs that engine with a Rust backend (Axum + Tokio) and a React 19 SPA, and adds the operations surface a Guacamole deployment usually has to bolt on: OIDC SSO, granular RBAC, Vault-sealed credential storage, hash-chained audit logging, session recording with NVR-style live observation, privileged-account checkout / rotation, and first-class web-kiosk, VDI, and Kubernetes-pod connection types.
+
+Up to v1.14.6 the session tier was Apache's `guacd` C daemon in a separate container. **v2.0.0 removed it entirely** — see [CHANGELOG](CHANGELOG.md#200--2026-09-09) and [ADR-0015](docs/adr/ADR-0015-native-rust-session-engine.md). The browser side is unchanged: the client still speaks the Guacamole wire protocol and existing `.guac` recordings still play.
 
 If you have used Guacamole's reference web app and wished it had real auth, real audit, real key management, and a UI built this decade — that is the gap Strata fills.
 
@@ -59,12 +61,14 @@ If you have used Guacamole's reference web app and wished it had real auth, real
 
 ### Protocols & display
 
-- **RDP, VNC, SSH, Telnet, Kubernetes pod console, Web kiosk, VDI desktop containers** — every protocol speaks the same WebSocket tunnel, recording, and audit pipeline.
-- **End-to-end H.264 GFX passthrough** — FreeRDP 3 → guacd → WebSocket → browser WebCodecs decoder, with no server-side transcode. Order-of-magnitude bandwidth wins on AVC444-enabled Windows hosts.
-- **Kerberos / NLA** — dynamic per-realm `krb5.conf` pushed to `guacd` at runtime; multi-realm with per-realm KDCs and lifetimes.
+- **RDP, VNC, SSH, Kubernetes pod console, Web kiosk, VDI desktop containers** — every protocol speaks the same WebSocket tunnel, recording, and audit pipeline, served by a native Rust engine with no unmanaged C in the session path.
+- **RDP fails closed without NLA** — the connector advertises CredSSP *only*, because offering the legacy TLS security layer lets a target negotiate down to one where the connection completes before any credential is checked.
+- **RDP certificate trust** — verify against an uploaded CA bundle or a pinned SHA-256 fingerprint (precedence: pin > bundle > ignore-cert), with in-app discovery of the target's certificate.
+- **Mandatory SSH host-key verification** — no trust-on-first-use, with in-app surveying of every key a target offers.
+- **Kerberos / NLA** — dynamic per-realm `krb5.conf` written at runtime; multi-realm with per-realm KDCs and lifetimes.
 - **Browser-based multi-monitor RDP** — Window Management API spans a session across physical monitors with per-window cursor/keyboard sync.
 - **Tiled multi-session view** — open multiple connections side-by-side with per-tile focus and keyboard broadcast.
-- **Sidecar guacd scaling** — round-robin pool across multiple `guacd` instances for horizontal scaling.
+- **Native SFTP file transfer** — one transfer path that decorates any protocol, rather than per-protocol drive redirection.
 
 ### Authentication & authorization
 
@@ -103,7 +107,7 @@ If you have used Guacamole's reference web app and wished it had real auth, real
 - **Outbound Quick-Share (approval-gated)** — files leaving a remote session are intercepted, sealed at rest with Vault envelope encryption, scanned by a built-in DLP heuristic, and either auto-approved (low score + per-user opt-in) or queued for an approver. Two ingest paths: transparent guacd `client.onfile` drive-channel interception, and a tokenised HTTPS upload-command (`curl` / `curl.exe` / PowerShell 7 `-Form` one-liner) for sites where GPO blocks RDP / SFTP drive redirection. Approved shares become a time-limited single-use download; denied / expired shares are purged and their sealed DEK zeroised by a periodic worker. New role permission `can_use_quick_share_outbound`, per-user approval-required toggle, and an approver-delegation list keep the perm separable from super-admin.
 - **Unified Session Bar** — Sharing, File Browser, Fullscreen, Pop-out, OSK in one zero-footprint right-side dock.
 - **Windows Key Proxy** — Right Ctrl acts as the host key, VMware/VirtualBox style, in every session mode.
-- **Large clipboard support** — `clipboard-buffer-size` is raised to **8 MiB on every protocol** (guacd's own default is 256 KiB and it truncates silently past it), and protocol-level chunking carries that buffer between local and remote. Every local → remote push is serialised through a single sender so concurrent triggers can never interleave two transfers into `guacd`'s shared clipboard buffer (v1.14.4), and the remote → local path carries a per-stream stall watchdog for wedged RDP CLIPRDR channels (v1.14.1) that publishes partials without abandoning a transfer that has merely paused. Opt-in, content-free diagnostics on both ends — `window.strataClipboard` in the browser and `STRATA_CLIPBOARD_TRACE=1` on the backend.
+- **Large clipboard support** — transfers are capped at **8 MiB per direction on every protocol**, and a truncation says so rather than the transfer vanishing; protocol-level chunking carries that buffer between local and remote. Every local → remote push is serialised through a single sender so concurrent triggers can never interleave two transfers into `guacd`'s shared clipboard buffer (v1.14.4), and the remote → local path carries a per-stream stall watchdog for wedged RDP CLIPRDR channels (v1.14.1) that publishes partials without abandoning a transfer that has merely paused. Opt-in, content-free diagnostics on both ends — `window.strataClipboard` in the browser and `STRATA_CLIPBOARD_TRACE=1` on the backend.
 - **In-app documentation** — `/docs` page renders Architecture, Security, API Reference, and the release-history carousel inline.
 - **Live toast notifications** — themed, reusable toast surface (`ToastProvider` / `useToast()`) with info / success / warning / error variants, replace-by-key semantics, sticky errors and ARIA live regions. Drives the new credential-profile expiry watcher (1 d / 1 h / 10 m for standard profiles; 7 d / 1 d / 1 h for extended-expiry profiles, plus a sticky **Renew now** toast at expiry) so operators are warned before a stale credential silently breaks a session.
 
@@ -111,10 +115,10 @@ If you have used Guacamole's reference web app and wished it had real auth, real
 
 - **Zero-config first boot** — bundled PostgreSQL 16 and Vault 1.19 containers; promote to external services any time through the UI.
 - **DMZ deployment mode** — split-topology option where a separate, minimal `strata-dmz` edge binary terminates public TLS while the internal node stays inside the corporate network and dials **out** over an HTTP/2-over-mTLS reverse tunnel. Zero-secret-overlap (no JWT key, no Vault, no DB credentials on the DMZ); every existing feature works through the DMZ on day one. See [docs/deployment.md](docs/deployment.md#dmz-deployment-mode).
-- **DNS configuration in admin UI** — admin-managed DNS servers and search domains pushed to `guacd` containers without editing `docker-compose.yml`.
+- **DNS configuration in admin UI** — admin-managed nameservers and search domains used by the session engine to resolve target hostnames, without editing `docker-compose.yml` or restarting anything. Infrastructure lookups stay on the container's own resolver.
 - **Recording disclaimer / Terms of Service** — mandatory first-login acceptance modal, timestamped in the database, declining logs the user out.
 - **Production-grade nginx gateway** — embedded-DNS resolver with per-request upstream resolution; nginx survives a backend outage and recovers automatically.
-- **CI/CD** — GitHub Actions workflow for automated weekly upstream `guacd` rebuilds, Trivy image scans (v1.8.2 fix), and CodeQL.
+- **CI/CD** — GitHub Actions workflows for backend, frontend, E2E and image builds, Trivy image scans (v1.8.2 fix), and CodeQL.
 - **Gated supply chain** — every push and pull request runs eight independent dependency and secret gates before anything merges: `gitleaks`, `cargo audit` (`--deny unsound --deny unmaintained`), `cargo deny` (license allow-list, banned/duplicate crates, source allow-list), `npm audit --audit-level=high` on both the frontend and E2E graphs, OSV-Scanner (which also backs the OpenSSF Scorecard `Vulnerabilities` check), Trivy image scanning, CodeQL, and GitHub Dependency Review. Advisory triage, the rules for suppressing a finding, and the single documented suppression in force are written up in [docs/security.md](docs/security.md#dependency--supply-chain-security).
 - **Apache 2.0 licensed** — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
@@ -124,6 +128,7 @@ For the full per-version history of how these capabilities were built and the bu
 
 | Version | Date       | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | :------ | :--------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2.0.0   | 2026-09-09 | **Major release - Apache Guacamole's `guacd` daemon is gone; every protocol is served by a native Rust engine in-process.** Four years of separate C daemon - FreeRDP, libssh2, libvncclient and a patched Guacamole build, spoken to over TCP 4822 - replaced by `ironrdp` (RDP), `russh` (SSH), `vnc-rs` (VNC), a native Kubernetes exec client, and `russh-sftp` (file transfer), all running as Tokio tasks inside the backend. **The browser is unaffected:** it still speaks the Guacamole wire protocol, and existing `.guac` recordings still play. Two behaviours are deliberately stricter and both are security decisions: **RDP requires NLA** - the connector advertises CredSSP *only*, because offering the legacy TLS layer lets a server negotiate down to one where the connection completes *before* any credential is checked (a live test against xrdp produced a healthy session from a deliberately wrong password) - and **SSH requires a host key**, with no trust-on-first-use, though the connection editor can survey a target's keys so approval is a decision rather than a hunt. Adds **RDP certificate trust** (CA bundle or pinned SHA-256, precedence pin > bundle > ignore-cert) with in-app discovery, since RDP presents its certificate only after X.224 and `openssl s_client` cannot fetch one. Every `guacd` parameter was audited and is now **honoured or removed**, each removal carrying a migration that clears it from existing connections (migrations `082`-`088`). **Custom DNS was rebuilt, not lost** - the engine resolves targets against your nameservers with search-suffix expansion while infrastructure lookups stay on Docker's resolver, and only the socket uses the address so TLS verification and the Kerberos SPN still see the hostname. Removes `STRATA_SESSION_ENGINE`, `GUACD_*` and `STRATA_CLIPBOARD_*`; drops the per-engine metrics split; renames the bandwidth counters to `bytes_down`/`bytes_up` (migration `089`). ([details](CHANGELOG.md#200--2026-09-09)) |
 | 1.14.6  | 2026-08-19 | **Patch release - large RDP clipboard copies were being discarded outright, and the setting meant to prevent it had never worked for RDP.** A 12,747-line, 281,852-character file produced *no* inbound clipboard events at all - not a truncated one - while small copies in the same session worked. `guacd` allocates one fixed-size clipboard buffer per connection, and on the copy-from-remote path the calls that publish the result sit inside a success branch that is skipped when the conversion runs out of buffer, so an oversize copy is dropped wholesale with no error. Strata had been sending `clipboard-buffer-size=8388608` for RDP since v1.3.x, but that parameter has never existed for RDP in the pinned `guacd` - absent from the RDP argument list, clipboard hard-coded to 262,144 bytes - so it was silently discarded at every connect. 281,852 against 262,144 is a 7.5% overrun, which is why a 12,747-line script failed and an 8,000-line certificate did not. Fixed by pinning `guacd` to an upstream commit that accepts the parameter and heap-allocates the buffer (verified by image build), reworking the v1.14.1 stall watchdog so a paused transfer completes instead of being abandoned, and making the ceiling visible via handshake logging plus a new `STRATA_CLIPBOARD_BUFFER_BYTES` override. Mandatory `guacd` rebuild. ([details](CHANGELOG.md#1146--2026-08-19)) |
 | 1.14.5  | 2026-08-18 | **Patch release - dependency security: an internet-facing HTTP/2 denial-of-service in `h2`, and an infinite loop in a build-time `nanoid`.** Two supply-chain gates fired within a day of each other. **`h2` (RUSTSEC-2026-0258 / GHSA-q83h-524g-xf6h)** - the HTTP/2 implementation underneath `hyper`, and a **first-class Strata dependency** (`h2 = "0.4"` in [`Cargo.toml`](Cargo.toml)) - accepted and queued **empty `DATA` frames without limit**. A peer that opens a stream and floods it with zero-length frames, on a stream the application never drains, drives unbounded memory growth on the receiving side and can panic outright if the accumulated length overflows. The accounting happens **before** any Strata-level authorisation, and it matters most at the edge: [`public_tls.rs`](crates/strata-dmz/src/public_tls.rs) advertises `alpn_protocols = ["h2", "http/1.1"]`, so an **anonymous internet client can negotiate HTTP/2 with the DMZ edge binary** without presenting a credential. The same crate carries the mTLS reverse link between the edge and the internal node ([`h2_serve.rs`](backend/src/services/dmz_link/h2_serve.rs) / [`listener.rs`](crates/strata-dmz/src/link_server/listener.rs)), including every WebSocket session multiplexed over Extended CONNECT, plus `hyper`/`axum`'s HTTP/2 on the single-node topology. **Fix:** `Cargo.lock` moves `h2 0.4.14` → **`0.4.16`**; the declared `"0.4"` requirement is unchanged, exactly **one** package moved in a 463-crate graph, and there is no behavioural, configuration, or protocol change. **`nanoid` (GHSA-2v37-7h3g-55p8 / CVE-2026-67213)** - `customAlphabet` / `customRandom` spin forever on a `size` of `0` (CWE-835). **No runtime exposure:** `nanoid` is not a Strata dependency - it arrives only as a **`dev` transitive of the build toolchain** (`vite` → `postcss` → `nanoid`) at a fixed, hard-coded size, is never bundled into the browser artefact, and is absent from the runtime image, which ships no `node_modules`. Pinned to **3.3.18** via an [`overrides`](frontend/package.json) entry anyway. Also ships the **first documentation of Strata's supply-chain gates** ([docs/security.md](docs/security.md#dependency--supply-chain-security)) and fixes two release-hygiene defects (root `package-lock.json` drift at `1.8.4`; a truncated [release checklist](docs/RELEASE_PROCESS.md)). **Dependency-only release: no application source file changed** - no schema, API, env-var, or behavioural change. **DMZ deployments should treat this as a priority patch.** ([details](CHANGELOG.md#1145--2026-08-18))                                                                                                                                                                                                                                                                                                                                                       |
 | 1.14.4  | 2026-08-12 | **Patch release - copy/paste no longer dies for the rest of the Windows session, plus end-to-end clipboard diagnostics.** A user reported _"I think it's something to do with going back to the server when the session closes but you don't log off and then you connect back in. I logged off from a session and logged back in and the copy and paste started to work again."_ Distinct from the v1.14.1 stall: this kills **both** directions and **survives a reconnect**, because RDP reattaches to the still-logged-on Windows session. Root cause: the local → remote push was driven by six independent triggers (three mouse/focus listeners and a window `paste` handler in [`SessionManager.tsx`](frontend/src/components/SessionManager.tsx), the pop-out's own pair bound to the **same** `displayEl` in [`usePopOut.ts`](frontend/src/components/usePopOut.ts), the [`SessionMenu.tsx`](frontend/src/components/SessionMenu.tsx) textarea, and three [`CommandPalette.tsx`](frontend/src/components/CommandPalette.tsx) actions), each with its own inline "open a clipboard stream → chunk → `sendEnd`" copy. A single click on a popped-out session fires up to four; all read `session.remoteClipboard` to decide "already sent?" but none wrote it back until **after** their own transfer finished, so every one passed the guard and opened its own stream - and because the large-payload path `await`s between chunks, their `blob`s interleaved. `guacd`'s RDP clipboard is a **single shared buffer** (`clipboard` resets it, every `blob` appends regardless of stream index), so the payloads spliced together and were announced over CLIPRDR twice, leaving `rdpclip.exe` waiting on a format-data response that never matched. That wedged state lives in the **Windows session, not `guacd`** - hence reconnect never helped. **Fix:** new [`clipboardSync.ts`](frontend/src/components/clipboardSync.ts) serialises every push per session so only one stream is ever open; duplicate suppression also tests in-flight text (explicit palette pastes use `{ force: true }`); closed tunnels are refused and `remoteClipboard` is only committed on a confirmed write; `resetRemoteClipboardEcho()` re-primes on `CONNECTED`; and `_cleanupPaste()` now runs on the tunnel-`CLOSED` path (previously only `closeSession()` did, leaking a window `paste` listener per drop **and per auto-reconnect attempt**). **New diagnostics:** an always-recording 500-entry browser ring buffer via `window.strataClipboard` and a `STRATA_CLIPBOARD_TRACE=1` backend tracer that warns when two clipboard streams overlap - both content-free (opcodes, sizes, timings, one-way digest only). **Recovery:** already-wedged Windows sessions need one log off; a redeploy will not clear them. Backend + frontend patch: **no schema, API, or dependency changes;** 14 regression tests added. ([details](CHANGELOG.md#1144--2026-08-12)) |
@@ -181,7 +186,7 @@ For the full per-version history of how these capabilities were built and the bu
 
 ## vs. vanilla Apache Guacamole
 
-Apache Guacamole's reference web app is a fantastic protocol gateway. Strata is what you'd build on top of it for an enterprise privileged-access deployment — without forking guacd.
+Apache Guacamole's reference web app is a fantastic protocol gateway. Strata is what you'd build on top of it for an enterprise privileged-access deployment — and, since v2.0.0, without any of it at runtime. The browser still speaks the Guacamole wire protocol, which is the part worth keeping; everything behind it is Strata's own.
 
 | Capability                  | Apache Guacamole reference webapp | **Strata Client**                                                                                                                                     |
 | --------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -193,7 +198,7 @@ Apache Guacamole's reference web app is a fantastic protocol gateway. Strata is 
 | Audit log                   | Application log                   | **Append-only, SHA-256 hash-chained** `audit_logs` covering every privileged action                                                                   |
 | Live session observation    | Not included                      | **NVR-style live observe** with 5-minute rewind buffer, share links (view/control), kill controls                                                     |
 | Recording playback          | Server-side render to video       | **In-browser playback** with seek/speed; optional Azure Blob Storage offload                                                                          |
-| H.264 GFX                   | Server-side transcode             | **End-to-end passthrough** to the browser's WebCodecs decoder — no proxy-side decode                                                                  |
+| Session tier                | `guacd` C daemon (FreeRDP, libssh2)  | **In-process Rust engine** — no separate container, no vendored C patches, no plaintext credential crossing a process boundary |                                                  |
 | Web / VDI sessions          | Not supported                     | **First-class** kiosk Chromium-in-Xvnc and Strata-managed `xrdp` Docker containers                                                                    |
 | Multi-monitor               | Limited                           | **Window Management API** spans a session across physical monitors                                                                                    |
 | Operator UX                 | JSP web app                       | **React 19 SPA** with setup wizard, scriptable Command Palette, Quick Share file CDN                                                                  |
@@ -218,14 +223,8 @@ flowchart LR
     Nginx -->|/* SPA assets| Frontend
 
     subgraph AppNet["Application tier"]
-        Backend["<b>Rust Backend</b><br/>Axum + Tokio<br/><sub>auth · RBAC · tunnel · audit · recording</sub>"]
+        Backend["<b>Rust Backend</b><br/>Axum + Tokio<br/><sub>auth · RBAC · tunnel · audit · recording<br/><b>native session engine</b></sub>"]
         Frontend["<b>Frontend container</b><br/><sub>nginx + static SPA</sub>"]
-    end
-
-    Backend -->|TCP 4822<br/>round-robin pool| GuacdPool
-    subgraph GuacdPool["guacd pool (custom image)"]
-        Guacd1["guacd<br/><sub>FreeRDP 3 · Kerberos · K8s · H.264</sub>"]
-        GuacdN["guacd-N<br/><sub>(horizontal scale)</sub>"]
     end
 
     Backend --> Postgres
@@ -241,7 +240,7 @@ flowchart LR
     SMTP["SMTP relay<br/><sub>checkout notifications</sub>"]
     Blob["Azure Blob Storage<br/><sub>recording offload</sub>"]
 
-    GuacdPool -->|RDP / VNC / SSH<br/>Kerberos / K8s API| Targets["Target hosts<br/><sub>Windows · Linux · K8s · Web</sub>"]
+    Backend -->|RDP / VNC / SSH<br/>Kerberos / K8s API| Targets["Target hosts<br/><sub>Windows · Linux · K8s · Web</sub>"]
 ```
 
 See [docs/architecture.md](docs/architecture.md) for a detailed breakdown of every component, data path, and trust boundary.
@@ -281,7 +280,6 @@ Images:
 | ------------------------------------------------------- | ------------------------------------------- |
 | `ghcr.io/bails309/strata-client/backend:<version>`      | Rust backend (Axum + Tokio)                 |
 | `ghcr.io/bails309/strata-client/frontend:<version>`     | Frontend SPA (nginx + static React)         |
-| `ghcr.io/bails309/strata-client/custom-guacd:<version>` | Custom guacd (FreeRDP 3 + Kerberos + H.264) |
 
 Verify image signatures + provenance with [Cosign](https://docs.sigstore.dev/cosign/installation/) before deploying to production:
 
@@ -304,7 +302,7 @@ cosign download attestation ghcr.io/bails309/strata-client/backend:1.10.0 \
 docker compose up -d --build
 ```
 
-This builds `backend`, `frontend`, and `custom-guacd` locally from the Dockerfiles in this repo. Use this path when you've modified source, are testing an unreleased commit, or need an air-gapped build.
+This builds `backend` and `frontend` locally from the Dockerfiles in this repo. Use this path when you've modified source, are testing an unreleased commit, or need an air-gapped build.
 
 ### ⌨️ Windows Key Proxy
 
@@ -332,7 +330,6 @@ This starts all services with Nginx as the main gateway:
 | ---------------- | ------------ | --------------------------------------------- |
 | `frontend`       | `80`, `443`  | React SPA + SSL Gateway + API Proxy           |
 | `backend`        | — (internal) | Rust API / WebSocket proxy                    |
-| `guacd`          | — (internal) | Guacamole protocol daemon (FreeRDP 3 + H.264) |
 | `postgres-local` | — (internal) | Bundled PostgreSQL 16                         |
 | `vault`          | — (internal) | Bundled HashiCorp Vault 1.19                  |
 
@@ -345,12 +342,6 @@ Strata Client uses Nginx to handle HTTPS. To use your own certificates:
 3. Restart the stack: `docker compose up -d`.
 
 Nginx is configured to automatically redirect all port 80 (HTTP) traffic to port 443 (HTTPS) once enabled.
-
-For additional guacd instances:
-
-```bash
-GUACD_INSTANCES=guacd-2:4822 docker compose --profile scale up -d
-```
 
 For a detailed production-ready setup on an Ubuntu server, follow the [Ubuntu VM Deployment Guide](docs/ubuntu-vm-deployment.md).
 
@@ -370,7 +361,7 @@ After setup, log in and navigate to **Admin → SSO / OIDC** to configure your i
 
 ### 5. Add optional components
 
-The core stack is fully functional out of the box. Most production deployments enable one or more **optional components** (ClamAV antivirus, additional `guacd` sidecars, the DMZ edge node, web-kiosk / VDI session containers, the Safeguard JIT integration, etc.) — each ships with its own deployment guide. Jump directly to the relevant one from the [Component & deployment guides](#-component--deployment-guides) table below.
+The core stack is fully functional out of the box. Most production deployments enable one or more **optional components** (ClamAV antivirus, the DMZ edge node, web-kiosk / VDI session containers, the Safeguard JIT integration, etc.) — each ships with its own deployment guide. Jump directly to the relevant one from the [Component & deployment guides](#-component--deployment-guides) table below.
 
 ## 🛠️ Development
 
@@ -382,7 +373,7 @@ cd backend
 cargo run
 ```
 
-Environment variables: `DATABASE_URL`, `GUACD_HOST`, `GUACD_PORT`, `RUST_LOG`, `CONFIG_PATH`.
+Environment variables: `DATABASE_URL`, `RUST_LOG`, `CONFIG_PATH`, `STRATA_SESSION_NATIVE_PROTOCOLS`.
 
 ### Frontend (React / TypeScript)
 
@@ -392,12 +383,13 @@ npm install
 npm run dev          # Vite dev server on :5173, proxies /api → :8080
 ```
 
-### Custom guacd
+### Session engine
 
-The `guacd/Dockerfile` builds the Apache Guacamole server with FreeRDP 3 and Kerberos support. To rebuild manually:
+Removed in v2.0.0. Sessions are served by the native Rust engine in
+`crates/strata-session`; there is no separate protocol daemon to build.
 
 ```bash
-docker build -t custom-guacd:latest ./guacd
+cargo test -p strata-session
 ```
 
 See [docs/deployment.md](docs/deployment.md) for production deployment and upgrade procedures.
@@ -430,8 +422,7 @@ Each row points at the deep-dive deployment / operator guide for the named compo
 | DMZ wire protocol & tunnel internals                                                               | [docs/tunnel.md](docs/tunnel.md)                                                                                                        | Frame format, multiplexing, backpressure, body streaming, RFC 8441 Extended CONNECT               |
 | **Antivirus scanning** (ClamAV sidecar / external clamd / command-driven Defender / Sophos / ESET) | [docs/av-scanning.md](docs/av-scanning.md) · [docs/deployment.md#antivirus-scanning-v1120](docs/deployment.md#antivirus-scanning-v1120) | Three backends, INSTREAM wire protocol, fail-mode truth table, EICAR smoke test, K8s manifests    |
 | **AV operations runbook**                                                                          | [docs/runbooks/av-operations.md](docs/runbooks/av-operations.md)                                                                        | Scanner-down triage, signature-update troubleshooting, false-positive remediation, capacity check |
-| **Additional `guacd` sidecars** (round-robin scaling beyond ~10–15 sessions per instance)          | [docs/deployment.md#high-availability](docs/deployment.md#high-availability)                                                            | `GUACD_INSTANCES`, `scale` compose profile, sidecar duplication template                          |
-| **H.264 GFX passthrough** (end-to-end AVC444 to the browser's WebCodecs decoder)                   | [docs/h264-passthrough.md](docs/h264-passthrough.md)                                                                                    | Host GPO (`Configure-RdpAvc444.ps1`), client checks, fallback paths, performance tuning           |
+| **Session engine internals** (native Rust RDP / SSH / VNC / Kubernetes engines)                    | [docs/adr/ADR-0015-native-rust-session-engine.md](docs/adr/ADR-0015-native-rust-session-engine.md)                                       | Why guacd was replaced, the dual-track transport design, the phased rollout                       |
 | **Web kiosk sessions** (Chromium-in-Xvnc with Trusted CA bundles)                                  | [docs/web-sessions.md](docs/web-sessions.md)                                                                                            | Image build, NSS DB injection, kiosk lifecycle, profile isolation, Chromium policy file           |
 | **VDI desktop containers** (Strata-managed `xrdp` Docker containers per user)                      | [docs/vdi.md](docs/vdi.md)                                                                                                              | Container template, per-user home volumes, GPU passthrough, networking, lifecycle                 |
 | **Safeguard JIT credential checkout** (OneIdentity Safeguard for Privileged Passwords integration) | [docs/safeguard.md](docs/safeguard.md) · [docs/safeguard-user-guide.md](docs/safeguard-user-guide.md)                                   | Appliance config, RSTS sign-in, password caching, JIT checkout dance, end-user UX                 |

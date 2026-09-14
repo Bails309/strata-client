@@ -156,6 +156,18 @@ pub fn build_router(state: SharedState) -> Router {
             delete(admin::delete_connection),
         )
         .route(
+            "/api/admin/connections/{id}/host-key",
+            post(admin::discover_connection_host_key),
+        )
+        .route(
+            "/api/admin/connections/{id}/certificate",
+            post(admin::discover_connection_certificate),
+        )
+        .route(
+            "/api/admin/connections/host-keys",
+            post(admin::survey_ssh_host_keys).put(admin::approve_ssh_host_keys),
+        )
+        .route(
             "/api/admin/connection-folders",
             get(admin::list_connection_folders),
         )
@@ -724,7 +736,6 @@ mod tests {
             config: None,
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
-            guacd_pool: None,
             file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                 "/tmp/strata-files",
             ))

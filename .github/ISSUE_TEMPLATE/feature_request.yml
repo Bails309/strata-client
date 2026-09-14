@@ -34,7 +34,7 @@ body:
       options:
         - Backend (Rust)
         - Frontend (React)
-        - guacd / patches
+        - session engine
         - Authentication / OIDC / SSO
         - RBAC / permissions
         - Audit / observability

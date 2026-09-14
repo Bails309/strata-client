@@ -1,0 +1,212 @@
+[package]
+name = "strata-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Native Rust remote-session engine replacing the Apache Guacamole C daemon (guacd)."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["ssh"]
+# Real protocol engines. Each pulls a substantial dependency tree, so
+# they are opt-in and can be rolled out one at a time (ADR-0015 Phase 2).
+ssh = ["dep:russh"]
+# Server-side terminal rasteriser, needed only by Guacamole Wire
+# Compatibility Mode. Native Direct Streaming sends raw PTY bytes to
+# xterm.js and does not pull this in.
+terminal = ["dep:alacritty_terminal", "dep:fontdue", "dep:image"]
+# RDP engine. Replaces FreeRDP: sans-I/O state machine, no hidden threads.
+rdp = [
+    "dep:ironrdp-connector",
+    "dep:ironrdp-session",
+    "dep:ironrdp-tokio",
+    "dep:ironrdp-tls",
+    "dep:ironrdp-pdu",
+    "dep:ironrdp-graphics",
+    "dep:ironrdp-core",
+    "dep:ironrdp-cliprdr",
+    "dep:ironrdp-dvc",
+    "dep:ironrdp-displaycontrol",
+    "dep:ironrdp-rdpsnd",
+    "dep:rustls-native-certs",
+    "dep:rustls-pki-types",
+    "dep:x509-cert",
+    "dep:sspi",
+    "dep:picky",
+    "dep:image",
+]
+# VNC engine. Also the transport behind `web`, which runs a browser in a
+# container and exposes it over RFB.
+vnc = ["dep:vnc-rs", "dep:image"]
+# Kubernetes exec engine. A WebSocket to the API server rather than a
+# protocol of its own, so it reuses the SSH engine's keymap and the
+# terminal rasteriser.
+kubernetes = [
+    "dep:tokio-tungstenite",
+    "dep:rustls-native-certs",
+    "dep:rustls-pki-types",
+    "dep:pkcs8",
+]
+# File transfer. Not a protocol: it decorates any engine, because guacd
+# offers it on RDP and VNC too by opening a second SSH connection.
+sftp = ["dep:russh-sftp", "dep:russh", "dep:serde_json"]
+# Re-enables RSA host keys and RSA public-key auth.
+#
+# OFF by default, and `cargo deny check advisories` is why: russh's `rsa`
+# feature pulls `rsa 0.10.0-rc.x`, which carries RUSTSEC-2023-0071 (the
+# Marvin attack -- key recovery through a timing sidechannel) with no
+# fixed release available. Shipping that in a privileged-access gateway
+# is not a trade we should make silently. ed25519, ECDSA (P-256/384/521)
+# and the post-quantum KEX remain available, which covers every target
+# running a current OpenSSH.
+#
+# Enable only for targets that present no non-RSA host key, and expect
+# to add a documented `advisories.ignore` entry when you do.
+ssh-rsa = ["ssh", "russh/rsa"]
+
+# IMPORTANT: this crate runs in the TRUSTED internal zone, never in the
+# DMZ. `crates/strata-dmz` MUST NOT depend on it — the edge reaches the
+# session tier over a signed socket, not in-process. Enforced by
+# .github/workflows/dmz-deps.yml. See
+# docs/adr/ADR-0015-native-rust-session-engine.md.
+
+[dependencies]
+strata-protocol = { path = "../strata-protocol" }
+
+# Async runtime
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tokio-rustls = { workspace = true }
+futures-util = { workspace = true }
+bytes = { workspace = true }
+async-trait = { workspace = true }
+
+# Wire parsing
+winnow = { workspace = true }
+base64 = { workspace = true }
+# Certificate fingerprints, for the pinning path in `tls.rs`.
+sha2 = { workspace = true }
+
+# Secrets
+secrecy = { workspace = true }
+zeroize = { workspace = true }
+
+# Errors / logging
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# SSH engine (feature `ssh`)
+#
+# Pinned to >=0.60.3 on purpose: RUSTSEC-2026-0153/0154 (CVE-2026-46673)
+# are only patched there. In releases before 0.58 the vulnerable
+# `CryptoVec` growth is reachable from *remote* SSH traffic — transport
+# packet reads and zlib decompression — and can abort the process. This
+# engine runs in-process inside the backend, so that abort would take
+# every RDP session down with it. That rules out the older russh that
+# current `ironrdp` would otherwise force us onto; see the version note
+# on the RDP dependencies below.
+#
+# `ring` rather than the default `aws-lc-rs`: aws-lc is a C library, and
+# removing C from the session tier is the point of this crate. rustls
+# already standardises the workspace on ring.
+russh = { version = "0.63", optional = true, default-features = false, features = [
+    "ring",
+    "flate2",
+] }
+
+# Terminal rasteriser (feature `terminal`)
+# No shaping engine: a monospace grid needs glyph rasterisation and
+# nothing else, so `fontdue` replaces the cosmic-text/tiny-skia stack.
+alacritty_terminal = { version = "0.26", optional = true }
+fontdue = { version = "0.9", optional = true }
+image = { version = "0.25", optional = true, default-features = false, features = [
+    "png",
+] }
+
+# RDP engine (feature `rdp`)
+#
+# TODO(v2): raise to the current ironrdp (0.10/0.11) once `picky` ships
+# 7.0.0 proper. ironrdp 0.8+ pins a `picky` release candidate that pins
+# `curve25519-dalek =5.0.0-rc.1`, which cannot coexist with the stable
+# 5.0.0 that a patched russh requires. The 0.7 line pins an older picky
+# whose dalek is 4.x — a different major — so both engines resolve.
+#
+# The alternative was holding ironrdp current and dropping russh to
+# 0.54, which reintroduces a remotely reachable process abort. Keeping
+# RDP three minor versions back is the cheaper of the two. See
+# docs/adr/ADR-0015-native-rust-session-engine.md.
+ironrdp-connector = { version = "0.7", optional = true }
+ironrdp-session = { version = "0.7", optional = true }
+ironrdp-tokio = { version = "0.7", optional = true }
+# `rustls-ring`, not the default aws-lc-rs: same no-C reasoning as russh,
+# and `deny.toml` bans native-tls outright.
+ironrdp-tls = { version = "0.2", optional = true, default-features = false, features = [
+    "rustls-ring",
+] }
+ironrdp-pdu = { version = "0.6", optional = true }
+ironrdp-graphics = { version = "0.6", optional = true }
+ironrdp-core = { version = "0.1", optional = true }
+# Clipboard virtual channel. 0.4 is the release that resolves to a single
+# ironrdp-svc 0.5 alongside connector 0.7.
+ironrdp-cliprdr = { version = "0.4", optional = true }
+# Dynamic virtual channels, and the Display Control channel they carry.
+# Without these the desktop is stuck at its initial size and the browser
+# has to scale the framebuffer, which looks blurry.
+ironrdp-dvc = { version = "0.4", optional = true }
+ironrdp-displaycontrol = { version = "0.4", optional = true }
+# Audio output. 0.6 is the only nearby release that resolves to a single
+# ironrdp-svc 0.5: 0.4 and 0.5 drag in svc 0.3/0.4 beside it and 0.9 drags
+# in 0.8, all of which resolve happily and then fail to typecheck against
+# connector 0.7's channel traits.
+ironrdp-rdpsnd = { version = "0.6", optional = true }
+# VNC/RFB client. Pure Rust with no `-sys` crate anywhere in its tree,
+# which is the same reason FreeRDP was replaced rather than wrapped.
+vnc-rs = { version = "0.5", optional = true }
+# Kubernetes exec transport (feature `kubernetes`). The `kube` crate was
+# not used: it carries an ~80-deep tree for an API this engine touches at
+# exactly one endpoint. rustls rather than native-tls, which deny.toml bans.
+tokio-tungstenite = { version = "0.29", optional = true, default-features = false, features = [
+    "connect",
+    "handshake",
+    "rustls-tls-native-roots",
+] }
+# PEM parsing for the connection's CA and client certificate. The
+# unmaintained rustls-pemfile is deliberately avoided (RUSTSEC-2025-0134).
+rustls-pki-types = { workspace = true, optional = true }
+# Decrypts a password-protected client key. Version tracks what is
+# already in the tree so only one copy is built.
+pkcs8 = { version = "0.11", optional = true, features = ["encryption", "pem"] }
+# SFTP subsystem (feature `sftp`), built for the russh already in tree.
+russh-sftp = { version = "3.0", optional = true }
+# Directory listings are a JSON object on the wire, and hand-rolling the
+# escaping for filenames the operator does not control is not worth it.
+serde_json = { workspace = true, optional = true }
+# TLS is driven directly rather than through ironrdp-tls, which accepts
+# any certificate and so cannot honour a connection's ignore-cert
+# setting. The tokio-rustls above is the workspace pin, already ring-only
+# so the process keeps a single crypto provider.
+rustls-native-certs = { version = "0.8", optional = true }
+x509-cert = { version = "0.2", optional = true }
+# Needed directly for the KDC network client CredSSP suspends on during
+# Kerberos authentication. Version tracks what ironrdp-connector 0.7 uses.
+# Default features off: only two types are used from it, and the defaults
+# drag in a blocking reqwest stack that is both unused and extra attack
+# surface.
+sspi = { version = "0.16", default-features = false, optional = true }
+# Not used directly — this is a resolution pin. ironrdp-connector 0.7
+# requires `picky = "7.0.0-rc.17"`, which on a prerelease also matches
+# rc.26; that newer picky no longer compiles against the `sspi` version
+# ironrdp 0.7 expects. Cargo has no `[constraints]` section, so an
+# explicit `=` dependency is the only way to hold it still.
+picky = { version = "=7.0.0-rc.17", optional = true }
+
+# IDs / time
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

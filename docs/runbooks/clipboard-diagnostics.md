@@ -1,5 +1,28 @@
 # Runbook — Clipboard failure diagnosis and recovery
 
+> **Partially superseded by v2.0.0.** Several failure modes below were
+> properties of `guacd`, which no longer exists. Specifically:
+>
+> - **The 256 KiB silent-discard ceiling is gone.** `guacd` allocated one
+>   fixed-size clipboard buffer per connection and dropped an oversize
+>   copy *wholesale* rather than truncating it (v1.14.6). The native
+>   engine caps a transfer at **8 MiB per direction** and logs when it
+>   truncates, so silence is no longer a possible symptom of size.
+> - **The `rdpclip.exe` wedge (v1.14.4) is far less likely.** It came
+>   from `guacd`'s RDP clipboard being a single shared buffer that could
+>   not multiplex interleaved streams. The serialised local→remote path
+>   added in v1.14.4 is retained, but the shared buffer underneath it is
+>   gone.
+> - **`STRATA_CLIPBOARD_TRACE` and `STRATA_CLIPBOARD_BUFFER_BYTES` no
+>   longer exist**, and neither does
+>   `docker-compose.clipboard-debug.yml`. Backend-side tracing sections
+>   below do not apply. The **browser-side** `window.strataClipboard`
+>   helper is unchanged and remains the primary diagnostic.
+>
+> The browser-side procedure, the recovery steps, and the general triage
+> flow are still correct. Treat any instruction that restarts `guacd` or
+> sets a backend clipboard environment variable as historical.
+
 ## Purpose
 
 Identify which of the known clipboard failure modes a user has hit,

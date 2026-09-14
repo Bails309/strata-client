@@ -23,7 +23,7 @@
 #                              Internal host's backend ────────┘
 #                              (initiates outbound, no public IP)
 #
-# This overlay does NOT bring up the backend, guacd, postgres, or
+# This overlay does NOT bring up the backend, postgres, or
 # vault — those live on the internal host (use the standard
 # docker-compose.yml there + STRATA_DMZ_ENDPOINTS in the backend env).
 #

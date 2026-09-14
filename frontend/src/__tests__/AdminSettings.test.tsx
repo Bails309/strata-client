@@ -156,7 +156,7 @@ import {
 
 const healthOk = {
   database: { connected: true, mode: "local", host: "localhost", latency_ms: 5 },
-  guacd: { reachable: true, host: "guacd", port: 4822 },
+  engine: { protocols: ["rdp", "ssh"], withheld: [], terminal_font: true },
   vault: { configured: true, mode: "local", address: "http://vault:8200" },
   schema: { status: "in_sync", applied_migrations: 28, expected_migrations: 28 },
   uptime_secs: 3600,
@@ -165,7 +165,7 @@ const healthOk = {
 
 const healthDown = {
   database: { connected: false, mode: "local", host: "localhost", latency_ms: null },
-  guacd: { reachable: false, host: "guacd", port: 4822 },
+  engine: { protocols: ["rdp", "ssh"], withheld: [], terminal_font: true },
   vault: { configured: false, mode: "", address: "" },
   schema: { status: "unavailable", applied_migrations: 0, expected_migrations: 28 },
   uptime_secs: 0,
@@ -174,13 +174,13 @@ const healthDown = {
 
 const metricsOk = {
   active_sessions: 7,
-  total_bytes_from_guacd: 1024,
-  total_bytes_to_guacd: 512,
+  total_bytes_down: 1024,
+  total_bytes_up: 512,
   sessions_by_protocol: { rdp: 4, ssh: 3 },
-  guacd_pool_size: 2,
-  recommended_per_instance: 18,
   system_total_memory: 8589934592,
   system_cpu_cores: 4,
+  native_ram_per_session_mb: 24,
+  native_recommended: 90,
 };
 
 const defaultUser: import("../api").MeResponse = {
@@ -247,6 +247,7 @@ function setupDefaults() {
     avg_duration_mins: 0,
     median_duration_mins: 0,
     total_bandwidth_bytes: 0,
+    recording_enabled: true,
     top_connections: [],
     top_users: [],
     daily_trend: [],
@@ -324,14 +325,14 @@ describe("HealthTab", () => {
   it("shows Healthy badges when all services are up", async () => {
     renderAdmin();
     const badges = await screen.findAllByText("Healthy");
-    expect(badges.length).toBe(4); // Database, guacd, Vault, Schema
+    expect(badges.length).toBe(4); // Database, Session Engine, Vault, Schema
   });
 
   it("shows Unhealthy badges when services are down", async () => {
     vi.mocked(getServiceHealth).mockResolvedValue(healthDown);
     renderAdmin();
     const unhealthy = await screen.findAllByText("Unhealthy");
-    expect(unhealthy.length).toBe(2); // Database, guacd
+    expect(unhealthy.length).toBe(1); // Database
     expect(screen.getByText("Not Configured")).toBeInTheDocument(); // Vault
     const unavailable = screen.getAllByText("Unavailable");
     expect(unavailable.length).toBeGreaterThanOrEqual(1); // Schema badge + status text
@@ -352,11 +353,6 @@ describe("HealthTab", () => {
   it("shows vault address when configured", async () => {
     renderAdmin();
     expect(await screen.findByText("http://vault:8200")).toBeInTheDocument();
-  });
-
-  it("shows pool size from metrics", async () => {
-    renderAdmin();
-    expect(await screen.findByText("2")).toBeInTheDocument();
   });
 
   it("shows retry button when health fails", async () => {
@@ -1557,6 +1553,7 @@ describe("SessionsTab", () => {
       avg_duration_mins: 12.5,
       median_duration_mins: 9.0,
       total_bandwidth_bytes: 5242880,
+      recording_enabled: true,
       top_connections: [],
       top_users: [],
       daily_trend: [],
@@ -1568,8 +1565,10 @@ describe("SessionsTab", () => {
     await user.click(screen.getByText("Sessions"));
     expect(await screen.findByText("72")).toBeInTheDocument();
     expect(screen.getByText("1.2")).toBeInTheDocument();
-    expect(screen.getByText("5")).toBeInTheDocument();
-    expect(screen.getByText("3")).toBeInTheDocument();
+    // Scoped to their own cards: the engine-cost cards added alongside
+    // these render small integers too, so a bare getByText is ambiguous.
+    expect(screen.getByText("Unique Users").parentElement).toHaveTextContent("5");
+    expect(screen.getByText("Active Now").parentElement).toHaveTextContent("3");
     expect(screen.getByText(/last 30 days/i)).toBeInTheDocument();
   });
 
@@ -1592,6 +1591,7 @@ describe("SessionsTab", () => {
       avg_duration_mins: 15.0,
       median_duration_mins: 12.0,
       total_bandwidth_bytes: 0,
+      recording_enabled: true,
       top_connections: [
         { name: "Server X", protocol: "rdp", sessions: 8, total_hours: 1.5 },
         { name: "Server Y", protocol: "ssh", sessions: 2, total_hours: 1.0 },
@@ -1619,6 +1619,7 @@ describe("SessionsTab", () => {
       avg_duration_mins: 15.0,
       median_duration_mins: 12.0,
       total_bandwidth_bytes: 0,
+      recording_enabled: true,
       top_connections: [],
       top_users: [
         { username: "alice", sessions: 6, total_hours: 1.0, last_session: "2026-04-10T14:30:00Z" },
@@ -1644,6 +1645,7 @@ describe("SessionsTab", () => {
       avg_duration_mins: 0,
       median_duration_mins: 0,
       total_bandwidth_bytes: 0,
+      recording_enabled: true,
       top_connections: [],
       top_users: [],
       daily_trend: [],
@@ -2433,10 +2435,13 @@ describe("ConnectionForm protocol sections", () => {
     // Display is collapsed by default — click to expand
     // Use getByRole to distinguish from the "Display" tab
     await user.click(screen.getByRole("button", { name: /▸ Display/ }));
-    expect(screen.getByText("Font Name")).toBeInTheDocument();
+    // Font Name was withdrawn in migration 088 — honouring a family name
+    // needs fontconfig, which is C. Font Size is honoured and stays.
+    expect(screen.getByText("Font Size")).toBeInTheDocument();
+    expect(screen.queryByText("Font Name")).not.toBeInTheDocument();
     // Click again to collapse
     await user.click(screen.getByRole("button", { name: /▾ Display/ }));
-    expect(screen.queryByText("Font Name")).not.toBeInTheDocument();
+    expect(screen.queryByText("Font Size")).not.toBeInTheDocument();
   });
 
   it("shows VNC protocol sections when protocol changed to VNC", async () => {
@@ -2636,16 +2641,15 @@ describe("ConnectionForm protocol sections", () => {
     expect(screen.getByText(/Security Mode/)).toBeInTheDocument();
   });
 
-  it("expands RDP Remote Desktop Gateway section", async () => {
+  it("expands RDP Certificate Trust section", async () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("Access"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
-    await user.click(screen.getByRole("button", { name: /▸ Remote Desktop Gateway/ }));
-    expect(screen.getByText("Gateway Hostname")).toBeInTheDocument();
-    expect(screen.getByText("Gateway Port")).toBeInTheDocument();
-    expect(screen.getByText("Gateway Username")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /▸ Certificate Trust/ }));
+    expect(screen.getByText("Trusted CA")).toBeInTheDocument();
+    expect(screen.getByText(/Pinned certificate fingerprints/)).toBeInTheDocument();
   });
 
   it("expands RDP Basic Settings section", async () => {
@@ -2678,14 +2682,17 @@ describe("ConnectionForm protocol sections", () => {
     expect(screen.getByText("Enable wallpaper")).toBeInTheDocument();
   });
 
-  it("expands RDP Drive Redirection section", async () => {
+  it("expands RDP Device Redirection section", async () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("Access"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ Device Redirection/ }));
-    expect(screen.getByText("Enable drive / file transfer")).toBeInTheDocument();
+    // Drive and printer redirection were withdrawn with the RDPDR
+    // channel; audio playback is all this section still carries.
+    expect(screen.getByText("Disable audio playback")).toBeInTheDocument();
+    expect(screen.queryByText("Disable file download")).not.toBeInTheDocument();
   });
 
   it("expands RDP Screen Recording section", async () => {
@@ -2716,16 +2723,8 @@ describe("ConnectionForm protocol sections", () => {
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ Clipboard/ }));
     expect(screen.getByText("Disable copy from remote")).toBeInTheDocument();
-  });
-
-  it("expands RDP RemoteApp section", async () => {
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText("Access"));
-    await screen.findByText("Server A");
-    await user.click(screen.getByText("+ Add Connection"));
-    await user.click(screen.getByRole("button", { name: /▸ RemoteApp/ }));
-    expect(screen.getByPlaceholderText("||notepad")).toBeInTheDocument();
+    // Line-ending normalisation was never wired to anything.
+    expect(screen.queryByText("Normalize Clipboard")).not.toBeInTheDocument();
   });
 
   it("expands RDP Load Balancing section", async () => {
@@ -3141,7 +3140,10 @@ describe("NetworkTab", () => {
         dns_search_domains: "corp.local",
       });
     });
-    expect(await screen.findByText(/Restart required/)).toBeInTheDocument();
+    expect(await screen.findByText(/Saved/)).toBeInTheDocument();
+    // The confirmation has to name the servers, because nothing else in
+    // the UI shows which resolver a session actually used.
+    expect(screen.getByText(/10\.0\.0\.1/)).toBeInTheDocument();
   });
 
   it("saves DNS settings without restart notice", async () => {

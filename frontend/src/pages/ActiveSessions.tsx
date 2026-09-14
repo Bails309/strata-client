@@ -249,7 +249,7 @@ export default function ActiveSessions() {
                         >
                           <path d="M12 5v14m-7-7l7 7 7-7" />
                         </svg>
-                        {(session.bytes_from_guacd / 1024 / 1024).toFixed(1)} MB
+                        {(session.bytes_down / 1024 / 1024).toFixed(1)} MB
                       </span>
                       <span className="text-[0.7rem] text-txt-tertiary flex items-center gap-1">
                         <svg
@@ -263,7 +263,7 @@ export default function ActiveSessions() {
                         >
                           <path d="M12 19V5m-7 7l7-7 7 7" />
                         </svg>
-                        {(session.bytes_to_guacd / 1024).toFixed(1)} KB
+                        {(session.bytes_up / 1024).toFixed(1)} KB
                       </span>
                     </div>
                   </td>

@@ -43,11 +43,13 @@ jobs:
           head -n 60 dmz-deps.txt
           echo "------------------------------------------"
 
-          forbidden='^(sqlx|deadpool-postgres|vaultrs|ldap3|krb5|kerberos|gssapi|libgssapi|guac)'
+          forbidden='^(sqlx|deadpool-postgres|vaultrs|ldap3|krb5|kerberos|gssapi|libgssapi|guac|strata-session)'
           if grep -E "$forbidden" dmz-deps.txt; then
             echo ""
             echo "FAIL: strata-dmz pulled in a forbidden crate."
-            echo "      The DMZ binary must not depend on DB/Vault/LDAP/Kerberos/guac crates."
+            echo "      The DMZ binary must not depend on DB/Vault/LDAP/Kerberos/guac crates,"
+            echo "      nor on strata-session: the edge reaches the session tier over a"
+            echo "      signed socket, not in-process (ADR-0015)."
             echo "      Move the offending feature to strata-internal."
             exit 1
           fi

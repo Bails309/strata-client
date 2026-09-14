@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hickory_resolver::config::{NameServerConfigGroup, ResolveHosts, ResolverConfig, ResolverOpts};
-use hickory_resolver::name_server::TokioConnectionProvider;
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::{Name, TokioResolver};
 use tokio::sync::RwLock;
 
@@ -119,9 +119,10 @@ async fn resolver_for(cfg: &DnsSettings) -> Arc<TokioResolver> {
     opts.use_hosts_file = ResolveHosts::Never;
 
     let resolver = Arc::new(
-        TokioResolver::builder_with_config(config, TokioConnectionProvider::default())
+        TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
             .with_options(opts)
-            .build(),
+            .build()
+            .expect("failed to build DNS resolver"),
     );
     *CACHE.write().await = Some((cfg.clone(), Arc::clone(&resolver)));
     resolver

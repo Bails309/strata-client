@@ -17,9 +17,10 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hickory_resolver::config::{NameServerConfigGroup, ResolveHosts, ResolverConfig, ResolverOpts};
+use hickory_resolver::config::{NameServerConfig, ResolveHosts, ResolverConfig, ResolverOpts};
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
-use hickory_resolver::{Name, TokioResolver};
+use hickory_resolver::proto::rr::Name;
+use hickory_resolver::TokioResolver;
 use tokio::sync::RwLock;
 
 use crate::services::settings;
@@ -101,13 +102,21 @@ async fn resolver_for(cfg: &DnsSettings) -> Arc<TokioResolver> {
         }
     }
 
-    let group = NameServerConfigGroup::from_ips_clear(&cfg.servers, 53, true);
-    let mut config = ResolverConfig::from_parts(None, Vec::new(), group);
+    let name_servers: Vec<NameServerConfig> = cfg
+        .servers
+        .iter()
+        .copied()
+        .map(NameServerConfig::udp_and_tcp)
+        .collect();
+
+    let mut search = Vec::new();
     for domain in &cfg.search {
         if let Ok(name) = domain.parse::<Name>() {
-            config.add_search(name);
+            search.push(name);
         }
     }
+
+    let config = ResolverConfig::from_parts(None, search, name_servers);
 
     let mut opts = ResolverOpts::default();
     opts.timeout = TIMEOUT;

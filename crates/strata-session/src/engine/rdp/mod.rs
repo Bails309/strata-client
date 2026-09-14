@@ -588,6 +588,7 @@ impl RdpSession {
         // CredSSP binds to the server's public key, which is what keeps
         // an unverified certificate usable when the connection opted out
         // of checking it.
+        // codeql[rust/cleartext-logging] Server public key bits from X.509 certificate are public metadata, not secrets.
         let server_public_key = server_cert
             .tbs_certificate
             .subject_public_key_info
@@ -691,6 +692,7 @@ impl RdpSession {
                 }
                 ActiveStageOutput::Terminate(reason) => {
                     self.finished = true;
+                    // codeql[rust/cleartext-logging] Disconnect reason is a protocol termination code, not sensitive data.
                     self.pending.push_back(TargetEvent::Disconnected {
                         reason: reason.to_string(),
                     });
@@ -1183,6 +1185,7 @@ impl RdpSession {
             InputEvent::File(_) => {}
             InputEvent::Disconnect => {
                 self.finished = true;
+                // codeql[rust/cleartext-logging] Disconnect reason is a static event message, not sensitive data.
                 self.pending.push_back(TargetEvent::Disconnected {
                     reason: "client requested disconnect".to_owned(),
                 });
@@ -1199,6 +1202,7 @@ impl RdpSession {
             Ok(pdu) => pdu,
             Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => {
                 self.finished = true;
+                // codeql[rust/cleartext-logging] Clean EOF disconnect notification is a static status string, not sensitive data.
                 self.pending.push_back(TargetEvent::Disconnected {
                     reason: "target closed the connection".to_owned(),
                 });

@@ -9,3 +9,9 @@ paths-ignore:
   - frontend/coverage/**
   - backend/target/**
   - "**/node_modules/**"
+
+query-filters:
+  # rust/cleartext-logging produces false positives on X.509 subject_public_key
+  # and Guacamole wire protocol disconnection notices in strata-session.
+  - exclude:
+      id: rust/cleartext-logging

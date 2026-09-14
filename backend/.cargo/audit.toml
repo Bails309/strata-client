@@ -21,4 +21,12 @@ ignore = [
     # have not yet migrated to rand 0.9. Strata's own code uses rand 0.9.3.
     # Remove once upstream crates publish rand-0.9 releases.
     "RUSTSEC-2026-0097",
+
+    # RUSTSEC-2026-0192 — `ttf-parser` is unmaintained (not vulnerable).
+    # Arrives via `fontdue`, the glyph rasteriser the session engine's
+    # terminal renderer uses for Guacamole Wire Compatibility Mode. The
+    # parser only ever sees font files we ship in the image, never network
+    # input, so an unmaintained advisory carries no reachable risk here.
+    # Revisit if a vulnerability is ever filed against it.
+    "RUSTSEC-2026-0192",
 ]

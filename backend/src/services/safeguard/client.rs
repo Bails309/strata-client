@@ -235,7 +235,7 @@ pub struct MeResponse {
 
 pub async fn probe_me(client: &Client, base: &str, bearer: &str) -> Result<MeResponse, AppError> {
     let url = format!("{base}/service/core/v4/Me");
-    // codeql[rust/request-forgery] Target URL is formed using validated base URL from validate_appliance_host().
+    // `base` must come from `base_url`, which is what validates the host.
     let resp = client
         .get(&url)
         .bearer_auth(bearer)
@@ -311,7 +311,7 @@ struct A2aTokenResponse {
 
 pub async fn a2a_login(client: &Client, base: &str, api_key: &str) -> Result<String, AppError> {
     let url = format!("{base}/service/core/v4/Token/LoginResponse");
-    // codeql[rust/request-forgery] Target URL is formed using validated base URL from validate_appliance_host().
+    // `base` must come from `base_url`, which is what validates the host.
     let resp = client
         .post(&url)
         .header("Authorization", format!("A2A {api_key}"))

@@ -1,0 +1,54 @@
+name: Publish CodeQL model pack
+
+# The `packs:` key in a CodeQL config file only accepts published pack names —
+# `scope/name`, validated against a strict identifier pattern — so a model pack
+# living in this repository has to reach GHCR before `codeql.yml` can consume
+# it. This workflow does that publish.
+#
+# Bump `version` in the pack's qlpack.yml whenever a model changes: the registry
+# rejects a re-publish of an existing version.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/codeql/extensions/**'
+      - '.github/workflows/codeql-model-pack.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish strata-rust-models
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The standalone CLI rather than the full bundle: publishing a model pack
+      # needs the packaging commands, not the bundled query packs (~200 MB vs
+      # ~1.5 GB). `pack install` fetches the `codeql/rust-all` target it extends.
+      - name: Install the CodeQL CLI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download --repo github/codeql-cli-binaries \
+            --pattern codeql-linux64.zip --dir "$RUNNER_TEMP"
+          unzip -q "$RUNNER_TEMP/codeql-linux64.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/codeql" >> "$GITHUB_PATH"
+
+      - name: Check the CLI is usable
+        run: codeql version --format=terse
+
+      - name: Resolve pack dependencies
+        run: codeql pack install .github/codeql/extensions/strata-rust-models
+
+      - name: Publish to GitHub Container Registry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: codeql pack publish .github/codeql/extensions/strata-rust-models

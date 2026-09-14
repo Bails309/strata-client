@@ -180,7 +180,6 @@ pub async fn test_connection(
     // (not 5xx, not a connect error), proving the appliance answers.
     {
         let url = format!("{base}/service/core/v4/Me");
-        // codeql[rust/request-forgery] Admin test endpoint validates the appliance host via validate_appliance_host() before this point; outbound request is an intentional reachability check by an authenticated administrator.
         match client.get(&url).send().await {
             Ok(r) => {
                 let status = r.status();

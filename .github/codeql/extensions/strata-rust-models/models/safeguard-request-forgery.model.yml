@@ -1,0 +1,70 @@
+# Barrier models for the Safeguard appliance URL builder.
+#
+# `rust/request-forgery` reports every outbound request whose URL derives from
+# a request body. `POST /api/admin/safeguard/test` is such a request by design:
+# an administrator supplies an appliance address and asks Strata to probe it,
+# so the feature cannot exist without one. What makes it safe is that the host
+# never reaches a URL unchecked — `validate_appliance_host` admits only a bare
+# DNS name or an IP literal, and `base_url` is the single URL constructor and
+# calls it unconditionally.
+#
+# `RequestForgery::ModelsAsDataBarrier` reads barriers of kind `request-url`,
+# which is the sink kind the query uses, so a barrier on the sanitiser's return
+# value stops the flow exactly where the validation happens.
+#
+# Two canonical-path spellings are listed because the root segment is the
+# rust-analyzer crate name, which normalises the `strata-backend` Cargo target.
+# Rows that bind to nothing are inert, so listing both costs nothing.
+extensions:
+  - addsTo:
+      pack: codeql/rust-all
+      extensible: barrierModel
+    data:
+      - [
+          "strata_backend::services::safeguard::client::base_url",
+          "ReturnValue",
+          "request-url",
+          "manual",
+        ]
+      - [
+          "strata_backend::services::safeguard::client::base_url",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "request-url",
+          "manual",
+        ]
+      - [
+          "strata_backend::services::safeguard::client::validate_appliance_host",
+          "ReturnValue",
+          "request-url",
+          "manual",
+        ]
+      - [
+          "strata_backend::services::safeguard::client::validate_appliance_host",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "request-url",
+          "manual",
+        ]
+      - [
+          "strata-backend::services::safeguard::client::base_url",
+          "ReturnValue",
+          "request-url",
+          "manual",
+        ]
+      - [
+          "strata-backend::services::safeguard::client::base_url",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "request-url",
+          "manual",
+        ]
+      - [
+          "strata-backend::services::safeguard::client::validate_appliance_host",
+          "ReturnValue",
+          "request-url",
+          "manual",
+        ]
+      - [
+          "strata-backend::services::safeguard::client::validate_appliance_host",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "request-url",
+          "manual",
+        ]

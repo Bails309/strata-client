@@ -141,12 +141,85 @@ pub fn a2a_identity(secrets: &ResolvedSecrets) -> Result<Option<Identity>, AppEr
 }
 
 /// Compose the base URL for the appliance.
-pub fn base_url(cfg: &SafeguardConfig) -> String {
-    if cfg.appliance_port == 443 {
-        format!("https://{}", cfg.appliance_fqdn)
-    } else {
-        format!("https://{}:{}", cfg.appliance_fqdn, cfg.appliance_port)
+///
+/// Fail-closed: the host is validated by [`validate_appliance_host`]
+/// before it is interpolated, so no caller can build a Safeguard URL
+/// out of an unchecked string.
+pub fn base_url(cfg: &SafeguardConfig) -> Result<String, AppError> {
+    let host = validate_appliance_host(&cfg.appliance_fqdn)?;
+    if !(1..=65535).contains(&cfg.appliance_port) {
+        return Err(AppError::Validation(
+            "Safeguard appliance port must be between 1 and 65535".into(),
+        ));
     }
+    if cfg.appliance_port == 443 {
+        Ok(format!("https://{host}"))
+    } else {
+        Ok(format!("https://{host}:{}", cfg.appliance_port))
+    }
+}
+
+/// Longest legal DNS name.
+const MAX_HOST_LEN: usize = 253;
+
+/// Check that `raw` names a host and nothing else, returning it
+/// normalised.
+///
+/// `appliance_fqdn` is operator-supplied and gets interpolated into
+/// every Safeguard URL. Anything other than a bare hostname or IP
+/// literal rewrites the URL instead of naming a host — `evil.test/x?`
+/// redirects the path, `user@internal` smuggles a different authority,
+/// a `:` injects a port — which turns every Safeguard call into a
+/// request-forgery primitive. Only `[A-Za-z0-9.-]` (or an IP literal)
+/// can survive this.
+pub fn validate_appliance_host(raw: &str) -> Result<String, AppError> {
+    let host = raw.trim();
+    let reject = || {
+        AppError::Validation(
+            "Safeguard appliance FQDN must be a bare hostname or IP address, with no \
+             scheme, port, path, credentials or query"
+                .to_owned(),
+        )
+    };
+
+    if host.is_empty() {
+        return Err(AppError::Validation(
+            "Safeguard appliance FQDN is required".into(),
+        ));
+    }
+    if host.len() > MAX_HOST_LEN {
+        return Err(reject());
+    }
+
+    // IP literals, accepted bracketed or bare and always emitted in the
+    // form a URL authority needs.
+    let unbracketed = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if let Ok(ip) = unbracketed.parse::<std::net::Ipv6Addr>() {
+        return Ok(format!("[{ip}]"));
+    }
+    if host.starts_with('[') {
+        return Err(reject());
+    }
+    if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
+        return Ok(ip.to_string());
+    }
+
+    let labels_ok = host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    });
+    if !labels_ok {
+        return Err(reject());
+    }
+    Ok(host.to_ascii_lowercase())
 }
 
 /// `GET /service/core/v4/Me` — Safeguard's "who am I" endpoint. Used
@@ -1095,13 +1168,63 @@ mod tests {
     #[test]
     fn base_url_default_port_omits_443() {
         let c = cfg_with_fqdn("sg.example.com", 443);
-        assert_eq!(base_url(&c), "https://sg.example.com");
+        assert_eq!(base_url(&c).unwrap(), "https://sg.example.com");
     }
 
     #[test]
     fn base_url_custom_port_appended() {
         let c = cfg_with_fqdn("sg.example.com", 8443);
-        assert_eq!(base_url(&c), "https://sg.example.com:8443");
+        assert_eq!(base_url(&c).unwrap(), "https://sg.example.com:8443");
+    }
+
+    /// Everything here would otherwise be interpolated into the URL and
+    /// send the request somewhere the operator never named.
+    #[test]
+    fn base_url_refuses_anything_that_is_not_a_host() {
+        for hostile in [
+            "sg.example.com/service/core/v4/Me?x=",
+            "sg.example.com#@evil.test",
+            "user:pass@evil.test",
+            "evil.test:8443",
+            "https://evil.test",
+            "sg.example.com\\@evil.test",
+            "sg example com",
+            "-leading.example.com",
+            "trailing-.example.com",
+            "double..dot.example.com",
+            "",
+        ] {
+            assert!(
+                base_url(&cfg_with_fqdn(hostile, 443)).is_err(),
+                "accepted hostile appliance FQDN {hostile:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn base_url_accepts_hosts_and_ip_literals() {
+        assert_eq!(
+            base_url(&cfg_with_fqdn("SG.Example.COM", 443)).unwrap(),
+            "https://sg.example.com"
+        );
+        assert_eq!(
+            base_url(&cfg_with_fqdn("10.0.0.5", 443)).unwrap(),
+            "https://10.0.0.5"
+        );
+        assert_eq!(
+            base_url(&cfg_with_fqdn("[2001:db8::1]", 8443)).unwrap(),
+            "https://[2001:db8::1]:8443"
+        );
+        assert_eq!(
+            base_url(&cfg_with_fqdn("2001:db8::1", 443)).unwrap(),
+            "https://[2001:db8::1]"
+        );
+    }
+
+    #[test]
+    fn base_url_refuses_a_port_out_of_range() {
+        assert!(base_url(&cfg_with_fqdn("sg.example.com", 0)).is_err());
+        assert!(base_url(&cfg_with_fqdn("sg.example.com", 70000)).is_err());
     }
 
     #[test]

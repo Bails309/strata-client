@@ -307,6 +307,9 @@ fn validate(cfg: &SafeguardConfig) -> Result<(), AppError> {
             "Safeguard appliance FQDN is required when enabled".into(),
         ));
     }
+    if !cfg.appliance_fqdn.trim().is_empty() {
+        super::client::validate_appliance_host(&cfg.appliance_fqdn)?;
+    }
     if !(1..=65535).contains(&cfg.appliance_port) {
         return Err(AppError::Validation(
             "appliance_port must be between 1 and 65535".into(),

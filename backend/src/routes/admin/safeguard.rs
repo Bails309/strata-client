@@ -90,6 +90,22 @@ pub async fn test_connection(
         )));
     }
 
+    // Before anything is dialled: the draft host is attacker-shaped
+    // input until it has been proved to be a bare hostname or IP.
+    let base = match base_url(&draft) {
+        Ok(base) => base,
+        Err(e) => {
+            return Ok(Json(TestConnectionOutcome::fail(
+                "Appliance address is not usable.",
+                vec![TestStep {
+                    name: "Appliance address",
+                    ok: false,
+                    detail: Some(e.to_string()),
+                }],
+            )));
+        }
+    };
+
     // Resolve any masked secrets from the saved row.
     let saved_secrets: Option<ResolvedSecrets> = if let Some(ref v) = vault {
         safeguard::config::load_secrets(&db.pool, v).await.ok()
@@ -159,8 +175,6 @@ pub async fn test_connection(
         ok: true,
         detail: None,
     });
-
-    let base = base_url(&draft);
 
     // Step 2 — reachability via /Me without auth. We expect 401 here
     // (not 5xx, not a connect error), proving the appliance answers.

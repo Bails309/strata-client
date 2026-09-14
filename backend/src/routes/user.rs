@@ -736,7 +736,7 @@ pub async fn safeguard_token_status(
                     crate::services::safeguard::config::load_secrets(&db.pool, &vault_cfg).await?;
                 let identity = client::a2a_identity(&secrets)?;
                 let http = client::build_client(&cfg, identity)?;
-                let base = client::base_url(&cfg);
+                let base = client::base_url(&cfg)?;
                 match client::verify_token(&http, &base, &token).await {
                     client::TokenProbe::Valid => { /* keep status */ }
                     client::TokenProbe::Invalid { status: code } => {
@@ -829,7 +829,7 @@ pub async fn submit_safeguard_token(
             crate::services::safeguard::config::load_secrets(&db.pool, &vault_cfg).await?;
         let identity = client::a2a_identity(&secrets)?;
         let http = client::build_client(&cfg, identity)?;
-        let base = client::base_url(&cfg);
+        let base = client::base_url(&cfg)?;
         match client::verify_token(&http, &base, &token).await {
             client::TokenProbe::Valid => {}
             client::TokenProbe::Invalid { status } => {
@@ -1010,7 +1010,7 @@ pub async fn enrol_safeguard_token(
             crate::services::safeguard::config::load_secrets(&db.pool, &vault_cfg).await?;
         let identity = client::a2a_identity(&secrets)?;
         let http = client::build_client(&cfg, identity)?;
-        let base = client::base_url(&cfg);
+        let base = client::base_url(&cfg)?;
         match client::verify_token(&http, &base, &token).await {
             client::TokenProbe::Valid => {}
             client::TokenProbe::Invalid { status } => {
@@ -1702,7 +1702,7 @@ pub async fn list_safeguard_accounts(
     let secrets = crate::services::safeguard::config::load_secrets(&db.pool, &vault_cfg).await?;
     let identity = crate::services::safeguard::client::a2a_identity(&secrets)?;
     let http = crate::services::safeguard::client::build_client(&sg_cfg, identity)?;
-    let base = crate::services::safeguard::client::base_url(&sg_cfg);
+    let base = crate::services::safeguard::client::base_url(&sg_cfg)?;
 
     let entitlements =
         crate::services::safeguard::client::list_password_entitlements(&http, &base, &bearer)

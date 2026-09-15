@@ -201,6 +201,11 @@ pins `curve25519-dalek = "=5.0.0-rc.1"`. A patched `russh` requires
 two 5.x versions, so current `ironrdp` and current `russh` do not
 resolve together. Verified against the registry:
 
+Versions below are `ironrdp-connector`, not the `ironrdp` meta-crate.
+The two are numbered independently — meta-crate 0.17.0 is connector
+0.10.0 — so "upgrade to ironrdp 0.17" and "upgrade to connector 0.10"
+name the same release, and there is no `ironrdp-connector` 0.17.
+
 | Combination | Resolves | Builds | Notes |
 | --- | --- | --- | --- |
 | `ironrdp` 0.10 + `russh` 0.63 | no | — | two 5.x `curve25519-dalek` |
@@ -253,47 +258,69 @@ The obvious escape hatch is a workspace `[patch]`, and it does not work:
 - **Disabling `picky`** is not available: `ironrdp-connector` 0.10 exposes
   only `default`, `qoi` and `qoiz`, so the dependency is mandatory.
 
-#### Unblock procedure
+#### Resolution: two vendored forks (2026-09-15)
 
-The blocker is external and clears on its own. `scripts/check-ironrdp-unblock.sh`
-resolves the candidate combination in a throwaway crate and exits non-zero
-while the conflict stands, so this does not rely on anyone remembering to
-re-check.
+The upgrade was taken, at the cost of two forks in `crates/vendor/`, wired
+in through a workspace `[patch.crates-io]`. Both are small, both are
+temporary, and both are liabilities — a fork pins us to a snapshot of
+someone else's code, outside the crates.io supply chain, and silently
+stops receiving upstream fixes.
 
-It clears when **either**:
+**`crates/vendor/ironrdp-connector` — three lines.** Upstream 0.10.0 pins
+`picky = "=7.0.0-rc.25"`, the last `picky` carrying
+`curve25519-dalek = "=5.0.0-rc.1"`. The fork moves it to rc.26 (which
+admits dalek 5.0.0 stable) and `sspi` 0.21 → 0.22, plus one line in
+`src/credssp.rs` because `sspi` 0.22 made `TsRequest::buffer_len()` return
+`Result<u16>`. Verified against IronRDP master `d2bb7376`, which still
+carries the rc.25 pin — patching to upstream git does *not* work.
 
-- `picky` ships a release whose `curve25519-dalek` requirement admits
-  5.0.0 stable (today: still `7.0.0-rc.26`, and `ironrdp-connector` 0.10
-  pins `=7.0.0-rc.25` exactly, so `picky` alone moving is not sufficient), **or**
-- `ironrdp-connector` relaxes its exact `picky` pin to a range that
-  includes such a release.
+**`crates/vendor/sspi` — one line.** Being forced onto `sspi` 0.22.0 by
+the above brought a new equality check on the SPNEGO `mechListMIC`
+sequence number (`src/kerberos/utils.rs`). Windows RDP hosts send that MIC
+with `seq_num` 0 while the AP-REP negotiated something else, so **every**
+Kerberos NLA session was rejected — and rejected *before* the MIC checksum,
+the part that actually carries the downgrade protection, is verified. The
+fork drops the sequence comparison and leaves the checksum verification
+untouched, restoring the behaviour of every `sspi` this product has
+shipped (0.16, and 0.21.3 before it, neither of which has the check).
 
-When the script passes, the work is:
+Routes that do **not** work, each tested rather than assumed:
 
-1. Raise `ironrdp-connector`/`-session`/`-tokio` to the matched set, and
-   the satellite crates (`-pdu`, `-graphics`, `-cliprdr`, `-dvc`,
-   `-displaycontrol`, `-rdpsnd`) to whatever resolves to a **single**
-   `ironrdp-svc`. Mismatched satellites resolve happily and then fail to
-   typecheck — that is how the 0.7 set was arrived at.
-2. Delete the `picky = "=7.0.0-rc.17"` resolution pin from
-   `crates/strata-session/Cargo.toml`. It exists only to hold 0.7 still.
-3. Re-check `ironrdp-session`'s own `ironrdp-connector` requirement. At
-   0.10 it wanted connector `^0.9`, so asking for connector 0.10 *and*
-   session 0.10 pulled in two connectors with different exact `picky`
-   pins and failed to resolve. The set has to be internally consistent.
-4. Confirm the connect future is `Send`. The whole point of the upgrade is
-   to retire the `LocalSet` worker pool in `engine/rdp/mod.rs`; if
-   `AsyncNetworkClient` is still a bare trait object the pool stays and the
-   upgrade delivers nothing here.
-5. Only then replace the pool with `tokio::spawn`, matching the SSH and
-   VNC engines, and update the `## Threading` header in
-   `engine/rdp/mod.rs`.
-6. Re-run the live RDP suite against the FreeRDP shadow target
-   (`docker-compose.session-test.yml`). Resolution and compilation prove
-   nothing about CredSSP.
+- **Relaxing `picky` rc.25's dalek pin** instead, to keep `sspi` 0.21.
+  rc.25 pins a whole RustCrypto release-candidate cluster —
+  `ecdsa = "=0.17.0-rc.22"`, `ed25519-dalek`/`x25519-dalek` `=3.0.0-rc.1`
+  — so it is not a one-line change, and the original judgement above
+  stands.
+- **Waiting for upstream.** `sspi` master HEAD is `f73e31c`, the 0.22.0
+  release commit; the check is unchanged there.
+- **Raw Kerberos, bypassing SPNEGO** so no `mechListMIC` exists.
+  `credssp::ClientMode` offers only `Negotiate`, `Pku2u` and `Ntlm`.
+- **NTLM over CredSSP.** Disabled on the target estate.
 
-Until then RDP runs three minor versions behind, which is the cheaper of
-the two available costs.
+#### Un-fork procedure
+
+`scripts/check-vendored-forks.sh` answers, per fork, whether the reason it
+exists is still true. **Run it on every dependency bump and before every
+release** — both forks should be deleted the moment upstream catches up,
+and neither will announce itself.
+
+- `ironrdp-connector` goes when a published connector resolves beside a
+  `russh` at or above 0.60.3 on its own. Then: raise the whole set to
+  whatever yields a **single** `ironrdp-svc` (mismatched satellites
+  resolve happily and then fail to typecheck), and delete the
+  `[patch.crates-io]` entry.
+- `sspi` goes when a published release no longer contains the
+  `invalid MIC token sequence number` check.
+
+Either way, finish with the live RDP suite against a real NLA target.
+Resolution and compilation prove nothing about CredSSP — that is exactly
+how the `sspi` regression reached a running deployment.
+
+Still outstanding after the upgrade: the connect future is now `Send`
+(verified by compiling an `assert_send` against `connect_finalize`), so
+the `LocalSet` worker pool in `engine/rdp/mod.rs` can be replaced with
+`tokio::spawn` to match the SSH and VNC engines. The `## Threading` header
+in that module still describes the old arrangement.
 
 Two operational constraints came out of the Phase 2 work and belong on
 the record:

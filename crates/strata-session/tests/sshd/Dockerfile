@@ -3,7 +3,7 @@
 # Deliberately password-authenticated with a well-known credential: this
 # image exists only to be connected to from a test on an isolated Docker
 # network, and must never be published or run anywhere reachable.
-FROM debian:trixie-slim
+FROM debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends openssh-server \

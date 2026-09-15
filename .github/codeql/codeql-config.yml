@@ -1,5 +1,14 @@
 name: "Strata CodeQL config"
 
+# Barrier models for sanitisers CodeQL cannot recognise on its own. Source
+# lives in .github/codeql/extensions/ and is published to GHCR by
+# codeql-model-pack.yml — `packs` only accepts published pack names, never a
+# path, so the pack must be republished (with a version bump) before a model
+# change takes effect here.
+packs:
+  rust:
+    - bails309/strata-rust-models
+
 # Exclude vendored / generated artefacts from analysis. These files are not
 # authored by the Strata team and findings against them are noise.
 paths-ignore:

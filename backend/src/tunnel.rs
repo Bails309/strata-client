@@ -67,9 +67,8 @@ pub struct HandshakeParams {
     pub recording_name: Option<String>,
     pub width: u32,
     pub height: u32,
-    /// Carried through from the client but not yet applied: the engine
-    /// does not set a desktop scale factor.
-    #[allow(dead_code)]
+    /// Carried through from the client: applied by the RDP engine to negotiate
+    /// native desktop scaling (100%..=500%) over Display Control.
     pub dpi: u32,
     /// Additional connection parameters from the `extra` JSONB column.
     /// Keys are Guacamole arg names (e.g. "enable-wallpaper", "color-depth").

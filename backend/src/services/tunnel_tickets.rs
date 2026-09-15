@@ -17,6 +17,8 @@ pub struct TunnelTicket {
     pub height: u32,
     pub dpi: u32,
     pub ignore_cert: bool,
+    pub webp: Option<bool>,
+    pub h264: Option<bool>,
     pub created_at: Instant,
 }
 
@@ -71,6 +73,8 @@ mod tests {
             height: 1080,
             dpi: 96,
             ignore_cert: false,
+            webp: Some(true),
+            h264: Some(true),
             created_at: Instant::now(),
         }
     }
@@ -85,6 +89,8 @@ mod tests {
         let consumed = consume(&id).expect("ticket should be consumable");
         assert_eq!(consumed.connection_id, conn_id);
         assert_eq!(consumed.width, 1920);
+        assert_eq!(consumed.webp, Some(true));
+        assert_eq!(consumed.h264, Some(true));
     }
 
     #[test]
@@ -126,6 +132,8 @@ mod tests {
             height: 1440,
             dpi: 144,
             ignore_cert: true,
+            webp: Some(true),
+            h264: Some(true),
             created_at: Instant::now(),
         };
         let id = create(ticket);
@@ -138,6 +146,8 @@ mod tests {
         assert_eq!(consumed.height, 1440);
         assert_eq!(consumed.dpi, 144);
         assert!(consumed.ignore_cert);
+        assert_eq!(consumed.webp, Some(true));
+        assert_eq!(consumed.h264, Some(true));
     }
 
     #[test]
@@ -152,6 +162,8 @@ mod tests {
             height: 1080,
             dpi: 96,
             ignore_cert: false,
+            webp: None,
+            h264: None,
             created_at: Instant::now(),
         };
         let id = create(ticket);

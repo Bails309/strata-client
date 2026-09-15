@@ -988,11 +988,36 @@ pub async fn get_by_id(
 
 // ── Session Recording Conversion & Download ────────────────────────────
 
+/// Cheap signature check, used to skip obvious junk before attempting a decode.
+///
+/// Deliberately has no size floor: lossless WebP of a flat damage
+/// rectangle is routinely under a hundred bytes, so one would discard
+/// valid frames. [`frame_to_png`] is the real validator.
 fn is_valid_image(buf: &[u8]) -> bool {
-    buf.len() > 100
-        && (buf.starts_with(b"\x89PNG")
-            || buf.starts_with(b"\xFF\xD8\xFF")
-            || (buf.len() > 12 && &buf[0..4] == b"RIFF" && &buf[8..12] == b"WEBP"))
+    buf.starts_with(b"\x89PNG\r\n\x1a\n")
+        || buf.starts_with(b"\xFF\xD8\xFF")
+        || (buf.len() >= 12 && &buf[0..4] == b"RIFF" && &buf[8..12] == b"WEBP")
+}
+
+/// Normalise a decoded frame to PNG.
+///
+/// The RDP engine emits PNG for small damage rectangles and WebP for
+/// large ones, so a recording carries both. ffmpeg's `image2` demuxer
+/// picks one decoder for the whole `frame_%05d.png` sequence, so a mixed
+/// sequence decodes as garbage or fails outright — every frame has to
+/// reach it in the same format.
+///
+/// Decoding doubles as validation: a truncated payload fails here rather
+/// than poisoning the ffmpeg run.
+fn frame_to_png(decoded: &[u8]) -> Option<Vec<u8>> {
+    // Already the target format, and re-encoding would only lose time.
+    if decoded.starts_with(b"\x89PNG\r\n\x1a\n") && decoded.ends_with(b"IEND\xaeB`\x82") {
+        return Some(decoded.to_vec());
+    }
+    let img = image::load_from_memory(decoded).ok()?;
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).ok()?;
+    Some(out.into_inner())
 }
 
 async fn extract_and_save_guac_frames(data: &[u8], work_dir: &std::path::Path) -> usize {
@@ -1080,10 +1105,12 @@ async fn extract_and_save_guac_frames(data: &[u8], work_dir: &std::path::Path) -
                                     base64::engine::general_purpose::STANDARD.decode(&clean_b64)
                                 {
                                     if is_valid_image(&decoded) {
-                                        count += 1;
-                                        let frame_path =
-                                            work_dir.join(format!("frame_{:05}.png", count));
-                                        let _ = tokio::fs::write(frame_path, decoded).await;
+                                        if let Some(png) = frame_to_png(&decoded) {
+                                            count += 1;
+                                            let frame_path =
+                                                work_dir.join(format!("frame_{count:05}.png"));
+                                            let _ = tokio::fs::write(frame_path, png).await;
+                                        }
                                     }
                                 }
                             }
@@ -1105,9 +1132,11 @@ async fn extract_and_save_guac_frames(data: &[u8], work_dir: &std::path::Path) -
 
         if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&clean_b64) {
             if is_valid_image(&decoded) {
-                count += 1;
-                let frame_path = work_dir.join(format!("frame_{:05}.png", count));
-                let _ = tokio::fs::write(frame_path, decoded).await;
+                if let Some(png) = frame_to_png(&decoded) {
+                    count += 1;
+                    let frame_path = work_dir.join(format!("frame_{count:05}.png"));
+                    let _ = tokio::fs::write(frame_path, png).await;
+                }
             }
         }
     }
@@ -1493,6 +1522,73 @@ pub async fn prepare_recording_for_download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Encode a solid RGB rectangle the way the RDP engine does.
+    fn webp_frame(w: u32, h: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        image::codecs::webp::WebPEncoder::new_lossless(&mut out)
+            .encode(
+                &vec![0x2d; (w * h * 3) as usize],
+                w,
+                h,
+                image::ExtendedColorType::Rgb8,
+            )
+            .unwrap();
+        out
+    }
+
+    fn png_frame(w: u32, h: u32) -> Vec<u8> {
+        use image::ImageEncoder as _;
+        let mut out = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut out)
+            .write_image(
+                &vec![0x2d; (w * h * 3) as usize],
+                w,
+                h,
+                image::ExtendedColorType::Rgb8,
+            )
+            .unwrap();
+        out
+    }
+
+    /// A flat 64x64 rectangle encodes to well under a hundred bytes in
+    /// lossless WebP. The old size floor discarded exactly these.
+    #[test]
+    fn small_webp_frames_are_not_discarded() {
+        let frame = webp_frame(64, 64);
+        assert!(
+            frame.len() < 100,
+            "expected a sub-100-byte frame to exercise the floor, got {}",
+            frame.len()
+        );
+        assert!(is_valid_image(&frame));
+        assert!(frame_to_png(&frame).is_some());
+    }
+
+    /// ffmpeg's image2 demuxer decodes a whole sequence with one codec,
+    /// so WebP damage rectangles have to reach it as PNG.
+    #[test]
+    fn frames_are_normalised_to_a_single_codec() {
+        for frame in [webp_frame(96, 96), png_frame(96, 96)] {
+            let png = frame_to_png(&frame).expect("frame should normalise");
+            assert!(
+                png.starts_with(b"\x89PNG\r\n\x1a\n"),
+                "every extracted frame must be PNG on disk"
+            );
+            assert!(png.ends_with(b"IEND\xaeB`\x82"));
+        }
+    }
+
+    #[test]
+    fn malformed_frames_are_rejected_rather_than_written() {
+        // Right signature, truncated payload.
+        let mut truncated = webp_frame(96, 96);
+        truncated.truncate(20);
+        assert!(frame_to_png(&truncated).is_none());
+
+        assert!(!is_valid_image(b"not an image at all"));
+        assert!(!is_valid_image(&[]));
+    }
 
     #[test]
     fn storage_type_equality() {

@@ -268,7 +268,7 @@ impl ProtocolEngine for KubeEngine {
             // straight through would type the operator's clipboard into
             // the pod.
             InputEvent::Clipboard(data) => self.clipboard = data,
-            InputEvent::Resize { width, height } => {
+            InputEvent::Resize { width, height, .. } => {
                 let (cols, rows) = self.config.cell.to_grid(width, height);
                 if (cols, rows) != (self.cols, self.rows) {
                     self.cols = cols;

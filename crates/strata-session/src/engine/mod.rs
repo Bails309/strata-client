@@ -142,6 +142,9 @@ pub enum InputEvent {
         width: u32,
         /// New height in pixels.
         height: u32,
+        /// Display DPI, when the client reports one. Only the RDP
+        /// engine acts on it; the rest size themselves in pixels.
+        dpi: Option<u32>,
     },
     /// Clipboard contents pushed from the client.
     Clipboard(Bytes),

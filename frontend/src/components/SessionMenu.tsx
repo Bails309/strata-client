@@ -6,6 +6,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { GuacSession } from "./SessionManager";
 import { sendClipboardToRemote } from "./clipboardSync";
 import FileBrowser from "./FileBrowser";
+import DisplaySettingsControl from "./DisplaySettingsControl";
 
 interface Props {
   session: GuacSession;
@@ -307,6 +308,11 @@ export default function SessionMenu({
                 )}
               </section>
             )}
+
+            {/* ── Display & Resolution (Hyper-V Slider) ── */}
+            <section className="pt-2 border-t border-white/10">
+              <DisplaySettingsControl session={session} onClose={onClose} />
+            </section>
 
             {/* ── Keyboard shortcut hint ── */}
             <div

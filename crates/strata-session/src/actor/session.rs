@@ -322,7 +322,9 @@ impl SessionActor {
         let input = match instruction {
             ClientInstruction::Mouse { x, y, mask } => InputEvent::Mouse { x, y, mask },
             ClientInstruction::Key { keysym, pressed } => InputEvent::Key { keysym, pressed },
-            ClientInstruction::Size { width, height } => InputEvent::Resize { width, height },
+            ClientInstruction::Size { width, height, dpi } => {
+                InputEvent::Resize { width, height, dpi }
+            }
             ClientInstruction::Disconnect => return Ok(Some("client requested disconnect".into())),
             ClientInstruction::Clipboard { stream, mimetype } => {
                 // Only text crosses the clipboard boundary; anything

@@ -20,7 +20,7 @@ import {
   ConnectionInfo,
   UserTag,
 } from "../api";
-import { useSessionManager, GuacSession } from "../components/SessionManager";
+import { useSessionManager, GuacSession, sendSizeWithDpi } from "../components/SessionManager";
 import { notifySessionActivity } from "../components/sessionActivity";
 import { useSidebarWidth } from "../components/Layout";
 import { usePopOut } from "../components/usePopOut";
@@ -40,6 +40,7 @@ import {
 import { useCoPilotRoom } from "../co-pilot/useCoPilotRoom";
 import { useCoPilotAudio } from "../co-pilot/useCoPilotAudio";
 import CoPilotOverlay from "../co-pilot/CoPilotOverlay";
+import { isWebPSupported, isH264Supported } from "../utils/browserCapabilities";
 
 /*
  * Phases:
@@ -523,12 +524,14 @@ export default function SessionClient() {
         try {
           const dpr = window.devicePixelRatio || 1;
 
+          const webpSupported = isWebPSupported();
           const resp = await createTunnelTicket({
             connection_id: connectionId,
             width: container.clientWidth,
             height: container.clientHeight,
             dpi: Math.round(96 * dpr),
             ignore_cert: ignoreCert,
+            webp: webpSupported,
           });
 
           if (userDisconnectRef.current) return;
@@ -540,6 +543,7 @@ export default function SessionClient() {
           connectParams.set("width", String(container.clientWidth));
           connectParams.set("height", String(container.clientHeight));
           connectParams.set("dpi", String(Math.round(96 * dpr)));
+          connectParams.set("webp", String(webpSupported));
 
           const session = createSession({
             connectionId,
@@ -728,12 +732,14 @@ export default function SessionClient() {
     const dpr = window.devicePixelRatio || 1;
 
     try {
+      const webpSupported = isWebPSupported();
       const resp = await createTunnelTicket({
         connection_id: connectionId,
         width: container.clientWidth,
         height: container.clientHeight,
         dpi: Math.round(96 * dpr),
         ignore_cert: ignoreCert,
+        webp: webpSupported,
       });
 
       const connectParams = new URLSearchParams();
@@ -742,6 +748,7 @@ export default function SessionClient() {
       connectParams.set("width", String(container.clientWidth));
       connectParams.set("height", String(container.clientHeight));
       connectParams.set("dpi", String(Math.round(96 * dpr)));
+      connectParams.set("webp", String(webpSupported));
 
       const session = createSession({
         connectionId,
@@ -818,6 +825,8 @@ export default function SessionClient() {
           height: container.clientHeight,
           dpi: Math.round(96 * dpr),
           ignore_cert: ignoreCert,
+          webp: isWebPSupported(),
+          h264: isH264Supported(),
         });
         ticketId = resp.ticket;
       } catch {
@@ -833,6 +842,8 @@ export default function SessionClient() {
       connectParams.set("width", String(container.clientWidth));
       connectParams.set("height", String(container.clientHeight));
       connectParams.set("dpi", String(Math.round(96 * dpr)));
+      connectParams.set("webp", String(isWebPSupported()));
+      connectParams.set("h264", String(isH264Supported()));
 
       const session = createSession({
         connectionId,
@@ -887,7 +898,9 @@ export default function SessionClient() {
   useEffect(() => {
     if (!currentSession || !containerRef.current) return;
     const container = containerRef.current!;
-    const client = currentSession.client;
+    // Narrowed once here: the closures below outlive the guard above.
+    const session = currentSession;
+    const client = session.client;
     const display = client.getDisplay();
 
     // Resize handling matches sol1/rustguac's reference implementation:
@@ -938,10 +951,39 @@ export default function SessionClient() {
         const displayEl = display.getElement();
         displayEl.style.marginLeft = "";
         displayEl.style.marginTop = "";
-        display.scale(Math.min(cw / dw, ch / dh));
-        client.sendSize(cw, ch);
+
+        const targetRes = session.targetResolution;
+        const zoom = session.zoomScale ?? "fit";
+
+        if (targetRes && targetRes !== "auto") {
+          sendSizeWithDpi(session, targetRes.width, targetRes.height);
+          const baseScale = Math.min(cw / targetRes.width, ch / targetRes.height);
+          const effectiveScale = zoom === "fit" ? baseScale : zoom;
+          display.scale(effectiveScale);
+          if (container) {
+            container.style.overflow =
+              targetRes.width * effectiveScale > cw || targetRes.height * effectiveScale > ch
+                ? "auto"
+                : "hidden";
+          }
+        } else {
+          const baseScale = Math.min(cw / dw, ch / dh);
+          const effectiveScale = zoom === "fit" ? baseScale : zoom;
+          display.scale(effectiveScale);
+          sendSizeWithDpi(session, cw, ch);
+          if (container) {
+            container.style.overflow =
+              dw * effectiveScale > cw || dh * effectiveScale > ch ? "auto" : "hidden";
+          }
+        }
       }
     }
+
+    session.applyDisplayConfig = (res, zoom) => {
+      session.targetResolution = res;
+      session.zoomScale = zoom;
+      handleResize();
+    };
 
     // Rescale when the remote display resolution changes (e.g. maximising
     // a window inside the remote desktop triggers a server-side resize).
@@ -980,6 +1022,7 @@ export default function SessionClient() {
       window.removeEventListener("resize", handleResize);
       // Restore previous handler (if any) to avoid leaking our closure.
       display.onresize = prevOnResize ?? null;
+      session.applyDisplayConfig = undefined;
     };
     // updatePrimarySize is defined in this effect's scope; deps cover all reactive inputs
     // eslint-disable-next-line react-hooks/exhaustive-deps

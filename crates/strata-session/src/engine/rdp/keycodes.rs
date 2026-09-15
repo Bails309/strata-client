@@ -21,19 +21,41 @@ pub struct Scancode {
 }
 
 impl Scancode {
-    const fn plain(code: u8) -> Self {
+    /// A key on the main block, sent without the `E0` prefix.
+    pub const fn plain(code: u8) -> Self {
         Self {
             code,
             extended: false,
         }
     }
 
-    const fn extended(code: u8) -> Self {
+    /// A key the `E0` prefix distinguishes from its main-block twin,
+    /// such as the numeric keypad's Enter.
+    pub const fn extended(code: u8) -> Self {
         Self {
             code,
             extended: true,
         }
     }
+}
+
+/// A resolved key event for RDP transmission: either a hardware scancode
+/// or a Unicode character fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyEvent {
+    /// Physical PC/XT set 1 scancode (for US-layout keys, modifiers, navigation).
+    Scancode(Scancode),
+    /// Unicode character fallback (for accented/international characters with no physical US key).
+    Unicode(char),
+}
+
+/// Resolve an X11 keysym to either a physical scancode or a Unicode character fallback.
+#[must_use]
+pub fn resolve_key(keysym: u32) -> Option<KeyEvent> {
+    if let Some(scancode) = keysym_to_scancode(keysym) {
+        return Some(KeyEvent::Scancode(scancode));
+    }
+    crate::engine::keymap::keysym_to_char(keysym).map(KeyEvent::Unicode)
 }
 
 /// Translate an X11 keysym to a key position.
@@ -254,9 +276,34 @@ mod tests {
     }
 
     #[test]
+    fn resolve_key_distinguishes_scancodes_and_unicode_fallback() {
+        // Standard keys map to scancodes
+        assert_eq!(
+            resolve_key(u32::from(b'a')),
+            Some(KeyEvent::Scancode(Scancode::plain(0x1e)))
+        );
+        assert_eq!(
+            resolve_key(0xff08), // BackSpace
+            Some(KeyEvent::Scancode(Scancode::plain(0x0e)))
+        );
+
+        // International characters fall back to Unicode
+        assert_eq!(resolve_key(0x00e9), Some(KeyEvent::Unicode('é')));
+        assert_eq!(resolve_key(0x00fc), Some(KeyEvent::Unicode('ü')));
+        assert_eq!(resolve_key(0x00f1), Some(KeyEvent::Unicode('ñ')));
+        assert_eq!(resolve_key(0x0100_20ac), Some(KeyEvent::Unicode('€')));
+        assert_eq!(resolve_key(0x0100_4e2d), Some(KeyEvent::Unicode('中')));
+
+        // Unmapped non-character keysyms return None
+        assert_eq!(resolve_key(0xff20), None);
+        assert_eq!(resolve_key(0x0200_0000), None);
+    }
+
+    #[test]
     fn never_panics_across_the_keysym_space() {
         for keysym in (0u32..0x0110_0000).step_by(89) {
             let _ = keysym_to_scancode(keysym);
+            let _ = resolve_key(keysym);
         }
     }
 }

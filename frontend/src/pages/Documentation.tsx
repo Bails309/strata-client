@@ -461,7 +461,13 @@ function WhatsNewContent() {
 
 type RoadmapStatus = ApiRoadmapStatus;
 
-const ROADMAP_STATUSES: RoadmapStatus[] = ["Proposed", "Researching", "In Progress", "Shipped"];
+const ROADMAP_STATUSES: RoadmapStatus[] = [
+  "Proposed",
+  "Researching",
+  "Blocked",
+  "In Progress",
+  "Shipped",
+];
 
 interface RoadmapItem {
   id: string;
@@ -481,6 +487,27 @@ interface RoadmapTheme {
 }
 
 const ROADMAP: RoadmapTheme[] = [
+  {
+    id: "protocols",
+    title: "Protocols & Session Types",
+    subtitle: "What the session engine can reach, and how it runs.",
+    accent: "#38bdf8",
+    items: [
+      {
+        id: "protocols-ironrdp-upgrade",
+        title: "IronRDP Upgrade & Tokio-Native RDP Sessions",
+        status: "Blocked",
+        areas: ["Protocols", "Session engine"],
+        description:
+          "Move the RDP engine onto the current IronRDP release and let sessions run as ordinary Tokio tasks, as SSH and VNC already do. Today's IronRDP has a connection future that cannot move between threads, so RDP sessions are multiplexed across a small dedicated worker pool instead.",
+        bullets: [
+          "Blocked upstream, not on effort: every IronRDP above the pinned release requires a pre-release of a cryptography crate that cannot coexist with the patched SSH library.",
+          "Taking the upgrade today would mean shipping a known remotely-triggerable denial of service in the SSH engine, which shares a process with every RDP session.",
+          "A repository check reports when the conflict clears; the upgrade steps are recorded in ADR-0015.",
+        ],
+      },
+    ],
+  },
   {
     id: "recordings",
     title: "Recording Enhancements",
@@ -604,6 +631,8 @@ function statusColors(status: RoadmapStatus): { bg: string; fg: string } {
       return { bg: "rgba(52,211,153,0.15)", fg: "#34d399" };
     case "In Progress":
       return { bg: "rgba(96,165,250,0.15)", fg: "#60a5fa" };
+    case "Blocked":
+      return { bg: "rgba(248,113,113,0.15)", fg: "#f87171" };
     case "Researching":
       return { bg: "rgba(251,191,36,0.15)", fg: "#fbbf24" };
     case "Proposed":
@@ -639,6 +668,7 @@ function RoadmapContent({ user }: { user?: MeResponse | null }) {
     const t: Record<RoadmapStatus, number> = {
       Proposed: 0,
       Researching: 0,
+      Blocked: 0,
       "In Progress": 0,
       Shipped: 0,
     };

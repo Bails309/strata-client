@@ -1334,6 +1334,7 @@ async fn connect_target(
                 .extra
                 .get("server-layout")
                 .and_then(|name| keyboard_layout_id(name));
+            let desktop_scale_factor = desktop_scale_factor_from_dpi(handshake.dpi);
             let factory = RdpEngineFactory::new(RdpConfig {
                 domain: handshake.domain.clone(),
                 kdc_url: kdc_url(handshake),
@@ -1365,6 +1366,9 @@ async fn connect_target(
                     .map(|t| t.trim())
                     .filter(|t| !t.is_empty())
                     .map(str::to_owned),
+                desktop_scale_factor,
+                enable_webp: flag_or(handshake, "enable-webp", true),
+                enable_h264: flag_or(handshake, "enable-h264", true),
             });
             factory
                 .connect(spec)
@@ -1514,6 +1518,14 @@ fn exec_command(handshake: &HandshakeParams) -> Vec<String> {
             || vec!["/bin/sh".to_owned()],
             |c| c.split_whitespace().map(str::to_owned).collect(),
         )
+}
+
+/// Derive an RDP desktop scale factor percentage (100..=500) from a display DPI.
+///
+/// Delegates to the engine so the connect-time scale and the one the
+/// engine recomputes on resize can never disagree.
+fn desktop_scale_factor_from_dpi(dpi: u32) -> Option<u32> {
+    strata_session::engine::rdp::desktop_scale_from_dpi(dpi)
 }
 
 #[cfg(test)]
@@ -2315,5 +2327,17 @@ mod tests {
             kdc_url(&params).as_deref(),
             Some("tcp://cicsazvm001.capita-ics.co.uk:88")
         );
+    }
+
+    #[test]
+    fn rdp_desktop_scale_factor_computes_from_dpi() {
+        assert_eq!(desktop_scale_factor_from_dpi(96), Some(100));
+        assert_eq!(desktop_scale_factor_from_dpi(120), Some(125));
+        assert_eq!(desktop_scale_factor_from_dpi(144), Some(150));
+        assert_eq!(desktop_scale_factor_from_dpi(192), Some(200));
+        assert_eq!(desktop_scale_factor_from_dpi(288), Some(300));
+        assert_eq!(desktop_scale_factor_from_dpi(0), None);
+        assert_eq!(desktop_scale_factor_from_dpi(50), None);
+        assert_eq!(desktop_scale_factor_from_dpi(600), None);
     }
 }

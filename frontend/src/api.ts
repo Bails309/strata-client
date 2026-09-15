@@ -519,7 +519,7 @@ export const postCommandAudit = (payload: CommandAuditPayload) =>
 
 // ── Roadmap status overrides ────────────────────────────────────────
 
-export type RoadmapStatus = "Proposed" | "Researching" | "In Progress" | "Shipped";
+export type RoadmapStatus = "Proposed" | "Researching" | "Blocked" | "In Progress" | "Shipped";
 
 export const getRoadmapStatuses = () =>
   request<{ statuses: Record<string, RoadmapStatus> }>("/roadmap");
@@ -1548,6 +1548,8 @@ export interface CreateTunnelTicketRequest {
   height?: number;
   dpi?: number;
   ignore_cert?: boolean;
+  webp?: boolean;
+  h264?: boolean;
 }
 
 export const createTunnelTicket = (body: CreateTunnelTicketRequest) =>

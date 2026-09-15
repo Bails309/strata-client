@@ -72,6 +72,7 @@ function createMockSession() {
       sendKeyEvent: vi.fn(),
       sendSize: vi.fn(),
     },
+    tunnel: { state: 1, sendMessage: vi.fn() },
   };
 }
 
@@ -591,6 +592,7 @@ describe("usePopOut", () => {
         sendSize: vi.fn(),
         createClipboardStream: vi.fn(() => ({ sendBlob: vi.fn(), sendEnd: vi.fn() })),
       },
+      tunnel: { state: 1, sendMessage: vi.fn() },
     };
     const container = document.createElement("div");
     Object.defineProperty(container, "clientWidth", { value: 800 });
@@ -611,7 +613,7 @@ describe("usePopOut", () => {
       result.current.returnDisplay();
     });
     expect(scaleFn).toHaveBeenCalled();
-    expect(session.client.sendSize).toHaveBeenCalledWith(800, 600);
+    expect(session.tunnel.sendMessage).toHaveBeenCalledWith("size", 800, 600, 96);
   });
 
   // ──────────────────────────────────────────────────────────────────────
@@ -701,6 +703,7 @@ describe("usePopOut", () => {
         sendSize: vi.fn(),
         createClipboardStream: vi.fn(() => ({ sendBlob: vi.fn(), sendEnd: vi.fn() })),
       },
+      tunnel: { state: 1, sendMessage: vi.fn() },
       _scaleFn: scale,
     };
   }
@@ -723,13 +726,13 @@ describe("usePopOut", () => {
 
       // Initial resize ran via popup.requestAnimationFrame chain
       expect(session._scaleFn).toHaveBeenCalled();
-      expect(session.client.sendSize).not.toHaveBeenCalled();
+      expect(session.tunnel.sendMessage).not.toHaveBeenCalled();
 
       // Advance the 150ms debounce
       await act(async () => {
         vi.advanceTimersByTime(160);
       });
-      expect(session.client.sendSize).toHaveBeenCalledWith(1280, 720);
+      expect(session.tunnel.sendMessage).toHaveBeenCalledWith("size", 1280, 720, 96);
     } finally {
       vi.useRealTimers();
     }
@@ -754,7 +757,7 @@ describe("usePopOut", () => {
       await act(async () => {
         vi.advanceTimersByTime(160);
       });
-      expect(session.client.sendSize).toHaveBeenCalledTimes(1);
+      expect(session.tunnel.sendMessage).toHaveBeenCalledTimes(1);
       expect(cap.obsInstance.observe).toHaveBeenCalled();
 
       // Two rapid observer callbacks at a new size must coalesce to one sendSize
@@ -766,8 +769,8 @@ describe("usePopOut", () => {
       await act(async () => {
         vi.advanceTimersByTime(160);
       });
-      expect(session.client.sendSize).toHaveBeenCalledTimes(2);
-      expect(session.client.sendSize).toHaveBeenLastCalledWith(1024, 600);
+      expect(session.tunnel.sendMessage).toHaveBeenCalledTimes(2);
+      expect(session.tunnel.sendMessage).toHaveBeenLastCalledWith("size", 1024, 600, 96);
     } finally {
       vi.useRealTimers();
     }
@@ -790,7 +793,7 @@ describe("usePopOut", () => {
       await act(async () => {
         vi.advanceTimersByTime(160);
       });
-      const baseline = (session.client.sendSize as any).mock.calls.length;
+      const baseline = (session.tunnel.sendMessage as any).mock.calls.length;
 
       // Zero-size resize must be a no-op (early-return branch)
       cap.popup.innerWidth = 0;
@@ -799,7 +802,7 @@ describe("usePopOut", () => {
       await act(async () => {
         vi.advanceTimersByTime(160);
       });
-      expect((session.client.sendSize as any).mock.calls.length).toBe(baseline);
+      expect((session.tunnel.sendMessage as any).mock.calls.length).toBe(baseline);
 
       // Real resize -> sendSize fires
       cap.popup.innerWidth = 800;
@@ -808,7 +811,7 @@ describe("usePopOut", () => {
       await act(async () => {
         vi.advanceTimersByTime(160);
       });
-      expect(session.client.sendSize).toHaveBeenLastCalledWith(800, 600);
+      expect(session.tunnel.sendMessage).toHaveBeenLastCalledWith("size", 800, 600, 96);
     } finally {
       vi.useRealTimers();
     }
@@ -853,12 +856,13 @@ describe("usePopOut", () => {
       await act(async () => {
         vi.advanceTimersByTime(160);
       });
-      const baseline = (session.client.sendSize as any).mock.calls.length;
+      const baseline = (session.tunnel.sendMessage as any).mock.calls.length;
 
-      // Simulate dragging to a different screen
+      // Simulate dragging to a different screen, at twice the scale
       cap.popup.screenX = 1920;
       cap.popup.innerWidth = 2560;
       cap.popup.innerHeight = 1440;
+      cap.popup.devicePixelRatio = 2;
 
       // 250ms screen poll fires, schedules a 300ms settle check, which then
       // calls handleResize and finally the 150ms sendSize debounce.
@@ -867,8 +871,9 @@ describe("usePopOut", () => {
         vi.advanceTimersByTime(310);
         vi.advanceTimersByTime(160);
       });
-      expect((session.client.sendSize as any).mock.calls.length).toBeGreaterThan(baseline);
-      expect(session.client.sendSize).toHaveBeenLastCalledWith(2560, 1440);
+      expect((session.tunnel.sendMessage as any).mock.calls.length).toBeGreaterThan(baseline);
+      // The new screen's DPI travels with the size, so the target rescales.
+      expect(session.tunnel.sendMessage).toHaveBeenLastCalledWith("size", 2560, 1440, 192);
     } finally {
       vi.useRealTimers();
     }

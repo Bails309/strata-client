@@ -214,6 +214,7 @@ async fn a_client_resize_reaches_the_remote_pty() {
         .handle_input(InputEvent::Resize {
             width: 800,
             height: 480,
+            dpi: None,
         })
         .await
         .expect("resize");

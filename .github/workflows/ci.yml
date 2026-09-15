@@ -203,9 +203,12 @@ jobs:
           cargo fmt -p strata-session -- --check
 
       - name: Clippy lint
+        # --all-features on strata-session: the protocol engines (rdp, vnc,
+        # kubernetes, sftp, terminal) are all opt-in, so the default feature
+        # set lints almost none of the crate.
         run: |
           cargo clippy -p strata-backend --all-targets -- -D warnings
-          cargo clippy -p strata-session --all-targets -- -D warnings
+          cargo clippy -p strata-session --all-features --all-targets -- -D warnings
 
       - name: Run unit tests
         run: cargo test -p strata-backend -- --test-threads=1

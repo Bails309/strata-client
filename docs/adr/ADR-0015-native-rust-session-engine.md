@@ -204,11 +204,22 @@ resolve together. Verified against the registry:
 | Combination | Resolves | Builds | Notes |
 | --- | --- | --- | --- |
 | `ironrdp` 0.10 + `russh` 0.63 | no | — | two 5.x `curve25519-dalek` |
+| `ironrdp` 0.10 + `russh` 0.60.2+ | no | — | same conflict; 0.60.1 is the ceiling |
+| `ironrdp` 0.10 + `russh` 0.60.1 | yes | — | **below the RUSTSEC-2026-0154 fix** |
 | `ironrdp` 0.10 + `russh` 0.54 | yes | yes | **`russh` carries RUSTSEC-2026-0153/0154** |
+| `ironrdp` 0.9 + `russh` 0.63 | no | — | same `curve25519-dalek` conflict |
+| `ironrdp` 0.8 + `russh` 0.63 | no | — | conflicts on `block-padding` instead |
 | `ironrdp` 0.7 + `russh` 0.63 | yes | only with `picky` pinned | chosen |
 
-The middle row is the trap. Dropping `russh` to 0.54 makes current
-`ironrdp` work, and it is what "RDP first" naively implies — but 0.54
+The middle rows are the trap, and the first framing of this ADR understated
+it. `russh` 0.54 is not the only version that makes current `ironrdp`
+resolve — **0.60.1 does too**, which looks far more palatable until you
+check the advisory: [RUSTSEC-2026-0154](https://rustsec.org/advisories/RUSTSEC-2026-0154.html)
+(CVE-2026-46673) records `patched = [">=0.60.3"]`. Every `russh` that can
+sit beside `ironrdp` 0.10 is therefore below the fix line, 0.60.1 by only
+two patch releases. There is no "nearly current" compromise available.
+
+Dropping `russh` to 0.54 is what "RDP first" naively implies — but 0.54
 predates 0.58, and in those releases the unchecked `CryptoVec` growth of
 RUSTSEC-2026-0153 is reachable from **remote SSH traffic** (transport
 packet reads and zlib decompression, and we enable `flate2`). The
@@ -228,10 +239,61 @@ against the `sspi` version this `ironrdp` expects. Cargo has no
 `[constraints]` section, so an unused `=` dependency is the only way to
 hold it still.
 
-**TODO — revisit when `picky` ships 7.0.0 proper.** At that point the
-dalek conflict disappears, the pin can go, and `ironrdp` can move to the
-current release. Until then RDP runs three minor versions behind, which
-is the cheaper of the two available costs.
+#### Why a `[patch]` override does not rescue this
+
+The obvious escape hatch is a workspace `[patch]`, and it does not work:
+
+- **Patching `curve25519-dalek`** is impossible in principle. A patch entry
+  supplies exactly one version, and no single version satisfies both
+  `=5.0.0-rc.1` and `^5.0.0`.
+- **Patching `picky`** to relax its dalek pin *would* resolve, at the cost
+  of forking and maintaining a cryptography crate (X.509/PKI/JOSE) that
+  sits in the CredSSP authentication path. For a security product that is
+  a worse liability than running `ironrdp` three minors behind.
+- **Disabling `picky`** is not available: `ironrdp-connector` 0.10 exposes
+  only `default`, `qoi` and `qoiz`, so the dependency is mandatory.
+
+#### Unblock procedure
+
+The blocker is external and clears on its own. `scripts/check-ironrdp-unblock.sh`
+resolves the candidate combination in a throwaway crate and exits non-zero
+while the conflict stands, so this does not rely on anyone remembering to
+re-check.
+
+It clears when **either**:
+
+- `picky` ships a release whose `curve25519-dalek` requirement admits
+  5.0.0 stable (today: still `7.0.0-rc.26`, and `ironrdp-connector` 0.10
+  pins `=7.0.0-rc.25` exactly, so `picky` alone moving is not sufficient), **or**
+- `ironrdp-connector` relaxes its exact `picky` pin to a range that
+  includes such a release.
+
+When the script passes, the work is:
+
+1. Raise `ironrdp-connector`/`-session`/`-tokio` to the matched set, and
+   the satellite crates (`-pdu`, `-graphics`, `-cliprdr`, `-dvc`,
+   `-displaycontrol`, `-rdpsnd`) to whatever resolves to a **single**
+   `ironrdp-svc`. Mismatched satellites resolve happily and then fail to
+   typecheck — that is how the 0.7 set was arrived at.
+2. Delete the `picky = "=7.0.0-rc.17"` resolution pin from
+   `crates/strata-session/Cargo.toml`. It exists only to hold 0.7 still.
+3. Re-check `ironrdp-session`'s own `ironrdp-connector` requirement. At
+   0.10 it wanted connector `^0.9`, so asking for connector 0.10 *and*
+   session 0.10 pulled in two connectors with different exact `picky`
+   pins and failed to resolve. The set has to be internally consistent.
+4. Confirm the connect future is `Send`. The whole point of the upgrade is
+   to retire the `LocalSet` worker pool in `engine/rdp/mod.rs`; if
+   `AsyncNetworkClient` is still a bare trait object the pool stays and the
+   upgrade delivers nothing here.
+5. Only then replace the pool with `tokio::spawn`, matching the SSH and
+   VNC engines, and update the `## Threading` header in
+   `engine/rdp/mod.rs`.
+6. Re-run the live RDP suite against the FreeRDP shadow target
+   (`docker-compose.session-test.yml`). Resolution and compilation prove
+   nothing about CredSSP.
+
+Until then RDP runs three minor versions behind, which is the cheaper of
+the two available costs.
 
 Two operational constraints came out of the Phase 2 work and belong on
 the record:

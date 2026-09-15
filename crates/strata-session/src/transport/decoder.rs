@@ -117,6 +117,7 @@ mod tests {
             Some(ClientInstruction::Size {
                 width: 1920,
                 height: 951,
+                dpi: None,
             })
         );
     }

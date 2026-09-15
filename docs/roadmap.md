@@ -8,8 +8,15 @@ Status legend:
 
 - **Proposed** — accepted into the roadmap but not yet scheduled
 - **Researching** — under active design / spike
+- **Blocked** — accepted, but waiting on something outside this repository
 - **In progress** — on a development branch
 - **Shipped** — released (see _What's New_)
+
+The in-app Roadmap tab is a separate, customer-facing list held in
+`frontend/src/pages/Documentation.tsx`; this file is not rendered there.
+It carries the same five statuses, validated server-side in
+`backend/src/routes/roadmap.rs`, so the two lists stay in step — but an
+entry has to be added to both.
 
 ## Lifecycle of shipped items
 
@@ -31,6 +38,40 @@ release that delivered them, then are removed. In practice:
 ---
 
 ## Protocols & Session Types
+
+### IronRDP upgrade and Tokio-native RDP sessions
+
+**Status:** Blocked
+**Area:** Protocols · Session engine
+
+Move `ironrdp` from the 0.7 line to current, and retire the bounded
+`LocalSet` worker pool the RDP engine uses in its place. `ironrdp-async`
+0.7's connection future is not `Send`, so RDP sessions cannot run on the
+shared Tokio runtime the SSH and VNC engines use; a current `ironrdp` is
+expected to lift that restriction and let RDP sessions become ordinary
+Tokio tasks.
+
+**Blocked on an external dependency, not on effort.** Every
+`ironrdp-connector` above 0.7 reaches `picky`, which pins
+`curve25519-dalek = "=5.0.0-rc.1"`. Every `russh` carrying the
+RUSTSEC-2026-0154 fix (`>=0.60.3`) needs `^5`, which resolves to 5.0.0
+stable, and Cargo cannot hold two 5.x versions. The highest `russh` that
+coexists with `ironrdp` 0.10 is 0.60.1 — two patch releases below the
+fix — so taking the upgrade today would mean shipping a remotely
+reachable denial of service in the SSH engine, which runs in-process
+alongside every RDP session.
+
+A workspace `[patch]` does not rescue it: no single `curve25519-dalek`
+version can satisfy both requirements, and the alternative is forking a
+cryptography crate that sits in the CredSSP path.
+
+`scripts/check-ironrdp-unblock.sh` reports whether the conflict has
+cleared, so this does not depend on anyone remembering to re-check. The
+full unblock procedure — which crates move together, which pin to delete,
+and what to verify before believing it — is in
+[ADR-0015](adr/ADR-0015-native-rust-session-engine.md#pinning-ironrdp-and-russh-so-both-engines-can-coexist).
+
+---
 
 ### Kubernetes Pod Console
 

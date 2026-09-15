@@ -111,12 +111,17 @@ RUN git clone https://github.com/apache/guacamole-server.git /src \
     && cd /src && git checkout be83001bda2e60f1356604c91144628e8150afeb
 
 WORKDIR /src
+# The ENABLE_WEBP assertion is not cosmetic: WebP support is auto-detected
+# from libwebp-dev, and guacenc treats a missing decoder as success. Lose
+# it and every WebP damage rectangle is silently dropped from exported
+# MP4s rather than raising an error.
 RUN autoreconf -fi \
     && ./configure --prefix=/usr/local --enable-guacenc \
     && make -j"$(nproc)" \
     && make DESTDIR=/build install \
     && test -x /build/usr/local/bin/guacenc \
-    && test -f /build/usr/local/lib/libguac.so
+    && test -f /build/usr/local/lib/libguac.so \
+    && grep -q '^#define ENABLE_WEBP' config.h
 
 # ── Runtime stage ─────────────────────────────────────────────────────
 FROM debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b

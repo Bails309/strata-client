@@ -85,6 +85,15 @@ export interface GuacSession {
   mpAllowAudio?: boolean;
   /** Max participants the room will accept (incl. the owner). 2..=6. */
   mpMaxParticipants?: number;
+  /** Target resolution: fixed { width, height } or "auto" to match window/display */
+  targetResolution?: { width: number; height: number } | "auto";
+  /** Display zoom scale factor: number like 1.0 (100%), 1.25, 1.5, or "fit" */
+  zoomScale?: number | "fit";
+  /** Apply resolution and zoom settings to the active display */
+  applyDisplayConfig?: (
+    res: { width: number; height: number } | "auto",
+    zoom: number | "fit"
+  ) => void;
 }
 
 interface SessionManagerValue {
@@ -132,6 +141,36 @@ interface CreateSessionOpts {
 }
 
 const SessionManagerContext = createContext<SessionManagerValue | null>(null);
+
+/**
+ * Report the display size to the target, with the client's DPI.
+ *
+ * `Guacamole.Client.sendSize` emits only width and height, so this goes
+ * to the tunnel directly to append a third argument. The backend treats
+ * that argument as optional, so a client that never sends it still
+ * resizes — and the target keeps its connect-time scale.
+ *
+ * Needed because a browser window dragged between monitors of different
+ * scale keeps its pixel size: without this the remote desktop stays at
+ * whichever DPI the session happened to start on. Pop-out windows pass
+ * their own `devicePixelRatio`, which is the whole point — that window
+ * is the one that moves between screens.
+ */
+export function sendSizeWithDpi(
+  session: GuacSession,
+  width: number,
+  height: number,
+  devicePixelRatio: number = window.devicePixelRatio || 1
+): void {
+  const dpi = Math.round(96 * (devicePixelRatio || 1));
+  // `Guacamole.Client` has no public isConnected(); the tunnel does.
+  if (session.tunnel?.state === 2) return;
+  if (typeof session.tunnel?.sendMessage === "function") {
+    session.tunnel.sendMessage("size", Math.round(width), Math.round(height), dpi);
+  } else if (typeof session.client?.sendSize === "function") {
+    session.client.sendSize(Math.round(width), Math.round(height));
+  }
+}
 
 // ── Module-level handler registry ──────────────────────────────────
 // `App.tsx`'s handleLogout lives outside SessionManagerProvider but needs to
@@ -814,7 +853,7 @@ export function SessionManagerProvider({
             const cw = parent.clientWidth;
             const ch = parent.clientHeight;
             if (cw > 0 && ch > 0) {
-              client.sendSize(cw, ch);
+              sendSizeWithDpi(session, cw, ch);
             }
             const dw = display.getWidth();
             const dh = display.getHeight();

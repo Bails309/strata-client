@@ -215,6 +215,8 @@ export default function SharedViewer() {
     connectParams.set("width", String(container.clientWidth));
     connectParams.set("height", String(container.clientHeight));
     connectParams.set("dpi", String(Math.round(96 * dpr)));
+    // No `webp` capability here on purpose: a viewer replays the owner's
+    // already-encoded frames, so the codec is the owner's to choose.
     // Multiplayer input gating: server reads `pid` from the query
     // string to identify which room participant is sending input
     // frames. Must be set here (not on the tunnel URL) — see comment

@@ -33,6 +33,7 @@ import {
 import { useSessionManager } from "../components/SessionManager";
 import Select from "../components/Select";
 import { useSettings } from "../contexts/SettingsContext";
+import { isWebPSupported } from "../utils/browserCapabilities";
 
 const PAGE_SIZE = 50;
 const FOLDER_VIEW_KEY = "strata-folder-view";
@@ -654,6 +655,7 @@ export default function Dashboard() {
 
       for (const conn of conns) {
         const dpr = window.devicePixelRatio || 1;
+        const webpSupported = isWebPSupported();
         const connCreds = creds[conn.id];
 
         // Obtain a one-time tunnel ticket so credentials never appear in the WebSocket URL
@@ -671,6 +673,7 @@ export default function Dashboard() {
             width: 800,
             height: 600,
             dpi: Math.round(96 * dpr),
+            webp: webpSupported,
           });
           ticketId = resp.ticket;
         } catch {
@@ -685,6 +688,7 @@ export default function Dashboard() {
         connectParams.set("width", "800");
         connectParams.set("height", "600");
         connectParams.set("dpi", String(Math.round(96 * dpr)));
+        connectParams.set("webp", String(webpSupported));
 
         const session = createSession({
           connectionId: conn.id,

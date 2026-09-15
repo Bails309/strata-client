@@ -629,7 +629,7 @@ impl ProtocolEngine for RasterisingEngine {
     }
 
     async fn handle_input(&mut self, input: InputEvent) -> Result<(), EngineError> {
-        if let InputEvent::Resize { width, height } = input {
+        if let InputEvent::Resize { width, height, .. } = input {
             let (cols, rows) = self.renderer.grid_for(width, height);
             self.renderer.resize(cols, rows);
             let (w, h) = self.renderer.pixel_size();
@@ -869,6 +869,7 @@ mod tests {
             .handle_input(InputEvent::Resize {
                 width: 1280,
                 height: 720,
+                dpi: None,
             })
             .await
             .unwrap();

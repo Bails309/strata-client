@@ -16,6 +16,7 @@ import {
 import FileBrowser from "./FileBrowser";
 import QuickShare from "./QuickShare";
 import QuickShareOutbound from "./QuickShareOutbound";
+import DisplaySettingsControl from "./DisplaySettingsControl";
 import { requestFullscreenWithLock, exitFullscreenWithUnlock } from "../utils/keyboardLock";
 
 // Modern flat checkbox: borderless until checked, accent-filled with a crisp
@@ -90,6 +91,7 @@ export default function SessionBar() {
   const [outboundOpen, setOutboundOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [displaySettingsOpen, setDisplaySettingsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   // Multiplayer share options (v1.9.6+) — only honoured for control-mode shares.
   const [mpEnabled, setMpEnabled] = useState(false);
@@ -632,7 +634,39 @@ export default function SessionBar() {
                     <line x1="7" y1="16" x2="17" y2="16" />
                   </svg>
                 </button>
+
+                {/* Display & Resolution (Hyper-V Slider) */}
+                <button
+                  className={`flex-1 h-9 flex items-center justify-center rounded-lg border transition-all duration-200 ${displaySettingsOpen ? "bg-accent/20 border-accent/40 text-accent-light" : "bg-white/5 border-white/10 text-txt-secondary hover:bg-white/10 hover:border-white/20"}`}
+                  onClick={() => setDisplaySettingsOpen(!displaySettingsOpen)}
+                  title="Display Resolution & Zoom (Hyper-V Slider)"
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <rect x="2" y="3" width="20" height="14" rx="2" />
+                    <line x1="8" y1="21" x2="16" y2="21" />
+                    <line x1="12" y1="17" x2="12" y2="21" />
+                  </svg>
+                </button>
               </div>
+
+              {/* Display & Resolution Popover */}
+              {displaySettingsOpen && (
+                <div className="mt-4 p-3 rounded-lg border border-white/10 bg-white/5 backdrop-blur animate-in fade-in slide-in-from-top-2 duration-200">
+                  <DisplaySettingsControl
+                    session={activeSession}
+                    onClose={() => setDisplaySettingsOpen(false)}
+                  />
+                </div>
+              )}
 
               {/* Keyboard Shortcuts List */}
               {keyboardOpen && (

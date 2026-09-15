@@ -126,20 +126,22 @@ alacritty_terminal = { version = "0.26", optional = true }
 fontdue = { version = "0.9", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = [
     "png",
+    "webp",
 ] }
 
 # RDP engine (feature `rdp`)
 #
-# TODO(v2): raise to the current ironrdp (0.10/0.11) once `picky` ships
-# 7.0.0 proper. ironrdp 0.8+ pins a `picky` release candidate that pins
-# `curve25519-dalek =5.0.0-rc.1`, which cannot coexist with the stable
-# 5.0.0 that a patched russh requires. The 0.7 line pins an older picky
-# whose dalek is 4.x — a different major — so both engines resolve.
+# Phase 4 modernization: RDP sessions run as asynchronous Tokio green tasks
+# cooperatively multiplexed across a bounded worker pool via `LocalSet`
+# (eliminating dedicated OS thread and Tokio runtime allocation per session).
 #
-# The alternative was holding ironrdp current and dropping russh to
-# 0.54, which reintroduces a remotely reachable process abort. Keeping
-# RDP three minor versions back is the cheaper of the two. See
-# docs/adr/ADR-0015-native-rust-session-engine.md.
+# Crate version note: `ironrdp` is held on 0.7 because everything above it
+# reaches a `picky` release candidate pinning `curve25519-dalek =5.0.0-rc.1`,
+# and every `russh` carrying the RUSTSEC-2026-0154 fix (>=0.60.3) needs
+# stable 5.0.0. The highest `russh` that coexists with ironrdp 0.10 is
+# 0.60.1 — below the fix — so there is no safe intermediate. Run
+# `scripts/check-ironrdp-unblock.sh` to see whether that still holds; the
+# upgrade steps are in docs/adr/ADR-0015-native-rust-session-engine.md.
 ironrdp-connector = { version = "0.7", optional = true }
 ironrdp-session = { version = "0.7", optional = true }
 ironrdp-tokio = { version = "0.7", optional = true }

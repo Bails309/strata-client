@@ -37,11 +37,14 @@ pub mod layouts;
 pub mod tls;
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use image::codecs::webp::WebPEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 use ironrdp_cliprdr::pdu::{ClipboardFormat, ClipboardFormatId, FormatDataResponse};
 use ironrdp_cliprdr::{Client as CliprdrClientRole, CliprdrClient, CliprdrSvcMessages};
@@ -76,6 +79,7 @@ use ironrdp_tokio::{single_sequence_step, FramedWrite as _, TokioFramed};
 use secrecy::ExposeSecret;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::LocalSet;
 use tokio_rustls::client::TlsStream;
 
 use crate::engine::rdp::audio::SessionAudio;
@@ -84,7 +88,7 @@ use crate::engine::rdp::clipboard::{
     MAX_CLIPBOARD_BYTES,
 };
 use crate::engine::rdp::kdc::KdcNetworkClient;
-use crate::engine::rdp::keycodes::keysym_to_scancode;
+use crate::engine::rdp::keycodes::{resolve_key, KeyEvent};
 use crate::engine::{EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec};
 use crate::error::EngineError;
 use crate::tls::CertPolicy;
@@ -137,6 +141,20 @@ pub struct RdpConfig {
     /// exist for that case: attach the issuing CA to the connection, or
     /// pin the certificate's fingerprint directly.
     pub cert_policy: CertPolicy,
+    /// HiDPI desktop scale factor in percent (100..=500 per MS-RDPEDISP).
+    /// Defaults to `None` (standard 100% scale).
+    pub desktop_scale_factor: Option<u32>,
+    /// Whether to enable WebP graphics acceleration for large damage rectangles.
+    /// Defaults to `true` (with automatic fallback to PNG).
+    pub enable_webp: bool,
+    /// Whether the client can decode direct H.264 video for WebCodecs
+    /// hardware decoding. Defaults to `true`.
+    ///
+    /// Accepted and negotiated today, but not yet acted on: emitting
+    /// [`TargetEvent::VideoSlice`] from RDP needs the graphics pipeline
+    /// (`ironrdp-egfx`), which is part of the blocked IronRDP upgrade.
+    /// Until then every frame goes out as an image update.
+    pub enable_h264: bool,
 }
 
 /// Desktop features the target may enable, mirroring guacd's
@@ -199,6 +217,9 @@ impl Default for RdpConfig {
             disable_paste: false,
             color_depth: None,
             cert_policy: CertPolicy::default(),
+            desktop_scale_factor: None,
+            enable_webp: true,
+            enable_h264: true,
         }
     }
 }
@@ -211,37 +232,96 @@ pub struct RdpEngine {
     finished: bool,
 }
 
+type LocalTask = Box<dyn FnOnce() + Send>;
+
+/// Bounded worker pool running Tokio current-thread runtimes with LocalSets.
+/// Multiple non-Send IronRDP sessions are scheduled cooperatively as asynchronous
+/// Tokio green tasks across this event loop pool rather than spawning an unmetered
+/// OS thread and a separate Tokio runtime per RDP connection.
+struct RdpWorker {
+    task_tx: mpsc::UnboundedSender<LocalTask>,
+}
+
+struct RdpWorkerPool {
+    workers: Vec<RdpWorker>,
+    next_worker: AtomicUsize,
+}
+
+static RDP_WORKER_POOL: OnceLock<RdpWorkerPool> = OnceLock::new();
+
+impl RdpWorkerPool {
+    fn global() -> &'static Self {
+        RDP_WORKER_POOL.get_or_init(|| {
+            let pool_size = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(2)
+                .clamp(1, 4);
+
+            let mut workers = Vec::with_capacity(pool_size);
+            for i in 0..pool_size {
+                let (task_tx, mut task_rx) = mpsc::unbounded_channel::<LocalTask>();
+                std::thread::Builder::new()
+                    .name(format!("strata-rdp-worker-{i}"))
+                    .spawn(move || {
+                        let runtime = match tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                        {
+                            Ok(rt) => rt,
+                            Err(err) => {
+                                tracing::error!(
+                                    "failed to create strata-rdp worker runtime: {err}"
+                                );
+                                return;
+                            }
+                        };
+                        let local_set = LocalSet::new();
+                        local_set.block_on(&runtime, async move {
+                            while let Some(task) = task_rx.recv().await {
+                                task();
+                            }
+                        });
+                    })
+                    .expect("failed to spawn strata-rdp worker thread");
+                workers.push(RdpWorker { task_tx });
+            }
+
+            Self {
+                workers,
+                next_worker: AtomicUsize::new(0),
+            }
+        })
+    }
+
+    fn spawn(&self, task: LocalTask) -> Result<(), EngineError> {
+        let idx = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
+        self.workers[idx]
+            .task_tx
+            .send(task)
+            .map_err(|_| EngineError::Closed("strata-rdp worker thread exited".to_owned()))
+    }
+}
+
 impl RdpEngine {
     /// Connect, authenticate over CredSSP, and reach the active stage.
     ///
     /// Returns once the session is live; the credential is consumed on
-    /// the session thread and dropped there.
+    /// the session task and dropped there.
     pub async fn connect(spec: TargetSpec, config: &RdpConfig) -> Result<Self, EngineError> {
         let (event_tx, events) = mpsc::channel(EVENT_QUEUE_DEPTH);
         let (input, input_rx) = mpsc::channel(INPUT_QUEUE_DEPTH);
         let (ready_tx, ready_rx) = oneshot::channel();
         let config = config.clone();
 
-        std::thread::Builder::new()
-            .name("strata-rdp".to_owned())
-            .spawn(move || {
-                let runtime = match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(runtime) => runtime,
-                    Err(err) => {
-                        let _ = ready_tx.send(Err(EngineError::Transport(err)));
-                        return;
-                    }
-                };
-                runtime.block_on(session_thread(spec, config, ready_tx, event_tx, input_rx));
-            })
-            .map_err(EngineError::Transport)?;
+        let task: LocalTask = Box::new(move || {
+            tokio::task::spawn_local(session_thread(spec, config, ready_tx, event_tx, input_rx));
+        });
+
+        RdpWorkerPool::global().spawn(task)?;
 
         let desktop = ready_rx
             .await
-            .map_err(|_| EngineError::Closed("rdp session thread exited".to_owned()))??;
+            .map_err(|_| EngineError::Closed("rdp session task exited".to_owned()))??;
 
         Ok(Self {
             events,
@@ -374,7 +454,7 @@ fn encode_cursor(pointer: &DecodedPointer) -> Result<TargetEvent, EngineError> {
     let (width, height) = (u32::from(pointer.width), u32::from(pointer.height));
 
     let mut png = Vec::new();
-    PngEncoder::new_with_quality(&mut png, CompressionType::Fast, FilterType::Adaptive)
+    PngEncoder::new_with_quality(&mut png, CompressionType::Fast, FilterType::NoFilter)
         .write_image(
             &pointer.bitmap_data,
             width,
@@ -423,9 +503,17 @@ struct RdpSession {
     disable_paste: bool,
     /// Previous frame, for narrowing the target's coarse damage rects.
     shadow: Vec<u8>,
+    /// Scratch buffer for cropped RGB pixels before PNG encoding, reused across frames.
+    cropped_scratch: Vec<u8>,
+    /// Scratch buffer for encoded PNG bytes, reused across frames.
+    encoded_scratch: BytesMut,
     stats: EncodeStats,
     stats_reported_at: Instant,
     finished: bool,
+    /// Scale factor for HiDPI displays (100..=500 percent), passed to DisplayControl on resize.
+    scale_factor: Option<u32>,
+    /// Whether to encode large damage rectangles with lossless WebP.
+    enable_webp: bool,
 }
 
 /// Entry point for the dedicated session thread.
@@ -465,7 +553,26 @@ async fn session_thread(
         tokio::select! {
             incoming = input.recv() => {
                 match incoming {
-                    Some(event) => {
+                    Some(mut event) => {
+                        // Coalesce consecutive button-free pointer moves: a
+                        // high-polling mouse otherwise floods the fast-path
+                        // queue with positions the target never renders.
+                        // Held-button moves are left alone so drag paths keep
+                        // every point.
+                        if matches!(event, InputEvent::Mouse { mask: 0, .. }) {
+                            while let Ok(next) = input.try_recv() {
+                                if matches!(next, InputEvent::Mouse { mask: 0, .. }) {
+                                    event = next;
+                                    continue;
+                                }
+                                if let Err(err) = session.handle_input(event).await {
+                                    let _ = events.send(Err(err)).await;
+                                    return;
+                                }
+                                event = next;
+                                break;
+                            }
+                        }
                         if let Err(err) = session.handle_input(event).await {
                             let _ = events.send(Err(err)).await;
                             return;
@@ -500,9 +607,11 @@ impl RdpSession {
 
         let width = clamp_dimension(width);
         let height = clamp_dimension(height);
+        let scale_factor = config.desktop_scale_factor.map(|s| s.clamp(100, 500));
 
         let connector_config = ConnectorConfig {
             desktop_size: DesktopSize { width, height },
+            desktop_scale_factor: scale_factor.unwrap_or(0),
             // Advertise *only* CredSSP. Offering the legacy TLS security
             // layer as well lets the server negotiate down to it, and on
             // that layer the connection succeeds before any credential
@@ -659,9 +768,13 @@ impl RdpSession {
             disable_copy: config.disable_copy,
             disable_paste: config.disable_paste,
             shadow: Vec::new(),
+            cropped_scratch: Vec::new(),
+            encoded_scratch: BytesMut::new(),
             stats: EncodeStats::default(),
             stats_reported_at: Instant::now(),
             finished: false,
+            scale_factor,
+            enable_webp: config.enable_webp,
         };
         session.request_full_repaint().await?;
         Ok(session)
@@ -889,7 +1002,9 @@ impl RdpSession {
         let width = usize::from(region.width());
         let height = usize::from(region.height());
 
-        let mut cropped = Vec::with_capacity(width * height * 3);
+        self.cropped_scratch.clear();
+        self.cropped_scratch.reserve(width * height * 3);
+
         let data = self.image.data();
         for row in 0..height {
             let start = (top + row) * stride + left * bpp;
@@ -902,24 +1017,56 @@ impl RdpSession {
                     self.image.height()
                 )));
             };
-            push_rgb(slice, &mut cropped);
+            push_rgb(slice, &mut self.cropped_scratch);
         }
 
         let pixels = width * height;
-        let mut encoded = Vec::new();
-        // PNG, not JPEG: a desktop is flat UI, which PNG compresses far
-        // better than a DCT codec. Measured on a real session, JPEG at
-        // quality 90 cost more bytes for the same activity.
-        PngEncoder::new_with_quality(&mut encoded, CompressionType::Fast, FilterType::Adaptive)
+        let use_webp = prefers_webp(self.enable_webp, pixels);
+        let mut encoded_as_webp = false;
+
+        self.encoded_scratch.reserve(pixels);
+
+        if use_webp {
+            let start_len = self.encoded_scratch.len();
+            let encoder = WebPEncoder::new_lossless((&mut self.encoded_scratch).writer());
+            if encoder
+                .encode(
+                    &self.cropped_scratch,
+                    width as u32,
+                    height as u32,
+                    ExtendedColorType::Rgb8,
+                )
+                .is_ok()
+            {
+                encoded_as_webp = true;
+            } else {
+                // If WebP encoding fails, truncate buffer and fall back to PNG
+                self.encoded_scratch.truncate(start_len);
+            }
+        }
+
+        if !encoded_as_webp {
+            PngEncoder::new_with_quality(
+                (&mut self.encoded_scratch).writer(),
+                CompressionType::Fast,
+                FilterType::Sub,
+            )
             .write_image(
-                &cropped,
+                &self.cropped_scratch,
                 width as u32,
                 height as u32,
                 ExtendedColorType::Rgb8,
             )
-            .map_err(|e| EngineError::Protocol(format!("png encode failed: {e}")))?;
+            .map_err(|e| EngineError::Protocol(format!("image encode failed: {e}")))?;
+        }
 
-        self.stats.record(pixels, encoded.len());
+        let mimetype = if encoded_as_webp {
+            "image/webp"
+        } else {
+            "image/png"
+        };
+
+        self.stats.record(pixels, self.encoded_scratch.len());
         if self.stats_reported_at.elapsed() >= ENCODE_REPORT_INTERVAL {
             self.stats
                 .report(u64::from(self.width) * u64::from(self.height));
@@ -929,8 +1076,8 @@ impl RdpSession {
         Ok(TargetEvent::ImageUpdate {
             x: i32::from(region.left),
             y: i32::from(region.top),
-            mimetype: "image/png",
-            data: Bytes::from(encoded),
+            mimetype,
+            data: self.encoded_scratch.split().freeze(),
         })
     }
 
@@ -1128,21 +1275,34 @@ impl RdpSession {
                 // the data if and when someone pastes.
                 self.advertise_local_formats().await?;
             }
-            InputEvent::Key { keysym, pressed } => {
-                let Some(scancode) = keysym_to_scancode(keysym) else {
-                    return Ok(());
-                };
-                let mut flags = KeyboardFlags::empty();
-                if !pressed {
-                    flags |= KeyboardFlags::RELEASE;
+            InputEvent::Key { keysym, pressed } => match resolve_key(keysym) {
+                Some(KeyEvent::Scancode(scancode)) => {
+                    let mut flags = KeyboardFlags::empty();
+                    if !pressed {
+                        flags |= KeyboardFlags::RELEASE;
+                    }
+                    if scancode.extended {
+                        flags |= KeyboardFlags::EXTENDED;
+                    }
+                    self.send_input(&[FastPathInputEvent::KeyboardEvent(flags, scancode.code)])
+                        .await?;
                 }
-                if scancode.extended {
-                    flags |= KeyboardFlags::EXTENDED;
+                Some(KeyEvent::Unicode(ch)) => {
+                    let mut flags = KeyboardFlags::empty();
+                    if !pressed {
+                        flags |= KeyboardFlags::RELEASE;
+                    }
+                    let mut utf16_buf = [0u16; 2];
+                    let units = ch.encode_utf16(&mut utf16_buf);
+                    let events: Vec<FastPathInputEvent> = units
+                        .iter()
+                        .map(|&unit| FastPathInputEvent::UnicodeKeyboardEvent(flags, unit))
+                        .collect();
+                    self.send_input(&events).await?;
                 }
-                self.send_input(&[FastPathInputEvent::KeyboardEvent(flags, scancode.code)])
-                    .await?;
-            }
-            InputEvent::Resize { width, height } => {
+                None => {}
+            },
+            InputEvent::Resize { width, height, dpi } => {
                 let (requested_w, requested_h) = (width, height);
                 let (width, height) = (clamp_dimension(width), clamp_dimension(height));
                 if u32::from(width) != requested_w || u32::from(height) != requested_h {
@@ -1155,6 +1315,12 @@ impl RdpSession {
                          will not line up"
                     );
                 }
+                // A window dragged between monitors of different scale
+                // keeps its pixel size, so track DPI separately from the
+                // early-return below.
+                if let Some(scale) = dpi.and_then(desktop_scale_from_dpi) {
+                    self.scale_factor = Some(scale);
+                }
                 if (width, height) == (self.width, self.height)
                     || self.requested_size == Some((width, height))
                 {
@@ -1163,10 +1329,12 @@ impl RdpSession {
                 // Only targets that negotiated the Display Control
                 // channel can resize; older hosts simply keep their
                 // original desktop size.
-                match self
-                    .stage
-                    .encode_resize(u32::from(width), u32::from(height), None, None)
-                {
+                match self.stage.encode_resize(
+                    u32::from(width),
+                    u32::from(height),
+                    self.scale_factor,
+                    None,
+                ) {
                     Some(Ok(frame)) => {
                         self.framed
                             .write_all(&frame)
@@ -1320,6 +1488,36 @@ fn clamp_coord(value: i32, max: u16) -> u16 {
     value.clamp(0, i32::from(max.saturating_sub(1))) as u16
 }
 
+/// Smallest damage rectangle worth spending WebP's encode time on, in pixels.
+const WEBP_MIN_PIXELS: usize = 64 * 64;
+
+/// Whether a damage rectangle of `pixels` should go out as lossless WebP.
+///
+/// Measured on synthetic desktop content, WebP costs roughly twice PNG's
+/// encode time on text and produces about a fifteenth of the bytes, so
+/// the trade is worth making wherever there are enough bytes to save.
+/// Below the threshold there are not: a small rectangle saves a few
+/// hundred bytes while paying WebP's per-call RIFF/VP8L overhead, and
+/// PNG's Sub filter is several times faster on flat content.
+const fn prefers_webp(enable_webp: bool, pixels: usize) -> bool {
+    enable_webp && pixels >= WEBP_MIN_PIXELS
+}
+
+/// Convert a display DPI into an MS-RDPEDISP desktop scale percentage.
+///
+/// 96 DPI is the unscaled desktop, so the percentage is simply the
+/// ratio. Anything landing outside the protocol's 100..=500 window
+/// returns `None`: the field is then left unset rather than clamped to
+/// a scale the client never asked for.
+#[must_use]
+pub fn desktop_scale_from_dpi(dpi: u32) -> Option<u32> {
+    if dpi == 0 {
+        return None;
+    }
+    let scale = ((f64::from(dpi) / 96.0) * 100.0).round() as u32;
+    (100..=500).contains(&scale).then_some(scale)
+}
+
 /// What an RDP target presented, for an operator to approve or pin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredCertificate {
@@ -1464,6 +1662,35 @@ mod tests {
     }
 
     #[test]
+    fn webp_encoder_lossless_roundtrip_valid_data() {
+        let width = 64u32;
+        let height = 64u32;
+        let rgb_data = vec![128u8; (width * height * 3) as usize];
+        let mut encoded = Vec::new();
+        let encoder = WebPEncoder::new_lossless(&mut encoded);
+        let result = encoder.encode(&rgb_data, width, height, ExtendedColorType::Rgb8);
+        assert!(result.is_ok());
+        assert!(!encoded.is_empty());
+        // WebP header starts with "RIFF" and contains "WEBP"
+        assert_eq!(&encoded[0..4], b"RIFF");
+        assert_eq!(&encoded[8..12], b"WEBP");
+    }
+
+    #[test]
+    fn only_large_rectangles_pay_for_webp() {
+        // A caret or a single repainted text line stays on PNG.
+        assert!(!prefers_webp(true, 1));
+        assert!(!prefers_webp(true, 8 * 16));
+        assert!(!prefers_webp(true, WEBP_MIN_PIXELS - 1));
+        // 64x64 and up is worth the encode time.
+        assert!(prefers_webp(true, WEBP_MIN_PIXELS));
+        assert!(prefers_webp(true, 1920 * 1080));
+        // A client that cannot decode WebP gets PNG at every size.
+        assert!(!prefers_webp(false, 1920 * 1080));
+        assert!(!prefers_webp(false, WEBP_MIN_PIXELS));
+    }
+
+    #[test]
     fn the_target_is_never_offered_a_lossy_codec() {
         // RemoteFX is a lossy wavelet, and ironrdp advertises it unless
         // told otherwise. Accepting it costs glyph edges before our own
@@ -1518,6 +1745,20 @@ mod tests {
         assert_eq!(clamp_dimension(3840), 3840);
         assert_eq!(clamp_dimension(5760), 5760);
         assert_eq!(clamp_dimension(7680), 7680);
+    }
+
+    #[test]
+    fn dpi_becomes_a_desktop_scale_percentage() {
+        assert_eq!(desktop_scale_from_dpi(96), Some(100));
+        assert_eq!(desktop_scale_from_dpi(120), Some(125));
+        assert_eq!(desktop_scale_from_dpi(144), Some(150));
+        assert_eq!(desktop_scale_from_dpi(192), Some(200));
+        assert_eq!(desktop_scale_from_dpi(480), Some(500));
+        // Unset, below 100% and past the MS-RDPEDISP ceiling all mean
+        // "leave the scale alone" rather than pick one for the client.
+        assert_eq!(desktop_scale_from_dpi(0), None);
+        assert_eq!(desktop_scale_from_dpi(50), None);
+        assert_eq!(desktop_scale_from_dpi(600), None);
     }
 
     #[test]
@@ -1600,5 +1841,18 @@ mod tests {
             factory.connect(spec).await,
             Err(EngineError::Unsupported("ssh"))
         ));
+    }
+
+    #[tokio::test]
+    async fn rdp_worker_pool_dispatches_local_tasks() {
+        let (tx, rx) = oneshot::channel();
+        let task: LocalTask = Box::new(move || {
+            tokio::task::spawn_local(async move {
+                let _ = tx.send(42);
+            });
+        });
+        RdpWorkerPool::global().spawn(task).expect("spawn task");
+        let result = rx.await.expect("receive result from worker task");
+        assert_eq!(result, 42);
     }
 }

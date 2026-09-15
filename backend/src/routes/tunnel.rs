@@ -105,6 +105,8 @@ pub struct TunnelQuery {
     pub height: Option<u32>,
     pub dpi: Option<u32>,
     pub ticket: Option<String>,
+    pub webp: Option<bool>,
+    pub h264: Option<bool>,
 }
 
 // ── Ticket creation ────────────────────────────────────────────────────
@@ -119,6 +121,8 @@ pub struct CreateTicketRequest {
     pub height: Option<u32>,
     pub dpi: Option<u32>,
     pub ignore_cert: Option<bool>,
+    pub webp: Option<bool>,
+    pub h264: Option<bool>,
 }
 
 pub async fn create_tunnel_ticket(
@@ -172,6 +176,8 @@ pub async fn create_tunnel_ticket(
         height: body.height.unwrap_or(1080),
         dpi: body.dpi.unwrap_or(96),
         ignore_cert: body.ignore_cert.unwrap_or(false),
+        webp: body.webp,
+        h264: body.h264,
         created_at: std::time::Instant::now(),
     };
 
@@ -818,6 +824,24 @@ pub async fn ws_tunnel(
     // experience is "letterbox/scale" rather than "disconnect").
     if protocol == "vdi" {
         extra.insert("resize-method".into(), String::new());
+    }
+
+    let webp_supported = ticket_creds
+        .as_ref()
+        .and_then(|t| t.webp)
+        .or(query.webp)
+        .unwrap_or(true);
+    if !webp_supported {
+        extra.insert("enable-webp".into(), "false".into());
+    }
+
+    let h264_supported = ticket_creds
+        .as_ref()
+        .and_then(|t| t.h264)
+        .or(query.h264)
+        .unwrap_or(true);
+    if !h264_supported {
+        extra.insert("enable-h264".into(), "false".into());
     }
 
     let safe_port: u16 = port

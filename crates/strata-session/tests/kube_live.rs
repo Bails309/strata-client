@@ -186,6 +186,7 @@ async fn the_pty_takes_a_new_size() {
         .handle_input(InputEvent::Resize {
             width: 800,
             height: 640,
+            dpi: None,
         })
         .await
         .expect("resizing");

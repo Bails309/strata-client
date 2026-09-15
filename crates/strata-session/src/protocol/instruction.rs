@@ -19,6 +19,9 @@ pub enum ClientInstruction {
         width: u32,
         /// New height in pixels.
         height: u32,
+        /// Display DPI, when the client reports one. Absent from
+        /// stock Guacamole clients, which send only width and height.
+        dpi: Option<u32>,
     },
     /// Pointer moved or a button changed state.
     Mouse {
@@ -110,6 +113,9 @@ impl ClientInstruction {
             "size" => Self::Size {
                 width: instruction.arg_int(0)?,
                 height: instruction.arg_int(1)?,
+                // Optional third argument, so a client that sends the
+                // stock two-argument form still parses.
+                dpi: instruction.arg(2).and_then(|d| d.parse().ok()),
             },
             "mouse" => Self::Mouse {
                 x: instruction.arg_int(0)?,
@@ -358,6 +364,23 @@ pub enum ServerInstruction {
         /// Object index being withdrawn.
         object: i32,
     },
+    /// Stream of compressed H.264 video slices targeting a layer (for WebCodecs hardware decode).
+    H264 {
+        /// Stream index.
+        stream: i32,
+        /// Destination layer index.
+        layer: i32,
+        /// Whether this slice is an IDR keyframe.
+        keyframe: bool,
+        /// Destination X.
+        x: i32,
+        /// Destination Y.
+        y: i32,
+        /// Frame width in pixels.
+        width: u32,
+        /// Frame height in pixels.
+        height: u32,
+    },
 }
 
 impl ServerInstruction {
@@ -530,6 +553,26 @@ impl ServerInstruction {
                 let v = [object.to_string()];
                 encode_str_args(out, "undefine", &v);
             }
+            Self::H264 {
+                stream,
+                layer,
+                keyframe,
+                x,
+                y,
+                width,
+                height,
+            } => {
+                let v = [
+                    stream.to_string(),
+                    layer.to_string(),
+                    if *keyframe { "1" } else { "0" }.to_string(),
+                    x.to_string(),
+                    y.to_string(),
+                    width.to_string(),
+                    height.to_string(),
+                ];
+                encode_str_args(out, "h264", &v);
+            }
         }
     }
 
@@ -582,7 +625,16 @@ mod tests {
             wire(b"4.size,4.1920,4.1080;"),
             ClientInstruction::Size {
                 width: 1920,
-                height: 1080
+                height: 1080,
+                dpi: None
+            }
+        );
+        assert_eq!(
+            wire(b"4.size,4.1920,4.1080,3.192;"),
+            ClientInstruction::Size {
+                width: 1920,
+                height: 1080,
+                dpi: Some(192)
             }
         );
         assert_eq!(
@@ -673,5 +725,29 @@ mod tests {
         assert_eq!(consumed, bytes.len());
         assert_eq!(parsed.opcode, "error");
         assert_eq!(parsed.arg(0).unwrap(), "target said: no; try again, later.");
+    }
+
+    #[test]
+    fn h264_instruction_encodes_and_roundtrips() {
+        let instruction = ServerInstruction::H264 {
+            stream: 1,
+            layer: 0,
+            keyframe: true,
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let bytes = instruction.to_bytes();
+        let (parsed, consumed) = try_parse_instruction(&bytes).unwrap().unwrap();
+        assert_eq!(consumed, bytes.len());
+        assert_eq!(parsed.opcode, "h264");
+        assert_eq!(parsed.arg(0).unwrap(), "1");
+        assert_eq!(parsed.arg(1).unwrap(), "0");
+        assert_eq!(parsed.arg(2).unwrap(), "1");
+        assert_eq!(parsed.arg(3).unwrap(), "0");
+        assert_eq!(parsed.arg(4).unwrap(), "0");
+        assert_eq!(parsed.arg(5).unwrap(), "1920");
+        assert_eq!(parsed.arg(6).unwrap(), "1080");
     }
 }

@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Guacamole from "guacamole-common-js";
-import { GuacSession } from "./SessionManager";
+import { GuacSession, sendSizeWithDpi } from "./SessionManager";
 import { clipboardDiag, sendClipboardToRemote } from "./clipboardSync";
 import { notifySessionActivity } from "./sessionActivity";
 import { createWinKeyProxy } from "../utils/winKeyProxy";
@@ -100,7 +100,7 @@ export function usePopOut(
       if (dw > 0 && dh > 0 && cw > 0 && ch > 0) {
         display.scale(Math.min(cw / dw, ch / dh));
       }
-      session.client.sendSize(cw, ch);
+      sendSizeWithDpi(session, cw, ch);
     } else if (session.displayEl) {
       // No container — user navigated away from the session page while the
       // popup was open.  Adopt the display element back into the main document
@@ -378,7 +378,9 @@ export function usePopOut(
         pendingSendSizeId = null;
         if (popup && !popup.closed) {
           try {
-            sess.client.sendSize(cw, ch);
+            // The popup's own ratio: it is the window that gets dragged
+            // to a screen with a different scale.
+            sendSizeWithDpi(sess, cw, ch, popup.devicePixelRatio);
           } catch (e) {
             console.warn("popup sendSize failed", e);
           }

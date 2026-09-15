@@ -126,6 +126,15 @@ hickory-resolver = { version = "0.26", default-features = false, features = [
 ] }
 # Magic-number / MIME detection for uploads (W3-6)
 infer = { version = "0.19", default-features = false }
+# Recording -> MP4 fallback normalises every extracted damage rectangle to
+# PNG, because the RDP engine emits a mix of PNG and WebP and ffmpeg's
+# image2 demuxer decodes a sequence with a single codec. Same version
+# strata-session already pulls in, so no new transitive dependencies.
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+] }
 # Prometheus /metrics endpoint (W3-12)
 axum-prometheus = "0.10"
 

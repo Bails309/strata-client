@@ -54,6 +54,8 @@ vi.mock("guacamole-common-js", () => {
           onerror: null,
           onstatechange: null,
           oninstruction: null,
+          state: 1,
+          sendMessage: vi.fn(),
         };
       }),
       Mouse: Object.assign(
@@ -816,7 +818,7 @@ describe("SessionManager", () => {
       session.client.onstatechange(3);
     });
 
-    expect(session.client.sendSize).toHaveBeenCalledWith(1000, 800);
+    expect(session.tunnel.sendMessage).toHaveBeenCalledWith("size", 1000, 800, 96);
     const display = session.client.getDisplay();
     expect(display.scale).toHaveBeenCalled();
   });

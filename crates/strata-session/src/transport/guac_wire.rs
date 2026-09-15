@@ -9,7 +9,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use bytes::{Bytes, BytesMut};
 
-use crate::engine::{FileEvent, TargetEvent};
+use crate::engine::{FileEvent, TargetEvent, VideoCodec};
 use crate::protocol::ServerInstruction;
 use crate::transport::{ClientFrame, FrameEncoder, StreamingMode};
 
@@ -263,6 +263,37 @@ impl GuacWireEncoder {
         out.push(ClientFrame::Text(buf.freeze()));
     }
 
+    /// Emit an H.264 video slice for client-side hardware WebCodecs decoding.
+    pub fn encode_h264(&mut self, keyframe: bool, data: &Bytes, out: &mut Vec<ClientFrame>) {
+        let stream = self.allocate_stream();
+        let mut header = BytesMut::new();
+        ServerInstruction::H264 {
+            stream,
+            layer: DEFAULT_LAYER,
+            keyframe,
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        }
+        .encode(&mut header);
+        out.push(ClientFrame::Text(header.freeze()));
+
+        for chunk in data.chunks(MAX_BLOB_BYTES) {
+            let mut buf = BytesMut::new();
+            ServerInstruction::Blob {
+                stream,
+                data: BASE64.encode(chunk),
+            }
+            .encode(&mut buf);
+            out.push(ClientFrame::Text(buf.freeze()));
+        }
+
+        let mut tail = BytesMut::new();
+        ServerInstruction::End { stream }.encode(&mut tail);
+        out.push(ClientFrame::Text(tail.freeze()));
+    }
+
     /// Emit the control instructions shared by both streaming modes.
     ///
     /// Returns `true` when `event` was handled.
@@ -395,14 +426,21 @@ impl FrameEncoder for GuacWireEncoder {
             TargetEvent::Clipboard(data) => self.encode_clipboard(data, out),
             TargetEvent::Audio(data) => self.encode_audio(data, out),
             TargetEvent::File(event) => self.encode_file(event, out),
-            // Handled by `encode_control` above, which runs first.
-            TargetEvent::CopyRegion { .. } => {}
-            // Compressed video and raw PTY bytes have no text
-            // representation: reaching them requires a server-side
-            // rasteriser (Phase 2). Count rather than silently drop.
-            TargetEvent::VideoSlice { .. } | TargetEvent::TerminalOutput(_) => {
+            TargetEvent::VideoSlice {
+                codec: VideoCodec::H264,
+                keyframe,
+                data,
+                ..
+            } => self.encode_h264(*keyframe, data, out),
+            TargetEvent::VideoSlice {
+                codec: VideoCodec::Av1,
+                ..
+            }
+            | TargetEvent::TerminalOutput(_) => {
                 self.unsupported += 1;
             }
+            // Handled by `encode_control` above, which runs first.
+            TargetEvent::CopyRegion { .. } => {}
             TargetEvent::Resized { .. }
             | TargetEvent::Disconnected { .. }
             | TargetEvent::CursorImage { .. }
@@ -623,5 +661,27 @@ mod tests {
         );
         assert!(out.is_empty());
         assert_eq!(encoder.unsupported_events(), 1);
+    }
+
+    #[test]
+    fn video_slice_h264_emits_stream_instruction_and_blobs() {
+        let mut encoder = GuacWireEncoder::new();
+        let mut out = Vec::new();
+        let nal_unit = Bytes::from_static(b"\x00\x00\x00\x01\x67\x42\x00\x1fNALPAYLOAD");
+        encoder.encode(
+            &TargetEvent::VideoSlice {
+                codec: VideoCodec::H264,
+                keyframe: true,
+                timestamp_ms: 1000,
+                data: nal_unit,
+            },
+            &mut out,
+        );
+        let parsed = instructions(&out);
+        assert_eq!(parsed[0].0, "h264");
+        assert_eq!(parsed[0].1[1], "0"); // layer
+        assert_eq!(parsed[0].1[2], "1"); // keyframe
+        assert_eq!(parsed[1].0, "blob");
+        assert_eq!(parsed[2].0, "end");
     }
 }

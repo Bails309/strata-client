@@ -184,7 +184,7 @@ fn printable(keysym: u32, mods: Modifiers) -> Option<Vec<u8>> {
 ///
 /// Latin-1 keysyms are their own codepoint; everything else arrives as
 /// a Unicode keysym with the `0x01000000` flag set.
-fn keysym_to_char(keysym: u32) -> Option<char> {
+pub(crate) fn keysym_to_char(keysym: u32) -> Option<char> {
     match keysym {
         0x20..=0xff => char::from_u32(keysym),
         0x0100_0000..=0x0110_ffff => char::from_u32(keysym - 0x0100_0000),

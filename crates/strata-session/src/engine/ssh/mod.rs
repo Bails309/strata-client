@@ -805,7 +805,7 @@ impl ProtocolEngine for SshEngine {
             // on focus and mouseover as well as on paste, so acting on it
             // would type the operator's clipboard into the session.
             InputEvent::Clipboard(data) => self.clipboard = data,
-            InputEvent::Resize { width, height } => {
+            InputEvent::Resize { width, height, .. } => {
                 self.width = width;
                 self.height = height;
                 let (cols, rows) = self.config.cell.to_grid(width, height);

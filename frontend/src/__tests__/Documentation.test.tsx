@@ -210,6 +210,20 @@ describe("Documentation", () => {
       await waitFor(() => expect(getRoadmapStatusesMock).toHaveBeenCalled());
     });
 
+    it("renders the Blocked status and the protocols theme", async () => {
+      getRoadmapStatusesMock.mockResolvedValue({ statuses: {} });
+      const user = userEvent.setup();
+      render(<Documentation />);
+      await user.click(screen.getByText("Roadmap"));
+      await screen.findByRole("heading", { level: 1, name: "Product Roadmap" });
+
+      expect(screen.getByText("Protocols & Session Types")).toBeInTheDocument();
+      expect(screen.getByText("IronRDP Upgrade & Tokio-Native RDP Sessions")).toBeInTheDocument();
+      // Both the summary card and the item's own badge.
+      expect(screen.getAllByText("Blocked").length).toBeGreaterThanOrEqual(2);
+      await waitFor(() => expect(getRoadmapStatusesMock).toHaveBeenCalled());
+    });
+
     it("shows Admin Editable badge for users with manage_system permission", async () => {
       getRoadmapStatusesMock.mockResolvedValue({ statuses: {} });
       const user = userEvent.setup();

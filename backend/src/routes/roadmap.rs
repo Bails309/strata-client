@@ -4,9 +4,9 @@
 //! Roadmap status persistence.
 //!
 //! Roadmap items are defined statically on the frontend. Admins can override
-//! each item's status (`Proposed | Researching | In Progress | Shipped`).
-//! Overrides are stored as a single JSON blob in `system_settings` under the
-//! key `roadmap_statuses`, shaped as `{ "<item-id>": "<status>" }`.
+//! each item's status (`Proposed | Researching | Blocked | In Progress |
+//! Shipped`). Overrides are stored as a single JSON blob in `system_settings`
+//! under the key `roadmap_statuses`, shaped as `{ "<item-id>": "<status>" }`.
 
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
@@ -20,7 +20,13 @@ use crate::services::middleware::{check_system_permission, AuthUser};
 use crate::services::settings;
 
 const SETTINGS_KEY: &str = "roadmap_statuses";
-const ALLOWED_STATUSES: &[&str] = &["Proposed", "Researching", "In Progress", "Shipped"];
+const ALLOWED_STATUSES: &[&str] = &[
+    "Proposed",
+    "Researching",
+    "Blocked",
+    "In Progress",
+    "Shipped",
+];
 const MAX_ITEM_ID_LEN: usize = 64;
 
 async fn require_running(state: &SharedState) -> Result<crate::db::Database, AppError> {
@@ -122,8 +128,24 @@ mod tests {
 
     #[test]
     fn allowed_statuses_cover_all_values() {
-        for s in ["Proposed", "Researching", "In Progress", "Shipped"] {
+        // Mirrors the `RoadmapStatus` union in frontend/src/api.ts; the two
+        // lists have to agree or an admin's selection is rejected as invalid.
+        for s in [
+            "Proposed",
+            "Researching",
+            "Blocked",
+            "In Progress",
+            "Shipped",
+        ] {
             assert!(ALLOWED_STATUSES.contains(&s));
+        }
+        assert_eq!(ALLOWED_STATUSES.len(), 5);
+    }
+
+    #[test]
+    fn unknown_statuses_are_rejected() {
+        for s in ["proposed", "Done", "", "Blocked "] {
+            assert!(!ALLOWED_STATUSES.contains(&s));
         }
     }
 }

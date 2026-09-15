@@ -1076,6 +1076,13 @@ pub struct BulkSafeguardCheckoutBody {
     pub comment: Option<String>,
 }
 
+/// Ceiling on profiles per bulk Safeguard request.
+///
+/// Each id costs a database round trip and at least one appliance
+/// call, so an uncapped list lets one HTTP request fan out into an
+/// arbitrary number of outbound requests against the appliance.
+const MAX_BULK_PROFILE_IDS: usize = 100;
+
 #[derive(Serialize)]
 pub struct BulkSafeguardCheckoutResult {
     pub profile_id: Uuid,
@@ -1165,6 +1172,11 @@ pub async fn bulk_safeguard_checkout(
     if body.profile_ids.is_empty() {
         return Ok(Json(vec![]));
     }
+    if body.profile_ids.len() > MAX_BULK_PROFILE_IDS {
+        return Err(AppError::Validation(format!(
+            "Too many profiles in one request (limit {MAX_BULK_PROFILE_IDS})"
+        )));
+    }
 
     // Safeguard policy commonly requires a non-empty ReasonComment;
     // refuse upfront rather than silently substituting a marker the
@@ -1184,7 +1196,7 @@ pub async fn bulk_safeguard_checkout(
     // kind='safeguard', or expired is silently dropped — the response
     // will be missing those ids and the UI can highlight them.
     let rows = cp_svc::list_for_user(&db.pool, user.id).await?;
-    let mut out = Vec::with_capacity(body.profile_ids.len());
+    let mut out = Vec::new();
 
     for pid in body.profile_ids.iter().copied() {
         let Some(profile) = rows.iter().find(|r| r.id == pid) else {
@@ -1760,6 +1772,12 @@ pub async fn bulk_safeguard_checkin(
             .ok_or_else(|| AppError::Config("Vault not configured".into()))?
     };
 
+    if body.profile_ids.len() > MAX_BULK_PROFILE_IDS {
+        return Err(AppError::Validation(format!(
+            "Too many profiles in one request (limit {MAX_BULK_PROFILE_IDS})"
+        )));
+    }
+
     // Resolve the full set of target profiles. An empty `profile_ids`
     // means "everything currently cached for this user".
     let cached =
@@ -1775,7 +1793,7 @@ pub async fn bulk_safeguard_checkin(
     }
 
     let profiles = cp_svc::list_for_user(&db.pool, user.id).await?;
-    let mut out = Vec::with_capacity(target_ids.len());
+    let mut out = Vec::new();
 
     for pid in target_ids {
         // Pull request_id + account/asset off the live cache row;

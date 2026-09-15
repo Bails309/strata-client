@@ -20,14 +20,13 @@
 
 //! ## Threading
 //!
-//! `ironrdp-async` 0.7's connection future is not `Send` — its
-//! `AsyncNetworkClient` hook is a bare trait object — so the session
-//! cannot be driven directly from the shared Tokio runtime behind
-//! [`ProtocolEngine`]. The whole RDP session therefore runs on its own
-//! thread with a current-thread runtime, and this module exposes a
-//! `Send` handle over channels. The runtime lives for the session's
-//! lifetime, so its sockets stay registered with the reactor that owns
-//! them.
+//! An RDP session is an ordinary Tokio task, like SSH and VNC. That was
+//! not always true: `ironrdp-async` 0.7's connection future was not
+//! `Send` — its `AsyncNetworkClient` hook was a boxed trait object — so
+//! sessions had to be multiplexed across a bounded pool of threads each
+//! running a current-thread runtime and a `LocalSet`. 0.10 replaced that
+//! hook with an RPITIT `NetworkClient`, which made the whole session
+//! future `Send` and let the pool go.
 
 pub mod audio;
 pub mod clipboard;
@@ -37,8 +36,6 @@ pub mod layouts;
 pub mod tls;
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -79,7 +76,6 @@ use ironrdp_tokio::{single_sequence_step, FramedWrite as _, TokioFramed};
 use secrecy::ExposeSecret;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::LocalSet;
 use tokio_rustls::client::TlsStream;
 
 use crate::engine::rdp::audio::SessionAudio;
@@ -232,76 +228,6 @@ pub struct RdpEngine {
     finished: bool,
 }
 
-type LocalTask = Box<dyn FnOnce() + Send>;
-
-/// Bounded worker pool running Tokio current-thread runtimes with LocalSets.
-/// Multiple non-Send IronRDP sessions are scheduled cooperatively as asynchronous
-/// Tokio green tasks across this event loop pool rather than spawning an unmetered
-/// OS thread and a separate Tokio runtime per RDP connection.
-struct RdpWorker {
-    task_tx: mpsc::UnboundedSender<LocalTask>,
-}
-
-struct RdpWorkerPool {
-    workers: Vec<RdpWorker>,
-    next_worker: AtomicUsize,
-}
-
-static RDP_WORKER_POOL: OnceLock<RdpWorkerPool> = OnceLock::new();
-
-impl RdpWorkerPool {
-    fn global() -> &'static Self {
-        RDP_WORKER_POOL.get_or_init(|| {
-            let pool_size = std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(2)
-                .clamp(1, 4);
-
-            let mut workers = Vec::with_capacity(pool_size);
-            for i in 0..pool_size {
-                let (task_tx, mut task_rx) = mpsc::unbounded_channel::<LocalTask>();
-                std::thread::Builder::new()
-                    .name(format!("strata-rdp-worker-{i}"))
-                    .spawn(move || {
-                        let runtime = match tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                        {
-                            Ok(rt) => rt,
-                            Err(err) => {
-                                tracing::error!(
-                                    "failed to create strata-rdp worker runtime: {err}"
-                                );
-                                return;
-                            }
-                        };
-                        let local_set = LocalSet::new();
-                        local_set.block_on(&runtime, async move {
-                            while let Some(task) = task_rx.recv().await {
-                                task();
-                            }
-                        });
-                    })
-                    .expect("failed to spawn strata-rdp worker thread");
-                workers.push(RdpWorker { task_tx });
-            }
-
-            Self {
-                workers,
-                next_worker: AtomicUsize::new(0),
-            }
-        })
-    }
-
-    fn spawn(&self, task: LocalTask) -> Result<(), EngineError> {
-        let idx = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
-        self.workers[idx]
-            .task_tx
-            .send(task)
-            .map_err(|_| EngineError::Closed("strata-rdp worker thread exited".to_owned()))
-    }
-}
-
 impl RdpEngine {
     /// Connect, authenticate over CredSSP, and reach the active stage.
     ///
@@ -313,11 +239,7 @@ impl RdpEngine {
         let (ready_tx, ready_rx) = oneshot::channel();
         let config = config.clone();
 
-        let task: LocalTask = Box::new(move || {
-            tokio::task::spawn_local(session_thread(spec, config, ready_tx, event_tx, input_rx));
-        });
-
-        RdpWorkerPool::global().spawn(task)?;
+        tokio::spawn(session_task(spec, config, ready_tx, event_tx, input_rx));
 
         let desktop = ready_rx
             .await
@@ -518,8 +440,8 @@ struct RdpSession {
     enable_webp: bool,
 }
 
-/// Entry point for the dedicated session thread.
-async fn session_thread(
+/// Entry point for the session task.
+async fn session_task(
     spec: TargetSpec,
     config: RdpConfig,
     ready: oneshot::Sender<Result<(u32, u32), EngineError>>,
@@ -1877,15 +1799,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rdp_worker_pool_dispatches_local_tasks() {
+    async fn a_session_task_runs_on_the_shared_runtime() {
         let (tx, rx) = oneshot::channel();
-        let task: LocalTask = Box::new(move || {
-            tokio::task::spawn_local(async move {
-                let _ = tx.send(42);
-            });
+        tokio::spawn(async move {
+            let _ = tx.send(42);
         });
-        RdpWorkerPool::global().spawn(task).expect("spawn task");
-        let result = rx.await.expect("receive result from worker task");
+        let result = rx.await.expect("receive result from session task");
         assert_eq!(result, 42);
     }
 }

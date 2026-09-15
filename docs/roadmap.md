@@ -45,9 +45,11 @@ release that delivered them, then are removed. In practice:
 **Area:** Protocols · Session engine
 
 Move `ironrdp` from the 0.7 line to current, and retire the bounded
-`LocalSet` worker pool the RDP engine uses in its place. `ironrdp-async`
-0.7's connection future is not `Send`, so RDP sessions cannot run on the
-shared Tokio runtime the SSH and VNC engines use.
+`LocalSet` worker pool the RDP engine used in its place. `ironrdp-async`
+0.7's connection future was not `Send`, so RDP sessions could not run on
+the shared Tokio runtime the SSH and VNC engines use. 0.10 replaced the
+boxed network-client hook with an RPITIT trait, the pool is gone, and RDP
+sessions are now ordinary Tokio tasks.
 
 The dependency conflict that held this back — `ironrdp` requiring a
 `curve25519-dalek` pre-release that cannot coexist with a `russh`
@@ -64,8 +66,7 @@ every release**, and delete each fork as soon as upstream catches up.
 The reasoning and the un-fork procedure are in
 [ADR-0015](adr/ADR-0015-native-rust-session-engine.md#pinning-ironrdp-and-russh-so-both-engines-can-coexist).
 
-Remaining: replace the `LocalSet` pool with `tokio::spawn` now that the
-connect future is `Send`.
+Remaining: drop both forks once upstream catches up.
 
 ---
 

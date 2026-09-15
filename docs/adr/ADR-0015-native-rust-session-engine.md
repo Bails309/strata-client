@@ -316,11 +316,11 @@ Either way, finish with the live RDP suite against a real NLA target.
 Resolution and compilation prove nothing about CredSSP — that is exactly
 how the `sspi` regression reached a running deployment.
 
-Still outstanding after the upgrade: the connect future is now `Send`
-(verified by compiling an `assert_send` against `connect_finalize`), so
-the `LocalSet` worker pool in `engine/rdp/mod.rs` can be replaced with
-`tokio::spawn` to match the SSH and VNC engines. The `## Threading` header
-in that module still describes the old arrangement.
+Still outstanding after the upgrade: nothing. The connect future is `Send`
+on this release (verified by compiling an `assert_send` against
+`connect_finalize`), so the `LocalSet` worker pool in `engine/rdp/mod.rs`
+was removed and RDP sessions are now ordinary `tokio::spawn` tasks, like
+SSH and VNC.
 
 Two operational constraints came out of the Phase 2 work and belong on
 the record:

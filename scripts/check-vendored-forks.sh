@@ -26,6 +26,13 @@ droppable=0
 #
 # The fork can go when a published `ironrdp-connector` resolves against a
 # patched `russh` on its own.
+#
+# It now also carries two behaviour patches, which this probe cannot see.
+# Both have to be upstreamed or reapplied before the fork is deleted:
+#   * advertises SUPPORT_DYN_VC_GFX_PROTOCOL, without which the server
+#     never opens the graphics pipeline channel;
+#   * drops SUPPORT_NET_CHAR_AUTODETECT, which we advertise but only half
+#     implement, leaving Windows retrying bandwidth measurement forever.
 IRONRDP="${IRONRDP_VERSION:-0.10}"
 RUSSH="${RUSSH_VERSION:-0.63}"
 
@@ -57,6 +64,7 @@ if (cd "$probe_dir" && cargo generate-lockfile >/dev/null 2>&1); then
     echo "   which is below the RUSTSEC-2026-0154 fix (>=0.60.3)."
   else
     echo "   CAN BE DROPPED: stock connector resolves with russh $russh_resolved."
+    echo "   First reapply or upstream the GFX and auto-detect capability patches."
     droppable=1
   fi
 else

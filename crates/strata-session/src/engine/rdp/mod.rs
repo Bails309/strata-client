@@ -71,6 +71,8 @@ use ironrdp_pdu::rdp::client_info::PerformanceFlags;
 use ironrdp_pdu::rdp::headers::ShareDataPdu;
 use ironrdp_pdu::rdp::refresh_rectangle::RefreshRectanglePdu;
 use ironrdp_pdu::Action;
+use ironrdp_rdpdr::backend::noop::NoopRdpdrBackend;
+use ironrdp_rdpdr::Rdpdr;
 use ironrdp_rdpsnd::client::Rdpsnd;
 use ironrdp_session::fast_path::ProcessorBuilder;
 use ironrdp_session::image::DecodedImage;
@@ -160,6 +162,14 @@ pub struct RdpConfig {
     /// server that switched to progressive surface commands would leave
     /// the screen stale.
     pub enable_gfx: bool,
+    /// Whether to carry desktop audio back over RDPSND.
+    ///
+    /// On by default, matching guacd, whose `disable-audio` parameter is
+    /// the way to turn it off. The Client Info PDU declares the opposite
+    /// -- `INFO_NOAUDIOPLAYBACK` -- so leaving this unset means the target
+    /// is told not to redirect audio and the RDPSND channel stays silent
+    /// however well the client handles it.
+    pub enable_audio: bool,
 }
 
 /// Desktop features the target may enable, mirroring guacd's
@@ -226,6 +236,7 @@ impl Default for RdpConfig {
             enable_webp: true,
             enable_h264: true,
             enable_gfx: false,
+            enable_audio: true,
         }
     }
 }
@@ -600,6 +611,10 @@ impl RdpSession {
             // Asking for the channel and never advertising support for it
             // means the server never opens it.
             enable_gfx: config.enable_gfx && config.enable_h264,
+            // Declared as a negative on the wire: without this the Client
+            // Info PDU carries INFO_NOAUDIOPLAYBACK and the target sends
+            // nothing, whatever RDPSND agrees to.
+            enable_audio_playback: config.enable_audio,
             ..default_connector_config()
         };
         // Nothing below may observe the credential.
@@ -643,8 +658,8 @@ impl RdpSession {
             .with_static_channel(drdynvc)
             .with_static_channel(CliprdrClient::new(Box::new(SessionClipboard::new(
                 clipboard_tx,
-            ))))
-            .with_static_channel(Rdpsnd::new(Box::new(SessionAudio::new(audio_tx))));
+            ))));
+        connector = with_audio_channels(connector, audio_tx);
 
         let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector)
             .await
@@ -1515,6 +1530,30 @@ const fn prefers_webp(enable_webp: bool, pixels: usize) -> bool {
     enable_webp && pixels >= WEBP_MIN_PIXELS
 }
 
+/// Register the channels that carry desktop audio.
+///
+/// Both are needed, and only one of them is obvious. Windows joins the
+/// rdpsnd channel and then never sends a single PDU on it unless rdpdr
+/// is advertised as well: no Server Audio Formats, no training, no wave
+/// data, and no error either. [MS-RDPEFS] Appendix A<1> documents the
+/// dependency the other way round — rdpdr needing rdpsnd — but on
+/// Server 2019/2022 it holds in both directions.
+///
+/// The rdpdr channel announces no devices and its backend is a no-op, so
+/// nothing can be redirected through it. It exists purely to satisfy that
+/// pairing, which is why it is registered here next to the audio channel
+/// rather than alongside the other session channels.
+///
+/// [MS-RDPEFS]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpefs/34d9de58-b2b5-40b6-b970-f82d4603bdb5
+fn with_audio_channels(
+    connector: ClientConnector,
+    audio_tx: tokio::sync::mpsc::Sender<Bytes>,
+) -> ClientConnector {
+    connector
+        .with_static_channel(Rdpsnd::new(Box::new(SessionAudio::new(audio_tx))))
+        .with_static_channel(Rdpdr::new(Box::new(NoopRdpdrBackend), "strata".to_owned()))
+}
+
 /// Convert a display DPI into an MS-RDPEDISP desktop scale percentage.
 ///
 /// 96 DPI is the unscaled desktop, so the percentage is simply the
@@ -1677,6 +1716,43 @@ fn map_connector(err: ironrdp_connector::ConnectorError) -> EngineError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_is_on_unless_the_connection_turns_it_off() {
+        // The wire field is a negative: `enable_audio_playback: false`
+        // sets INFO_NOAUDIOPLAYBACK, which tells the target not to
+        // redirect audio at all. Defaulting it off left RDPSND agreed
+        // and silent.
+        assert!(
+            RdpConfig::default().enable_audio,
+            "audio has to be on by default, as it was under guacd"
+        );
+    }
+
+    #[test]
+    fn audio_registers_rdpdr_alongside_rdpsnd() {
+        // rdpdr looks dead here: no devices, no-op backend, nothing reads
+        // from it. It is load-bearing anyway. Drop it and Windows joins
+        // the rdpsnd channel, then sends nothing on it for the life of
+        // the session — silent audio with no error anywhere to explain it.
+        let (audio_tx, _rx) = audio::channel();
+        let connector = with_audio_channels(
+            ClientConnector::new(
+                default_connector_config(),
+                "127.0.0.1:3389".parse().expect("valid socket address"),
+            ),
+            audio_tx,
+        );
+
+        assert!(
+            connector.static_channels.get_by_type::<Rdpsnd>().is_some(),
+            "rdpsnd carries the audio itself"
+        );
+        assert!(
+            connector.static_channels.get_by_type::<Rdpdr>().is_some(),
+            "rdpdr is what makes Windows actually use rdpsnd"
+        );
+    }
 
     #[test]
     fn desktop_pixels_are_encoded_without_alpha() {

@@ -192,6 +192,7 @@ impl GuacWireEncoder {
             None => {
                 let stream = self.allocate_stream();
                 self.audio_stream = Some(stream);
+                tracing::info!(stream, mimetype = AUDIO_MIMETYPE, "opening audio stream");
                 let mut header = BytesMut::new();
                 ServerInstruction::Audio {
                     stream,

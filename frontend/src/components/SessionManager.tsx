@@ -142,6 +142,65 @@ interface CreateSessionOpts {
 
 const SessionManagerContext = createContext<SessionManagerValue | null>(null);
 
+const SCALE_PASSTHROUGH_KEY = "strata-display-scale-passthrough";
+
+/**
+ * Whether the local display scale is forwarded to the target as its DPI.
+ *
+ * Off by default: a remote desktop should look the same to everyone on a
+ * given monitor size, and forwarding the scale means a user at 125% gets
+ * a 1920×1080 desktop that Windows then draws 25% larger — the same
+ * "zoomed in" session as sending the wrong size did. Users on a HiDPI
+ * panel who want the remote UI to match their local text size can turn
+ * it back on.
+ */
+export function isScalePassthroughEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(SCALE_PASSTHROUGH_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function setScalePassthroughEnabled(enabled: boolean): void {
+  try {
+    window.localStorage.setItem(SCALE_PASSTHROUGH_KEY, String(enabled));
+  } catch {
+    // Private-mode storage denial: fall back to the default for this tab.
+  }
+}
+
+/**
+ * The DPI to report to the target for a given local display scale.
+ *
+ * 96 is the unscaled desktop; the backend turns this into an MS-RDPEDISP
+ * scale percentage, so 96 pins the remote UI to 100% regardless of local
+ * zoom. Sizes are always sent as real pixels either way.
+ */
+export function remoteDpi(devicePixelRatio: number = window.devicePixelRatio || 1): number {
+  const dpr = isScalePassthroughEnabled() ? devicePixelRatio || 1 : 1;
+  return Math.round(96 * dpr);
+}
+
+/**
+ * Real pixel size and reported DPI for a container measured in CSS pixels.
+ *
+ * Connect-time parameters and later resizes have to agree, so both go
+ * through this.
+ */
+export function remoteDisplayMetrics(
+  cssWidth: number,
+  cssHeight: number,
+  devicePixelRatio: number = window.devicePixelRatio || 1
+): { width: number; height: number; dpi: number } {
+  const dpr = devicePixelRatio || 1;
+  return {
+    width: Math.round(cssWidth * dpr),
+    height: Math.round(cssHeight * dpr),
+    dpi: remoteDpi(dpr),
+  };
+}
+
 /**
  * Report the display size to the target, with the client's DPI.
  *
@@ -162,7 +221,7 @@ export function sendSizeWithDpi(
   height: number,
   devicePixelRatio: number = window.devicePixelRatio || 1
 ): void {
-  const dpi = Math.round(96 * (devicePixelRatio || 1));
+  const dpi = remoteDpi(devicePixelRatio);
   // `Guacamole.Client` has no public isConnected(); the tunnel does.
   if (session.tunnel?.state === 2) return;
   if (typeof session.tunnel?.sendMessage === "function") {

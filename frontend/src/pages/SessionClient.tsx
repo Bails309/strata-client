@@ -25,6 +25,7 @@ import {
   GuacSession,
   sendSizeFromCss,
   sendSizeWithDpi,
+  remoteDisplayMetrics,
 } from "../components/SessionManager";
 import { notifySessionActivity } from "../components/sessionActivity";
 import { useSidebarWidth } from "../components/Layout";
@@ -527,14 +528,14 @@ export default function SessionClient() {
         if (!container) return;
 
         try {
-          const dpr = window.devicePixelRatio || 1;
+          const metrics = remoteDisplayMetrics(container.clientWidth, container.clientHeight);
 
           const webpSupported = isWebPSupported();
           const resp = await createTunnelTicket({
             connection_id: connectionId,
-            width: container.clientWidth,
-            height: container.clientHeight,
-            dpi: Math.round(96 * dpr),
+            width: metrics.width,
+            height: metrics.height,
+            dpi: metrics.dpi,
             ignore_cert: ignoreCert,
             webp: webpSupported,
           });
@@ -545,9 +546,9 @@ export default function SessionClient() {
           // Auth via HttpOnly access_token cookie (sent automatically on
           // the WS upgrade). Ticket binds the connection to the credentials.
           connectParams.set("ticket", resp.ticket);
-          connectParams.set("width", String(container.clientWidth));
-          connectParams.set("height", String(container.clientHeight));
-          connectParams.set("dpi", String(Math.round(96 * dpr)));
+          connectParams.set("width", String(metrics.width));
+          connectParams.set("height", String(metrics.height));
+          connectParams.set("dpi", String(metrics.dpi));
           connectParams.set("webp", String(webpSupported));
 
           const session = createSession({
@@ -734,15 +735,15 @@ export default function SessionClient() {
     userDisconnectRef.current = false;
 
     const container = containerRef.current;
-    const dpr = window.devicePixelRatio || 1;
+    const metrics = remoteDisplayMetrics(container.clientWidth, container.clientHeight);
 
     try {
       const webpSupported = isWebPSupported();
       const resp = await createTunnelTicket({
         connection_id: connectionId,
-        width: container.clientWidth,
-        height: container.clientHeight,
-        dpi: Math.round(96 * dpr),
+        width: metrics.width,
+        height: metrics.height,
+        dpi: metrics.dpi,
         ignore_cert: ignoreCert,
         webp: webpSupported,
       });
@@ -750,9 +751,9 @@ export default function SessionClient() {
       const connectParams = new URLSearchParams();
       // Auth via HttpOnly cookie; ticket binds the connection.
       connectParams.set("ticket", resp.ticket);
-      connectParams.set("width", String(container.clientWidth));
-      connectParams.set("height", String(container.clientHeight));
-      connectParams.set("dpi", String(Math.round(96 * dpr)));
+      connectParams.set("width", String(metrics.width));
+      connectParams.set("height", String(metrics.height));
+      connectParams.set("dpi", String(metrics.dpi));
       connectParams.set("webp", String(webpSupported));
 
       const session = createSession({
@@ -815,7 +816,7 @@ export default function SessionClient() {
     // Defer to next frame so the fixed-position portal container has its final layout dimensions.
     let cancelled = false;
     const raf = requestAnimationFrame(async () => {
-      const dpr = window.devicePixelRatio || 1;
+      const metrics = remoteDisplayMetrics(container.clientWidth, container.clientHeight);
       const creds = pendingCredsRef.current;
 
       // Obtain a one-time tunnel ticket so credentials never appear in the WebSocket URL
@@ -826,9 +827,9 @@ export default function SessionClient() {
           username: creds.username || undefined,
           password: creds.password || undefined,
           credential_profile_id: creds.credential_profile_id || undefined,
-          width: container.clientWidth,
-          height: container.clientHeight,
-          dpi: Math.round(96 * dpr),
+          width: metrics.width,
+          height: metrics.height,
+          dpi: metrics.dpi,
           ignore_cert: ignoreCert,
           webp: isWebPSupported(),
           h264: isH264Supported(),
@@ -844,9 +845,9 @@ export default function SessionClient() {
       const connectParams = new URLSearchParams();
       // Auth via HttpOnly cookie; ticket binds the connection.
       connectParams.set("ticket", ticketId);
-      connectParams.set("width", String(container.clientWidth));
-      connectParams.set("height", String(container.clientHeight));
-      connectParams.set("dpi", String(Math.round(96 * dpr)));
+      connectParams.set("width", String(metrics.width));
+      connectParams.set("height", String(metrics.height));
+      connectParams.set("dpi", String(metrics.dpi));
       connectParams.set("webp", String(isWebPSupported()));
       connectParams.set("h264", String(isH264Supported()));
 

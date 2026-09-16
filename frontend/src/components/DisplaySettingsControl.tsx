@@ -1,5 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
-import { GuacSession } from "./SessionManager";
+import {
+  GuacSession,
+  isScalePassthroughEnabled,
+  setScalePassthroughEnabled,
+} from "./SessionManager";
 import { requestFullscreenWithLock, exitFullscreenWithUnlock } from "../utils/keyboardLock";
 
 export interface ResolutionStop {
@@ -52,6 +56,8 @@ export default function DisplaySettingsControl({ session }: Props) {
   const [isFullscreen, setIsFullscreen] = useState<boolean>(!!document.fullscreenElement);
   const [liveWidth, setLiveWidth] = useState<number>(1920);
   const [liveHeight, setLiveHeight] = useState<number>(1080);
+  const [scalePassthrough, setScalePassthrough] = useState<boolean>(isScalePassthroughEnabled);
+  const localScale = Math.round((window.devicePixelRatio || 1) * 100);
 
   // Sync state with session and live display
   useEffect(() => {
@@ -93,6 +99,16 @@ export default function DisplaySettingsControl({ session }: Props) {
     const targetRes =
       sliderIndex === FULLSCREEN_INDEX ? "auto" : { width: stop.width, height: stop.height };
     session.applyDisplayConfig?.(targetRes, newZoom);
+  };
+
+  // Takes effect on the next resize the target accepts, so nudge one now.
+  const handleScalePassthroughChange = (enabled: boolean) => {
+    setScalePassthrough(enabled);
+    setScalePassthroughEnabled(enabled);
+    const stop = RESOLUTION_STOPS[sliderIndex];
+    const targetRes =
+      sliderIndex === FULLSCREEN_INDEX ? "auto" : { width: stop.width, height: stop.height };
+    session.applyDisplayConfig?.(targetRes, zoom);
   };
 
   const toggleFullscreen = async () => {
@@ -194,6 +210,25 @@ export default function DisplaySettingsControl({ session }: Props) {
 
       {/* ── Fullscreen Action & Current Status ── */}
       <section className="pt-2 border-t border-white/10 flex flex-col gap-2">
+        <label className="flex items-start gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            className="mt-0.5 accent-accent"
+            checked={scalePassthrough}
+            onChange={(e) => handleScalePassthroughChange(e.target.checked)}
+          />
+          <span className="flex flex-col">
+            <span className="text-xs font-medium text-txt-primary">
+              Match my display scale ({localScale}%)
+            </span>
+            <span className="text-[0.68rem] text-txt-tertiary leading-snug">
+              {scalePassthrough
+                ? "The remote desktop draws its UI at your local scale, so text matches the size on this machine."
+                : "The remote desktop stays at 100% regardless of your local scale. Turn on if the session looks too small."}
+            </span>
+          </span>
+        </label>
+
         <button
           type="button"
           onClick={toggleFullscreen}

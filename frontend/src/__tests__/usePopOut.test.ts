@@ -54,6 +54,7 @@ vi.mock("guacamole-common-js", () => ({
 }));
 
 import { usePopOut } from "../components/usePopOut";
+import { setScalePassthroughEnabled } from "../components/SessionManager";
 
 function createMockSession() {
   return {
@@ -873,10 +874,46 @@ describe("usePopOut", () => {
       });
       expect((session.tunnel.sendMessage as any).mock.calls.length).toBeGreaterThan(baseline);
       // innerWidth/Height are CSS pixels, so the request is scaled up to the
-      // real ones the screen has; the DPI travels with it so the target
-      // draws its UI at the new screen's scale.
+      // real ones the screen has. The DPI stays at 96 by default so the
+      // target renders a 5120-wide desktop at 100% rather than zooming it.
+      expect(session.tunnel.sendMessage).toHaveBeenLastCalledWith("size", 5120, 2880, 96);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("forwards the new screen's scale after a move when passthrough is opted in", async () => {
+    vi.useFakeTimers();
+    setScalePassthroughEnabled(true);
+    try {
+      const session = richSession();
+      const containerRef = { current: document.createElement("div") };
+      const cap = createCapturingPopup();
+      vi.spyOn(window, "open").mockReturnValue(cap.popup as any);
+
+      const { result } = renderHook(() => usePopOut(session as any, containerRef as any), {
+        wrapper: routerWrapper,
+      });
+      await act(async () => {
+        await result.current.popOut();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(160);
+      });
+
+      cap.popup.screenX = 1920;
+      cap.popup.innerWidth = 2560;
+      cap.popup.innerHeight = 1440;
+      cap.popup.devicePixelRatio = 2;
+
+      await act(async () => {
+        vi.advanceTimersByTime(260);
+        vi.advanceTimersByTime(310);
+        vi.advanceTimersByTime(160);
+      });
       expect(session.tunnel.sendMessage).toHaveBeenLastCalledWith("size", 5120, 2880, 192);
     } finally {
+      setScalePassthroughEnabled(false);
       vi.useRealTimers();
     }
   });

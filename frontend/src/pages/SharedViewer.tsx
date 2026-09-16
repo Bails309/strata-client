@@ -11,6 +11,7 @@ import { useCoPilotRoom } from "../co-pilot/useCoPilotRoom";
 import { useCoPilotAudio } from "../co-pilot/useCoPilotAudio";
 import CoPilotOverlay from "../co-pilot/CoPilotOverlay";
 import { getMe } from "../api";
+import { remoteDisplayMetrics } from "../components/SessionManager";
 import { isProfane } from "../utils/profanityFilter";
 /**
  * Shared session viewer. Accessible without authentication
@@ -212,9 +213,10 @@ export default function SharedViewer() {
     };
 
     const connectParams = new URLSearchParams();
-    connectParams.set("width", String(container.clientWidth));
-    connectParams.set("height", String(container.clientHeight));
-    connectParams.set("dpi", String(Math.round(96 * dpr)));
+    const metrics = remoteDisplayMetrics(container.clientWidth, container.clientHeight, dpr);
+    connectParams.set("width", String(metrics.width));
+    connectParams.set("height", String(metrics.height));
+    connectParams.set("dpi", String(metrics.dpi));
     // No `webp` capability here on purpose: a viewer replays the owner's
     // already-encoded frames, so the codec is the owner's to choose.
     // Multiplayer input gating: server reads `pid` from the query
@@ -227,7 +229,8 @@ export default function SharedViewer() {
 
     const handleResize = () => {
       applyScale();
-      client.sendSize(container.clientWidth, container.clientHeight);
+      const m = remoteDisplayMetrics(container.clientWidth, container.clientHeight, dpr);
+      client.sendSize(m.width, m.height);
     };
     window.addEventListener("resize", handleResize);
 

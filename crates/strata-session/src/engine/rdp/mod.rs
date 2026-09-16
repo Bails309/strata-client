@@ -87,7 +87,7 @@ use crate::engine::rdp::clipboard::{
     MAX_CLIPBOARD_BYTES,
 };
 use crate::engine::rdp::kdc::KdcNetworkClient;
-use crate::engine::rdp::keycodes::{resolve_key, KeyEvent};
+use crate::engine::rdp::keycodes::{resolve_key, shortcut_modifier_bit, KeyEvent};
 use crate::engine::{EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec};
 use crate::error::EngineError;
 use crate::tls::CertPolicy;
@@ -437,6 +437,8 @@ struct RdpSession {
     disable_copy: bool,
     /// Never carry the client's clipboard to the target.
     disable_paste: bool,
+    /// Shortcut modifiers currently held, as a bit per modifier key.
+    shortcut_modifiers: u8,
     /// Previous frame, for narrowing the target's coarse damage rects.
     shadow: Vec<u8>,
     /// Scratch buffer for cropped RGB pixels before PNG encoding, reused across frames.
@@ -735,6 +737,7 @@ impl RdpSession {
             read_only: config.read_only,
             disable_copy: config.disable_copy,
             disable_paste: config.disable_paste,
+            shortcut_modifiers: 0,
             shadow: Vec::new(),
             cropped_scratch: Vec::new(),
             encoded_scratch: BytesMut::new(),
@@ -1275,33 +1278,42 @@ impl RdpSession {
                 // the data if and when someone pastes.
                 self.advertise_local_formats().await?;
             }
-            InputEvent::Key { keysym, pressed } => match resolve_key(keysym) {
-                Some(KeyEvent::Scancode(scancode)) => {
-                    let mut flags = KeyboardFlags::empty();
-                    if !pressed {
-                        flags |= KeyboardFlags::RELEASE;
+            InputEvent::Key { keysym, pressed } => {
+                if let Some(bit) = shortcut_modifier_bit(keysym) {
+                    if pressed {
+                        self.shortcut_modifiers |= bit;
+                    } else {
+                        self.shortcut_modifiers &= !bit;
                     }
-                    if scancode.extended {
-                        flags |= KeyboardFlags::EXTENDED;
-                    }
-                    self.send_input(&[FastPathInputEvent::KeyboardEvent(flags, scancode.code)])
-                        .await?;
                 }
-                Some(KeyEvent::Unicode(ch)) => {
-                    let mut flags = KeyboardFlags::empty();
-                    if !pressed {
-                        flags |= KeyboardFlags::RELEASE;
+                match resolve_key(keysym, self.shortcut_modifiers != 0) {
+                    Some(KeyEvent::Scancode(scancode)) => {
+                        let mut flags = KeyboardFlags::empty();
+                        if !pressed {
+                            flags |= KeyboardFlags::RELEASE;
+                        }
+                        if scancode.extended {
+                            flags |= KeyboardFlags::EXTENDED;
+                        }
+                        self.send_input(&[FastPathInputEvent::KeyboardEvent(flags, scancode.code)])
+                            .await?;
                     }
-                    let mut utf16_buf = [0u16; 2];
-                    let units = ch.encode_utf16(&mut utf16_buf);
-                    let events: Vec<FastPathInputEvent> = units
-                        .iter()
-                        .map(|&unit| FastPathInputEvent::UnicodeKeyboardEvent(flags, unit))
-                        .collect();
-                    self.send_input(&events).await?;
+                    Some(KeyEvent::Unicode(ch)) => {
+                        let mut flags = KeyboardFlags::empty();
+                        if !pressed {
+                            flags |= KeyboardFlags::RELEASE;
+                        }
+                        let mut utf16_buf = [0u16; 2];
+                        let units = ch.encode_utf16(&mut utf16_buf);
+                        let events: Vec<FastPathInputEvent> = units
+                            .iter()
+                            .map(|&unit| FastPathInputEvent::UnicodeKeyboardEvent(flags, unit))
+                            .collect();
+                        self.send_input(&events).await?;
+                    }
+                    None => {}
                 }
-                None => {}
-            },
+            }
             InputEvent::Resize { width, height, dpi } => {
                 let (requested_w, requested_h) = (width, height);
                 let (width, height) = (clamp_dimension(width), clamp_dimension(height));

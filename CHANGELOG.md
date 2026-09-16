@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now matches the monitor and maps pixel-for-pixel. Unaffected at 100%,
   where the conversion is a multiply by one.
 
+- **Multi-monitor sessions had the same fault, and sent no DPI at all.**
+  The aggregate desktop was summed from CSS widths, so a scaled monitor
+  contributed fewer pixels than it can show, and all three resize calls
+  bypassed the DPI-aware path entirely. Each screen now contributes its
+  own real width, the primary's scale travels with the request, and the
+  popup canvases are backed in real pixels so each slice draws 1:1.
+  Window placement keeps its own CSS-pixel coordinates, which is the unit
+  `window.moveTo` speaks — previously the remote-desktop offset was
+  reused for placement, which only held while the two units agreed.
+
 - **Non-US keyboards typed the wrong characters over RDP.** On a UK layout
   `\` arrived as `#`; `@` and `"` were swapped, and `£` did not work. The
   engine translated each keysym to a US key position and the target then

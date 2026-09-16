@@ -33,6 +33,7 @@ rdp = [
     "dep:ironrdp-dvc",
     "dep:ironrdp-displaycontrol",
     "dep:ironrdp-rdpsnd",
+    "dep:ironrdp-egfx",
     "dep:rustls-native-certs",
     "dep:rustls-pki-types",
     "dep:x509-cert",
@@ -163,6 +164,10 @@ ironrdp-dvc = { version = "0.8", optional = true }
 ironrdp-displaycontrol = { version = "0.8", optional = true }
 # Audio output.
 ironrdp-rdpsnd = { version = "0.9", optional = true }
+# Graphics pipeline (MS-RDPEGFX), the channel H.264 arrives on. Vendored:
+# stock 0.3 will not advertise AVC without a local decoder, and its only
+# decoder is the openh264 C library. See crates/vendor/ironrdp-egfx.
+ironrdp-egfx = { version = "0.3", optional = true }
 # VNC/RFB client. Pure Rust with no `-sys` crate anywhere in its tree,
 # which is the same reason FreeRDP was replaced rather than wrapped.
 vnc-rs = { version = "0.5", optional = true }

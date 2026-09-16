@@ -83,9 +83,15 @@ $wsKey  = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations'
 $desired = [ordered]@{}
 
 # ── AVC 4:4:4 (H.264 full-colour) ────────────────────────────────────────
+# This is the setting that matters: without it a host that prefers 4:4:4
+# strips the AVC flag from an AVC420-only client rather than falling back,
+# which negotiates a graphics pipeline with no codec the client can use.
 $desired["$tsKey\AVC444ModePreferred"]  = 1   # Negotiate H.264 at all
-$desired["$tsKey\SelectTransport"]      = 1   # Prefer UDP for video
-$desired["$tsKey\MaxCompressionLevel"]  = 2   # Optimised compression
+
+# Deliberately NOT set: SelectTransport, fClientDisableUDP and
+# MaxCompressionLevel. Strata connects over TCP with no sideband UDP
+# transport and no bulk compression, so all three are inert here and would
+# only change unrelated behaviour for other RDP clients on this host.
 
 # ── 60 FPS frame rate (default is 30) ────────────────────────────────────
 # Correct location is Terminal Server\WinStations, NOT \Windows\Dwm.
@@ -103,7 +109,6 @@ $desired["$tsKey\fEnableRemoteFXAdvancedRemoteApp"] = 1
 $desired["$tsKey\VisualExperiencePolicy"]           = 1   # Rich multimedia
 
 # ── Network ──────────────────────────────────────────────────────────────
-$desired["$tsKey\fClientDisableUDP"]    = 0   # Allow UDP transport
 $desired["$tsKey\SelectNetworkDetect"]  = 1   # Auto-detect network quality
 
 # ---------------------------------------------------------------------------
@@ -194,17 +199,21 @@ foreach ($full in $desired.Keys) {
 # 6. Verification hint
 # ---------------------------------------------------------------------------
 Write-Section "Verification (after reboot + reconnect)"
-Write-Host "Open Event Viewer on this host and watch for:" -ForegroundColor Gray
-Write-Host "  Applications and Services Logs >" -ForegroundColor Gray
-Write-Host "    Microsoft > Windows > RemoteDesktopServices-RdpCoreTS >" -ForegroundColor Gray
-Write-Host "      Operational" -ForegroundColor Gray
+Write-Host "Verify from the Strata backend log, not Event Viewer: event IDs" -ForegroundColor Gray
+Write-Host "162 (AVC444 mode) and 170 (hardware encoder) describe the host's"  -ForegroundColor Gray
+Write-Host "own encoder and say nothing about what this client negotiated."    -ForegroundColor Gray
 Write-Host ""
-Write-Host "  Event ID 162 = AVC444 mode active" -ForegroundColor Green
-Write-Host "  Event ID 170 = Hardware encoding active" -ForegroundColor Green
+Write-Host "  docker compose logs backend | Select-String 'graphics pipeline'" -ForegroundColor Gray
 Write-Host ""
-Write-Host "If you see 162 but not 170, software AVC is in use (expected on" -ForegroundColor Gray
-Write-Host "hosts without a usable GPU). If you see neither, AVC444 was not"  -ForegroundColor Gray
-Write-Host "negotiated and the session is on the bitmap path."                -ForegroundColor Gray
+Write-Host "Connect with 'Enable graphics pipeline (GFX)' ticked, then expect:" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  'rdp graphics pipeline negotiated' with V10_7 or V8_1 caps"      -ForegroundColor Green
+Write-Host "  'first rdp h264 frame passed through' with a codec_id"            -ForegroundColor Green
+Write-Host ""
+Write-Host "If the negotiated line reports capabilities without an AVC flag,"   -ForegroundColor Gray
+Write-Host "the host declined H.264 and the session renders over the bitmap"    -ForegroundColor Gray
+Write-Host "path; the backend logs an error saying so. If neither line appears" -ForegroundColor Gray
+Write-Host "at all, the pipeline was never opened -- check the GFX toggle."      -ForegroundColor Gray
 
 # ---------------------------------------------------------------------------
 # 7. Reboot prompt

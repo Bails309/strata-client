@@ -4,6 +4,8 @@ import {
   isH264Supported,
   _resetWebPSupportedCacheForTesting,
   _probeWebPSupportForTesting,
+  _resetH264SupportedCacheForTesting,
+  _probeH264SupportForTesting,
 } from "../utils/browserCapabilities";
 
 /**
@@ -108,17 +110,73 @@ describe("browserCapabilities", () => {
 });
 
 describe("isH264Supported", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
+  beforeEach(() => {
+    _resetH264SupportedCacheForTesting(null);
   });
 
-  it("returns true when window.VideoDecoder is defined", () => {
-    vi.stubGlobal("VideoDecoder", class FakeVideoDecoder {});
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    _resetH264SupportedCacheForTesting(null);
+  });
+
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("reports support when the browser can configure the avc1 profile", async () => {
+    vi.stubGlobal("VideoDecoder", {
+      isConfigSupported: () => Promise.resolve({ supported: true }),
+    });
+    _probeH264SupportForTesting();
+    await settle();
+
     expect(isH264Supported()).toBe(true);
   });
 
-  it("returns false when window.VideoDecoder is undefined", () => {
+  it("reports no support when WebCodecs exists but rejects the profile", async () => {
+    // The case the old presence check got wrong: VideoDecoder present,
+    // H.264 absent.
+    vi.stubGlobal("VideoDecoder", {
+      isConfigSupported: () => Promise.resolve({ supported: false }),
+    });
+    _probeH264SupportForTesting();
+    await settle();
+
+    expect(isH264Supported()).toBe(false);
+  });
+
+  it("probes the same codec string the decoder configures with", async () => {
+    const isConfigSupported = vi.fn(() => Promise.resolve({ supported: true }));
+    vi.stubGlobal("VideoDecoder", { isConfigSupported });
+    _probeH264SupportForTesting();
+    await settle();
+
+    expect(isConfigSupported).toHaveBeenCalledWith({ codec: "avc1.42E033" });
+  });
+
+  it("reports no support when WebCodecs is absent entirely", () => {
     vi.stubGlobal("VideoDecoder", undefined);
+    _probeH264SupportForTesting();
+
+    expect(isH264Supported()).toBe(false);
+  });
+
+  it("reports no support while the probe is still in flight", () => {
+    // Opposite default to WebP: guessing wrong here costs a black screen,
+    // not bandwidth.
+    vi.stubGlobal("VideoDecoder", {
+      isConfigSupported: () => new Promise(() => {}),
+    });
+    _probeH264SupportForTesting();
+
+    expect(isH264Supported()).toBe(false);
+  });
+
+  it("reports no support when the probe rejects", async () => {
+    vi.stubGlobal("VideoDecoder", {
+      isConfigSupported: () => Promise.reject(new Error("nope")),
+    });
+    _probeH264SupportForTesting();
+    await settle();
+
     expect(isH264Supported()).toBe(false);
   });
 });

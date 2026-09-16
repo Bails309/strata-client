@@ -30,12 +30,14 @@
 
 pub mod audio;
 pub mod clipboard;
+pub mod gfx;
 pub mod kdc;
 pub mod keycodes;
 pub mod layouts;
 pub mod tls;
 
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -55,6 +57,7 @@ use ironrdp_connector::{
 use ironrdp_core::{IntoOwned, WriteBuf};
 use ironrdp_displaycontrol::client::DisplayControlClient;
 use ironrdp_dvc::DrdynvcClient;
+use ironrdp_egfx::client::GraphicsPipelineClient;
 use ironrdp_graphics::diff::find_different_rects_sub;
 use ironrdp_graphics::image_processing::PixelFormat;
 use ironrdp_graphics::pointer::DecodedPointer;
@@ -146,11 +149,17 @@ pub struct RdpConfig {
     /// Whether the client can decode direct H.264 video for WebCodecs
     /// hardware decoding. Defaults to `true`.
     ///
-    /// Accepted and negotiated today, but not yet acted on: emitting
-    /// [`TargetEvent::VideoSlice`] from RDP needs the graphics pipeline
-    /// (`ironrdp-egfx`), which is part of the blocked IronRDP upgrade.
-    /// Until then every frame goes out as an image update.
+    /// Only acted on when [`Self::enable_gfx`] is also set: H.264 arrives
+    /// on the graphics pipeline and nowhere else.
     pub enable_h264: bool,
+    /// Whether to negotiate the graphics pipeline (MS-RDPEGFX).
+    ///
+    /// Off by default, matching the connection editor. Turning it on only
+    /// changes anything when the client also supports H.264 — without a
+    /// use for AVC frames the bitmap path is the better renderer, and a
+    /// server that switched to progressive surface commands would leave
+    /// the screen stale.
+    pub enable_gfx: bool,
 }
 
 /// Desktop features the target may enable, mirroring guacd's
@@ -216,6 +225,7 @@ impl Default for RdpConfig {
             desktop_scale_factor: None,
             enable_webp: true,
             enable_h264: true,
+            enable_gfx: false,
         }
     }
 }
@@ -401,6 +411,8 @@ struct RdpSession {
     stage: ActiveStage,
     /// Produces a fresh sequence each time the server deactivates all.
     activation_factory: ConnectionActivationFactory,
+    /// H.264 frames parked by the graphics pipeline handler.
+    gfx_frames: Arc<Mutex<VecDeque<TargetEvent>>>,
     image: DecodedImage,
     pending: VecDeque<TargetEvent>,
     width: u16,
@@ -583,6 +595,9 @@ impl RdpSession {
                 .load_balance_info
                 .as_ref()
                 .map(|token| NegoRequestData::routing_token(token.clone())),
+            // Asking for the channel and never advertising support for it
+            // means the server never opens it.
+            enable_gfx: config.enable_gfx && config.enable_h264,
             ..default_connector_config()
         };
         // Nothing below may observe the credential.
@@ -597,13 +612,33 @@ impl RdpSession {
         let mut framed = TokioFramed::new(stream);
         let (clipboard_tx, clipboard) = mpsc::unbounded_channel();
         let (audio_tx, audio) = audio::channel();
-        let mut connector = ClientConnector::new(connector_config, client_addr)
-            .with_static_channel(
-                // Carries MS-RDPEDISP, which lets the desktop follow the
-                // browser window instead of being scaled to fit it.
-                DrdynvcClient::new()
-                    .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new()))),
+
+        // H.264 only arrives on the graphics pipeline, and the pipeline is
+        // only worth negotiating if the client can decode what comes back.
+        let gfx_frames = Arc::new(Mutex::new(VecDeque::new()));
+        let gfx_unsupported = Arc::new(Mutex::new(0u64));
+        let gfx = (config.enable_gfx && config.enable_h264).then(|| {
+            GraphicsPipelineClient::new(
+                Box::new(gfx::GfxPassthrough::new(
+                    Arc::clone(&gfx_frames),
+                    Arc::clone(&gfx_unsupported),
+                )),
+                // No local decoder: the browser does the decoding, which is
+                // the entire point of the passthrough.
+                None,
             )
+        });
+
+        let mut drdynvc = DrdynvcClient::new()
+            .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+        if let Some(gfx) = gfx {
+            drdynvc = drdynvc.with_dynamic_channel(gfx);
+        }
+
+        let mut connector = ClientConnector::new(connector_config, client_addr)
+            // Carries MS-RDPEDISP, which lets the desktop follow the
+            // browser window instead of being scaled to fit it.
+            .with_static_channel(drdynvc)
             .with_static_channel(CliprdrClient::new(Box::new(SessionClipboard::new(
                 clipboard_tx,
             ))))
@@ -686,6 +721,7 @@ impl RdpSession {
             framed,
             stage,
             activation_factory: connection.activation_factory,
+            gfx_frames,
             image,
             pending,
             width,
@@ -714,6 +750,28 @@ impl RdpSession {
 
     /// Turn stage outputs into client events, writing responses back.
     async fn absorb(&mut self, outputs: Vec<ActiveStageOutput>) -> Result<(), EngineError> {
+        // The graphics pipeline handler runs inside `stage.process` and
+        // cannot reach `pending` itself.
+        let mut resized_to = None;
+        if let Ok(mut frames) = self.gfx_frames.lock() {
+            for event in frames.iter() {
+                if let TargetEvent::Resized { width, height } = event {
+                    resized_to = Some((*width, *height));
+                }
+            }
+            self.pending.append(&mut frames);
+        }
+
+        // A grown desktop is only ever *damaged* where something moved, so
+        // without this the newly exposed area stays black until it happens
+        // to be redrawn. Same failure the guacd `refresh-rect-on-resize`
+        // patch existed to fix.
+        if let Some((width, height)) = resized_to {
+            self.width = u16::try_from(width).unwrap_or(self.width);
+            self.height = u16::try_from(height).unwrap_or(self.height);
+            self.request_full_repaint().await?;
+        }
+
         for output in outputs {
             match output {
                 ActiveStageOutput::ResponseFrame(frame) => {
@@ -1584,6 +1642,7 @@ fn default_connector_config() -> ConnectorConfig {
         // No sideband UDP transport: sessions are tunnelled over the one
         // TCP connection the browser holds.
         multitransport_flags: None,
+        enable_gfx: false,
         enable_server_pointer: false,
         pointer_software_rendering: false,
     }

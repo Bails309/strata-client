@@ -841,6 +841,14 @@ fn create_gcc_blocks<'a>(
 
                     // TODO(#136): support for ClientEarlyCapabilityFlags::SUPPORT_STATUS_INFO_PDU
 
+                    // STRATA FORK: without this the server never opens the
+                    // Microsoft::Windows::RDS::Graphics channel, so
+                    // registering an EGFX handler silently does nothing.
+                    // MS-RDPBCGR 2.2.1.3.2.
+                    if config.enable_gfx {
+                        early_capability_flags |= ClientEarlyCapabilityFlags::SUPPORT_DYN_VC_GFX_PROTOCOL;
+                    }
+
                     if max_color_depth == 32 {
                         early_capability_flags |= ClientEarlyCapabilityFlags::WANT_32_BPP_SESSION;
                     }

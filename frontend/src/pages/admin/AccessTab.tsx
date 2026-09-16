@@ -461,6 +461,10 @@ export default function AccessTab({
     "disable-paste",
     "read-only",
     "ignore-cert",
+    // Inverted: "false" is the *enabled* state, so stripping it as falsy
+    // made the GFX checkbox impossible to turn on — it saved and came
+    // back unticked.
+    "disable-gfx",
   ]);
 
   // Strip empty values from extra before saving, except for a whitelist of

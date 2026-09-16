@@ -1,28 +1,19 @@
 # H.264 GFX passthrough
 
-> **Removed in v2.0.0. This page is retained as history.**
+> **Reinstated on the native RDP engine.**
 >
-> H.264 passthrough was a property of the patched `guacd` image
-> (`004-h264-display-worker.patch`), which no longer exists. The native RDP
-> engine has no GFX pipeline: it advertises `disable-gfx`, because
-> advertising a codec the engine cannot then deliver leaves FreeRDP in a
-> corrupted progressive-codec bitmap-cache state — fragments of one window
-> bleeding into another, and switching applications not repainting cleanly.
+> Passthrough was originally a property of the patched `guacd` image and was
+> removed in v2.0.0 along with it. It now runs natively on `ironrdp-egfx`,
+> with no `guacd` and no FreeRDP anywhere in the path.
 >
-> The parameter was dropped in migration `087` after confirming **no
-> connection in any deployment had it set**, so nothing observable changed.
-> The pilot telemetry that informed the decision measured the native
-> encoder at **0.077 bytes per pixel**, which is why re-adding a lossy
-> codec path was not treated as urgent.
+> It is **off by default**. Enable it per connection with **Enable graphics
+> pipeline (GFX)**, which sets `disable-gfx=false`.
 >
-> Nothing below is live. It describes how the feature worked up to
-> v1.14.6, and is kept because the Windows-host GPO configuration
-> ([`Configure-RdpAvc444.ps1`](Configure-RdpAvc444.ps1)) is still a useful
-> reference for anyone diagnosing RDP codec negotiation, and because the
-> reasoning is cited from [ADR-0015](adr/ADR-0015-native-rust-session-engine.md).
->
-> A native GFX/AVC444 pipeline is a candidate for a future release; it is
-> blocked on `ironrdp-egfx`, which the pinned `ironrdp 0.7` predates.
+> Turning GFX on stops the host sending legacy bitmap updates, so it is a
+> genuine trade rather than a free win: H.264 is lossy, and the lossless
+> bitmap path measured **0.0296 bytes per pixel** on the pilot estate --
+> already inside the bandwidth budget. Prefer GFX for motion-heavy work
+> (video, scrolling, window drags) and the bitmap path for static text.
 
 Strata's RDP pipeline streams **raw H.264 NAL units** from the Windows host all
 the way to the browser's `VideoDecoder` (WebCodecs API). There is no
@@ -34,9 +25,9 @@ Windows host prerequisites, and how to verify the codec is actually flowing.
 ```mermaid
 flowchart LR
     Host["Windows RDP host"]
-    Host -->|"RDPGFX / AVC444"| Guacd
-    Guacd["guacd (patched)<br/><sub>004-h264-display-worker.patch<br/>hooks RDPGFX SurfaceCommand →<br/>enqueues NAL units →<br/>emits '4.h264,&lt;len&gt;.&lt;bytes&gt;;'</sub>"]
-    Guacd -->|"'4.h264' Guac op"| Browser
+    Host -->|"MS-RDPEGFX / AVC420 or AVC444"| Engine
+    Engine["strata-session<br/><sub>ironrdp-egfx GraphicsPipelineHandler<br/>claims AVC frames undecoded →<br/>rewrites to Annex B →<br/>emits 'h264' Guac instruction</sub>"]
+    Engine -->|"'h264' Guac op"| Browser
     Browser["browser<br/><sub>Guacamole.H264Decoder<br/>(WebCodecs VideoDecoder)</sub>"]
 ```
 
@@ -44,18 +35,20 @@ flowchart LR
 
 | Layer | File / artefact | Role |
 |---|---|---|
-| guacd patch | [`guacd/patches/004-h264-display-worker.patch`](../guacd/patches/004-h264-display-worker.patch) | Hooks FreeRDP 3's RDPGFX `SurfaceCommand` callback. Queues AVC NAL units on each `guac_display_layer` and emits them as a custom `4.h264` Guacamole instruction during the per-frame flush. Byte-identical to the upstream sol1/rustguac patch (SHA `7a13504c2b051ec651d39e1068dc7174dc796f97`). |
-| Backend defaults | [`backend/src/tunnel.rs`](../backend/src/tunnel.rs) `full_param_map()` | Seeds the RDP defaults required for AVC444 negotiation: `color-depth=32`, `disable-gfx=false`, `enable-h264=true`, `force-lossless=false`, `cursor=local`, plus the explicit `enable-*` / `disable-*` toggles FreeRDP `settings.c` requires. Per-connection extras override via the allowlist in `is_allowed_guacd_param()`. |
-| Frontend decoder | [`frontend/src/lib/guacamole-vendor.js`](../frontend/src/lib/guacamole-vendor.js) | Vendored `guacamole-common-js` **1.6.0** (upgraded from 1.5.0 in v0.28.0) with `H264Decoder` bundled (line ~13408), `4.h264` opcode handler (line ~16755), and the `waitForPending` sync gate (line ~17085). The 1.6.0 line is required because the H.264 opcode, decoder class, and sync gate are all 1.6.0-only additions; stock 1.5.0 has no H.264 support. The npm `guacamole-common-js` dep in `package.json` remains at `^1.5.0` for TypeScript types only — it is never executed at runtime, because Vite redirects every `import Guacamole from "guacamole-common-js"` to the vendored 1.6.0 adapter. |
-| Admin UI toggle | [`frontend/src/pages/admin/connectionForm.tsx`](../frontend/src/pages/admin/connectionForm.tsx) | Per-connection **Disable H.264 codec** checkbox. Bound to `enable-h264` (sets `"false"` to force RemoteFX fallback). Default unchecked → backend default `true` applies. |
+| EGFX handler | [`crates/strata-session/src/engine/rdp/gfx.rs`](../crates/strata-session/src/engine/rdp/gfx.rs) | Implements `GraphicsPipelineHandler`. Advertises V10.7/V8.1/V8, claims AVC frames before the decode path, converts the bitstream to Annex B, and forwards solid fills and surface-to-surface copies. Non-AVC surface commands are rendered as PNG so the screen is never left blank. |
+| `ironrdp-egfx` fork | [`crates/vendor/ironrdp-egfx`](../crates/vendor/ironrdp-egfx) | Adds the `accepts_avc_passthrough` / `on_avc_bitstream` hooks upstream lacks, so AVC frames can be claimed without an H.264 decoder present. Tracked by [`scripts/check-vendored-forks.sh`](../scripts/check-vendored-forks.sh). |
+| `ironrdp-connector` fork | [`crates/vendor/ironrdp-connector`](../crates/vendor/ironrdp-connector) | Sets `SUPPORT_DYN_VC_GFX_PROTOCOL` in the early capability flags when GFX is enabled. Without it the host never opens the `Microsoft::Windows::RDS::Graphics` channel. |
+| Backend wiring | [`backend/src/session_engine.rs`](../backend/src/session_engine.rs) | Maps the `disable-gfx` connection parameter onto `RdpConfig::enable_gfx`. The parameter is inverted: `"false"` is the *enabled* state. |
+| Frontend decoder | [`frontend/src/lib/guacamole-vendor.js`](../frontend/src/lib/guacamole-vendor.js) | `H264Decoder` built on WebCodecs, plus the `waitForPending` sync gate that applies decode backpressure. Draws each frame **1:1**, cropping to the RDP destination rectangle rather than the padded coded size. |
+| Admin UI toggle | [`frontend/src/pages/admin/connectionForm.tsx`](../frontend/src/pages/admin/connectionForm.tsx) | Per-connection **Enable graphics pipeline (GFX)** checkbox under Performance. |
 
 ## Windows host prerequisites
 
 H.264 will only flow if the RDP host is configured to use AVC444. Without
-this, `enable-h264=true` is a silent no-op: guacd loads the H.264 hook (you
-will see `H.264 passthrough enabled for RDPGFX channel.` in the logs) but the
-host never produces `SurfaceCommand` AVC callbacks, so no `4.h264`
-instructions are ever emitted.
+this, ticking **Enable graphics pipeline (GFX)** is a silent no-op: the
+graphics channel opens and the backend logs `rdp graphics pipeline
+negotiated`, but the capability set comes back without an AVC flag and the
+host never sends a `WireToSurface1` AVC command.
 
 ### Required registry values
 
@@ -66,15 +59,20 @@ These mirror sol1/rustguac's `contrib/setup-rdp-performance.ps1` exactly.
 | Value | DWORD | Purpose |
 |---|---|---|
 | `AVC444ModePreferred` | `1` | Tells RDP to negotiate H.264 / AVC444 with the client at all. **Without this, H.264 will not flow regardless of GPU.** |
-| `SelectTransport` | `1` | Prefer UDP transport (lower latency, better for AVC video). |
-| `MaxCompressionLevel` | `2` | Optimised RDP compression level. |
 | `AVCHardwareEncodePreferred` | `1` *(GPU only)* | Use the GPU's hardware AVC encoder when available. **Skip on hosts without a real GPU.** |
 | `bEnumerateHWBeforeSW` | `1` *(GPU only)* | Enumerate hardware encoders before falling back to software. |
 | `fEnableDesktopComposition` | `1` | Enable DWM compositing in remote sessions (improves video overlays / smooth scroll). |
 | `fEnableRemoteFXAdvancedRemoteApp` | `1` | Enable RemoteFX features for remote app sessions. |
 | `VisualExperiencePolicy` | `1` | Visual experience preset = "Rich multimedia". |
-| `fClientDisableUDP` | `0` | Allow UDP transport (do not disable). |
 | `SelectNetworkDetect` | `1` | Auto-detect network quality. |
+
+> **Not set by the script.** `SelectTransport`, `fClientDisableUDP` and
+> `MaxCompressionLevel` appear in older versions of this page and in
+> rustguac's script. Strata connects over TCP with no sideband UDP
+> transport (`multitransport_flags: None`) and no bulk compression
+> (`compression_type: None`), so all three are inert for this client and
+> are omitted rather than changing unrelated behaviour for other RDP
+> clients on the same host.
 
 **`HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations`**
 
@@ -87,11 +85,11 @@ These mirror sol1/rustguac's `contrib/setup-rdp-performance.ps1` exactly.
 > controls the *local* DWM and has **no effect** on RDP frame rate. The
 > correct location is `Terminal Server\WinStations` as shown above.
 
-The first three Terminal Services values (`AVC444ModePreferred`,
-`SelectTransport`, `MaxCompressionLevel`) are what actually **enable H.264
-negotiation** between client and server. `AVCHardwareEncodePreferred` only
-chooses between the hardware and software encoder *once* H.264 is negotiated
-— it does **not** turn H.264 on by itself.
+The first Terminal Services value (`AVC444ModePreferred`) is what actually
+**enables H.264 negotiation** between client and server.
+`AVCHardwareEncodePreferred` only chooses between the hardware and software
+encoder *once* H.264 is negotiated — it does **not** turn H.264 on by itself,
+and a host with no GPU can still serve H.264 from the software encoder.
 
 ### Should I run the script if the host has no hardware GPU?
 
@@ -188,86 +186,70 @@ edits require `gpedit.msc` rather than registry writes on Server.
 
 ## Verifying H.264 is flowing
 
-Four independent layers can report activity. The Windows Event Log is the
-**authoritative** source — it tells you what the RDP server itself decided
-to negotiate, before any client-side observation. Use it first; the others
-are useful when you can't get on the host.
+The **backend log is authoritative**. It reports what this client actually
+negotiated and what it received, which is the only thing that matters.
 
-### 1. Windows Event Viewer (authoritative)
+> **Event IDs 162 and 170 are not useful here.** Earlier versions of this
+> page treated the `RemoteDesktopServices-RdpCoreTS/Operational` log as the
+> source of truth. Those events describe the host's own encoder state; they
+> can be absent on a working passthrough session and present on a session
+> that never reached this client. Use them only to diagnose the host in
+> isolation.
 
-On the **RDP host**, open Event Viewer:
-
-```
-Applications and Services Logs
-  └─ Microsoft
-     └─ Windows
-        └─ RemoteDesktopServices-RdpCoreTS
-           └─ Operational
-```
-
-After connecting a session, look for:
-
-| Event ID | Meaning |
-|---|---|
-| **162** | AVC444 mode active — H.264 is being negotiated. |
-| **170** | Hardware AVC encoder is in use (i.e. GPU is doing the encoding). |
-
-| You see... | Diagnosis |
-|---|---|
-| 162 + 170 | Hardware H.264. Best case. |
-| 162 only | Software H.264. Working, but CPU-heavy. See the decision matrix above. |
-| Neither | AVC444 was not negotiated. Session is on the bitmap path — re-run `Configure-RdpAvc444.ps1`, reboot, reconnect. |
-
-### 2. guacd logs
+### 1. Backend log (authoritative)
 
 ```powershell
-docker compose logs --tail=200 guacd | Select-String "H\.264|AVC|RDPGFX"
+docker compose logs backend | Select-String "graphics pipeline|h264 frame"
 ```
 
-Expected after a working H.264 session:
+| Line | Meaning |
+|---|---|
+| `rdp graphics pipeline negotiated` + `caps` | The channel opened. Check the flags: `V10_7` or `V8_1` with AVC means H.264 was agreed. |
+| `first rdp h264 frame passed through` | Frames are arriving. Reports `codec_id`, `keyframe`, `bytes` and the `wire` format. |
+| `rdp graphics pipeline output resized` | The host resized the surface under GFX. |
+| `rdp graphics pipeline closed` + `chroma_views_discarded` | Session end, plus how many AVC444 auxiliary views were dropped. |
 
-- One-off: `H.264 passthrough enabled for RDPGFX channel.` *(this only proves
-  the hook installed; it does NOT prove frames are flowing.)*
-- Repeating during activity: AVC `SurfaceCommand` debug lines (only at
-  `-L debug` or `-L trace`).
+If `negotiated` appears with no AVC flag, the host declined H.264 and the
+backend logs an error telling you to turn the toggle off. If neither line
+appears, the pipeline was never opened — check the GFX checkbox.
 
-If you only see the first line and no AVC activity even while moving windows,
-the host is not producing AVC frames → run `Configure-RdpAvc444.ps1`.
-
-### 3. WebSocket trace
+### 2. WebSocket trace
 
 In Chrome DevTools → Network → WS → click the tunnel → Messages. Look for
 frames starting with `4.h264,` — these are H.264 NAL units being sent to the
-browser. If you only see `5.image,` and `4.blob,` frames (and similar), the
-host is on the bitmap path.
+browser. If you only see `5.image,` and `4.blob,` frames, the session is on
+the bitmap path.
 
-### 4. Browser console
+### 3. Browser console
 
 ```js
 window.client?._h264Decoder?.stats()
 ```
 
-The `_h264Decoder` field is **created lazily** on the first `4.h264`
+The `_h264Decoder` field is **created lazily** on the first `h264`
 instruction, so:
 
 - `undefined` → no H.264 instruction has ever arrived in this session.
-  Combine with check #2 to decide whether it is the host (no AVC) or the
-  patch (no `4.h264` emit).
+  Combine with check #1 to decide whether it is the host (no AVC) or the
+  engine (nothing forwarded).
 - An object with `framesDecoded > 0` → H.264 is fully active.
 
 ## Troubleshooting matrix
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| Event Viewer shows neither 162 nor 170 | AVC444 was never negotiated; host is on bitmap path | Run `Configure-RdpAvc444.ps1`, reboot, reconnect |
-| Event Viewer shows 162 but not 170 | Software AVC in use (no GPU, or GPU not exposed to RDP) | Expected on hosts without a GPU. On Server SKUs with a GPU, also enable "Use hardware graphics adapters for all RDP sessions" GPO. |
-| `_h264Decoder` is `undefined` after several minutes of activity | Windows host is not producing AVC frames | As above (Event 162 missing) |
-| guacd logs say `H.264 passthrough enabled` but no AVC debug lines, even at `-L debug` | As above | As above |
-| `framesDecoded > 0` but rendering still appears to ghost during fast window animations | Browser DevTools is open and throttling GPU compositing | Close DevTools or detach it to a separate window |
-| Connection works but is on the bitmap path even after host config | `color-depth` is set to `8`/`16`/`24` on the connection extras (forces RemoteFX) | Change Color Depth to "Default (32-bit, required for H.264)" in the connection form |
-| Persistent ghost frames on a host you cannot reconfigure | RemoteFX fallback may be more reliable for that host | Tick **Disable H.264 codec** on that connection only |
+| No `graphics pipeline negotiated` line at all | GFX is off for this connection | Tick **Enable graphics pipeline (GFX)**. The parameter is inverted, so the stored value is `disable-gfx=false`. |
+| `negotiated` shows caps with no AVC flag | Host will not do H.264 | Run `Configure-RdpAvc444.ps1`, reboot, reconnect. |
+| Caps come back as `V8_1 { SMALL_CACHE }` after advertising AVC420 | Host prefers 4:4:4 and strips the AVC flag rather than falling back | Already handled: the handler advertises V10.7 so the host has a 4:4:4 option to agree to. |
+| Black screen with GFX on | Host is sending a surface command the handler cannot render | Check for `progressive codec` or `graphics cache` warnings in the backend log; both are unsupported under passthrough. |
+| Text looks soft or hazy | Frames being rescaled rather than blitted 1:1 | Fixed: H.264 pads to a 16x16 macroblock boundary and Windows sets no crop metadata, so the decoder reports a taller frame than the picture. The client crops to the RDP destination rectangle. |
+| Green line along the bottom edge | Macroblock padding rows (YUV 0,0,0) being drawn | Same fix as above. |
+| `framesDecoded > 0` but rendering ghosts during fast animations | DevTools open and throttling GPU compositing | Close DevTools or detach it to a separate window. |
+| Works, but text is crisper with GFX off | Expected. H.264 is lossy; the bitmap path is not. | Use GFX for motion-heavy sessions, the bitmap path for static text. |
 
 ## Why this replaced the v0.27.0 Refresh Rect mitigation
+
+*History, from the guacd era. Neither guacd nor the patch exists any more.*
 
 v0.27.0 shipped a guacd patch that translated a no-op resize instruction
 into an RDP `Refresh Rect` PDU, asking the host to retransmit a full frame

@@ -1369,6 +1369,14 @@ async fn connect_target(
                 desktop_scale_factor,
                 enable_webp: flag_or(handshake, "enable-webp", true),
                 enable_h264: flag_or(handshake, "enable-h264", true),
+                // `disable-gfx` is a negative with three states: the editor
+                // writes "false" to mean GFX on, "true" to mean off, and
+                // leaves it unset when the administrator never touched it.
+                // Only an explicit "false" turns the pipeline on.
+                enable_gfx: handshake
+                    .extra
+                    .get("disable-gfx")
+                    .is_some_and(|v| v.trim() == "false"),
             });
             factory
                 .connect(spec)

@@ -100,6 +100,45 @@ else
   rm -rf "$src_dir"
 fi
 
+# ── Fork 3: ironrdp-egfx ─────────────────────────────────────────────────
+#
+# Stock `ironrdp-egfx` only surfaces AVC frames once its own H.264 decoder
+# has turned them into bitmaps, and builds its capability set from whether
+# that decoder exists. Strata forwards the bitstream to the browser's
+# WebCodecs decoder untouched, so the fork adds a handler hook that claims
+# AVC frames before the decode path and advertises AVC without a decoder.
+#
+# The fork can go when upstream can hand out AVC frames undecoded.
+echo
+echo "== fork 3: crates/vendor/ironrdp-egfx =="
+outside="$(mktemp -d)"
+version_line=$(cd "$outside" && cargo info ironrdp-egfx 2>/dev/null | grep -m1 '^version:')
+rm -rf "$outside"
+latest=$(printf '%s' "$version_line" \
+  | sed -E 's/.*\(latest ([^)]+)\).*/\1/; t; s/^version: *//' \
+  | tr -d ' ')
+if [ -z "$latest" ]; then
+  echo "   could not determine the latest ironrdp-egfx version; check by hand."
+else
+  echo "   latest published ironrdp-egfx: $latest"
+  src_dir="$(mktemp -d)"
+  if curl -sfL "https://static.crates.io/crates/ironrdp-egfx/ironrdp-egfx-$latest.crate" \
+       -o "$src_dir/e.tgz" && tar xzf "$src_dir/e.tgz" -C "$src_dir"; then
+    # Upstream will not use our method names, so match the concept rather
+    # than the spelling: a hook that hands out the encoded bitstream.
+    if grep -rqiE 'passthrough|bitstream' "$src_dir/ironrdp-egfx-$latest/src/client.rs"; then
+      echo "   MAY BE DROPPABLE: ironrdp-egfx $latest mentions a bitstream or"
+      echo "   passthrough hook in client.rs. Read it before deleting the fork."
+      droppable=1
+    else
+      echo "   STILL NEEDED: ironrdp-egfx $latest only yields decoded bitmaps."
+    fi
+  else
+    echo "   could not fetch ironrdp-egfx $latest; check by hand."
+  fi
+  rm -rf "$src_dir"
+fi
+
 echo
 if [ "$droppable" -eq 1 ]; then
   echo "At least one fork can go. Follow the un-fork procedure in"

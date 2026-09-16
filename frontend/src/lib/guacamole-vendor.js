@@ -13619,9 +13619,24 @@ Guacamole.H264Decoder = function H264Decoder(display) {
                             // mismatch and leave uncovered pixels.
                             var dw = pos.w || frame.displayWidth || frame.codedWidth;
                             var dh = pos.h || frame.displayHeight || frame.codedHeight;
+                            // H.264 pads to a 16x16 macroblock boundary and
+                            // Windows sets no crop metadata, so the frame can
+                            // be taller than the picture -- those rows decode
+                            // green. The RDP destination rect is the only
+                            // authority on real size, so crop to it and blit
+                            // 1:1; scaling here would resample every pixel.
+                            var crop = frame.visibleRect;
+                            var sx = crop ? crop.x : 0;
+                            var sy = crop ? crop.y : 0;
+                            var fw = crop ? crop.width
+                                    : (frame.displayWidth || frame.codedWidth);
+                            var fh = crop ? crop.height
+                                    : (frame.displayHeight || frame.codedHeight);
+                            var sw = Math.min(dw, fw);
+                            var sh = Math.min(dh, fh);
                             ctx.drawImage(frame,
-                                    0, 0, frame.codedWidth, frame.codedHeight,
-                                    pos.x, pos.y, dw, dh);
+                                    sx, sy, sw, sh,
+                                    pos.x, pos.y, sw, sh);
                         }
                     } finally {
                         // CRITICAL: always close VideoFrame to release GPU memory

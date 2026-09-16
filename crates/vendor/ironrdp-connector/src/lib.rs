@@ -256,6 +256,15 @@ pub struct Config {
     /// [\[MS-RDPBCGR\] 2.2.1.3.7]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/861f2bbb-6ca2-4c5a-8c44-0714fa901e70
     /// [`MultiTransportChannelData`]: ironrdp_pdu::gcc::MultiTransportChannelData
     pub multitransport_flags: Option<gcc::MultiTransportFlags>,
+
+    /// STRATA FORK: advertise `SUPPORT_DYN_VC_GFX_PROTOCOL`.
+    ///
+    /// The server only opens the graphics pipeline channel when the client
+    /// asks for it in the Client Core Data ([MS-RDPBCGR] 2.2.1.3.2), so
+    /// registering an EGFX handler without this does nothing at all.
+    /// Off by default: a client with no use for surface commands is better
+    /// served by the bitmap path.
+    pub enable_gfx: bool,
 }
 
 ironrdp_core::assert_impl!(Config: Send, Sync);

@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Non-US keyboards typed the wrong characters over RDP.** On a UK layout
+  `\` arrived as `#`; `@` and `"` were swapped, and `£` did not work. The
+  engine translated each keysym to a US key position and the target then
+  applied its own layout on top, so the layout was applied twice: `\` and
+  `#` are the same position on US and UK keyboards respectively, and both
+  steps were individually correct. This is the right model for a client
+  that sends the physical key pressed, which is what `mstsc` does, but the
+  browser sends the character the user's local layout already produced.
+  Printable characters now travel as layout-independent Unicode key
+  events, which fixes every affected layout rather than one key.
+
+  Keys that are positions rather than text keep their scancode: anything
+  held with Ctrl, Alt or Super so shortcuts still register, space, and the
+  named keys. `AltGr` is deliberately not counted as a shortcut modifier,
+  because on most non-US layouts it composes characters.
+
+  The keyboard layout selected on a connection is still sent to the target
+  and still governs those positional keys, but it no longer determines
+  which character you get. The **Failsafe (Unicode events)** option is
+  consequently now a no-op: what it selected is what every layout does.
+
 ## [2.1.0] — 2026-09-16 — RDP H.264 GFX passthrough
 
 ### The ask

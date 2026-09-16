@@ -5,10 +5,14 @@
 
 /// Windows layout id for a guacd `server-layout` name.
 ///
-/// `failsafe` returns `None`: guacd handles it by sending Unicode
-/// events rather than scancodes, which this engine does not implement,
-/// so the caller falls back to the default rather than silently
-/// pretending the layout was applied.
+/// The id tells the target what kind of keyboard the session has, which
+/// governs the keys sent as positions: shortcuts, space and the named
+/// keys. Printable characters do not depend on it, because they travel
+/// as Unicode (see [`keycodes`](super::keycodes)).
+///
+/// `failsafe` returns `None` and so falls back to the default id. The
+/// behaviour it selected in guacd -- Unicode events instead of scancodes
+/// -- is now what every layout does for character input.
 pub fn keyboard_layout_id(name: &str) -> Option<u32> {
     let id = match name.trim().to_ascii_lowercase().as_str() {
         "en-us-qwerty" => 0x0000_0409,

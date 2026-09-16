@@ -836,8 +836,20 @@ fn create_gcc_blocks<'a>(
                     let mut early_capability_flags = ClientEarlyCapabilityFlags::VALID_CONNECTION_TYPE
                         | ClientEarlyCapabilityFlags::SUPPORT_ERR_INFO_PDU
                         | ClientEarlyCapabilityFlags::STRONG_ASYMMETRIC_KEYS
-                        | ClientEarlyCapabilityFlags::SUPPORT_NET_CHAR_AUTODETECT
                         | ClientEarlyCapabilityFlags::SUPPORT_SKIP_CHANNELJOIN;
+
+                    // STRATA FORK: SUPPORT_NET_CHAR_AUTODETECT is deliberately
+                    // absent. ironrdp-session answers the RTT request but drops
+                    // Bandwidth Measure Start/Stop ("Auto-detect request not yet
+                    // implemented"), so the Bandwidth Measure Results PDU that
+                    // MS-RDPBCGR 3.2.5.10 requires never goes back. Windows then
+                    // retries the measurement in a tight loop for the life of the
+                    // session and never resolves the link's characteristics, so it
+                    // withholds bandwidth-gated redirection — audio never starts,
+                    // while graphics and clipboard are unaffected. Advertising a
+                    // capability we do not implement is the bug; without the flag
+                    // the server sizes the session from connectionType instead.
+                    // Re-add once the bandwidth measurement is answered.
 
                     // TODO(#136): support for ClientEarlyCapabilityFlags::SUPPORT_STATUS_INFO_PDU
 

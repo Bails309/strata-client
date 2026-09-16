@@ -1342,6 +1342,45 @@ describe("AccessTab", () => {
     expect(updateConnection).toHaveBeenCalledWith("c1", expect.any(Object));
   });
 
+  it('persists Enable GFX, whose enabled state is the string "false"', async () => {
+    // `cleanExtra` strips falsy extras before saving. `disable-gfx` is
+    // inverted -- "false" means enabled -- so without an exemption the
+    // checkbox saved and came back unticked, every time.
+    vi.mocked(updateConnection).mockResolvedValue({
+      id: "c1",
+      name: "Server A",
+      protocol: "rdp",
+      hostname: "10.0.0.1",
+      port: 3389,
+      domain: "",
+      description: "",
+      folder_id: undefined,
+      extra: { "disable-gfx": "false" },
+    });
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    const connectionsCard = screen
+      .getByRole("heading", { name: "Connections" })
+      .closest(".card") as HTMLElement;
+    await user.click(within(connectionsCard).getAllByText("Edit")[0]);
+    await screen.findByText("Edit Connection");
+
+    // Sections are collapsed unless they opt in, so the control does not
+    // exist until Performance is expanded.
+    await user.click(screen.getByRole("button", { name: /Performance/ }));
+    await user.click(screen.getByLabelText("Enable graphics pipeline (GFX)"));
+    await user.click(screen.getByText("Save Changes"));
+
+    expect(updateConnection).toHaveBeenCalledWith(
+      "c1",
+      expect.objectContaining({
+        extra: expect.objectContaining({ "disable-gfx": "false" }),
+      })
+    );
+  });
+
   it("closes form after connection deleted if editing same id", async () => {
     vi.mocked(deleteConnection).mockResolvedValue({ status: "success" });
     const user = userEvent.setup();

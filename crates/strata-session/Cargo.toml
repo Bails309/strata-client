@@ -33,11 +33,11 @@ rdp = [
     "dep:ironrdp-dvc",
     "dep:ironrdp-displaycontrol",
     "dep:ironrdp-rdpsnd",
+    "dep:ironrdp-egfx",
     "dep:rustls-native-certs",
     "dep:rustls-pki-types",
     "dep:x509-cert",
     "dep:sspi",
-    "dep:picky",
     "dep:image",
 ]
 # VNC engine. Also the transport behind `web`, which runs a browser in a
@@ -131,41 +131,43 @@ image = { version = "0.25", optional = true, default-features = false, features 
 
 # RDP engine (feature `rdp`)
 #
-# Phase 4 modernization: RDP sessions run as asynchronous Tokio green tasks
-# cooperatively multiplexed across a bounded worker pool via `LocalSet`
-# (eliminating dedicated OS thread and Tokio runtime allocation per session).
+# Crate version note: this is the current `ironrdp` line (meta-crate 0.17;
+# the sub-crates are numbered independently). It resolves beside a patched
+# `russh` only because of the three-line fork in
+# `crates/vendor/ironrdp-connector`, registered as a workspace
+# `[patch.crates-io]` — stock connector 0.10 pins `picky =7.0.0-rc.25`,
+# which pins `curve25519-dalek =5.0.0-rc.1`, and `russh` >=0.60.3 needs
+# 5.0.0 stable. Run `scripts/check-vendored-forks.sh` to see whether the
+# fork can be dropped yet; the reasoning is in
+# docs/adr/ADR-0015-native-rust-session-engine.md.
 #
-# Crate version note: `ironrdp` is held on 0.7 because everything above it
-# reaches a `picky` release candidate pinning `curve25519-dalek =5.0.0-rc.1`,
-# and every `russh` carrying the RUSTSEC-2026-0154 fix (>=0.60.3) needs
-# stable 5.0.0. The highest `russh` that coexists with ironrdp 0.10 is
-# 0.60.1 — below the fix — so there is no safe intermediate. Run
-# `scripts/check-ironrdp-unblock.sh` to see whether that still holds; the
-# upgrade steps are in docs/adr/ADR-0015-native-rust-session-engine.md.
-ironrdp-connector = { version = "0.7", optional = true }
-ironrdp-session = { version = "0.7", optional = true }
-ironrdp-tokio = { version = "0.7", optional = true }
+# The whole set has to agree on a single `ironrdp-svc` (0.8). Mismatched
+# satellites resolve happily and then fail to typecheck — that is how this
+# set was arrived at.
+ironrdp-connector = { version = "0.10", optional = true }
+ironrdp-session = { version = "0.11", optional = true }
+ironrdp-tokio = { version = "0.10", optional = true }
 # `rustls-ring`, not the default aws-lc-rs: same no-C reasoning as russh,
 # and `deny.toml` bans native-tls outright.
 ironrdp-tls = { version = "0.2", optional = true, default-features = false, features = [
     "rustls-ring",
 ] }
-ironrdp-pdu = { version = "0.6", optional = true }
-ironrdp-graphics = { version = "0.6", optional = true }
-ironrdp-core = { version = "0.1", optional = true }
-# Clipboard virtual channel. 0.4 is the release that resolves to a single
-# ironrdp-svc 0.5 alongside connector 0.7.
-ironrdp-cliprdr = { version = "0.4", optional = true }
+ironrdp-pdu = { version = "0.9", optional = true }
+ironrdp-graphics = { version = "0.9", optional = true }
+ironrdp-core = { version = "0.2", optional = true }
+# Clipboard virtual channel.
+ironrdp-cliprdr = { version = "0.7", optional = true }
 # Dynamic virtual channels, and the Display Control channel they carry.
 # Without these the desktop is stuck at its initial size and the browser
 # has to scale the framebuffer, which looks blurry.
-ironrdp-dvc = { version = "0.4", optional = true }
-ironrdp-displaycontrol = { version = "0.4", optional = true }
-# Audio output. 0.6 is the only nearby release that resolves to a single
-# ironrdp-svc 0.5: 0.4 and 0.5 drag in svc 0.3/0.4 beside it and 0.9 drags
-# in 0.8, all of which resolve happily and then fail to typecheck against
-# connector 0.7's channel traits.
-ironrdp-rdpsnd = { version = "0.6", optional = true }
+ironrdp-dvc = { version = "0.8", optional = true }
+ironrdp-displaycontrol = { version = "0.8", optional = true }
+# Audio output.
+ironrdp-rdpsnd = { version = "0.9", optional = true }
+# Graphics pipeline (MS-RDPEGFX), the channel H.264 arrives on. Vendored:
+# stock 0.3 will not advertise AVC without a local decoder, and its only
+# decoder is the openh264 C library. See crates/vendor/ironrdp-egfx.
+ironrdp-egfx = { version = "0.3", optional = true }
 # VNC/RFB client. Pure Rust with no `-sys` crate anywhere in its tree,
 # which is the same reason FreeRDP was replaced rather than wrapped.
 vnc-rs = { version = "0.5", optional = true }
@@ -195,17 +197,13 @@ serde_json = { workspace = true, optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
 x509-cert = { version = "0.2", optional = true }
 # Needed directly for the KDC network client CredSSP suspends on during
-# Kerberos authentication. Version tracks what ironrdp-connector 0.7 uses.
-# Default features off: only two types are used from it, and the defaults
-# drag in a blocking reqwest stack that is both unused and extra attack
-# surface.
-sspi = { version = "0.16", default-features = false, optional = true }
-# Not used directly — this is a resolution pin. ironrdp-connector 0.7
-# requires `picky = "7.0.0-rc.17"`, which on a prerelease also matches
-# rc.26; that newer picky no longer compiles against the `sspi` version
-# ironrdp 0.7 expects. Cargo has no `[constraints]` section, so an
-# explicit `=` dependency is the only way to hold it still.
-picky = { version = "=7.0.0-rc.17", optional = true }
+# Kerberos authentication. Version tracks what ironrdp-connector 0.10 uses
+# once forked onto picky rc.26; 0.22 itself is vendored in
+# `crates/vendor/sspi` to drop a mechListMIC sequence check that rejects
+# Kerberos NLA against Windows RDP hosts. Default features off: only two
+# types are used from it, and the defaults drag in a blocking reqwest
+# stack that is both unused and extra attack surface.
+sspi = { version = "0.22", default-features = false, optional = true }
 
 # IDs / time
 uuid = { workspace = true }

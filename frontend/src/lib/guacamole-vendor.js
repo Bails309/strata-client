@@ -1,4 +1,5 @@
 /* Vendored Guacamole client (1.6.0) from sol1/rustguac. Do not edit. */
+import { h264SourceRect } from "./h264FrameRect";
 (function(){
 var Guacamole = window.Guacamole = window.Guacamole || {};
 /* === Namespace.js === */
@@ -13617,11 +13618,13 @@ Guacamole.H264Decoder = function H264Decoder(display) {
                             // own codedWidth/codedHeight, which can differ
                             // from the requested region after a level
                             // mismatch and leave uncovered pixels.
-                            var dw = pos.w || frame.displayWidth || frame.codedWidth;
-                            var dh = pos.h || frame.displayHeight || frame.codedHeight;
+                            // Source and destination sizes must match:
+                            // scaling here resamples every pixel and drags
+                            // in macroblock padding. See h264FrameRect.ts.
+                            var r = h264SourceRect(frame, pos.w, pos.h);
                             ctx.drawImage(frame,
-                                    0, 0, frame.codedWidth, frame.codedHeight,
-                                    pos.x, pos.y, dw, dh);
+                                    r.sx, r.sy, r.sw, r.sh,
+                                    pos.x, pos.y, r.sw, r.sh);
                         }
                     } finally {
                         // CRITICAL: always close VideoFrame to release GPU memory

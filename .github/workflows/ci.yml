@@ -245,7 +245,11 @@ jobs:
         run: cargo install cargo-tarpaulin --locked
 
       - name: Generate backend coverage report
-        run: cargo tarpaulin -p strata-backend --skip-clean --out xml --out html --output-dir coverage/ --exclude-files src/main.rs --fail-under 19 -- --test-threads=1
+        # Vendored forks are third-party source we do not test. They are
+        # path dependencies, so tarpaulin instruments them unless excluded
+        # and ~28k uncovered lines sink the percentage. Both globs are
+        # given because tarpaulin is inconsistent about `*` crossing `/`.
+        run: cargo tarpaulin -p strata-backend --skip-clean --out xml --out html --output-dir coverage/ --exclude-files src/main.rs --exclude-files 'crates/vendor/*' --exclude-files 'crates/vendor/**/*' --fail-under 19 -- --test-threads=1
 
       - name: Upload backend coverage
         if: always()

@@ -142,6 +142,10 @@ mod tests {
             &TargetEvent::VideoSlice {
                 codec: VideoCodec::H264,
                 keyframe: true,
+                x: 0,
+                y: 0,
+                width: 64,
+                height: 64,
                 timestamp_ms: 42,
                 data: nal.clone(),
             },
@@ -212,6 +216,10 @@ mod tests {
             &TargetEvent::VideoSlice {
                 codec: VideoCodec::Av1,
                 keyframe: true,
+                x: 0,
+                y: 0,
+                width: 64,
+                height: 64,
                 timestamp_ms: 1,
                 data: Bytes::from_static(b"obu"),
             },

@@ -496,14 +496,15 @@ const ROADMAP: RoadmapTheme[] = [
       {
         id: "protocols-ironrdp-upgrade",
         title: "IronRDP Upgrade & Tokio-Native RDP Sessions",
-        status: "Blocked",
+        status: "In Progress",
         areas: ["Protocols", "Session engine"],
         description:
-          "Move the RDP engine onto the current IronRDP release and let sessions run as ordinary Tokio tasks, as SSH and VNC already do. Today's IronRDP has a connection future that cannot move between threads, so RDP sessions are multiplexed across a small dedicated worker pool instead.",
+          "Move the RDP engine onto the current IronRDP release and let sessions run as ordinary Tokio tasks, as SSH and VNC already do. The previous IronRDP had a connection future that could not move between threads, so RDP sessions were multiplexed across a small dedicated worker pool instead. That pool is now gone.",
         bullets: [
-          "Blocked upstream, not on effort: every IronRDP above the pinned release requires a pre-release of a cryptography crate that cannot coexist with the patched SSH library.",
-          "Taking the upgrade today would mean shipping a known remotely-triggerable denial of service in the SSH engine, which shares a process with every RDP session.",
-          "A repository check reports when the conflict clears; the upgrade steps are recorded in ADR-0015.",
+          "The upstream dependency conflict that held this back is resolved: the current IronRDP now runs alongside the patched SSH library, on stable cryptography rather than a pre-release.",
+          "Two small vendored patches carry it — one to let IronRDP reach a fixed dependency, one to drop a Kerberos check added upstream that wrongly rejected sessions against Windows hosts.",
+          "Both patches are temporary. A repository check reports when each can be dropped, and it is run on every dependency bump and before every release.",
+          "Remaining: drop both patches as soon as upstream releases carry the fixes.",
         ],
       },
     ],

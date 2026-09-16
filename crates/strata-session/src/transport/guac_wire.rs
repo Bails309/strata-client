@@ -264,17 +264,27 @@ impl GuacWireEncoder {
     }
 
     /// Emit an H.264 video slice for client-side hardware WebCodecs decoding.
-    pub fn encode_h264(&mut self, keyframe: bool, data: &Bytes, out: &mut Vec<ClientFrame>) {
+    #[expect(clippy::too_many_arguments, reason = "mirrors the `h264` instruction")]
+    pub fn encode_h264(
+        &mut self,
+        keyframe: bool,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        data: &Bytes,
+        out: &mut Vec<ClientFrame>,
+    ) {
         let stream = self.allocate_stream();
         let mut header = BytesMut::new();
         ServerInstruction::H264 {
             stream,
             layer: DEFAULT_LAYER,
             keyframe,
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0,
+            x,
+            y,
+            width,
+            height,
         }
         .encode(&mut header);
         out.push(ClientFrame::Text(header.freeze()));
@@ -429,9 +439,13 @@ impl FrameEncoder for GuacWireEncoder {
             TargetEvent::VideoSlice {
                 codec: VideoCodec::H264,
                 keyframe,
+                x,
+                y,
+                width,
+                height,
                 data,
                 ..
-            } => self.encode_h264(*keyframe, data, out),
+            } => self.encode_h264(*keyframe, *x, *y, *width, *height, data, out),
             TargetEvent::VideoSlice {
                 codec: VideoCodec::Av1,
                 ..
@@ -672,6 +686,10 @@ mod tests {
             &TargetEvent::VideoSlice {
                 codec: VideoCodec::H264,
                 keyframe: true,
+                x: 16,
+                y: 32,
+                width: 640,
+                height: 480,
                 timestamp_ms: 1000,
                 data: nal_unit,
             },
@@ -681,6 +699,12 @@ mod tests {
         assert_eq!(parsed[0].0, "h264");
         assert_eq!(parsed[0].1[1], "0"); // layer
         assert_eq!(parsed[0].1[2], "1"); // keyframe
+                                         // The destination rectangle has to survive: the client draws the
+                                         // decoded frame at exactly these coordinates.
+        assert_eq!(parsed[0].1[3], "16");
+        assert_eq!(parsed[0].1[4], "32");
+        assert_eq!(parsed[0].1[5], "640");
+        assert_eq!(parsed[0].1[6], "480");
         assert_eq!(parsed[1].0, "blob");
         assert_eq!(parsed[2].0, "end");
     }

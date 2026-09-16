@@ -237,6 +237,14 @@ pub enum TargetEvent {
         codec: VideoCodec,
         /// Whether this slice can be decoded without prior frames.
         keyframe: bool,
+        /// Destination X on the default layer.
+        x: i32,
+        /// Destination Y on the default layer.
+        y: i32,
+        /// Destination width in pixels.
+        width: u32,
+        /// Destination height in pixels.
+        height: u32,
         /// Capture time in milliseconds since the Unix epoch.
         timestamp_ms: u64,
         /// Compressed bitstream.

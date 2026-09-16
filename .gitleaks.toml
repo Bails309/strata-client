@@ -23,6 +23,19 @@ description = "Strata public test vectors and false-positive fixtures."
 paths = [
   '''crates/strata-dmz/src/ws_proxy\.rs''',
   '''backend/src/services/dmz_link/upgrade_handler\.rs''',
+
+  # Upstream test material inside the vendored sspi fork, which is a
+  # verbatim copy of the published crate (see crates/vendor/sspi and
+  # scripts/check-vendored-forks.sh). None of it is Strata's, and none
+  # authenticates against anything we run.
+  #
+  # pku2u/mod.rs carries a PEM private key in a #[cfg(test)] module,
+  # used to exercise PKINIT certificate validation.
+  '''crates/vendor/sspi/src/pku2u/mod\.rs''',
+  # tools/aadjoin is a C# helper for Azure AD join testing, shipped in
+  # the crate but never built by Cargo. Its device credentials and JWT
+  # are upstream fixtures.
+  '''crates/vendor/sspi/tools/aadjoin/.*''',
 ]
 
 # Public RFC 6455 §1.3 worked-example values — the client key

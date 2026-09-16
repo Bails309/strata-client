@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [Unreleased]
+
+### Added
+
+- **RDP H.264 GFX passthrough on the native engine.** MS-RDPEGFX AVC420 /
+  AVC444 frames are forwarded to the browser's WebCodecs `VideoDecoder`
+  without a server-side decode, restoring on the native engine what was
+  removed with `guacd` in 2.0.0. Off by default; enable per connection with
+  **Enable graphics pipeline (GFX)**. See
+  [docs/h264-passthrough.md](docs/h264-passthrough.md).
+- **Vendored fork `crates/vendor/ironrdp-egfx`** adding the handler hooks
+  upstream lacks for claiming AVC frames undecoded, tracked by
+  `scripts/check-vendored-forks.sh` alongside the existing two forks.
+- Solid-fill and surface-to-surface copy commands are now forwarded, the
+  latter as a canvas-side copy rather than a re-encode.
+
+### Fixed
+
+- **Hazy text and a green line along the bottom edge with GFX enabled.**
+  H.264 pads the picture to a 16x16 macroblock boundary and Windows sets no
+  crop metadata, so the decoder reported a frame taller than the picture.
+  The client scaled that padded frame to the destination rectangle, which
+  resampled every pixel on every frame and drew the padding rows (which
+  decode green) at the bottom. Frames are now cropped to the RDP
+  destination rectangle and blitted 1:1.
+- **The GFX toggle could never be saved.** `disable-gfx` is inverted, so its
+  enabled state is the string `"false"` — which the admin form stripped as
+  falsy. Long-standing, and the reason the parameter was previously
+  documented as inert.
+- Chroma-only AVC444 updates are no longer forwarded as pictures; on those
+  the auxiliary view occupies `stream1`, so the previous behaviour painted a
+  chroma plane over the region.
+- The graphics pipeline now requests a full repaint after a GFX resize,
+  which previously left the newly exposed area black until it was damaged.
+- `isH264Supported()` probes `VideoDecoder.isConfigSupported()` rather than
+  assuming support from the API merely being present.
+
 ## [2.0.0] — 2026-09-09 — Native Rust session engine
 
 ### Major Release — Apache Guacamole's `guacd` is gone; every protocol is served by native Rust

@@ -20,25 +20,24 @@
 
 //! ## Threading
 //!
-//! `ironrdp-async` 0.7's connection future is not `Send` — its
-//! `AsyncNetworkClient` hook is a bare trait object — so the session
-//! cannot be driven directly from the shared Tokio runtime behind
-//! [`ProtocolEngine`]. The whole RDP session therefore runs on its own
-//! thread with a current-thread runtime, and this module exposes a
-//! `Send` handle over channels. The runtime lives for the session's
-//! lifetime, so its sockets stay registered with the reactor that owns
-//! them.
+//! An RDP session is an ordinary Tokio task, like SSH and VNC. That was
+//! not always true: `ironrdp-async` 0.7's connection future was not
+//! `Send` — its `AsyncNetworkClient` hook was a boxed trait object — so
+//! sessions had to be multiplexed across a bounded pool of threads each
+//! running a current-thread runtime and a `LocalSet`. 0.10 replaced that
+//! hook with an RPITIT `NetworkClient`, which made the whole session
+//! future `Send` and let the pool go.
 
 pub mod audio;
 pub mod clipboard;
+pub mod gfx;
 pub mod kdc;
 pub mod keycodes;
 pub mod layouts;
 pub mod tls;
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -49,7 +48,7 @@ use image::{ExtendedColorType, ImageEncoder};
 use ironrdp_cliprdr::pdu::{ClipboardFormat, ClipboardFormatId, FormatDataResponse};
 use ironrdp_cliprdr::{Client as CliprdrClientRole, CliprdrClient, CliprdrSvcMessages};
 use ironrdp_connector::connection_activation::{
-    ConnectionActivationSequence, ConnectionActivationState,
+    ConnectionActivationFactory, ConnectionActivationState,
 };
 use ironrdp_connector::credssp::KerberosConfig;
 use ironrdp_connector::{
@@ -58,6 +57,7 @@ use ironrdp_connector::{
 use ironrdp_core::{IntoOwned, WriteBuf};
 use ironrdp_displaycontrol::client::DisplayControlClient;
 use ironrdp_dvc::DrdynvcClient;
+use ironrdp_egfx::client::GraphicsPipelineClient;
 use ironrdp_graphics::diff::find_different_rects_sub;
 use ironrdp_graphics::image_processing::PixelFormat;
 use ironrdp_graphics::pointer::DecodedPointer;
@@ -74,12 +74,11 @@ use ironrdp_pdu::Action;
 use ironrdp_rdpsnd::client::Rdpsnd;
 use ironrdp_session::fast_path::ProcessorBuilder;
 use ironrdp_session::image::DecodedImage;
-use ironrdp_session::{ActiveStage, ActiveStageOutput};
+use ironrdp_session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
 use ironrdp_tokio::{single_sequence_step, FramedWrite as _, TokioFramed};
 use secrecy::ExposeSecret;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::LocalSet;
 use tokio_rustls::client::TlsStream;
 
 use crate::engine::rdp::audio::SessionAudio;
@@ -150,11 +149,17 @@ pub struct RdpConfig {
     /// Whether the client can decode direct H.264 video for WebCodecs
     /// hardware decoding. Defaults to `true`.
     ///
-    /// Accepted and negotiated today, but not yet acted on: emitting
-    /// [`TargetEvent::VideoSlice`] from RDP needs the graphics pipeline
-    /// (`ironrdp-egfx`), which is part of the blocked IronRDP upgrade.
-    /// Until then every frame goes out as an image update.
+    /// Only acted on when [`Self::enable_gfx`] is also set: H.264 arrives
+    /// on the graphics pipeline and nowhere else.
     pub enable_h264: bool,
+    /// Whether to negotiate the graphics pipeline (MS-RDPEGFX).
+    ///
+    /// Off by default, matching the connection editor. Turning it on only
+    /// changes anything when the client also supports H.264 — without a
+    /// use for AVC frames the bitmap path is the better renderer, and a
+    /// server that switched to progressive surface commands would leave
+    /// the screen stale.
+    pub enable_gfx: bool,
 }
 
 /// Desktop features the target may enable, mirroring guacd's
@@ -220,6 +225,7 @@ impl Default for RdpConfig {
             desktop_scale_factor: None,
             enable_webp: true,
             enable_h264: true,
+            enable_gfx: false,
         }
     }
 }
@@ -230,76 +236,6 @@ pub struct RdpEngine {
     input: mpsc::Sender<InputEvent>,
     desktop: (u32, u32),
     finished: bool,
-}
-
-type LocalTask = Box<dyn FnOnce() + Send>;
-
-/// Bounded worker pool running Tokio current-thread runtimes with LocalSets.
-/// Multiple non-Send IronRDP sessions are scheduled cooperatively as asynchronous
-/// Tokio green tasks across this event loop pool rather than spawning an unmetered
-/// OS thread and a separate Tokio runtime per RDP connection.
-struct RdpWorker {
-    task_tx: mpsc::UnboundedSender<LocalTask>,
-}
-
-struct RdpWorkerPool {
-    workers: Vec<RdpWorker>,
-    next_worker: AtomicUsize,
-}
-
-static RDP_WORKER_POOL: OnceLock<RdpWorkerPool> = OnceLock::new();
-
-impl RdpWorkerPool {
-    fn global() -> &'static Self {
-        RDP_WORKER_POOL.get_or_init(|| {
-            let pool_size = std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(2)
-                .clamp(1, 4);
-
-            let mut workers = Vec::with_capacity(pool_size);
-            for i in 0..pool_size {
-                let (task_tx, mut task_rx) = mpsc::unbounded_channel::<LocalTask>();
-                std::thread::Builder::new()
-                    .name(format!("strata-rdp-worker-{i}"))
-                    .spawn(move || {
-                        let runtime = match tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                        {
-                            Ok(rt) => rt,
-                            Err(err) => {
-                                tracing::error!(
-                                    "failed to create strata-rdp worker runtime: {err}"
-                                );
-                                return;
-                            }
-                        };
-                        let local_set = LocalSet::new();
-                        local_set.block_on(&runtime, async move {
-                            while let Some(task) = task_rx.recv().await {
-                                task();
-                            }
-                        });
-                    })
-                    .expect("failed to spawn strata-rdp worker thread");
-                workers.push(RdpWorker { task_tx });
-            }
-
-            Self {
-                workers,
-                next_worker: AtomicUsize::new(0),
-            }
-        })
-    }
-
-    fn spawn(&self, task: LocalTask) -> Result<(), EngineError> {
-        let idx = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
-        self.workers[idx]
-            .task_tx
-            .send(task)
-            .map_err(|_| EngineError::Closed("strata-rdp worker thread exited".to_owned()))
-    }
 }
 
 impl RdpEngine {
@@ -313,11 +249,7 @@ impl RdpEngine {
         let (ready_tx, ready_rx) = oneshot::channel();
         let config = config.clone();
 
-        let task: LocalTask = Box::new(move || {
-            tokio::task::spawn_local(session_thread(spec, config, ready_tx, event_tx, input_rx));
-        });
-
-        RdpWorkerPool::global().spawn(task)?;
+        tokio::spawn(session_task(spec, config, ready_tx, event_tx, input_rx));
 
         let desktop = ready_rx
             .await
@@ -477,6 +409,10 @@ fn encode_cursor(pointer: &DecodedPointer) -> Result<TargetEvent, EngineError> {
 struct RdpSession {
     framed: TokioFramed<TlsStream<TcpStream>>,
     stage: ActiveStage,
+    /// Produces a fresh sequence each time the server deactivates all.
+    activation_factory: ConnectionActivationFactory,
+    /// H.264 frames parked by the graphics pipeline handler.
+    gfx_frames: Arc<Mutex<VecDeque<TargetEvent>>>,
     image: DecodedImage,
     pending: VecDeque<TargetEvent>,
     width: u16,
@@ -516,8 +452,8 @@ struct RdpSession {
     enable_webp: bool,
 }
 
-/// Entry point for the dedicated session thread.
-async fn session_thread(
+/// Entry point for the session task.
+async fn session_task(
     spec: TargetSpec,
     config: RdpConfig,
     ready: oneshot::Sender<Result<(u32, u32), EngineError>>,
@@ -659,6 +595,9 @@ impl RdpSession {
                 .load_balance_info
                 .as_ref()
                 .map(|token| NegoRequestData::routing_token(token.clone())),
+            // Asking for the channel and never advertising support for it
+            // means the server never opens it.
+            enable_gfx: config.enable_gfx && config.enable_h264,
             ..default_connector_config()
         };
         // Nothing below may observe the credential.
@@ -673,13 +612,33 @@ impl RdpSession {
         let mut framed = TokioFramed::new(stream);
         let (clipboard_tx, clipboard) = mpsc::unbounded_channel();
         let (audio_tx, audio) = audio::channel();
-        let mut connector = ClientConnector::new(connector_config, client_addr)
-            .with_static_channel(
-                // Carries MS-RDPEDISP, which lets the desktop follow the
-                // browser window instead of being scaled to fit it.
-                DrdynvcClient::new()
-                    .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new()))),
+
+        // H.264 only arrives on the graphics pipeline, and the pipeline is
+        // only worth negotiating if the client can decode what comes back.
+        let gfx_frames = Arc::new(Mutex::new(VecDeque::new()));
+        let gfx_unsupported = Arc::new(Mutex::new(0u64));
+        let gfx = (config.enable_gfx && config.enable_h264).then(|| {
+            GraphicsPipelineClient::new(
+                Box::new(gfx::GfxPassthrough::new(
+                    Arc::clone(&gfx_frames),
+                    Arc::clone(&gfx_unsupported),
+                )),
+                // No local decoder: the browser does the decoding, which is
+                // the entire point of the passthrough.
+                None,
             )
+        });
+
+        let mut drdynvc = DrdynvcClient::new()
+            .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+        if let Some(gfx) = gfx {
+            drdynvc = drdynvc.with_dynamic_channel(gfx);
+        }
+
+        let mut connector = ClientConnector::new(connector_config, client_addr)
+            // Carries MS-RDPEDISP, which lets the desktop follow the
+            // browser window instead of being scaled to fit it.
+            .with_static_channel(drdynvc)
             .with_static_channel(CliprdrClient::new(Box::new(SessionClipboard::new(
                 clipboard_tx,
             ))))
@@ -714,21 +673,18 @@ impl RdpSession {
         let kerberos = config
             .kdc_url
             .clone()
-            .map(|kdc_url| KerberosConfig::new(Some(kdc_url), Some(hostname.clone())))
+            .map(|kdc_url| KerberosConfig::new(Some(kdc_url), hostname.clone()))
             .transpose()
             .map_err(map_connector)?;
         let mut network_client = KdcNetworkClient;
-        let network_client = kerberos
-            .as_ref()
-            .map(|_| &mut network_client as &mut dyn ironrdp_tokio::AsyncNetworkClient);
 
         let connection = ironrdp_tokio::connect_finalize(
             upgraded,
-            &mut framed,
             connector,
+            &mut framed,
+            &mut network_client,
             hostname.as_str().into(),
             server_public_key,
-            network_client,
             kerberos,
         )
         .await
@@ -748,12 +704,24 @@ impl RdpSession {
             height: u32::from(height),
         });
 
-        let mut stage = ActiveStage::new(connection);
+        let mut stage = ActiveStageBuilder {
+            static_channels: connection.static_channels,
+            user_channel_id: connection.user_channel_id,
+            io_channel_id: connection.io_channel_id,
+            message_channel_id: connection.message_channel_id,
+            share_id: connection.share_id,
+            compression_type: connection.compression_type,
+            enable_server_pointer: true,
+            pointer_software_rendering: connection.pointer_software_rendering,
+        }
+        .build();
         stage.set_enable_server_pointer(true);
 
         let mut session = Self {
             framed,
             stage,
+            activation_factory: connection.activation_factory,
+            gfx_frames,
             image,
             pending,
             width,
@@ -782,6 +750,28 @@ impl RdpSession {
 
     /// Turn stage outputs into client events, writing responses back.
     async fn absorb(&mut self, outputs: Vec<ActiveStageOutput>) -> Result<(), EngineError> {
+        // The graphics pipeline handler runs inside `stage.process` and
+        // cannot reach `pending` itself.
+        let mut resized_to = None;
+        if let Ok(mut frames) = self.gfx_frames.lock() {
+            for event in frames.iter() {
+                if let TargetEvent::Resized { width, height } = event {
+                    resized_to = Some((*width, *height));
+                }
+            }
+            self.pending.append(&mut frames);
+        }
+
+        // A grown desktop is only ever *damaged* where something moved, so
+        // without this the newly exposed area stays black until it happens
+        // to be redrawn. Same failure the guacd `refresh-rect-on-resize`
+        // patch existed to fix.
+        if let Some((width, height)) = resized_to {
+            self.width = u16::try_from(width).unwrap_or(self.width);
+            self.height = u16::try_from(height).unwrap_or(self.height);
+            self.request_full_repaint().await?;
+        }
+
         for output in outputs {
             match output {
                 ActiveStageOutput::ResponseFrame(frame) => {
@@ -810,8 +800,8 @@ impl RdpSession {
                         reason: reason.to_string(),
                     });
                 }
-                ActiveStageOutput::DeactivateAll(activation) => {
-                    self.reactivate(activation).await?;
+                ActiveStageOutput::DeactivateAll => {
+                    self.reactivate().await?;
                 }
                 ActiveStageOutput::PointerBitmap(pointer) => {
                     self.pending.push_back(encode_cursor(&pointer)?);
@@ -822,6 +812,14 @@ impl RdpSession {
                 // The browser positions its own pointer, and keeps the
                 // last shape until the server sends a new one.
                 ActiveStageOutput::PointerDefault | ActiveStageOutput::PointerPosition { .. } => {}
+                // No sideband UDP transport: every session is tunnelled
+                // over the single TCP connection the browser holds, and
+                // the request is advisory.
+                ActiveStageOutput::MultitransportRequest(_) => {}
+                // Server-measured RTT/bandwidth. Nothing here adapts to
+                // it yet, and the encoder's damage tracking is already
+                // bandwidth-shaped.
+                ActiveStageOutput::AutoDetect(_) => {}
             }
         }
         Ok(())
@@ -833,23 +831,20 @@ impl RdpSession {
     /// notably when the desktop replaces the logon screen. Ignoring it
     /// leaves both ends disagreeing about the capability set, and the
     /// server stops painting the desktop.
-    async fn reactivate(
-        &mut self,
-        mut activation: Box<ConnectionActivationSequence>,
-    ) -> Result<(), EngineError> {
+    async fn reactivate(&mut self) -> Result<(), EngineError> {
+        let mut activation = self.activation_factory.create();
         let mut buf = WriteBuf::new();
         loop {
-            single_sequence_step(&mut self.framed, &mut *activation, &mut buf)
+            single_sequence_step(&mut self.framed, &mut activation, &mut buf)
                 .await
                 .map_err(map_connector)?;
 
             let ConnectionActivationState::Finalized {
-                io_channel_id,
-                user_channel_id,
                 desktop_size,
+                share_id,
                 enable_server_pointer,
                 pointer_software_rendering,
-            } = &activation.state
+            } = activation.connection_activation_state()
             else {
                 continue;
             };
@@ -857,14 +852,19 @@ impl RdpSession {
             let (width, height) = (desktop_size.width, desktop_size.height);
             self.stage.set_fastpath_processor(
                 ProcessorBuilder {
-                    io_channel_id: *io_channel_id,
-                    user_channel_id: *user_channel_id,
-                    enable_server_pointer: *enable_server_pointer,
-                    pointer_software_rendering: *pointer_software_rendering,
+                    io_channel_id: activation.io_channel_id(),
+                    user_channel_id: activation.user_channel_id(),
+                    share_id,
+                    enable_server_pointer,
+                    pointer_software_rendering,
+                    // Compression is declined in `default_connector_config`,
+                    // so the server never sends compressed PDUs.
+                    bulk_decompressor: None,
                 }
                 .build(),
             );
-            self.stage.set_enable_server_pointer(*enable_server_pointer);
+            self.stage.set_enable_server_pointer(enable_server_pointer);
+            self.stage.set_share_id(share_id);
 
             // Rebuilding the framebuffer blanks it, so only do so when
             // the size actually changed — otherwise a reactivation
@@ -1206,9 +1206,9 @@ impl RdpSession {
         Ok(())
     }
 
-    fn cliprdr(&mut self) -> Result<&CliprdrClient, EngineError> {
+    fn cliprdr(&mut self) -> Result<&mut CliprdrClient, EngineError> {
         self.stage
-            .get_svc_processor::<CliprdrClient>()
+            .get_svc_processor_mut::<CliprdrClient>()
             .ok_or_else(|| EngineError::Protocol("clipboard channel is not available".to_owned()))
     }
 
@@ -1625,6 +1625,8 @@ fn default_connector_config() -> ConnectorConfig {
         bitmap: None,
         dig_product_id: String::new(),
         client_dir: String::new(),
+        alternate_shell: String::new(),
+        work_dir: String::new(),
         platform: ironrdp_pdu::rdp::capability_sets::MajorPlatformType::UNIX,
         hardware_id: None,
         request_data: None,
@@ -1633,6 +1635,14 @@ fn default_connector_config() -> ConnectorConfig {
         performance_flags: PerformanceFlags::default(),
         license_cache: None,
         timezone_info: Default::default(),
+        // Bulk compression is declined: the encoder already ships only
+        // changed rectangles, so the server would be compressing PDUs we
+        // then have to decompress for no bandwidth we do not already save.
+        compression_type: None,
+        // No sideband UDP transport: sessions are tunnelled over the one
+        // TCP connection the browser holds.
+        multitransport_flags: None,
+        enable_gfx: false,
         enable_server_pointer: false,
         pointer_software_rendering: false,
     }
@@ -1640,6 +1650,10 @@ fn default_connector_config() -> ConnectorConfig {
 
 fn map_connector(err: ironrdp_connector::ConnectorError) -> EngineError {
     let text = err.to_string();
+    // `AuthRejected` reads to an operator as "wrong credentials", so an
+    // interop failure inside CredSSP is indistinguishable from one
+    // without the underlying error recorded here.
+    tracing::warn!(error = ?err, "rdp connector error");
     // CredSSP failures are the common operator-facing case and deserve
     // to be named rather than surfacing as "connection sequence failed".
     if text.contains("CredSSP") || text.contains("credssp") || text.contains("logon") {
@@ -1844,15 +1858,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rdp_worker_pool_dispatches_local_tasks() {
+    async fn a_session_task_runs_on_the_shared_runtime() {
         let (tx, rx) = oneshot::channel();
-        let task: LocalTask = Box::new(move || {
-            tokio::task::spawn_local(async move {
-                let _ = tx.send(42);
-            });
+        tokio::spawn(async move {
+            let _ = tx.send(42);
         });
-        RdpWorkerPool::global().spawn(task).expect("spawn task");
-        let result = rx.await.expect("receive result from worker task");
+        let result = rx.await.expect("receive result from session task");
         assert_eq!(result, 42);
     }
 }

@@ -6,6 +6,30 @@ members = [
     "crates/strata-dmz",
     "crates/strata-session",
 ]
+# Vendored forks, built through [patch.crates-io] below rather than as
+# members so workspace-wide lint and test runs stay on our own code.
+exclude = [
+    "crates/vendor/ironrdp-connector",
+    "crates/vendor/ironrdp-egfx",
+    "crates/vendor/sspi",
+]
+
+# Three vendored forks, all small, all temporary. Every fork here is a
+# liability: re-check them on every dependency bump and delete the moment
+# upstream catches up. `scripts/check-vendored-forks.sh` reports the state
+# of each, and the reasoning for all three is in
+# docs/adr/ADR-0015-native-rust-session-engine.md.
+#
+# - ironrdp-connector: 3 lines, unpins picky so current ironrdp resolves
+#   beside a russh carrying the RUSTSEC-2026-0154 fix.
+# - sspi: 1 line, drops a mechListMIC sequence check added in 0.22.0 that
+#   rejects Kerberos NLA against Windows RDP hosts.
+# - ironrdp-egfx: adds an AVC passthrough hook, so H.264 can reach the
+#   browser's WebCodecs decoder without a local (C) decoder.
+[patch.crates-io]
+ironrdp-connector = { path = "crates/vendor/ironrdp-connector" }
+ironrdp-egfx = { path = "crates/vendor/ironrdp-egfx" }
+sspi = { path = "crates/vendor/sspi" }
 
 [workspace.package]
 version = "2.0.0"

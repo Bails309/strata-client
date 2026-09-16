@@ -20,11 +20,8 @@
 //! Getting either wrong produces a KDC that appears to answer and an
 //! ASN.1 parse failure several layers away.
 
-use std::future::Future;
-use std::pin::Pin;
-
 use ironrdp_connector::{ConnectorError, ConnectorErrorKind, ConnectorResult};
-use ironrdp_tokio::AsyncNetworkClient;
+use ironrdp_tokio::NetworkClient;
 use sspi::generator::NetworkRequest;
 use sspi::network_client::NetworkProtocol;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -41,24 +38,19 @@ const MAX_KDC_REPLY: usize = 0xbb80;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct KdcNetworkClient;
 
-impl AsyncNetworkClient for KdcNetworkClient {
-    fn send<'a>(
-        &'a mut self,
-        request: &'a NetworkRequest,
-    ) -> Pin<Box<dyn Future<Output = ConnectorResult<Vec<u8>>> + 'a>> {
-        Box::pin(async move {
-            match request.protocol {
-                NetworkProtocol::Tcp => send_tcp(request).await,
-                NetworkProtocol::Udp => send_udp(request).await,
-                // KDC Proxy (KKDCP) tunnels the same messages over HTTPS.
-                // Refuse loudly rather than silently failing to
-                // authenticate: an operator who configured a proxy URL
-                // needs to know it is not honoured.
-                NetworkProtocol::Http | NetworkProtocol::Https => Err(kdc_err(
-                    "KDC Proxy (KKDCP) URLs are not supported; use tcp:// or udp://",
-                )),
-            }
-        })
+impl NetworkClient for KdcNetworkClient {
+    async fn send(&mut self, request: &NetworkRequest) -> ConnectorResult<Vec<u8>> {
+        match request.protocol {
+            NetworkProtocol::Tcp => send_tcp(request).await,
+            NetworkProtocol::Udp => send_udp(request).await,
+            // KDC Proxy (KKDCP) tunnels the same messages over HTTPS.
+            // Refuse loudly rather than silently failing to
+            // authenticate: an operator who configured a proxy URL
+            // needs to know it is not honoured.
+            NetworkProtocol::Http | NetworkProtocol::Https => Err(kdc_err(
+                "KDC Proxy (KKDCP) URLs are not supported; use tcp:// or udp://",
+            )),
+        }
     }
 }
 

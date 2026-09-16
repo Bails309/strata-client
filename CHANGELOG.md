@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **RDP sessions carried no audio.** The RDPSND implementation was
+  complete and the channel was negotiated, but every session declared
+  `INFO_NOAUDIOPLAYBACK` in its Client Info PDU, which tells the target
+  not to redirect audio at all — so both ends agreed a format and the
+  server correctly sent nothing. The field behind that flag is a
+  negative, and it defaulted to off. Audio is now on unless a connection
+  sets `disable-audio`, which is how guacd read the same parameter; that
+  parameter was accepted by preflight but nothing consumed it, so it was
+  inert either way.
+
 - **Sessions arrived zoomed in on a display scaled above 100%.** Three
   users on identical 1920x1080 monitors got different results, because one
   had Windows display scaling at 125%. A scaled display reports fewer CSS

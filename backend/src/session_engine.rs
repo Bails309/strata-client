@@ -1348,6 +1348,9 @@ async fn connect_target(
                 read_only: flag(handshake, "read-only"),
                 disable_copy: flag(handshake, "disable-copy"),
                 disable_paste: flag(handshake, "disable-paste"),
+                // Audio is on unless the connection turns it off, which is
+                // how guacd read the same parameter.
+                enable_audio: !flag(handshake, "disable-audio"),
                 cert_policy: rdp_cert_policy(handshake).map_err(AppError::Validation)?,
                 color_depth: color_depth(handshake),
                 performance: RdpPerformance {

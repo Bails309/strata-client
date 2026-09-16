@@ -160,6 +160,14 @@ pub struct RdpConfig {
     /// server that switched to progressive surface commands would leave
     /// the screen stale.
     pub enable_gfx: bool,
+    /// Whether to carry desktop audio back over RDPSND.
+    ///
+    /// On by default, matching guacd, whose `disable-audio` parameter is
+    /// the way to turn it off. The Client Info PDU declares the opposite
+    /// -- `INFO_NOAUDIOPLAYBACK` -- so leaving this unset means the target
+    /// is told not to redirect audio and the RDPSND channel stays silent
+    /// however well the client handles it.
+    pub enable_audio: bool,
 }
 
 /// Desktop features the target may enable, mirroring guacd's
@@ -226,6 +234,7 @@ impl Default for RdpConfig {
             enable_webp: true,
             enable_h264: true,
             enable_gfx: false,
+            enable_audio: true,
         }
     }
 }
@@ -600,6 +609,10 @@ impl RdpSession {
             // Asking for the channel and never advertising support for it
             // means the server never opens it.
             enable_gfx: config.enable_gfx && config.enable_h264,
+            // Declared as a negative on the wire: without this the Client
+            // Info PDU carries INFO_NOAUDIOPLAYBACK and the target sends
+            // nothing, whatever RDPSND agrees to.
+            enable_audio_playback: config.enable_audio,
             ..default_connector_config()
         };
         // Nothing below may observe the credential.
@@ -1677,6 +1690,18 @@ fn map_connector(err: ironrdp_connector::ConnectorError) -> EngineError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_is_on_unless_the_connection_turns_it_off() {
+        // The wire field is a negative: `enable_audio_playback: false`
+        // sets INFO_NOAUDIOPLAYBACK, which tells the target not to
+        // redirect audio at all. Defaulting it off left RDPSND agreed
+        // and silent.
+        assert!(
+            RdpConfig::default().enable_audio,
+            "audio has to be on by default, as it was under guacd"
+        );
+    }
 
     #[test]
     fn desktop_pixels_are_encoded_without_alpha() {

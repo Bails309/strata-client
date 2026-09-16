@@ -12152,6 +12152,49 @@ var Guacamole = Guacamole || {};
 Guacamole.AudioContextFactory = {
 
     /**
+     * Resume a suspended AudioContext once the page sees a user gesture.
+     *
+     * Browsers create an AudioContext suspended until the user has
+     * interacted with the page, and never resume it on their own. A
+     * player writing into a suspended context produces no sound and no
+     * error, so without this audio simply never starts.
+     *
+     * @param {AudioContext} context
+     *     The context to resume.
+     */
+    'resumeOnGesture' : function resumeOnGesture(context) {
+
+        if (!context || context.state !== 'suspended')
+            return;
+
+        var events = ['mousedown', 'keydown', 'touchstart', 'pointerdown'];
+
+        var detach = function detach() {
+            for (var i = 0; i < events.length; i++)
+                document.removeEventListener(events[i], resume, true);
+        };
+
+        var resume = function resume() {
+            try {
+                var resumed = context.resume();
+                if (resumed && resumed.then)
+                    resumed.then(detach, function ignore() {});
+                else
+                    detach();
+            }
+            catch (e) {
+                // Context already closed, or resume refused.
+            }
+        };
+
+        // Capture phase: the session display stops propagation on the
+        // events it handles, which is most of them.
+        for (var i = 0; i < events.length; i++)
+            document.addEventListener(events[i], resume, true);
+
+    },
+
+    /**
      * A singleton instance of a Web Audio API AudioContext object, or null if
      * no instance has yes been created. This property may be manually set if
      * you wish to supply your own AudioContext instance, but care must be
@@ -12180,8 +12223,16 @@ Guacamole.AudioContextFactory = {
             try {
 
                 // Create new instance if none yet exists
-                if (!Guacamole.AudioContextFactory.singleton)
+                if (!Guacamole.AudioContextFactory.singleton) {
                     Guacamole.AudioContextFactory.singleton = new AudioContext();
+                    Guacamole.AudioContextFactory.resumeOnGesture(
+                            Guacamole.AudioContextFactory.singleton);
+                }
+
+                // A context can be suspended again by the browser, so
+                // re-arm rather than assuming the first resume stuck.
+                Guacamole.AudioContextFactory.resumeOnGesture(
+                        Guacamole.AudioContextFactory.singleton);
 
                 // Return singleton instance
                 return Guacamole.AudioContextFactory.singleton;

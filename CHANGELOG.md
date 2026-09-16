@@ -19,6 +19,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameter was accepted by preflight but nothing consumed it, so it was
   inert either way.
 
+  Clearing that flag was necessary but not sufficient: the target still
+  joined the audio channel and then sent nothing on it, with no error to
+  say why. Windows will not use RDPSND unless the device redirection
+  channel is advertised alongside it. [MS-RDPEFS] Appendix A<1> documents
+  that dependency the other way round — device redirection needing audio —
+  but on Server 2019 and 2022 it holds in both directions, and `mstsc`
+  always advertises both. The channel is now advertised with no devices
+  and a no-op backend, so no drive, printer, port or smart card can be
+  redirected through it; it exists only to satisfy that pairing.
+
+- **RDP sessions retried network auto-detection endlessly.** The client
+  advertised support for the bandwidth measurement in MS-RDPBCGR 2.2.14
+  but only answered the round-trip part of it, so the results PDU the
+  server waits for never arrived. Windows does not give up: it reissued
+  the measurement dozens of times a second for the life of every session,
+  each attempt costing a round trip on a connection already tunnelled
+  through a browser, and never resolved the link's characteristics. The
+  capability is no longer advertised, and the server sizes the session
+  from the reported connection type instead.
+
 - **Sessions arrived zoomed in on a display scaled above 100%.** Three
   users on identical 1920x1080 monitors got different results, because one
   had Windows display scaling at 125%. A scaled display reports fewer CSS

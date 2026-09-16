@@ -40,6 +40,10 @@ pub struct SessionAudio {
     /// Set once a malformed format index has been reported, so a
     /// misbehaving target cannot flood the log.
     warned_unknown_format: bool,
+    /// Whether the first wave packet has been logged. Silence is
+    /// otherwise indistinguishable from a target that never sent
+    /// anything.
+    seen_first_wave: bool,
 }
 
 impl SessionAudio {
@@ -59,6 +63,7 @@ impl SessionAudio {
             }],
             tx,
             warned_unknown_format: false,
+            seen_first_wave: false,
         }
     }
 }
@@ -89,6 +94,11 @@ impl RdpsndClientHandler for SessionAudio {
                 );
             }
             return;
+        }
+
+        if !self.seen_first_wave {
+            self.seen_first_wave = true;
+            tracing::info!(bytes = data.len(), "first rdp audio packet received");
         }
 
         if self.tx.try_send(Bytes::copy_from_slice(&data)).is_err() {

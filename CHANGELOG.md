@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
-## [Unreleased]
+## [2.1.0] — 2026-09-16 — RDP H.264 GFX passthrough
+
+### The ask
+
+Re-enable H.264 streaming for RDP on the native session engine. Passthrough
+was a property of the patched `guacd` image and went away with it in 2.0.0;
+`ironrdp-egfx` makes it possible natively.
 
 ### Added
 
@@ -41,6 +47,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which previously left the newly exposed area black until it was damaged.
 - `isH264Supported()` probes `VideoDecoder.isConfigSupported()` rather than
   assuming support from the API merely being present.
+
+### Scope and safety
+
+GFX is **off by default** and opt-in per connection, so no existing session
+changes behaviour on upgrade. Enabling it stops the host sending legacy
+bitmap updates, which is a real trade rather than a free win: H.264 is
+lossy, while the bitmap path is lossless and already measured **0.0296
+bytes per pixel** on the pilot estate. Prefer GFX for motion-heavy work and
+the bitmap path for static text.
+
+The release adds a third vendored fork. Every fork is a supply-chain
+liability with a recorded drop condition; `scripts/check-vendored-forks.sh`
+reports per fork whether its reason still holds.
+
+Three CI gates needed exclusions for the vendored trees, because path
+dependencies put third-party source inside the repo: `cargo-audit`
+(RUSTSEC-2023-0089, unmaintained `atomic-polyfill`, unreachable here),
+`tarpaulin` (~9.9k untested lines polluting the coverage denominator) and
+`gitleaks` (upstream test fixtures in the `sspi` fork). All three are
+scoped to `crates/vendor` and disappear when the forks do.
+
+### Testing
+
+- 226 `strata-session` unit tests, including new coverage for the AVC444
+  chroma cases and the EGFX surface hooks.
+- 1629 frontend tests across 81 files, including 7 new cases pinning the
+  H.264 draw rectangle against the macroblock-padding regression.
+- Live-verified against a Windows host over Kerberos NLA: `V10_7`
+  capabilities confirmed, `Avc444v2` frames decoded in-browser, text crisp
+  with GFX both on and off.
+- Supply-chain gates run locally: `cargo audit` clean, `gitleaks` reports no
+  leaks, coverage 22.73%.
+
+### Deploying
+
+Rebuild both images; there is no migration and no configuration change.
+To use GFX, tick **Enable graphics pipeline (GFX)** under Performance on a
+connection and confirm the host is configured for AVC — see
+[docs/Configure-RdpAvc444.ps1](docs/Configure-RdpAvc444.ps1). Verify from
+the backend log, not Event Viewer:
+
+```sh
+docker compose logs backend | grep "graphics pipeline"
+```
+
+### Reference documentation
+
+[docs/h264-passthrough.md](docs/h264-passthrough.md) was rewritten: it still
+described the removed `guacd` pipeline and treated Event IDs 162/170 as
+authoritative, which is wrong for this client.
+[docs/Configure-RdpAvc444.ps1](docs/Configure-RdpAvc444.ps1) dropped three
+registry values that are inert for Strata and now verifies from the backend
+log. No change to `ARCHITECTURE.md`, `docs/security.md` or
+`docs/api-reference.md`: no trust boundary, API surface or audit event
+moved.
 
 ## [2.0.0] — 2026-09-09 — Native Rust session engine
 

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sessions arrived zoomed in on a display scaled above 100%.** Three
+  users on identical 1920x1080 monitors got different results, because one
+  had Windows display scaling at 125%. A scaled display reports fewer CSS
+  pixels than it has — 1536 wide rather than 1920 — and the client passed
+  those straight through as the desktop size while separately telling the
+  target to draw its UI at 125%. The two compound: less content fits *and*
+  everything is drawn larger, then the undersized canvas is stretched back
+  across the real pixels, which also cost sharpness. Container sizes are
+  now converted to real pixels before being sent. The scaling that fits the
+  canvas to its container already divides them back down, so the desktop
+  now matches the monitor and maps pixel-for-pixel. Unaffected at 100%,
+  where the conversion is a multiply by one.
+
 - **Non-US keyboards typed the wrong characters over RDP.** On a UK layout
   `\` arrived as `#`; `@` and `"` were swapped, and `£` did not work. The
   engine translated each keysym to a US key position and the target then

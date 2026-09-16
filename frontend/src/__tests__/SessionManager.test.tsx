@@ -823,6 +823,55 @@ describe("SessionManager", () => {
     expect(display.scale).toHaveBeenCalled();
   });
 
+  it("asks for real pixels, not CSS pixels, on a scaled display", () => {
+    // A 125% display reports fewer CSS pixels than it has. Sending those
+    // asked for a smaller desktop *and* told the target to draw its UI
+    // 25% larger, so the session arrived zoomed in and soft.
+    vi.stubGlobal("requestAnimationFrame", (cb: any) => {
+      cb();
+      return 0;
+    });
+    const originalDpr = window.devicePixelRatio;
+    Object.defineProperty(window, "devicePixelRatio", {
+      value: 1.25,
+      configurable: true,
+    });
+
+    try {
+      const { result } = renderHook(() => useSessionManager(), { wrapper });
+
+      const parent = document.createElement("div");
+      Object.defineProperties(parent, {
+        clientWidth: { value: 1536, configurable: true },
+        clientHeight: { value: 864, configurable: true },
+      });
+
+      let session: any;
+      rtlAct(() => {
+        session = result.current.createSession({
+          connectionId: "c-scaled",
+          name: "Scaled",
+          protocol: "rdp",
+          containerEl: parent,
+          connectParams: new URLSearchParams(),
+        });
+        parent.appendChild(session.displayEl);
+      });
+
+      rtlAct(() => {
+        session.client.onstatechange(3);
+      });
+
+      // 1536 x 1.25 = the 1920 the monitor actually has.
+      expect(session.tunnel.sendMessage).toHaveBeenCalledWith("size", 1920, 1080, 120);
+    } finally {
+      Object.defineProperty(window, "devicePixelRatio", {
+        value: originalDpr,
+        configurable: true,
+      });
+    }
+  });
+
   it("sets error on tunnel.onerror", () => {
     const { result } = renderHook(() => useSessionManager(), { wrapper });
 

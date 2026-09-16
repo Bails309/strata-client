@@ -35,23 +35,39 @@ function Get-RegValue($path, $name) {
 # ---------------------------------------------------------------------------
 Write-Section "GPU capability"
 
-$gpus = Get-CimInstance -ClassName Win32_VideoController |
-    Select-Object Name, AdapterRAM, DriverVersion, VideoProcessor
+$gpus = Get-CimInstance -ClassName Win32_VideoController
 
 if (-not $gpus) {
     Write-Host "No video controllers detected." -ForegroundColor Yellow
 } else {
-    $gpus | Format-Table -AutoSize | Out-String | Write-Host
+    $gpus |
+        Select-Object Name, DriverVersion, VideoProcessor, PNPDeviceID |
+        Format-Table -AutoSize | Out-String | Write-Host
 }
 
-# Heuristic: a discrete or modern iGPU usually has > 256 MB VRAM and a real
-# vendor name. Basic display adapters (e.g. "Microsoft Basic Display Adapter"
-# or Hyper-V synthetic video) cannot do hardware AVC encoding.
-$hasHwGpu = $false
-foreach ($g in $gpus) {
-    $isBasic = $g.Name -match 'Basic Display|Hyper-V|RemoteFX|Standard VGA'
-    $hasRam  = ($g.AdapterRAM -as [int64]) -gt 256MB
-    if (-not $isBasic -and $hasRam) { $hasHwGpu = $true; break }
+# Heuristic: a real GPU exposes a PCI vendor ID. Hyper-V's synthetic video
+# adapter and the RDP indirect display driver are software devices and do not.
+# VRAM size cannot be used for this: Win32_VideoController.AdapterRAM is a
+# deprecated uint32 that cannot represent 4 GB or more and reports empty on
+# current Windows builds, so a 24 GB card and a synthetic adapter both read as
+# nothing.
+$gpuVendorPattern = 'PCI\\VEN_(10DE|1002|8086)'   # NVIDIA, AMD, Intel
+
+$hwGpu = $gpus | Where-Object { $_.PNPDeviceID -match $gpuVendorPattern }
+$hasHwGpu = [bool]$hwGpu
+
+# A passthrough GPU whose driver is missing never becomes a video controller:
+# it sits under Other devices as a raw PCI function. Azure N-series VMs arrive
+# in exactly this state until the NVIDIA driver extension runs, which looks
+# identical to having no GPU at all unless you go looking for it.
+$driverless = @()
+if (-not $hasHwGpu) {
+    try {
+        $driverless = Get-PnpDevice -PresentOnly -ErrorAction Stop |
+            Where-Object { $_.InstanceId -match $gpuVendorPattern -and $_.Status -ne 'OK' }
+    } catch {
+        $driverless = @()
+    }
 }
 
 # Server SKUs need an explicit policy to let RDP use the host GPU
@@ -61,14 +77,60 @@ Write-Host "OS:        $($osInfo.Caption)"
 Write-Host "Is Server: $isServer"
 Write-Host "Hardware GPU available: $hasHwGpu"
 
+if ($hasHwGpu) {
+    Write-Host "Detected:  $(($hwGpu | ForEach-Object { $_.Name }) -join ', ')"
+}
+
+if ($driverless) {
+    Write-Host ""
+    Write-Host "A GPU is attached to this machine but has no working driver:" -ForegroundColor Yellow
+    foreach ($d in $driverless) {
+        Write-Host ("  [{0}] {1}" -f $d.Status, $d.FriendlyName) -ForegroundColor Yellow
+        Write-Host ("        {0}" -f $d.InstanceId) -ForegroundColor DarkGray
+
+        # The problem code is the only thing that distinguishes "no driver was
+        # ever installed" from "a driver installed and then refused to start",
+        # which need completely different fixes.
+        try {
+            $code = (Get-PnpDeviceProperty -InstanceId $d.InstanceId `
+                        -KeyName 'DEVPKEY_Device_ProblemCode' -ErrorAction Stop).Data
+            $meaning = switch ($code) {
+                28 { 'no driver installed for this device' }
+                31 { 'driver present but Windows could not load it' }
+                43 { 'driver loaded then the device reported a fault' }
+                default { $null }
+            }
+            $text = if ($meaning) { "problem code $code - $meaning" } else { "problem code $code" }
+            Write-Host ("        {0}" -f $text) -ForegroundColor Yellow
+        } catch {
+            # Property unavailable on some SKUs; the status above is enough.
+        }
+    }
+    Write-Host ""
+    Write-Host "  Until the driver is installed Windows cannot use it to encode,"  -ForegroundColor Yellow
+    Write-Host "  and this script will keep reporting no hardware GPU."            -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  If the Azure driver extension already reports success, it only"  -ForegroundColor Yellow
+    Write-Host "  means the extension ran. Check what it actually did:"            -ForegroundColor Yellow
+    Write-Host "    Get-Content 'C:\WindowsAzure\Logs\Plugins\Microsoft.HpcCompute.NvidiaGpuDriverWindows\*\CommandExecution.log' -Tail 40" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "  Otherwise install the vendor driver:"                            -ForegroundColor Yellow
+    Write-Host "    az account set --subscription <subscription-id>"               -ForegroundColor Gray
+    Write-Host "    az vm extension set --name NvidiaGpuDriverWindows \"           -ForegroundColor Gray
+    Write-Host "      --publisher Microsoft.HpcCompute --vm-name <vm> \"           -ForegroundColor Gray
+    Write-Host "      --resource-group <rg>"                                        -ForegroundColor Gray
+    Write-Host "  then reboot and re-run this script."                             -ForegroundColor Yellow
+}
+
 if ($isServer -and $hasHwGpu) {
     Write-Host ""
-    Write-Host "NOTE: On Server SKUs, RDP only uses the host GPU when the policy" -ForegroundColor Yellow
+    Write-Host "NOTE: Server SKUs only let RDP use the host GPU when the policy"  -ForegroundColor Yellow
     Write-Host "      'Use hardware graphics adapters for all Remote Desktop"      -ForegroundColor Yellow
-    Write-Host "      Services sessions' is enabled. Check gpedit.msc under:"      -ForegroundColor Yellow
-    Write-Host "      Computer Configuration > Admin Templates > Windows"          -ForegroundColor Yellow
-    Write-Host "      Components > Remote Desktop Services > Remote Desktop"       -ForegroundColor Yellow
-    Write-Host "      Session Host > Remote Session Environment."                  -ForegroundColor Yellow
+    Write-Host "      Services sessions' is enabled. That policy is the"           -ForegroundColor Yellow
+    Write-Host "      bEnumerateHWBeforeSW value below, so applying these changes" -ForegroundColor Yellow
+    Write-Host "      sets it; there is no need to visit gpedit.msc as well."      -ForegroundColor Yellow
+    Write-Host "      A domain GPO setting it to Disabled would still win, and"    -ForegroundColor Yellow
+    Write-Host "      gpedit.msc is where you would see that."                     -ForegroundColor Yellow
 }
 
 # ---------------------------------------------------------------------------

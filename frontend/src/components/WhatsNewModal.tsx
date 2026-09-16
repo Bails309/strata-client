@@ -29,6 +29,33 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.1.0",
+    subtitle:
+      "H.264 streaming is back for RDP, running natively with no server-side decode. Hardware-accelerated H.264 was a property of the patched guacd image and went away when guacd did, and it now runs on the native engine: the Windows host's graphics frames are handed to the browser's video decoder untouched, so nothing decodes, rasterises and re-encodes them in the middle. It is off by default and opt-in per connection, because it is a genuine trade rather than a free win — turning it on stops the host sending lossless bitmap updates, and H.264 is lossy. Use it for motion-heavy work such as video, scrolling and dragging windows, and leave it off for reading text.",
+    sections: [
+      {
+        title: "Turning it on",
+        description:
+          "Tick 'Enable graphics pipeline (GFX)' under Performance on an RDP connection. The Windows host also has to be configured to offer H.264 at all, which the Configure-RdpAvc444.ps1 script in the documentation sets up. Whether it actually negotiated is visible in the backend log rather than in Windows Event Viewer: the events Windows raises describe its own encoder and can be absent on a working session or present on one that never reached this client.",
+      },
+      {
+        title: "Three reasons it had never worked",
+        description:
+          "None of them was host configuration. The GFX checkbox could never be saved at all: the setting is inverted, so its enabled state is the word 'false', which the connection form discarded as an empty value — which is why older documentation described the setting as having no effect. Separately, the client never asked the host to open the graphics channel, so the host never opened one. And asking for the plainer 4:2:0 colour mode on a host configured to prefer 4:4:4 had the codec removed from the reply rather than downgraded, leaving a graphics pipeline with no codec the browser could use, which showed up as a black screen.",
+      },
+      {
+        title: "Why the text looked hazy, and why it no longer does",
+        description:
+          "Early testing showed a faint blur over everything, worst on text, plus a green line along the bottom of the screen. That turned out not to be a limitation of H.264 quality. The codec encodes in 16-pixel blocks and pads the picture up to a block boundary, so a 1920x950 desktop is really encoded as 1920x960, and Windows does not mark where the real picture ends because the RDP protocol already says so. The client was scaling that padded frame down to fit, which resampled every pixel of every frame and squeezed the ten padding rows — which decode as green — into the bottom edge. Frames are now cropped to the size RDP reports and drawn one-to-one, and text is crisp with the pipeline on or off.",
+      },
+      {
+        title: "Scrolling and window drags",
+        description:
+          "When the host moves a region that is already on screen — scrolling a document, dragging a window — it says so rather than resending the pixels. Those instructions are now followed, as a copy performed in the browser costing a handful of numbers instead of a re-encoded image. Flat-colour fills are forwarded too. Previously both were ignored, which left stale content behind.",
+      },
+    ],
+  },
+  {
     version: "2.0.0",
     subtitle:
       "Major release — Apache Guacamole's guacd daemon is gone, and every session is now served by a native Rust engine running inside the backend. For four years the session tier was a separate C daemon spoken to over TCP: FreeRDP, libssh2, libvncclient and a patched Guacamole build, running as its own container. This release replaces all of it with native Rust engines, all running in-process. Nothing changes in your browser — the client still speaks the Guacamole wire protocol, existing recordings still play, and your connections keep their settings. Two behaviours are deliberately stricter than guacd was, and both are security decisions rather than regressions: RDP now requires NLA, and SSH now requires a host key. RDP also gains real certificate trust, every parameter guacd ever accepted is now either honoured or removed from the product outright, and the custom DNS feature was rebuilt to work without the daemon that used to provide it.",

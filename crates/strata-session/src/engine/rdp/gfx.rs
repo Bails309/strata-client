@@ -461,16 +461,108 @@ fn annex_b_has_keyframe(data: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ironrdp_egfx::pdu::{Color, Point};
+    use ironrdp_core::{Encode as _, WriteCursor};
+    use ironrdp_egfx::pdu::{Avc420BitmapStream, Color, Point};
 
     /// A handler plus the queue it writes into.
     fn handler() -> (GfxPassthrough, Arc<Mutex<VecDeque<TargetEvent>>>) {
+        let (h, frames, _) = handler_with_counter();
+        (h, frames)
+    }
+
+    /// A handler, the queue it writes into, and the discarded-chroma counter.
+    type Harness = (
+        GfxPassthrough,
+        Arc<Mutex<VecDeque<TargetEvent>>>,
+        Arc<Mutex<u64>>,
+    );
+
+    /// As `handler`, plus the discarded-chroma counter.
+    fn handler_with_counter() -> Harness {
         let frames = Arc::new(Mutex::new(VecDeque::new()));
         let unsupported = Arc::new(Mutex::new(0));
         (
-            GfxPassthrough::new(Arc::clone(&frames), unsupported),
+            GfxPassthrough::new(Arc::clone(&frames), Arc::clone(&unsupported)),
             frames,
+            unsupported,
         )
+    }
+
+    /// An AVC420 stream carrying `data` and no region rectangles.
+    fn avc420(data: &[u8]) -> Avc420BitmapStream<'_> {
+        Avc420BitmapStream {
+            rectangles: Vec::new(),
+            quant_qual_vals: Vec::new(),
+            data,
+        }
+    }
+
+    fn encode_444(stream: &Avc444BitmapStream<'_>) -> Vec<u8> {
+        let mut buf = vec![0u8; stream.size()];
+        let mut cursor = WriteCursor::new(&mut buf);
+        stream.encode(&mut cursor).expect("the stream encodes");
+        buf
+    }
+
+    /// A one-NAL Annex B keyframe (NAL type 5, IDR).
+    const IDR: [u8; 6] = [0, 0, 0, 1, 0x65, 0xaa];
+
+    #[test]
+    fn a_chroma_only_update_is_not_forwarded_as_a_picture() {
+        // On a chroma-only update the decoder puts the AUXILIARY view in
+        // `stream1`. Forwarding it paints a chroma plane over the region.
+        let (mut h, frames, discarded) = handler_with_counter();
+        let bytes = encode_444(&Avc444BitmapStream {
+            encoding: Encoding::CHROMA,
+            stream1: avc420(&IDR),
+            stream2: None,
+        });
+
+        let claimed = h.on_avc_bitstream(0, Codec1Type::Avc444v2, &rect(0, 0, 640, 480), &bytes);
+
+        assert!(claimed, "the frame is ours even though we cannot use it");
+        assert!(
+            drain(&frames).is_empty(),
+            "an auxiliary view is not a picture"
+        );
+        assert_eq!(*discarded.lock().expect("not poisoned"), 1);
+    }
+
+    #[test]
+    fn a_full_4_4_4_frame_forwards_the_main_view_and_counts_the_dropped_chroma() {
+        let (mut h, frames, discarded) = handler_with_counter();
+        let bytes = encode_444(&Avc444BitmapStream {
+            encoding: Encoding::LUMA_AND_CHROMA,
+            stream1: avc420(&IDR),
+            stream2: Some(avc420(&[0, 0, 0, 1, 0x41, 0xbb])),
+        });
+
+        assert!(h.on_avc_bitstream(0, Codec1Type::Avc444v2, &rect(0, 0, 640, 480), &bytes));
+
+        let events = drain(&frames);
+        assert_eq!(events.len(), 1, "the main view has to reach the browser");
+        match &events[0] {
+            TargetEvent::VideoSlice { keyframe, data, .. } => {
+                assert!(keyframe, "an IDR must be flagged or the decoder drops it");
+                assert_eq!(data.as_ref(), &IDR, "only the main view travels");
+            }
+            other => panic!("expected a video slice, got {other:?}"),
+        }
+        assert_eq!(
+            *discarded.lock().expect("not poisoned"),
+            1,
+            "the auxiliary view was dropped and should be counted"
+        );
+    }
+
+    #[test]
+    fn a_progressive_codec_is_declined_rather_than_claimed() {
+        let (mut h, frames) = handler();
+
+        let claimed = h.on_avc_bitstream(0, Codec1Type::Uncompressed, &rect(0, 0, 8, 8), &[]);
+
+        assert!(!claimed, "a codec we cannot read must fall through");
+        assert!(drain(&frames).is_empty());
     }
 
     fn rect(left: u16, top: u16, right: u16, bottom: u16) -> ExclusiveRectangle {

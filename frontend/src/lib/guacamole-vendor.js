@@ -1,4 +1,5 @@
 /* Vendored Guacamole client (1.6.0) from sol1/rustguac. Do not edit. */
+import { h264SourceRect } from "./h264FrameRect";
 (function(){
 var Guacamole = window.Guacamole = window.Guacamole || {};
 /* === Namespace.js === */
@@ -13617,26 +13618,13 @@ Guacamole.H264Decoder = function H264Decoder(display) {
                             // own codedWidth/codedHeight, which can differ
                             // from the requested region after a level
                             // mismatch and leave uncovered pixels.
-                            var dw = pos.w || frame.displayWidth || frame.codedWidth;
-                            var dh = pos.h || frame.displayHeight || frame.codedHeight;
-                            // H.264 pads to a 16x16 macroblock boundary and
-                            // Windows sets no crop metadata, so the frame can
-                            // be taller than the picture -- those rows decode
-                            // green. The RDP destination rect is the only
-                            // authority on real size, so crop to it and blit
-                            // 1:1; scaling here would resample every pixel.
-                            var crop = frame.visibleRect;
-                            var sx = crop ? crop.x : 0;
-                            var sy = crop ? crop.y : 0;
-                            var fw = crop ? crop.width
-                                    : (frame.displayWidth || frame.codedWidth);
-                            var fh = crop ? crop.height
-                                    : (frame.displayHeight || frame.codedHeight);
-                            var sw = Math.min(dw, fw);
-                            var sh = Math.min(dh, fh);
+                            // Source and destination sizes must match:
+                            // scaling here resamples every pixel and drags
+                            // in macroblock padding. See h264FrameRect.ts.
+                            var r = h264SourceRect(frame, pos.w, pos.h);
                             ctx.drawImage(frame,
-                                    sx, sy, sw, sh,
-                                    pos.x, pos.y, sw, sh);
+                                    r.sx, r.sy, r.sw, r.sh,
+                                    pos.x, pos.y, r.sw, r.sh);
                         }
                     } finally {
                         // CRITICAL: always close VideoFrame to release GPU memory

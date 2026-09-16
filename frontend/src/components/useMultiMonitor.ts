@@ -4,7 +4,7 @@
    eslint.config.js W4-1 commentary. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import Guacamole from "guacamole-common-js";
-import { GuacSession } from "./SessionManager";
+import { GuacSession, sendSizeFromCss, sendSizeWithDpi } from "./SessionManager";
 import { notifySessionActivity } from "./sessionActivity";
 import { createWinKeyProxy } from "../utils/winKeyProxy";
 import { installShortcutProxy } from "../utils/shortcutProxy";
@@ -33,8 +33,11 @@ interface ScreenInfo {
   /** Physical screen position — used for window.open() placement only */
   left: number;
   top: number;
+  /** CSS pixels, which is what window placement and sizing speak. */
   width: number;
   height: number;
+  /** This screen's device pixel ratio; CSS width x scale = real pixels. */
+  scale: number;
   isPrimary: boolean;
 }
 
@@ -45,6 +48,10 @@ interface ScreenTile {
   sliceX: number;
   /** Y offset into the aggregate remote desktop (in remote pixels) */
   sliceY: number;
+  /** X offset in CSS pixels, for placing the popup window. */
+  placeX: number;
+  /** Y offset in CSS pixels, for placing the popup window. */
+  placeY: number;
 }
 
 interface MonitorLayout {
@@ -92,6 +99,7 @@ function mapScreenDetails(details: ScreenDetails): ScreenInfo[] {
     top: s.availTop ?? 0,
     width: s.availWidth > 0 ? s.availWidth : fallbackW,
     height: s.availHeight > 0 ? s.availHeight : fallbackH,
+    scale: s.devicePixelRatio || window.devicePixelRatio || 1,
     isPrimary: !!s.isPrimary,
   }));
 }
@@ -137,19 +145,30 @@ function buildLayout(screens: ScreenInfo[]): MonitorLayout | null {
     ordered = [primary, ...secondaries];
   }
 
-  // Place all monitors in a horizontal row at sliceY = 0.
+  // Place all monitors in a horizontal row at sliceY = 0. Remote geometry
+  // is in real pixels so a scaled monitor gets the desktop it can
+  // actually show; placement stays in CSS pixels, which is the unit
+  // window.moveTo speaks.
   let cursorX = 0;
+  let placeCursorX = 0;
   for (const screen of ordered) {
-    const tile: ScreenTile = { screen, sliceX: cursorX, sliceY: 0 };
+    const tile: ScreenTile = {
+      screen,
+      sliceX: cursorX,
+      sliceY: 0,
+      placeX: placeCursorX,
+      placeY: 0,
+    };
     tiles.push(tile);
     if (screen === primary) primaryTile = tile;
-    cursorX += screen.width;
+    cursorX += Math.round(screen.width * screen.scale);
+    placeCursorX += screen.width;
   }
 
   // Cap aggregate height to the primary monitor's height so the remote
   // taskbar sits within the primary slice's visible area.
   const aggregateWidth = cursorX;
-  const aggregateHeight = primary.height;
+  const aggregateHeight = Math.round(primary.height * primary.scale);
 
   return { screens, tiles, primary, primaryTile: primaryTile!, aggregateWidth, aggregateHeight };
 }
@@ -262,7 +281,7 @@ export function useMultiMonitor(
     const ch = container.clientHeight;
     const origPrimary = freshLayout.primary;
     const adjustedScreens: ScreenInfo[] = freshLayout.screens.map((s) =>
-      s === origPrimary ? { ...s, width: cw, height: ch } : s
+      s === origPrimary ? { ...s, width: cw, height: ch, scale: window.devicePixelRatio || 1 } : s
     );
     const adjustedLayout = buildLayout(adjustedScreens);
     if (!adjustedLayout) return;
@@ -289,8 +308,8 @@ export function useMultiMonitor(
     for (const tile of secondaryTiles) {
       const screen = tile.screen;
       // Use physical position if available, otherwise tile offset.
-      const popupLeft = positionsFingerprinted ? tile.sliceX : screen.left;
-      const popupTop = positionsFingerprinted ? tile.sliceY : screen.top;
+      const popupLeft = positionsFingerprinted ? tile.placeX : screen.left;
+      const popupTop = positionsFingerprinted ? tile.placeY : screen.top;
       const features = [
         `left=${popupLeft}`,
         `top=${popupTop}`,
@@ -324,8 +343,10 @@ export function useMultiMonitor(
       );
     }
 
-    // ── Request aggregate resolution from guacd ──
-    client.sendSize(layout.aggregateWidth, layout.aggregateHeight);
+    // ── Request aggregate resolution from the target ──
+    // Already real pixels; the primary's DPI travels so the remote draws
+    // its UI at the scale the operator's main screen uses.
+    sendSizeWithDpi(sess, layout.aggregateWidth, layout.aggregateHeight, layout.primary.scale);
 
     // ── Scale the display and offset so the primary region is visible ──
     // The container has overflow:hidden so only primaryW x primaryH is shown.
@@ -333,8 +354,8 @@ export function useMultiMonitor(
     // container, rather than relying solely on the resize handler (which may
     // fire asynchronously after the server responds).
     const scale = Math.min(
-      containerRef.current!.clientWidth / layout.primary.width,
-      containerRef.current!.clientHeight / layout.primary.height
+      containerRef.current!.clientWidth / (layout.primary.width * layout.primary.scale),
+      containerRef.current!.clientHeight / (layout.primary.height * layout.primary.scale)
     );
     display.scale(scale);
     displayEl.style.marginLeft = `-${layout.primaryTile.sliceX * scale}px`;
@@ -357,8 +378,8 @@ export function useMultiMonitor(
       // dimensions include browser chrome, so the inner area is smaller.
       // moveTo + resizeTo after a tick corrects placement, and we also
       // try the Fullscreen API for a truly chrome-free view.
-      const popupLeft = positionsFingerprinted ? tile.sliceX : screen.left;
-      const popupTop = positionsFingerprinted ? tile.sliceY : screen.top;
+      const popupLeft = positionsFingerprinted ? tile.placeX : screen.left;
+      const popupTop = positionsFingerprinted ? tile.placeY : screen.top;
       try {
         popup.moveTo(popupLeft, popupTop);
         popup.resizeTo(screen.width, screen.height);
@@ -376,8 +397,12 @@ export function useMultiMonitor(
       }
 
       const canvas = popup.document.createElement("canvas");
-      canvas.width = popup.innerWidth || screen.width;
-      canvas.height = popup.innerHeight || screen.height;
+      // Backing store in real pixels so a slice drawn from the remote
+      // desktop lands 1:1 rather than being resampled; CSS size below
+      // keeps it filling the window.
+      const popupScale = popup.devicePixelRatio || screen.scale || 1;
+      canvas.width = Math.round((popup.innerWidth || screen.width) * popupScale);
+      canvas.height = Math.round((popup.innerHeight || screen.height) * popupScale);
       canvas.style.display = "block";
       canvas.style.width = "100%";
       canvas.style.height = "100%";
@@ -389,8 +414,9 @@ export function useMultiMonitor(
       // The slice coordinates (remote pixels) stay the same — only the
       // local canvas resolution changes so the image fills the window.
       function syncCanvasSize() {
-        const w = popup.innerWidth;
-        const h = popup.innerHeight;
+        const scale = popup.devicePixelRatio || screen.scale || 1;
+        const w = Math.round(popup.innerWidth * scale);
+        const h = Math.round(popup.innerHeight * scale);
         if (w > 0 && h > 0 && (canvas.width !== w || canvas.height !== h)) {
           canvas.width = w;
           canvas.height = h;
@@ -487,8 +513,8 @@ export function useMultiMonitor(
         ctx,
         sourceX,
         sourceY,
-        sliceW: screen.width,
-        sliceH: Math.min(screen.height, layout.aggregateHeight),
+        sliceW: Math.round(screen.width * screen.scale),
+        sliceH: Math.min(Math.round(screen.height * screen.scale), layout.aggregateHeight),
         keyboard,
         mouse,
         removeShortcutProxy,
@@ -608,7 +634,7 @@ export function useMultiMonitor(
     if (originalSizeRef.current && containerRef.current) {
       const cw = containerRef.current.clientWidth;
       const ch = containerRef.current.clientHeight;
-      session.client.sendSize(cw, ch);
+      sendSizeFromCss(session, cw, ch);
     }
     originalSizeRef.current = null;
     layoutRef.current = null;
@@ -635,12 +661,21 @@ export function useMultiMonitor(
 
       const origPrimary = layout.primary;
       const adjusted = buildLayout(
-        layout.screens.map((s) => (s === origPrimary ? { ...s, width: newW, height: newH } : s))
+        layout.screens.map((s) =>
+          s === origPrimary
+            ? { ...s, width: newW, height: newH, scale: window.devicePixelRatio || 1 }
+            : s
+        )
       );
       if (!adjusted) return;
 
       layoutRef.current = adjusted;
-      session.client.sendSize(adjusted.aggregateWidth, adjusted.aggregateHeight);
+      sendSizeWithDpi(
+        session,
+        adjusted.aggregateWidth,
+        adjusted.aggregateHeight,
+        adjusted.primary.scale
+      );
     },
     [session]
   );

@@ -872,8 +872,10 @@ describe("usePopOut", () => {
         vi.advanceTimersByTime(160);
       });
       expect((session.tunnel.sendMessage as any).mock.calls.length).toBeGreaterThan(baseline);
-      // The new screen's DPI travels with the size, so the target rescales.
-      expect(session.tunnel.sendMessage).toHaveBeenLastCalledWith("size", 2560, 1440, 192);
+      // innerWidth/Height are CSS pixels, so the request is scaled up to the
+      // real ones the screen has; the DPI travels with it so the target
+      // draws its UI at the new screen's scale.
+      expect(session.tunnel.sendMessage).toHaveBeenLastCalledWith("size", 5120, 2880, 192);
     } finally {
       vi.useRealTimers();
     }

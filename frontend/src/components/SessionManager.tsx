@@ -172,6 +172,26 @@ export function sendSizeWithDpi(
   }
 }
 
+/**
+ * Resize from a container measured in CSS pixels.
+ *
+ * A display scaled above 100% reports fewer CSS pixels than it has, so
+ * passing them straight through asks the target for a smaller desktop and
+ * then tells it to draw the UI larger on top. Both effects compound: at
+ * 125% a 1920-wide monitor requested a 1536-wide desktop at 125% scale,
+ * which arrived zoomed in and soft. The target wants real pixels; the
+ * `display.scale()` call that fits the canvas divides them back down.
+ */
+export function sendSizeFromCss(
+  session: GuacSession,
+  cssWidth: number,
+  cssHeight: number,
+  devicePixelRatio: number = window.devicePixelRatio || 1
+): void {
+  const dpr = devicePixelRatio || 1;
+  sendSizeWithDpi(session, cssWidth * dpr, cssHeight * dpr, dpr);
+}
+
 // ── Module-level handler registry ──────────────────────────────────
 // `App.tsx`'s handleLogout lives outside SessionManagerProvider but needs to
 // tear down active sessions when the user logs out (manual or idle timeout).
@@ -853,7 +873,7 @@ export function SessionManagerProvider({
             const cw = parent.clientWidth;
             const ch = parent.clientHeight;
             if (cw > 0 && ch > 0) {
-              sendSizeWithDpi(session, cw, ch);
+              sendSizeFromCss(session, cw, ch);
             }
             const dw = display.getWidth();
             const dh = display.getHeight();

@@ -485,6 +485,92 @@ describe("useMultiMonitor", () => {
     window.open = originalOpen;
   });
 
+  it("aggregates real pixels, not CSS pixels, when a screen is scaled", async () => {
+    // A 125% screen reports 1536 CSS pixels for its 1920. Summing the CSS
+    // values asked for a desktop smaller than the monitors can show, so
+    // the session arrived zoomed in.
+    const mockDetails = {
+      screens: [
+        {
+          availLeft: 0,
+          availTop: 0,
+          availWidth: 1536,
+          availHeight: 864,
+          devicePixelRatio: 1.25,
+          isPrimary: true,
+        },
+        {
+          availLeft: 1536,
+          availTop: 0,
+          availWidth: 1920,
+          availHeight: 1080,
+          devicePixelRatio: 1,
+          isPrimary: false,
+        },
+      ],
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    (window as any).getScreenDetails = vi.fn().mockResolvedValue(mockDetails);
+
+    const mockPopup = {
+      closed: false,
+      document: {
+        title: "",
+        body: {
+          style: { margin: "", padding: "", overflow: "", background: "" },
+          appendChild: vi.fn(),
+        },
+        createElement: vi.fn(() => {
+          const canvas = document.createElement("canvas");
+          (canvas as any).getContext = vi.fn(() => ({ drawImage: vi.fn() }));
+          return canvas;
+        }),
+        addEventListener: vi.fn(),
+      },
+      addEventListener: vi.fn(),
+      close: vi.fn(),
+      innerWidth: 1920,
+      innerHeight: 1080,
+      devicePixelRatio: 1,
+    };
+    const originalOpen = window.open;
+    window.open = vi.fn().mockReturnValue(mockPopup);
+
+    const session = makeSession();
+    // The primary tile takes its size from the container, which is CSS
+    // pixels on the operator's own screen.
+    const containerRef = makeContainerRef();
+    const originalDpr = window.devicePixelRatio;
+    Object.defineProperty(window, "devicePixelRatio", {
+      value: 1.25,
+      configurable: true,
+    });
+
+    try {
+      const { result } = renderHook(() => useMultiMonitor(session, containerRef));
+
+      await act(async () => {
+        await result.current.enableMultiMonitor();
+      });
+
+      const call = session.client.sendSize.mock.calls.at(-1);
+      expect(call).toBeDefined();
+      const [aggregateWidth] = call!;
+      // Primary contributes container CSS width x 1.25; the unscaled
+      // secondary contributes its full 1920. Summing CSS pixels alone
+      // would have produced a narrower desktop than the monitors have.
+      const containerCssWidth = containerRef.current!.clientWidth;
+      expect(aggregateWidth).toBe(Math.round(containerCssWidth * 1.25) + 1920);
+    } finally {
+      Object.defineProperty(window, "devicePixelRatio", {
+        value: originalDpr,
+        configurable: true,
+      });
+      window.open = originalOpen;
+    }
+  });
+
   it("getLayout returns null when multi-monitor is not active", () => {
     delete (window as any).getScreenDetails;
     const session = makeSession();

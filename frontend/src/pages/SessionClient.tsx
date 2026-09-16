@@ -20,7 +20,12 @@ import {
   ConnectionInfo,
   UserTag,
 } from "../api";
-import { useSessionManager, GuacSession, sendSizeWithDpi } from "../components/SessionManager";
+import {
+  useSessionManager,
+  GuacSession,
+  sendSizeFromCss,
+  sendSizeWithDpi,
+} from "../components/SessionManager";
 import { notifySessionActivity } from "../components/sessionActivity";
 import { useSidebarWidth } from "../components/Layout";
 import { usePopOut } from "../components/usePopOut";
@@ -970,7 +975,7 @@ export default function SessionClient() {
           const baseScale = Math.min(cw / dw, ch / dh);
           const effectiveScale = zoom === "fit" ? baseScale : zoom;
           display.scale(effectiveScale);
-          sendSizeWithDpi(session, cw, ch);
+          sendSizeFromCss(session, cw, ch);
           if (container) {
             container.style.overflow =
               dw * effectiveScale > cw || dh * effectiveScale > ch ? "auto" : "hidden";

@@ -36,16 +36,12 @@ export interface FrameSourceRect {
 export function h264SourceRect(
   frame: DecodedFrameLike,
   instructionWidth?: number,
-  instructionHeight?: number,
+  instructionHeight?: number
 ): FrameSourceRect {
   const crop = frame.visibleRect;
 
-  const frameWidth = crop
-    ? crop.width
-    : (frame.displayWidth ?? 0) || (frame.codedWidth ?? 0);
-  const frameHeight = crop
-    ? crop.height
-    : (frame.displayHeight ?? 0) || (frame.codedHeight ?? 0);
+  const frameWidth = crop ? crop.width : (frame.displayWidth ?? 0) || (frame.codedWidth ?? 0);
+  const frameHeight = crop ? crop.height : (frame.displayHeight ?? 0) || (frame.codedHeight ?? 0);
 
   const destWidth = instructionWidth || frameWidth;
   const destHeight = instructionHeight || frameHeight;

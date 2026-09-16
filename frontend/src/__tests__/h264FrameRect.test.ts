@@ -13,7 +13,7 @@ describe("h264SourceRect", () => {
         codedHeight: 960,
       },
       1920,
-      950,
+      950
     );
 
     expect(rect).toEqual({ sx: 0, sy: 0, sw: 1920, sh: 950 });
@@ -27,7 +27,7 @@ describe("h264SourceRect", () => {
     const rect = h264SourceRect(
       { visibleRect: { x: 0, y: 0, width: 1920, height: 960 } },
       destWidth,
-      destHeight,
+      destHeight
     );
 
     expect(rect.sw).toBe(destWidth);
@@ -38,7 +38,7 @@ describe("h264SourceRect", () => {
     const rect = h264SourceRect(
       { visibleRect: { x: 8, y: 16, width: 200, height: 100 } },
       200,
-      100,
+      100
     );
 
     expect(rect).toEqual({ sx: 8, sy: 16, sw: 200, sh: 100 });
@@ -48,7 +48,7 @@ describe("h264SourceRect", () => {
     const rect = h264SourceRect(
       { displayWidth: 640, displayHeight: 480, codedWidth: 640, codedHeight: 480 },
       640,
-      480,
+      480
     );
 
     expect(rect).toEqual({ sx: 0, sy: 0, sw: 640, sh: 480 });
@@ -69,11 +69,7 @@ describe("h264SourceRect", () => {
   });
 
   it("uses the frame size when the instruction carries no geometry", () => {
-    const rect = h264SourceRect(
-      { visibleRect: { x: 0, y: 0, width: 800, height: 600 } },
-      0,
-      0,
-    );
+    const rect = h264SourceRect({ visibleRect: { x: 0, y: 0, width: 800, height: 600 } }, 0, 0);
 
     expect(rect).toEqual({ sx: 0, sy: 0, sw: 800, sh: 600 });
   });

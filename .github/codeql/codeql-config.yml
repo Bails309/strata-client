@@ -18,6 +18,15 @@ paths-ignore:
   - frontend/coverage/**
   - backend/target/**
   - "**/node_modules/**"
+  # Vendored upstream crates. Patched forks are path dependencies, so their
+  # source sits in-repo and every path-based tool treats it as first-party —
+  # cargo-audit, tarpaulin and gitleaks each need the same exclusion. The
+  # NTLM implementation in sspi accounts for most of the noise: MS-NLMP
+  # defines the scheme in terms of MD4, HMAC-MD5 and RC4, so the weak-crypto
+  # rule fires on every sealing key and password hash and there is nothing to
+  # fix short of not speaking NTLM. Scoped to the path rather than disabling
+  # the rule, which must keep firing on first-party code.
+  - crates/vendor/**
 
 query-filters:
   # rust/cleartext-logging produces false positives on X.509 subject_public_key

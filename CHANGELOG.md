@@ -22,6 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now matches the monitor and maps pixel-for-pixel. Unaffected at 100%,
   where the conversion is a multiply by one.
 
+- **The remote desktop is no longer redrawn at the local display scale.**
+  Correcting the desktop size above fixed only half of the fault: the
+  client still reported the local scale as the session DPI, so a user at
+  125% received a correctly sized desktop that the target then drew 25%
+  larger — the same zoomed-in session, from the other cause. Size and DPI
+  now come from one place so they cannot disagree, and the scale is
+  reported only if asked for, under "Match my display scale" in Display
+  Settings. A remote desktop therefore looks the same on every client
+  regardless of local zoom; anyone who preferred remote text to match
+  their local size can turn the option back on without reconnecting.
+  Session sharing sent its size the same way and could zoom the owner's
+  session, and the initial connection was still sending CSS pixels long
+  after the first resize had corrected them; both now take the same path.
+
 - **Multi-monitor sessions had the same fault, and sent no DPI at all.**
   The aggregate desktop was summed from CSS widths, so a scaled monitor
   contributed fewer pixels than it can show, and all three resize calls

@@ -22,6 +22,13 @@ vi.mock("react-router-dom", async (importOriginal) => {
 vi.mock("../components/SessionManager", () => ({
   useSessionManager: vi.fn(),
   SessionManagerProvider: ({ children }: any) => <>{children}</>,
+  remoteDisplayMetrics: (w: number, h: number, dpr = 1) => ({
+    width: Math.round(w * dpr),
+    height: Math.round(h * dpr),
+    dpi: 96,
+  }),
+  sendSizeFromCss: vi.fn(),
+  sendSizeWithDpi: vi.fn(),
 }));
 
 vi.mock("../api", () => ({

@@ -862,8 +862,10 @@ describe("SessionManager", () => {
         session.client.onstatechange(3);
       });
 
-      // 1536 x 1.25 = the 1920 the monitor actually has.
-      expect(session.tunnel.sendMessage).toHaveBeenCalledWith("size", 1920, 1080, 120);
+      // 1536 x 1.25 = the 1920 the monitor actually has. The scale is
+      // already baked into that number, so the DPI stays unscaled rather
+      // than asking the target to zoom on top of it.
+      expect(session.tunnel.sendMessage).toHaveBeenCalledWith("size", 1920, 1080, 96);
     } finally {
       Object.defineProperty(window, "devicePixelRatio", {
         value: originalDpr,

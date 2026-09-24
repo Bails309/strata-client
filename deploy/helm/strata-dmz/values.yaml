@@ -6,10 +6,12 @@
 #   OR set secrets.create=true and inline them under secrets.values.
 
 image:
-  repository: ghcr.io/bails309/strata-dmz
+  # REQUIRED: your private registry path, e.g. registry.example.com/strata/strata-dmz.
+  # No public image is published.
+  repository: ""
   tag: ""              # defaults to .Chart.AppVersion
   pullPolicy: IfNotPresent
-imagePullSecrets: []
+imagePullSecrets: []   # e.g. [{ name: private-registry }]
 
 replicaCount: 2        # >= 2 for HA. Each replica accepts independent links.
 

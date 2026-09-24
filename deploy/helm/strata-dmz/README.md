@@ -32,9 +32,12 @@ kubectl create secret generic strata-dmz-link-tls \
 kubectl create secret tls strata-dmz-public-tls \
     --cert=public.crt --key=public.key
 
-# 4. Install the chart.
+# 4. Install the chart. There is no public image: point image.repository at
+#    the registry you push strata-dmz to, with a pull secret if it needs auth.
 helm install strata-dmz ./deploy/helm/strata-dmz \
-    --set image.tag=1.5.0 \
+    --set image.repository=registry.example.com/strata/strata-dmz \
+    --set image.tag=2.1.1 \
+    --set imagePullSecrets[0].name=private-registry \
     --set config.nodeId=dmz-1 \
     --set config.clusterId=strata-cluster-prod \
     --set ingress.hosts[0].host=strata.example.com

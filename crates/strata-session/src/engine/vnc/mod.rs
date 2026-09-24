@@ -27,7 +27,9 @@ use vnc::{
     X11Event,
 };
 
-use crate::engine::{EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec};
+use crate::engine::{
+    DisconnectCause, EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec,
+};
 use crate::error::EngineError;
 
 /// Per-connection VNC settings.
@@ -253,8 +255,10 @@ impl VncEngine {
             // An audible bell has nowhere to go in the Guacamole protocol.
             VncEvent::Bell => {}
             VncEvent::Error(message) => {
-                self.pending
-                    .push_back(TargetEvent::Disconnected { reason: message });
+                self.pending.push_back(TargetEvent::Disconnected {
+                    reason: format!("The VNC server connection failed: {message}"),
+                    cause: DisconnectCause::ConnectionLost,
+                });
                 self.finished = true;
             }
             // The event type is non-exhaustive, so a newer decoder can

@@ -234,7 +234,7 @@ The deployment surface for an operator running both nodes:
 # docker-compose.dmz.yml
 services:
   strata-dmz:
-    image: ghcr.io/bails309/strata-dmz:1.5.0
+    image: registry.example.com/strata/strata-dmz:1.5.0   # your private registry
     ports:
       - "443:8443"
     environment:
@@ -270,7 +270,7 @@ services:
 # docker-compose.internal.yml
 services:
   strata-backend:
-    image: ghcr.io/bails309/strata-backend:1.5.0
+    image: registry.example.com/strata/backend:1.5.0      # your private registry
     environment:
       STRATA_DMZ_ENDPOINTS: "wss://dmz1.example.com:8444/link,wss://dmz2.example.com:8444/link"
       STRATA_DMZ_LINK_TLS_CLIENT_CERT: /run/secrets/link_client_cert

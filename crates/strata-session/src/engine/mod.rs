@@ -211,6 +211,30 @@ pub enum VideoCodec {
     Av1,
 }
 
+/// Why a session ended, in terms the client can act on.
+///
+/// Carried beside the human-readable reason so the client can title and
+/// handle the end of a session without parsing the text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisconnectCause {
+    /// Ended normally: the user logged off or disconnected, or the remote
+    /// program exited.
+    Ended,
+    /// The target ended the session for being idle too long.
+    IdleTimeout,
+    /// Someone else took over the session, or an administrator on the
+    /// target ended it.
+    Conflict,
+    /// The target refused or could no longer serve the session.
+    Refused,
+    /// The target does not allow this account in.
+    Unauthorized,
+    /// The network path to the target failed.
+    ConnectionLost,
+    /// The target or engine failed in some other way.
+    Failed,
+}
+
 /// Something that happened on the target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TargetEvent {
@@ -308,8 +332,10 @@ pub enum TargetEvent {
     File(FileEvent),
     /// The session ended.
     Disconnected {
-        /// Human-readable reason.
+        /// Human-readable reason, shown to the user as-is.
         reason: String,
+        /// What kind of end this was.
+        cause: DisconnectCause,
     },
 }
 

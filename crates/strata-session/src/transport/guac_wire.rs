@@ -9,7 +9,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use bytes::{Bytes, BytesMut};
 
-use crate::engine::{FileEvent, TargetEvent, VideoCodec};
+use crate::engine::{DisconnectCause, FileEvent, TargetEvent, VideoCodec};
 use crate::protocol::ServerInstruction;
 use crate::transport::{ClientFrame, FrameEncoder, StreamingMode};
 
@@ -46,6 +46,28 @@ const CURSOR_LAYER: i32 = -1;
 /// this encoder puts on the wire, and the transport is compiled whether
 /// or not that engine is.
 pub const AUDIO_MIMETYPE: &str = "audio/L16;rate=44100,channels=2";
+
+// Guacamole protocol status codes the client titles a session end by.
+const SERVER_ERROR: i32 = 0x0200;
+const UPSTREAM_ERROR: i32 = 0x0203;
+const UPSTREAM_UNAVAILABLE: i32 = 0x0208;
+const SESSION_CONFLICT: i32 = 0x0209;
+const SESSION_TIMEOUT: i32 = 0x020A;
+const SESSION_CLOSED: i32 = 0x020B;
+const CLIENT_UNAUTHORIZED: i32 = 0x0301;
+
+/// Guacamole status code for the `error` instruction ending a session.
+fn disconnect_status(cause: DisconnectCause) -> i32 {
+    match cause {
+        DisconnectCause::Ended => SESSION_CLOSED,
+        DisconnectCause::IdleTimeout => SESSION_TIMEOUT,
+        DisconnectCause::Conflict => SESSION_CONFLICT,
+        DisconnectCause::Refused => UPSTREAM_UNAVAILABLE,
+        DisconnectCause::Unauthorized => CLIENT_UNAUTHORIZED,
+        DisconnectCause::ConnectionLost => UPSTREAM_ERROR,
+        DisconnectCause::Failed => SERVER_ERROR,
+    }
+}
 
 /// Encodes target events as Guacamole text instructions.
 #[derive(Debug)]
@@ -349,12 +371,11 @@ impl GuacWireEncoder {
                 ));
                 true
             }
-            TargetEvent::Disconnected { reason } => {
+            TargetEvent::Disconnected { reason, cause } => {
                 out.push(ClientFrame::Text(
                     ServerInstruction::Error {
                         text: reason.clone(),
-                        // 519 = UPSTREAM_ERROR in the Guacamole status set.
-                        status: 519,
+                        status: disconnect_status(*cause),
                     }
                     .to_bytes()
                     .freeze(),
@@ -656,6 +677,7 @@ mod tests {
         encoder.encode(
             &TargetEvent::Disconnected {
                 reason: "target closed".to_owned(),
+                cause: DisconnectCause::ConnectionLost,
             },
             &mut out,
         );
@@ -663,7 +685,25 @@ mod tests {
         assert_eq!(parsed[0].0, "size");
         assert_eq!(parsed[0].1, vec!["0", "1920", "1080"]);
         assert_eq!(parsed[1].0, "error");
-        assert_eq!(parsed[1].1, vec!["target closed", "519"]);
+        assert_eq!(parsed[1].1, vec!["target closed", "515"]);
+    }
+
+    #[test]
+    fn a_clean_logoff_is_not_reported_as_an_upstream_failure() {
+        let mut encoder = GuacWireEncoder::new();
+        let mut out = Vec::new();
+        encoder.encode(
+            &TargetEvent::Disconnected {
+                reason: "You signed out of the remote session.".to_owned(),
+                cause: DisconnectCause::Ended,
+            },
+            &mut out,
+        );
+        let parsed = instructions(&out);
+        assert_eq!(
+            parsed[0].1,
+            vec!["You signed out of the remote session.", "523"]
+        );
     }
 
     #[test]

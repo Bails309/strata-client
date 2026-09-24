@@ -18,6 +18,7 @@ import QuickShare from "./QuickShare";
 import QuickShareOutbound from "./QuickShareOutbound";
 import DisplaySettingsControl from "./DisplaySettingsControl";
 import { requestFullscreenWithLock, exitFullscreenWithUnlock } from "../utils/keyboardLock";
+import { describeSessionEnd } from "../utils/sessionEnd";
 
 // Modern flat checkbox: borderless until checked, accent-filled with a crisp
 // check glyph drawn via `:after`. Strips native chrome with `appearance-none`
@@ -1393,8 +1394,11 @@ function SessionThumbnail({
               <span className="text-[0.6rem] font-bold text-danger leading-tight uppercase">
                 Session Ended
               </span>
-              <span className="text-[0.55rem] text-txt-secondary leading-tight mt-0.5 max-w-full truncate px-1">
-                {session.error.includes("terminated") ? "Terminated by Admin" : "Connection Lost"}
+              <span
+                className="text-[0.55rem] text-txt-secondary leading-tight mt-0.5 max-w-full truncate px-1"
+                title={session.error}
+              >
+                {describeSessionEnd(session.error, session.errorCode).label}
               </span>
             </div>
           )}

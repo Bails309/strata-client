@@ -237,6 +237,30 @@ describe("SessionClient", () => {
     });
   });
 
+  it("titles a remote sign-out by its status code, not as a connection error", async () => {
+    await renderSessionClient();
+
+    await waitFor(() => {
+      expect(typeof mockSession.tunnel.oninstruction).toBe("function");
+    });
+
+    const message = "You signed out of the remote session.";
+    await rtlAct(async () => {
+      mockSession.tunnel.oninstruction("error", [message, "523"]);
+      mockSession.client.onerror({ code: 0x020b, message });
+    });
+    await rtlAct(async () => {
+      mockSession.tunnel.onstatechange(2);
+    });
+
+    const root = within(document.getElementById("root")!);
+    await waitFor(() => {
+      expect(root.getByText(message)).toBeInTheDocument();
+    });
+    expect(root.getByText("Session Ended")).toBeInTheDocument();
+    expect(root.queryByText("Connection Error")).not.toBeInTheDocument();
+  });
+
   it("focuses container on mouseDown", async () => {
     await renderSessionClient();
 

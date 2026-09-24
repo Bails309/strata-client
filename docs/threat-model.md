@@ -159,6 +159,14 @@ flowchart LR
 | **D** Resource exhaustion by a hostile target | Oversize frames, unbounded clipboard, runaway image data              | Fixed ceilings enforced in the engine: 8 MiB per clipboard direction (`MAX_CLIPBOARD_BYTES`), 16 MiB per-instruction pending buffer, per-user concurrent session cap                                       | OK                                                                    |
 | **I** Target-controlled data in backend logs | A target supplying hostile strings that get logged                     | Engine logs are structured and record sizes, opcodes and timings — not payloads                                                                                                                          | Spot-check on protocol additions                                      |
 
+**Reviewed in v2.1.1:**
+
+| Threat | Vector | Mitigation | Residual |
+| ------ | ------ | ---------- | -------- |
+| **R** Session ends without a finalised recording or revoked credential | A target (or the network to it) fails a write while the engine forwards client input. Before v2.1.1 the error returned from `SessionActor::run()` ahead of `teardown()`. | Input-path engine errors now end the session in order; engine shutdown, audit finalisation and credential revocation run on every engine exit path. See [security.md § Session-end reporting](security.md#session-end-reporting-v211). | OK. `PipelineClosed` / audit-sink failures still return early, as before. |
+| **I** Internal detail in the disconnect message shown to the user | Error chains (I/O errors, resolved addresses, protocol diagnostics) forwarded to the browser | The browser receives fixed engine-chosen sentences; error chains are logged server-side only | Kubernetes and VNC forward target-supplied text, as before; rendered as React text, never markup |
+| **E** Device redirection via the RDPDR channel advertised for audio | Host issues device I/O over the channel Windows requires beside RDPSND | Empty device list and `NoopRdpdrBackend`; drive/printer/port/smart-card redirection remains removed | OK |
+
 > **Why the trade was judged acceptable.** The retired threats were live and
 > recurring — tracking upstream `guacamole-server` CVEs against a patched fork
 > is continuous work, and getting it wrong is a memory-safety bug in C reachable

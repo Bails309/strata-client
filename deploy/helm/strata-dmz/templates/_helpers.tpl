@@ -25,8 +25,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{- define "strata-dmz.image" -}}
+{{- $repo := required "image.repository is required: set it to your private registry path (no public image is published)" .Values.image.repository -}}
 {{- $tag := default .Chart.AppVersion .Values.image.tag -}}
-{{ printf "%s:%s" .Values.image.repository $tag }}
+{{ printf "%s:%s" $repo $tag }}
 {{- end -}}
 
 {{- define "strata-dmz.secretName" -}}

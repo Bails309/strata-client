@@ -59,6 +59,75 @@ uses the resolved address — the hostname still reaches TLS verification
 and the Kerberos SPN, so pre-resolution cannot be used to steer a session
 to an attacker-controlled address while retaining a valid-looking name.
 
+### Session-end reporting (v2.1.1)
+
+v2.1.1 made every session end reach the browser as a Guacamole `error`
+instruction with a cause-specific status code and a plain-language sentence
+(design: [architecture.md](architecture.md#how-a-session-ends-v211)). Two
+security properties follow from how that was done.
+
+**Teardown now always runs after an input-path engine failure.** Before
+v2.1.1, an engine error raised while forwarding client input to the target
+propagated out of `SessionActor::run()` with `?`, which returned **before**
+`teardown()`. On that path the engine was not shut down, the audit sink was
+not finalised, and the credential guard's `revoke()` was never called — the
+step this document elsewhere promises runs *"even when engine shutdown
+fails"*. The input path now converts the error into an orderly end and falls
+through to teardown like every other exit.
+
+| Property | Value |
+| -------- | ----- |
+| Trust boundary | Backend ↔ target host |
+| Reachability | **Post-authentication** — requires an established session. A target, or the network between the backend and a target, can trigger it by failing a write. |
+| Effect before the fix | Recording left unfinalised; session credential guard not revoked; engine resources released only when the task was dropped |
+| Other exit paths | Unchanged. `PipelineClosed` and audit-sink errors still return early, as before; they indicate the actor's own plumbing has failed, not the target |
+
+**Client-facing text discloses no internal detail.** The browser is sent
+fixed sentences chosen by the engine, never an error chain:
+
+| Source | What reaches the browser | What stays server-side |
+| ------ | ------------------------ | ---------------------- |
+| Engine error (`Transport`, `Closed`, `Protocol`, `Unsupported`, `AuthRejected`) | One of five fixed sentences | The full error, logged at `WARN` (`engine failure`) |
+| RDP Set Error Info, known code | A fixed sentence from `PROTOCOL_INDEPENDENT_ENDS` | The `ironrdp` reason, logged at `INFO` |
+| RDP licensing / broker / protocol-error code | A fixed sentence plus the MS-RDPBCGR description — a constant compiled into `ironrdp-pdu`, not target-supplied text | — |
+| SSH exit or signal | Exit status, or signal name and the server's error message | — |
+| Kubernetes close / exec status, VNC error | Target- or library-supplied text, as before v2.1.1 | — |
+
+The last row is pre-existing and deliberate — a pod's own error message is
+the most useful thing an operator can be shown — and it is safe to display
+because the SPA renders it as React text, never as markup. The rest of the
+table exists so that a transport failure cannot reveal internal hostnames,
+resolved addresses or socket errors to an end user.
+
+The browser keys **no** security decision on the status code. The only
+behaviour the overlay derives from an end is whether to offer **Reconnect**,
+and an administrator termination is recognised by its text on the same
+basis as before; reconnecting still goes through a fresh tunnel ticket and
+the full authorisation path.
+
+### RDP device-redirection channel (v2.1.1)
+
+Windows Server 2019 and 2022 will not send RDPSND audio unless the client
+also advertises the device-redirection virtual channel (RDPDR, MS-RDPEFS).
+v2.1.1 therefore registers RDPDR — but as a pairing token only:
+
+- The device list is **empty**, and the backend is `NoopRdpdrBackend`. No
+  drive, printer, serial/parallel port or smart card is announced, so the
+  host has nothing to open and no I/O request it sends can reach a local
+  resource.
+- Drive and printer redirection remain **removed**, exactly as recorded in
+  the v2.0.0 table above; file transfer stays on the single audited SFTP
+  path.
+- RDPDR and RDPSND are attached together in one function,
+  `with_audio_channels()`, and a unit test asserts both, so the channel
+  cannot be dropped as apparent dead code (which would silently kill audio)
+  or grown into real redirection without the change being visible.
+
+Both channels are registered on every RDP connection. `disable-audio` does
+not remove them; it sets `INFO_NOAUDIOPLAYBACK` in the Client Info PDU, which
+tells the host not to redirect audio at all. The empty RDPDR channel carries
+the same (nil) exposure either way.
+
 ---
 
 ## Authentication
@@ -536,7 +605,8 @@ AD sync `connection_defaults` are applied as the `extra` JSONB on synced connect
 
 - **Display & performance**: color-depth, resize-method, force-lossless, cursor, read-only
 - **RDP performance flags**: enable-wallpaper, enable-theming, enable-font-smoothing, enable-full-window-drag, enable-desktop-composition, enable-menu-animations, disable-bitmap-caching, disable-offscreen-caching, disable-glyph-caching, disable-gfx
-- **H.264 GFX passthrough (v0.28.0 – v1.14.6, removed in v2.0.0)**: `enable-h264` is stripped from every connection's `extra` map by migration `087` and is no longer accepted by the whitelist. The engine has no EGFX pipeline; `disable-gfx` / `disable-offscreen-caching` remain accepted but inert. Nothing is withdrawn in practice — the parameter defaulted to `false` and no connection had it set. The removal is *itself* the security-relevant point: advertising a codec the engine cannot deliver corrupts the bitmap cache into persistent ghost tiles, so leaving a dead toggle in the editor was worse than removing it. Rationale in [migration 087](../backend/migrations/087_drop_h264_passthrough.sql).andbox as the rest of the page. No additional credentials, paths, or shell-executable parameters are exposed by these flags
+- **H.264 GFX passthrough (v0.28.0 – v1.14.6 via `guacd`; removed in v2.0.0; restored natively in v2.1.0)**: `enable-h264` is stripped from every connection's `extra` map by migration `087` and is no longer accepted by the whitelist. Since v2.1.0 the native engine's opt-in passthrough is governed by `disable-gfx` alone (inverted: `"false"` enables it), and `disable-offscreen-caching` remains accepted but inert. The v2.0.0 removal was itself the security-relevant point at the time: advertising a codec the engine could not deliver corrupted the bitmap cache into persistent ghost tiles, so leaving a dead toggle in the editor was worse than removing it. Rationale in [migration 087](../backend/migrations/087_drop_h264_passthrough.sql); the v2.1.0 design, which forwards the bitstream to the browser without decoding it server-side, is in [h264-passthrough.md](h264-passthrough.md). No additional credentials, paths, or shell-executable parameters are exposed by these flags
+- **Audio (v2.1.1)**: `disable-audio` is now honoured on RDP — before v2.1.1 it was accepted and ignored, and audio never played either way. Unset, the host is invited to redirect audio over RDPSND; set, the Client Info PDU carries `INFO_NOAUDIOPLAYBACK`. An empty RDPDR channel is advertised in both cases; see [RDP device-redirection channel](#rdp-device-redirection-channel-v211).
 - **Session recording**: recording-path, recording-name, create-recording-path, recording-include-keys, recording-exclude-output, recording-exclude-mouse, recording-exclude-touch
 - **Authentication**: ignore-cert (certificate validation bypass only — no credential parameters)
 - **Clipboard, audio, printing, Wake-on-LAN**: various toggle and configuration parameters
@@ -1283,7 +1353,7 @@ For production external databases, use `require` at minimum. Use `verify-full` w
 
 ### Container Isolation
 
-All containers communicate over an internal Docker bridge network (`guac-internal`). Only the nginx reverse proxy (frontend container) exposes host-mapped ports (`HTTP_PORT` default 80, `HTTPS_PORT` default 443). The backend, `guacd`, `postgres-local`, and Vault are **not** exposed to the host network.
+All containers communicate over an internal Docker bridge network (`guac-internal`). Only the nginx reverse proxy (frontend container) exposes host-mapped ports (`HTTP_PORT` default 80, `HTTPS_PORT` default 443). The backend, `postgres-local`, and Vault are **not** exposed to the host network (neither were the `guacd` containers, before v2.0.0 removed them).
 
 ### Session Engine Communication
 
@@ -1302,7 +1372,7 @@ All containers communicate over an internal Docker bridge network (`guac-interna
 > Vault-decrypted credentials and the database pool. That containment loss
 > is real and is accepted on the basis that the parsing is safe Rust, each
 > session is an isolated task, and the C memory-safety surface that made the
-> process boundary worth having in the first place is gone.rking provides the security boundary.
+> process boundary worth having in the first place is gone.
 
 ### Vault Communication
 
@@ -1418,14 +1488,15 @@ All of the following run in CI. A red gate blocks the merge; there is no "warn a
 | `cargo deny`             | Licenses, banned crates, crate sources        | [`ci.yml`](../.github/workflows/ci.yml) → **Dependency Audit**                    | `check bans licenses sources` against [`deny.toml`](../deny.toml).                                                                          |
 | `npm audit`              | `frontend/` and `e2e/` production graphs      | [`ci.yml`](../.github/workflows/ci.yml) → **Dependency Audit**                    | `--audit-level=high --omit=dev`.                                                                                                            |
 | OSV-Scanner              | `Cargo.lock` + npm lockfiles                  | OpenSSF Scorecard ([`scorecard.yml`](../.github/workflows/scorecard.yml))          | Config at [`osv-scanner.toml`](../osv-scanner.toml); backs the Scorecard `Vulnerabilities` check.                                            |
-| Trivy                    | Built container images                        | [`trivy.yml`](../.github/workflows/trivy.yml)                                     | Scans the assembled `backend` / `frontend` / `guacd` images, catching OS-package CVEs the language-level tools cannot see.                   |
-| CodeQL                   | First-party Rust + TypeScript                 | [`codeql.yml`](../.github/workflows/codeql.yml)                                   | Static analysis of code we wrote, complementing the dependency gates.                                                                       |
+| Trivy                    | Built container images                        | [`trivy.yml`](../.github/workflows/trivy.yml)                                     | Scans the assembled `backend` / `frontend` images (and, before v2.0.0, `guacd`), catching OS-package CVEs the language-level tools cannot see. |
+| CodeQL                   | First-party Rust + TypeScript                 | [`codeql.yml`](../.github/workflows/codeql.yml)                                   | Static analysis of code we wrote, complementing the dependency gates. `crates/vendor/` is excluded **by path** in [`codeql-config.yml`](../.github/codeql/codeql-config.yml) (v2.1.1) — see below. |
 | Dependency Review        | Dependency diff on every pull request         | [`dependency-review.yml`](../.github/workflows/dependency-review.yml)             | Blocks a PR that *introduces* a vulnerable or disallowed-licence package, before it is ever merged.                                          |
 
 Two design details are worth calling out because they are easy to get wrong:
 
 - **`cargo audit` is wrapped in a bounded retry.** The advisory database is fetched from `github.com/RustSec/advisory-db` at job time, and a transient network failure there is indistinguishable from a real finding if the exit code is taken at face value. The CI step retries up to three times with escalating backoff and only then emits `::error::cargo audit failed after N attempts` — so a flaky fetch cannot fail an otherwise-clean build, and, crucially, a genuine finding still fails it three times over rather than being papered over.
 - **`osv-scanner.toml` must live at the workspace root.** OSV-Scanner only applies an ignore-config that sits in the **same directory as the manifest being scanned**. A copy under `backend/` would be silently ignored while appearing to work, which is the worst possible failure mode for a suppression file. The file therefore lives next to `Cargo.lock` at the repository root, and the header comment in it says so.
+- **Vendored forks are excluded by path, never by rule (v2.1.1).** The patched forks under `crates/vendor/` (`ironrdp-connector`, `ironrdp-egfx`, `sspi`) are Cargo *path* dependencies, so their third-party source sits in the repository and every path-based tool reads it as first-party. CodeQL raised 26 high-severity *broken or weak cryptographic algorithm* alerts against `sspi`, all of them NTLM — RC4 sealing keys, MD4 password hashing, HMAC-MD5 proofs — which MS-NLMP defines in terms of those primitives, so there is nothing to fix short of not speaking NTLM to targets that negotiate it. The exclusion is scoped to the `crates/vendor` **path**, not to the rule, so weak cryptography in first-party code still fails the scan. It is the fourth gate to need the same treatment after `cargo-audit`, `tarpaulin` and `gitleaks`; each disappears when the forks do, and `scripts/check-vendored-forks.sh` reports on every dependency bump whether each fork is still required.
 
 ### Advisory triage policy
 
@@ -1802,6 +1873,25 @@ The frontend is a Progressive Web App:
 
 ## H.264 GFX Encoding
 
+> **Restored in v2.1.0 — backfilled here in v2.1.1.** The v2.1.0 release
+> notes stated that this page needed no change; that was wrong, because the
+> note below still said there is no H.264 pipeline. There is again, and its
+> security properties differ from the `guacd`-era one in the way that
+> matters:
+>
+> - **No server-side decode.** The engine lifts the AVC bitstream out of
+>   MS-RDPEGFX and forwards it to the browser's WebCodecs `VideoDecoder`
+>   untouched (vendored `ironrdp-egfx` fork, `on_avc_bitstream()` hook). No
+>   video codec is linked into the backend; the bitstream is parsed only
+>   for NAL framing and keyframe detection. The decoder that does run is
+>   the browser's, in the user's own renderer sandbox.
+> - **Off by default, opt-in per connection** via `disable-gfx=false`, so
+>   the attack surface below is unchanged for any connection that does not
+>   enable it.
+>
+> See [h264-passthrough.md](h264-passthrough.md). The note that follows is
+> the v2.0.0 record and is kept unedited.
+>
 > **Removed in v2.0.0.** There is no H.264 pipeline. The RDP engine
 > maintains a full-desktop framebuffer, reports changed rectangles and
 > PNG-encodes them; migration `087` strips `enable-h264` from every
@@ -1809,8 +1899,8 @@ The frontend is a Progressive Web App:
 >
 > The security-relevant effect is a **reduction** in attack surface, and
 > it is the concrete instance of the general argument for this release. The
-> old path meant a video codec \u2014 the most historically CVE-dense category
-> of C in the whole deployment \u2014 parsed attacker-adjacent bitstreams inside
+> old path meant a video codec — the most historically CVE-dense category
+> of C in the whole deployment — parsed attacker-adjacent bitstreams inside
 > the session tier. That code is not merely isolated now; it is not
 > compiled in.
 >
@@ -2149,15 +2239,15 @@ variable is missing.
 > The problem it solved has also gone, rather than moved: the engine writes
 > `.guac` files as the same unprivileged `strata` user that reads them, so
 > there is no cross-UID handoff to reconcile and no startup `chown` to
-> perform. The backend's own capability set is unchanged \u2014 it retains
+> perform. The backend's own capability set is unchanged — it retains
 > `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID` and `SETUID` for the
 > ephemeral web-session storage under `/var/lib/strata`, not for recordings.
 >
 > The one piece of the old model that **is** retained is the
 > supplementary-group bootstrap in `backend/entrypoint.sh`, so that
-> recordings written before the upgrade \u2014 still owned `guacd:guacd` at mode
-> `0640` \u2014 remain readable. See
-> [Recordings Volume \u2014 Cross-Container POSIX Permissions Model](#recordings-volume--cross-container-posix-permissions-model).
+> recordings written before the upgrade — still owned `guacd:guacd` at mode
+> `0640` — remain readable. See
+> [Recordings Volume — Cross-Container POSIX Permissions Model](#recordings-volume--cross-container-posix-permissions-model).
 >
 > **Operator action on upgrade:** none for this item. Verify with
 > `docker compose exec backend ls -la /var/lib/guacamole/recordings` that

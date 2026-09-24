@@ -79,37 +79,41 @@ Open `http://127.0.0.1` and complete the setup wizard. The bundled PostgreSQL an
 > [!TIP]
 > **New to Strata Client?** For a comprehensive host-level guide, see our [Ubuntu VM Deployment Guide](ubuntu-vm-deployment.md).
 
-### Supply-chain verification (required before every rollout)
+### Image provenance (private registry)
 
-Every image built by the [release workflow](../.github/workflows/release.yml)
-is signed keyless with Cosign, carries a CycloneDX SBOM attestation, and
-ships SLSA Level 3 build provenance. Any deployment pipeline — manual or
-automated — **must** verify the image digest it is about to pull before
-rolling it out. The repository ships [`scripts/verify-image.sh`](../scripts/verify-image.sh)
-for exactly this purpose:
+> **Changed in v2.1.1.** Up to v2.1.0 a tag-triggered release workflow
+> pushed the `backend` and `frontend` images to GitHub Container Registry,
+> signed them keyless with Cosign, attached a CycloneDX SBOM attestation and
+> SLSA Level 3 provenance, and `scripts/verify-image.sh` checked all three
+> before rollout. The workflow, the script and the
+> `docker-compose.ghcr.yml` overlay were removed in v2.1.1: images are now
+> built from this repository and stored in a **private registry** only. No
+> Strata image is published publicly.
 
-```bash
-# Backend
-./scripts/verify-image.sh \
-  ghcr.io/your-org/strata-client/backend@sha256:<digest>
+Because nothing upstream signs the images any more, the integrity of what a
+host runs rests on your own build and registry controls. At minimum:
 
-# Frontend
-./scripts/verify-image.sh \
-  ghcr.io/your-org/strata-client/frontend@sha256:<digest>
-```
+1. **Build from a tagged commit** (`git checkout vX.Y.Z`) on a trusted build
+   host or CI runner, and record the resulting digests:
 
-The script runs:
+   ```bash
+   docker compose build backend frontend
+   docker image inspect --format '{{index .RepoDigests 0}}' \
+     registry.example.com/strata/backend:2.1.1
+   ```
 
-1. `cosign verify` — confirms the digest was signed by the expected GitHub
-   Actions release workflow identity via Sigstore Fulcio + Rekor.
-2. `cosign verify-attestation --type cyclonedx` — confirms the CycloneDX
-   SBOM attestation is present and signed by the same identity.
-3. `slsa-verifier verify-image` — confirms SLSA L3 build provenance and
-   that the image was built from this repository.
+2. **Push to a registry that requires authentication** for both push and
+   pull, with push rights limited to the build identity.
+3. **Deploy by digest** (`image: registry.example.com/strata/backend@sha256:<digest>`)
+   so a re-pushed tag cannot change what a host runs.
+4. If your registry supports it, **sign on push** (Cosign with your own key
+   or KMS, Notation, or the registry's native signing) and enforce
+   verification at pull time. Strata does not ship keys or a verification
+   script for this; use your registry's tooling.
 
-Requirements: `cosign >= 2.2` and `slsa-verifier >= 2.5` in `PATH`.
-
-**Rollout MUST abort** if this script exits non-zero.
+The image-level CVE gate is unaffected: Trivy still scans the images CI
+builds on every push (see
+[security.md § Dependency & supply-chain security](security.md#dependency--supply-chain-security)).
 
 ### 1. Environment Configuration
 
@@ -609,6 +613,71 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 ## Upgrading
 
 ### Version-specific upgrade notes
+
+#### v2.1.0 → v2.1.1 (accurate session-end messages; RDP audio, keyboard and display-scale fixes)
+
+A drop-in rebuild of both images. **No migration, no `.env` change, no API
+change.** The DMZ edge carries no changed code and does not need rebuilding.
+
+> **No image is published for this release.** If you deployed from GitHub
+> Container Registry with `docker-compose.ghcr.yml`, that overlay is gone and
+> `ghcr.io/bails309/strata-client/*:2.1.1` does not exist. Build the images and
+> push them to your private registry as described in the
+> [README Quick Start](../README.md#2-run) and
+> [Image provenance](#image-provenance-private-registry). The `strata-dmz` Helm
+> chart (0.2.0) now **requires** `image.repository`.
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+**Behaviour that changes for users — tell them before you upgrade:**
+
+| Change | What users notice | If it is unwanted |
+| ------ | ----------------- | ----------------- |
+| RDP audio plays | Sessions that were always silent now have sound, after the first click or keypress | Set `disable-audio` on the connection |
+| Remote UI pinned to 100% on scaled displays | On a monitor scaled above 100%, the remote desktop is sharper and shows more, with smaller text than before | The user ticks **Display Settings → Match my display scale** (per browser) |
+| Printable keys sent as Unicode | Non-US layouts type the characters shown on the keys; shortcuts unchanged | — (the old behaviour was a bug) |
+| Session-end overlay | Accurate titles and sentences instead of *Connection Error* / *"You may have logged out"* | — |
+
+**Verify post-upgrade:**
+
+1. The in-app **What's New** modal shows the v2.1.1 card.
+2. On an RDP session, sign out from the Start menu. The overlay reads
+   **Session Ended** — *"You signed out of the remote session."*
+3. Play a sound on the remote desktop, and confirm the backend logged the
+   audio stream:
+
+   ```bash
+   docker compose logs backend | grep "opening audio stream"
+   ```
+
+4. Optional: end an RDP session by blocking the target at a firewall. After
+   the TCP timeout the overlay reads **Connection Lost**, and the backend log
+   carries a `WARN` `engine failure` line with the underlying error.
+
+Diagnosing unexpected session ends is covered by the
+[session-disconnects runbook](runbooks/session-disconnects.md).
+
+**Rollback** is a plain image rollback to v2.1.0; there is no state to
+reverse.
+
+#### v2.0.0 → v2.1.0 (RDP H.264 GFX passthrough)
+
+*Backfilled in v2.1.1.* A drop-in rebuild of both images with no migration
+and no configuration change. H.264 is **off by default**; to use it, tick
+**Enable graphics pipeline (GFX)** under Performance on an RDP connection,
+prepare the host with [`Configure-RdpAvc444.ps1`](Configure-RdpAvc444.ps1),
+and confirm negotiation from the backend log rather than Event Viewer:
+
+```bash
+docker compose logs backend | grep "graphics pipeline"
+```
+
+See [h264-passthrough.md](h264-passthrough.md).
 
 #### v1.14.6 → v2.0.0 (guacd removed; native Rust session engine)
 
@@ -2402,8 +2471,16 @@ networkPolicy:
 helm install strata-dmz ./deploy/helm/strata-dmz \
     -n strata-dmz \
     -f values-prod.yaml \
-    --set image.tag=1.4.1
+    --set image.repository=registry.example.com/strata/strata-dmz \
+    --set image.tag=2.1.1 \
+    --set imagePullSecrets[0].name=private-registry
 ```
+
+`image.repository` is **required** since chart 0.2.0 (v2.1.1): no public
+`strata-dmz` image is published, so build it from `crates/strata-dmz` and
+push it to your registry first. Create the pull secret in the namespace with
+`kubectl -n strata-dmz create secret docker-registry private-registry
+--docker-server=registry.example.com --docker-username=… --docker-password=…`.
 
 Watch the rollout:
 

@@ -30,6 +30,8 @@ export interface GuacSession {
   createdAt: number;
   /** Last known error, if any */
   error?: string;
+  /** Guacamole status code that came with `error`, when there was one */
+  errorCode?: number;
   /** Filesystem objects exposed by guacd (RDP drive, SFTP, etc.) */
   filesystems: { object: Guacamole.GuacObject; name: string }[];
   /** Remote clipboard text (last received from, or last successfully sent to, the session) */
@@ -876,11 +878,13 @@ export function SessionManagerProvider({
     // Handle errors
     tunnel.onerror = (status: Guacamole.Status) => {
       session.error = status.message || "Connection failed";
+      session.errorCode = status.code;
       setSessions((prev) => [...prev]); // trigger re-render
     };
 
     client.onerror = (status: Guacamole.Status) => {
       session.error = status.message || "Connection failed";
+      session.errorCode = status.code;
       setSessions((prev) => [...prev]);
     };
 

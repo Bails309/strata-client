@@ -70,13 +70,19 @@ use ironrdp_pdu::rdp::capability_sets::client_codecs_capabilities;
 use ironrdp_pdu::rdp::client_info::PerformanceFlags;
 use ironrdp_pdu::rdp::headers::ShareDataPdu;
 use ironrdp_pdu::rdp::refresh_rectangle::RefreshRectanglePdu;
+use ironrdp_pdu::rdp::server_error_info::{
+    ErrorInfo, ProtocolIndependentCode, ProtocolIndependentConnectionBrokerCode,
+    ProtocolIndependentLicensingCode, RdpSpecificCode,
+};
 use ironrdp_pdu::Action;
 use ironrdp_rdpdr::backend::noop::NoopRdpdrBackend;
 use ironrdp_rdpdr::Rdpdr;
 use ironrdp_rdpsnd::client::Rdpsnd;
 use ironrdp_session::fast_path::ProcessorBuilder;
 use ironrdp_session::image::DecodedImage;
-use ironrdp_session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
+use ironrdp_session::{
+    ActiveStage, ActiveStageBuilder, ActiveStageOutput, GracefulDisconnectReason,
+};
 use ironrdp_tokio::{single_sequence_step, FramedWrite as _, TokioFramed};
 use secrecy::ExposeSecret;
 use tokio::net::TcpStream;
@@ -90,7 +96,9 @@ use crate::engine::rdp::clipboard::{
 };
 use crate::engine::rdp::kdc::KdcNetworkClient;
 use crate::engine::rdp::keycodes::{resolve_key, shortcut_modifier_bit, KeyEvent};
-use crate::engine::{EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec};
+use crate::engine::{
+    DisconnectCause, EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec,
+};
 use crate::error::EngineError;
 use crate::tls::CertPolicy;
 
@@ -813,10 +821,11 @@ impl RdpSession {
                 }
                 ActiveStageOutput::Terminate(reason) => {
                     self.finished = true;
+                    tracing::info!(%reason, "rdp target ended the session");
+                    let (reason, cause) = describe_termination(&reason);
                     // codeql[rust/cleartext-logging] Disconnect reason is a protocol termination code, not sensitive data.
-                    self.pending.push_back(TargetEvent::Disconnected {
-                        reason: reason.to_string(),
-                    });
+                    self.pending
+                        .push_back(TargetEvent::Disconnected { reason, cause });
                 }
                 ActiveStageOutput::DeactivateAll => {
                     self.reactivate().await?;
@@ -1382,7 +1391,8 @@ impl RdpSession {
                 self.finished = true;
                 // codeql[rust/cleartext-logging] Disconnect reason is a static event message, not sensitive data.
                 self.pending.push_back(TargetEvent::Disconnected {
-                    reason: "client requested disconnect".to_owned(),
+                    reason: "You disconnected from the remote session.".to_owned(),
+                    cause: DisconnectCause::Ended,
                 });
             }
             // Raw text has no meaning to a graphical target.
@@ -1399,7 +1409,10 @@ impl RdpSession {
                 self.finished = true;
                 // codeql[rust/cleartext-logging] Clean EOF disconnect notification is a static status string, not sensitive data.
                 self.pending.push_back(TargetEvent::Disconnected {
-                    reason: "target closed the connection".to_owned(),
+                    reason: "The remote computer closed the connection without giving a reason. \
+                             It may have restarted, shut down, or dropped off the network."
+                        .to_owned(),
+                    cause: DisconnectCause::ConnectionLost,
                 });
                 return Ok(());
             }
@@ -1713,9 +1726,225 @@ fn map_connector(err: ironrdp_connector::ConnectorError) -> EngineError {
     EngineError::Protocol(text)
 }
 
+/// What the user is told for each Set Error Info code a target ends a
+/// session with. The spec descriptions `ironrdp` renders are written for
+/// protocol implementers: a Start-menu Disconnect reads as "initiated by
+/// an administrative tool".
+const PROTOCOL_INDEPENDENT_ENDS: &[(ProtocolIndependentCode, &str, DisconnectCause)] = &[
+    (
+        ProtocolIndependentCode::LogoffByUser,
+        "You signed out of the remote session.",
+        DisconnectCause::Ended,
+    ),
+    (
+        ProtocolIndependentCode::RpcInitiatedDisconnectByuser,
+        "You disconnected from the remote session. It is still running on the remote \
+         computer; reconnect to pick up where you left off.",
+        DisconnectCause::Ended,
+    ),
+    (
+        ProtocolIndependentCode::RpcInitiatedDisconnect,
+        "An administrator on the remote computer disconnected this session. It is still \
+         running; reconnect to pick up where you left off.",
+        DisconnectCause::Conflict,
+    ),
+    (
+        ProtocolIndependentCode::RpcInitiatedLogoff,
+        "An administrator on the remote computer signed this session out.",
+        DisconnectCause::Conflict,
+    ),
+    (
+        ProtocolIndependentCode::DisconnectedByOtherconnection,
+        "This session was opened from another window or device, which disconnected it here.",
+        DisconnectCause::Conflict,
+    ),
+    (
+        ProtocolIndependentCode::IdleTimeout,
+        "The remote computer disconnected the session because it was idle for too long.",
+        DisconnectCause::IdleTimeout,
+    ),
+    (
+        ProtocolIndependentCode::LogonTimeout,
+        "The session reached the time limit set on the remote computer.",
+        DisconnectCause::Ended,
+    ),
+    (
+        ProtocolIndependentCode::ServerDeniedConnection,
+        "The remote computer refused the connection.",
+        DisconnectCause::Refused,
+    ),
+    (
+        ProtocolIndependentCode::OutOfMemory,
+        "The remote computer ran out of memory and ended the session.",
+        DisconnectCause::Refused,
+    ),
+    (
+        ProtocolIndependentCode::ServerInsufficientPrivileges,
+        "Your account is not allowed to sign in to the remote computer over Remote Desktop.",
+        DisconnectCause::Unauthorized,
+    ),
+    (
+        ProtocolIndependentCode::ServerFreshCredentialsRequired,
+        "The remote computer requires the password to be entered for every connection.",
+        DisconnectCause::Unauthorized,
+    ),
+    (
+        ProtocolIndependentCode::ServerDwmCrash,
+        REMOTE_COMPONENT_FAILED,
+        DisconnectCause::Failed,
+    ),
+    (
+        ProtocolIndependentCode::ServerWinlogonCrash,
+        REMOTE_COMPONENT_FAILED,
+        DisconnectCause::Failed,
+    ),
+    (
+        ProtocolIndependentCode::ServerCsrssCrash,
+        REMOTE_COMPONENT_FAILED,
+        DisconnectCause::Failed,
+    ),
+    (
+        ProtocolIndependentCode::CloseStackOnDriverNotReady,
+        REMOTE_COMPONENT_FAILED,
+        DisconnectCause::Failed,
+    ),
+    (
+        ProtocolIndependentCode::CloseStackOnDriverFailure,
+        REMOTE_COMPONENT_FAILED,
+        DisconnectCause::Failed,
+    ),
+    (
+        ProtocolIndependentCode::CloseStackOnDriverIfaceFailure,
+        REMOTE_COMPONENT_FAILED,
+        DisconnectCause::Failed,
+    ),
+];
+
+const REMOTE_COMPONENT_FAILED: &str =
+    "The session ended because a component on the remote computer stopped unexpectedly.";
+
+/// User-facing account of why the target ended the session.
+///
+/// `ironrdp` hands the Set Error Info code over already rendered as text,
+/// so the code is recovered by rendering each known code the same way.
+fn describe_termination(reason: &GracefulDisconnectReason) -> (String, DisconnectCause) {
+    let text = match reason {
+        GracefulDisconnectReason::UserInitiated => {
+            return (
+                "You disconnected from the remote session.".to_owned(),
+                DisconnectCause::Ended,
+            );
+        }
+        GracefulDisconnectReason::ServerInitiated => {
+            return (
+                "The remote computer ended the session.".to_owned(),
+                DisconnectCause::Ended,
+            );
+        }
+        GracefulDisconnectReason::Other(text) => text.as_str(),
+    };
+
+    for &(code, message, cause) in PROTOCOL_INDEPENDENT_ENDS {
+        if ErrorInfo::ProtocolIndependentCode(code).description() == text {
+            return (message.to_owned(), cause);
+        }
+    }
+
+    // Everything else keeps the spec text as detail, minus its category tag.
+    let in_category = |sample: ErrorInfo| {
+        sample
+            .description()
+            .split_once(']')
+            .is_some_and(|(tag, _)| text.starts_with(tag))
+    };
+    let detail = text
+        .split_once(']')
+        .map_or(text, |(_, rest)| rest.trim_start_matches(':').trim());
+
+    if in_category(ErrorInfo::ProtocolIndependentLicensingCode(
+        ProtocolIndependentLicensingCode::Internal,
+    )) {
+        return (
+            format!("The remote computer ended the session because of a Remote Desktop licensing problem: {detail}."),
+            DisconnectCause::Refused,
+        );
+    }
+    if in_category(ErrorInfo::ProtocolIndependentConnectionBrokerCode(
+        ProtocolIndependentConnectionBrokerCode::DestinationNotFound,
+    )) {
+        return (
+            format!("The Remote Desktop connection broker could not place this session: {detail}."),
+            DisconnectCause::Refused,
+        );
+    }
+    if in_category(ErrorInfo::RdpSpecificCode(RdpSpecificCode::UnknownPduType)) {
+        return (
+            format!("The remote computer ended the session after a protocol error: {detail}."),
+            DisconnectCause::Failed,
+        );
+    }
+    (
+        format!("The remote computer ended the session ({detail})."),
+        DisconnectCause::Ended,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ended_with(info: ErrorInfo) -> (String, DisconnectCause) {
+        describe_termination(&GracefulDisconnectReason::Other(info.description()))
+    }
+
+    #[test]
+    fn a_logoff_is_reported_as_a_sign_out() {
+        let (message, cause) = ended_with(ErrorInfo::ProtocolIndependentCode(
+            ProtocolIndependentCode::LogoffByUser,
+        ));
+        assert_eq!(message, "You signed out of the remote session.");
+        assert_eq!(cause, DisconnectCause::Ended);
+    }
+
+    #[test]
+    fn a_start_menu_disconnect_is_not_blamed_on_an_administrator() {
+        let (message, cause) = ended_with(ErrorInfo::ProtocolIndependentCode(
+            ProtocolIndependentCode::RpcInitiatedDisconnectByuser,
+        ));
+        assert!(message.starts_with("You disconnected"), "{message}");
+        assert!(!message.contains("administrat"), "{message}");
+        assert_eq!(cause, DisconnectCause::Ended);
+    }
+
+    #[test]
+    fn idle_and_takeover_ends_keep_their_own_cause() {
+        let (_, idle) = ended_with(ErrorInfo::ProtocolIndependentCode(
+            ProtocolIndependentCode::IdleTimeout,
+        ));
+        assert_eq!(idle, DisconnectCause::IdleTimeout);
+        let (_, taken) = ended_with(ErrorInfo::ProtocolIndependentCode(
+            ProtocolIndependentCode::DisconnectedByOtherconnection,
+        ));
+        assert_eq!(taken, DisconnectCause::Conflict);
+    }
+
+    #[test]
+    fn a_licensing_failure_keeps_the_spec_detail() {
+        let (message, cause) = ended_with(ErrorInfo::ProtocolIndependentLicensingCode(
+            ProtocolIndependentLicensingCode::NoLicense,
+        ));
+        assert!(message.contains("licensing problem"), "{message}");
+        assert!(message.contains("no Client Access Licenses"), "{message}");
+        assert!(!message.contains('['), "category tag leaked: {message}");
+        assert_eq!(cause, DisconnectCause::Refused);
+    }
+
+    #[test]
+    fn a_server_ultimatum_is_a_clean_end() {
+        let (message, cause) = describe_termination(&GracefulDisconnectReason::ServerInitiated);
+        assert_eq!(message, "The remote computer ended the session.");
+        assert_eq!(cause, DisconnectCause::Ended);
+    }
 
     #[test]
     fn audio_is_on_unless_the_connection_turns_it_off() {

@@ -47,6 +47,7 @@ import { useCoPilotRoom } from "../co-pilot/useCoPilotRoom";
 import { useCoPilotAudio } from "../co-pilot/useCoPilotAudio";
 import CoPilotOverlay from "../co-pilot/CoPilotOverlay";
 import { isWebPSupported, isH264Supported } from "../utils/browserCapabilities";
+import { describeSessionEnd } from "../utils/sessionEnd";
 
 /*
  * Phases:
@@ -96,6 +97,8 @@ export default function SessionClient() {
     domain: "",
   });
   const [error, setError] = useState("");
+  // Keyed by message so a later setError() never inherits a stale code.
+  const [errorStatus, setErrorStatus] = useState<{ message: string; code: number } | null>(null);
   const [sshRequired, setSshRequired] = useState<string[] | null>(null);
   const [hasDomain, setHasDomain] = useState(false);
   const [ignoreCert, setIgnoreCert] = useState(false);
@@ -623,9 +626,11 @@ export default function SessionClient() {
           // Last session — always show the "Session Ended" overlay even if
           // userDisconnectRef is stale from prior session switches.
           setReconnecting(null);
-          setError(
-            session.error || "The remote session has ended. You may have logged out of the server."
+          const message = session.error || "The remote session has ended.";
+          setErrorStatus(
+            session.errorCode === undefined ? null : { message, code: session.errorCode }
           );
+          setError(message);
           return;
         }
 
@@ -670,6 +675,7 @@ export default function SessionClient() {
       session.tunnel.onerror = (status: Guacamole.Status) => {
         tunnelHadError = true;
         session.error = status.message || "Connection failed";
+        session.errorCode = status.code;
         if (managerTunnelErrorHandler) {
           managerTunnelErrorHandler(status);
         }
@@ -679,6 +685,7 @@ export default function SessionClient() {
       const managerClientErrorHandler = session.client.onerror;
       session.client.onerror = (status: Guacamole.Status) => {
         session.error = status.message || "Connection failed";
+        session.errorCode = status.code;
         if (managerClientErrorHandler) {
           managerClientErrorHandler(status);
         }
@@ -1268,7 +1275,7 @@ export default function SessionClient() {
       navigate(`/session/${next.connectionId}`);
     } else {
       // Last session ended — show overlay.
-      setError("The remote session has ended. You may have logged out of the server.");
+      setError("The remote session has ended.");
     }
     // reconnectLoading is read at runtime only; including it would re-run the cleanup spuriously
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1335,6 +1342,11 @@ export default function SessionClient() {
     disableMultiMonitor,
     screenCount,
   ]);
+
+  const sessionEnd = describeSessionEnd(
+    error,
+    errorStatus?.message === error ? errorStatus.code : undefined
+  );
 
   // Render via portal into document.body to escape the .main-content container.
   return createPortal(
@@ -1532,15 +1544,9 @@ export default function SessionClient() {
                 <line x1="12" y1="2" x2="12" y2="12" />
               </svg>
             </div>
-            <h3 className="text-xl font-bold mb-2">
-              {error.toLowerCase().includes("terminated")
-                ? "Session Terminated"
-                : error.toLowerCase().includes("session has ended")
-                  ? "Session Ended"
-                  : "Connection Error"}
-            </h3>
+            <h3 className="text-xl font-bold mb-2">{sessionEnd.title}</h3>
             <p className="text-txt-secondary text-sm mb-8 leading-relaxed">
-              {error.toLowerCase().includes("terminated")
+              {sessionEnd.terminatedByAdmin
                 ? "Your session has been terminated by an administrator. Any unsaved work may be lost."
                 : error}
             </p>
@@ -1552,7 +1558,7 @@ export default function SessionClient() {
               >
                 Exit to Dashboard
               </button>
-              {!error.toLowerCase().includes("terminated") && (
+              {!sessionEnd.terminatedByAdmin && (
                 <button
                   className="btn-primary flex-1"
                   onClick={handleManualReconnect}

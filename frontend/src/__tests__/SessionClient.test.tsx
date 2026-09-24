@@ -278,8 +278,11 @@ describe("SessionClient", () => {
   it("handles drag-and-drop file upload", async () => {
     await renderSessionClient();
 
+    // The real BlobWriter reads the file asynchronously and then writes to the
+    // stream; a stream without sendBlob threw after the test had finished.
+    const stream = { onack: null, sendBlob: vi.fn(), sendEnd: vi.fn() };
     mockSession.filesystems = [
-      { object: { createOutputStream: vi.fn(() => ({ onack: null })) }, name: "Drive" },
+      { object: { createOutputStream: vi.fn(() => stream) }, name: "Drive" },
     ];
 
     await waitFor(() => {
@@ -293,8 +296,12 @@ describe("SessionClient", () => {
     fireEvent.drop(focusable, { dataTransfer: { files: [file] } });
 
     await waitFor(() => {
-      expect(mockSession.filesystems[0].object.createOutputStream).toHaveBeenCalled();
+      expect(mockSession.filesystems[0].object.createOutputStream).toHaveBeenCalledWith(
+        "text/plain",
+        "/test.txt"
+      );
     });
+    await waitFor(() => expect(stream.sendBlob).toHaveBeenCalled());
   });
 
   it("shows Reconnect button on error overlay and reconnects on click", async () => {

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — frontend CI failing with every test passing
+
+The **Frontend (React)** job failed on `main` after v2.1.1 with 83/83 test
+files and 1647/1647 tests green and coverage above every floor. Vitest exits
+non-zero on an **unhandled error**, even one raised after a test has
+finished: `TypeError: stream.sendBlob is not a function`, from
+`SessionClient.test.tsx` › *handles drag-and-drop file upload*. The test's
+mock output stream had only `onack`, while the real `Guacamole.BlobWriter`
+reads the dropped file with `FileReader` and then calls `stream.sendBlob()`
+asynchronously — after the test had already returned. Whether that landed
+inside a later test depended on scheduling, so it reproduced on the Linux
+runner (and in a `node:24` container) but not on Windows. The mock stream now
+implements `sendBlob` / `sendEnd`, and the test waits for the payload to reach
+the stream, so the write completes inside the test that caused it. Test-only
+change.
+
 ### Security — OpenSSF Scorecard `Vulnerabilities` (score 4, six findings)
 
 Scorecard's OSV-Scanner run reported six advisories. Only one was a

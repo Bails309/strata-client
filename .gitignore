@@ -1,6 +1,9 @@
 # Build artifacts
 target/
 target-*/
+# Vendored forks resolve through the root Cargo.lock; their own lockfiles are
+# never read by Cargo but are scanned by OSV-Scanner / Scorecard.
+crates/vendor/*/Cargo.lock
 node_modules/
 dist/
 **/node_modules/

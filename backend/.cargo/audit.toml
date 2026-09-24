@@ -6,13 +6,13 @@
 
 [advisories]
 ignore = [
-    # RUSTSEC-2023-0071 — `rsa` Marvin timing side-channel (medium).
-    # Pulled in transitively by `jsonwebtoken` (RSA JWT verification) and by
-    # `sqlx-macros-core` (MySQL compile-time checks, unused at runtime — we
-    # only enable the `postgres` sqlx feature). No fixed upgrade is available
-    # upstream. Mitigation: Strata does not expose RSA signing/decryption to
-    # untrusted network timing; JWTs are verified server-side against trusted
-    # OIDC JWKS. Revisit when `rsa` publishes a constant-time release.
+    # RUSTSEC-2023-0071 — `rsa` Marvin timing side-channel (medium). No fixed
+    # release upstream. `rsa 0.10.0-rc.18` IS compiled, via picky / sspi /
+    # winscard under the RDP engine (`rsa 0.9.10` is locked but not compiled on
+    # Linux). The attack times RSA private-key decryption; the RDP engine only
+    # builds Credentials::UsernamePassword, so no RSA private key is ever used.
+    # Revisit if smart-card / certificate RDP auth is implemented, or when
+    # `rsa` publishes a constant-time release.
     "RUSTSEC-2023-0071",
 
     # RUSTSEC-2026-0097 — `rand` 0.8.5 unsoundness with custom loggers

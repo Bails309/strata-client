@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security — OpenSSF Scorecard `Vulnerabilities` (score 4, six findings)
+
+Scorecard's OSV-Scanner run reported six advisories. Only one was a
+outdated package in the build; four came from lockfiles Cargo never
+reads, and one suppression was missing.
+
+| Advisory | Package | Where it came from | Resolution |
+| -------- | ------- | ------------------ | ---------- |
+| RUSTSEC-2026-0286 (OOB read decoding `CKA_ALLOWED_MECHANISMS`) | `cryptoki` 0.12.0 | Root `Cargo.lock`, via `sspi` smart-card support | **Bumped to 0.12.1.** Not reachable — Strata never opens a PKCS#11 session — but fixed rather than argued |
+| RUSTSEC-2026-0285 (TLS 1.3 messages across key changes) | `rustls` 0.23.41 | Stale `crates/vendor/ironrdp-connector/Cargo.lock` | Root already resolves 0.23.45; stale lockfile deleted |
+| RUSTSEC-2026-0118, RUSTSEC-2026-0119 (NSEC3 loop; O(n²) name compression) | `hickory-proto` 0.25.2 | Stale `crates/vendor/sspi/Cargo.lock` | Root resolves 0.26.3 via `hickory-resolver`; stale lockfile deleted |
+| RUSTSEC-2023-0071 (Marvin) | `rsa` | Vendored lockfiles, where the root `osv-scanner.toml` does not apply | Stale lockfiles deleted; the existing suppression's rationale **corrected** |
+| RUSTSEC-2023-0089 (unmaintained) | `atomic-polyfill` | Root `Cargo.lock` | Suppression **added** to `osv-scanner.toml`, mirroring `backend/.cargo/audit.toml` |
+
+**Why the vendored lockfiles mattered.** The forks under `crates/vendor/`
+shipped their upstream `Cargo.lock`. Cargo ignores them — the forks are
+`[patch.crates-io]` path dependencies resolved through the root lockfile —
+but OSV-Scanner scans every lockfile it finds and applies an ignore file only
+to its own directory. All three are deleted, and `crates/vendor/*/Cargo.lock`
+is now in `.gitignore` so refreshing a fork cannot reintroduce them.
+
+**The RUSTSEC-2023-0071 rationale was wrong.** `osv-scanner.toml` and
+`docs/security.md` said `rsa` was a lockfile artefact never compiled into the
+backend. Since the v2.0.0 RDP engine, `rsa 0.10.0-rc.18` is compiled via
+`picky` / `sspi` / `winscard`. The suppression stands on a different, checked
+ground: the attack times RSA private-key decryption, and the RDP engine only
+ever builds `Credentials::UsernamePassword`, so no RSA private key reaches the
+crate. `backend/.cargo/audit.toml` carried a similar stale rationale and is
+corrected too.
+
+Only `cryptoki` moves in `Cargo.lock` (0.12.0 → 0.12.1, semver patch); no
+schema, API, env-var or behavioural change. `cargo check -p strata-backend
+--locked` passes, and `osv-scanner scan source -r .` reports **No issues
+found**, with four findings filtered by justified suppressions. The Scorecard
+score updates on its next run against `main` after this merges.
+
 ## [2.1.1] — 2026-09-24
 
 ### Patch release — sessions now say how they actually ended, and five RDP fidelity defects are fixed

@@ -9,30 +9,42 @@
 # would silently be ignored.
 #
 # Reference: https://google.github.io/osv-scanner/configuration/
+#
+# The vendored forks under crates/vendor/ must not carry their own Cargo.lock
+# (see .gitignore): Cargo never reads them, this config does not apply to
+# them, and their stale pins were reported as live findings until removed.
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2023-0071"
 reason = """
-Marvin Attack timing side-channel in the pure-Rust `rsa` crate (unfixable
-upstream as of 2026). The `rsa` crate appears in Cargo.lock as a
-resolution-graph artifact only and is NEVER compiled into the strata-backend
-binary:
+Marvin Attack timing side-channel in the pure-Rust `rsa` crate. No fixed
+release exists upstream.
 
-  1. `jsonwebtoken` is built with the `aws_lc_rs` feature, which uses the
-     AWS-LC native crypto backend (RustCrypto-free) for RSA signature
-     verification.
+`rsa 0.10.0-rc.18` IS compiled into strata-backend, via the RDP stack:
+`picky` / `sspi` / `winscard` <- vendored `ironrdp-connector` + `sspi` <-
+strata-session. (`rsa 0.9.10` is locked but not compiled for the Linux
+target; `jsonwebtoken` uses `aws_lc_rs` and `sqlx` excludes `sqlx-mysql`.)
 
-  2. `sqlx` is configured with `default-features = false` and only the
-     `postgres` backend; `sqlx-mysql` (which depends on `rsa` for MySQL
-     `caching_sha2_password` auth) is excluded from the build graph.
+The attack recovers plaintext by timing RSA PKCS#1 v1.5 *decryption with a
+private key*. Strata never gives these crates an RSA private key: the RDP
+engine only constructs `Credentials::UsernamePassword` (NTLM / Kerberos with
+symmetric etypes), so the private-key paths that would decrypt with `rsa`
+(PKINIT, PKU2U, smart-card credentials) are never reached.
 
-`cargo tree` does not list `rsa` in the actual compiled dependency graph.
-The `[[package]] name = "rsa"` entry in Cargo.lock exists because Cargo
-locks resolved versions for all reachable optional/feature-gated crates
-across the workspace, even those not selected for compilation.
+Remove when `rsa` ships a constant-time release, or revisit if smart-card or
+certificate-based RDP authentication is ever implemented.
+"""
 
-This is a documented false positive and will be removed if/when sqlx
-drops `rsa` from its umbrella crate manifest.
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0089"
+reason = """
+`atomic-polyfill` is unmaintained (informational, no vulnerability). It is
+locked via sspi[scard] -> winscard -> iso7816 -> heapless 0.7, and is not
+compiled for the Linux target (`cargo tree -p strata-backend -e normal -i
+atomic-polyfill` prints nothing). On targets that do build it, it defers to
+core::sync::atomic. No winscard / iso7816 release moves to heapless 0.8,
+which dropped the shim, so it cannot be updated away. Mirrors the entry in
+backend/.cargo/audit.toml; revisit when the vendored sspi fork is dropped.
 """
 
 [[IgnoredVulns]]

@@ -59,3 +59,4 @@ The runbooks listed below cover §26/§28 of the Coding Standards.
 | smtp-troubleshooting.md  | Notification email delivery failures, retry-worker stalls   | Active |
 | av-operations.md         | AV scanner outage, signature updates, false-positive triage | Active |
 | clipboard-diagnostics.md | RDP clipboard failure triage, recovery & evidence capture   | Active |
+| session-disconnects.md   | Unexpected session ends: on-screen message → cause → log    | Active |

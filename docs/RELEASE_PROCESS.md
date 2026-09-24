@@ -180,6 +180,24 @@ git push origin vX.Y.Z
 gh release create vX.Y.Z --notes-file CHANGELOG.md
 ```
 
+Pushing the tag publishes **no** container images: since v2.1.1 there is no
+release workflow and nothing is pushed to GitHub Container Registry. Build the
+tagged images and push them to the private registry:
+
+```sh
+git switch --detach vX.Y.Z
+docker compose build backend frontend
+for svc in backend frontend; do
+  docker tag "strata/$svc:latest" "$REGISTRY/$svc:X.Y.Z"
+  docker push "$REGISTRY/$svc:X.Y.Z"
+done
+```
+
+Record the pushed digests in the release notes so deployments can pin by
+digest ([deployment.md § Image provenance](deployment.md#image-provenance-private-registry)).
+For DMZ topologies, build and push `strata-dmz` the same way from
+`crates/strata-dmz`.
+
 ---
 
 ## 10. Post-release

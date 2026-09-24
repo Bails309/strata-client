@@ -69,6 +69,8 @@ If you have used Guacamole's reference web app and wished it had real auth, real
 - **Browser-based multi-monitor RDP** — Window Management API spans a session across physical monitors with per-window cursor/keyboard sync.
 - **Tiled multi-session view** — open multiple connections side-by-side with per-tile focus and keyboard broadcast.
 - **Native SFTP file transfer** — one transfer path that decorates any protocol, rather than per-protocol drive redirection.
+- **RDP audio, layout-independent typing, and pixel-exact sizing** — desktop audio over RDPSND (on by default, `disable-audio` to turn off); printable characters sent as Unicode so every local keyboard layout types what it shows, with shortcuts still sent as key positions; desktop sized in real device pixels with the remote UI pinned to 100% unless the user opts in to matching their local display scale (v2.1.1).
+- **Accurate session-end messages** — every ended session carries a cause and a Guacamole status code, so the browser can say *"You signed out of the remote session"*, *"Session Timed Out"* or *"Connection Lost"* instead of guessing; Windows' disconnect codes are translated from protocol-spec prose into plain language (v2.1.1).
 
 ### Authentication & authorization
 
@@ -128,6 +130,7 @@ For the full per-version history of how these capabilities were built and the bu
 
 | Version | Date       | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | :------ | :--------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2.1.1   | 2026-09-24 | **Patch release - sessions now say how they actually ended, plus working RDP audio, correct non-US keyboard input and correct sizing on scaled displays.** Signing out of Windows showed **Connection Error**, Start -> Disconnect blamed *"an administrative tool"*, and a dropped network path suggested *"You may have logged out of the server."* Three causes: every native session end carried the same status code (`519`, mis-commented as `UPSTREAM_ERROR`), so the browser guessed from wording; `ironrdp` hands over Windows' Set Error Info code only as MS-RDPBCGR spec prose, which was shown verbatim; and an engine failure ended the session **without sending the browser anything**. `TargetEvent::Disconnected` now carries a `DisconnectCause` mapped to seven Guacamole status codes (`SESSION_CLOSED`, `SESSION_TIMEOUT`, `SESSION_CONFLICT`, `UPSTREAM_UNAVAILABLE`, `CLIENT_UNAUTHORIZED`, `UPSTREAM_ERROR`, `SERVER_ERROR`); the RDP engine recovers the code by re-rendering known codes through the same `ironrdp` function and translates it into plain sentences; engine failures are reported; and the overlay and session-bar thumbnail title by status code via `describeSessionEnd()`. Fixing the silent path also closed a teardown skip: an input-path engine failure returned before the recording was finalised and the credential revoked. Also ships the post-2.1.0 RDP fixes: **audio** (every session sent `INFO_NOAUDIOPLAYBACK`, and Windows also requires RDPDR beside RDPSND - now advertised with **no devices**; `disable-audio` is honoured), **Unicode keyboard input** (a UK `\` arrived as `#` because the layout was applied twice), **device-pixel sizing with DPI pinned to 96** unless *Match my display scale* is ticked, and no more **network auto-detect** retry storm. **Images are no longer published to GitHub Container Registry** - the release workflow, `docker-compose.ghcr.yml` and `verify-image.sh` are removed; build and push to a private registry (Quick Start below), and the `strata-dmz` Helm chart now requires `image.repository`. No migration, API or env-var change. ([details](CHANGELOG.md#211--2026-09-24)) |
 | 2.1.0   | 2026-09-16 | **Minor release - H.264 streaming returns for RDP, native and with no server-side decode.** MS-RDPEGFX AVC420/AVC444 frames from the Windows host go straight to the browser's WebCodecs `VideoDecoder`, restoring on the native engine what was removed with `guacd` in v2.0.0. **Off by default, opt-in per connection** via **Enable graphics pipeline (GFX)**: enabling it stops the host sending lossless bitmap updates, so it suits motion-heavy work rather than reading text. Three unrelated faults had to be fixed before a frame arrived, none of them host configuration: the GFX toggle **could never be saved** (the parameter is inverted, so its enabled state is the string `"false"`, which the admin form stripped as falsy - hence the old "inert" documentation), the connector **never requested the graphics channel**, and advertising 4:2:0 alone had the codec flag stripped by a host preferring 4:4:4, so the handler now advertises V10.7. Hazy text with a green line along the bottom edge proved **not** to be an H.264 quality limit: the codec pads to a 16x16 macroblock boundary (1920x950 encodes as 1920x960) and Windows sets no crop metadata, so the client was scaling the padded frame to fit - resampling every pixel of every frame and drawing the green padding rows. Frames are now cropped to the surface rectangle and blitted 1:1. Solid fills and surface-to-surface copies are forwarded, the latter as a canvas-side copy rather than a re-encode. Adds a third vendored fork (`ironrdp-egfx`), tracked with a drop condition. ([details](CHANGELOG.md#210--2026-09-16)) |
 | 2.0.0   | 2026-09-09 | **Major release - Apache Guacamole's `guacd` daemon is gone; every protocol is served by a native Rust engine in-process.** Four years of separate C daemon - FreeRDP, libssh2, libvncclient and a patched Guacamole build, spoken to over TCP 4822 - replaced by `ironrdp` (RDP), `russh` (SSH), `vnc-rs` (VNC), a native Kubernetes exec client, and `russh-sftp` (file transfer), all running as Tokio tasks inside the backend. **The browser is unaffected:** it still speaks the Guacamole wire protocol, and existing `.guac` recordings still play. Two behaviours are deliberately stricter and both are security decisions: **RDP requires NLA** - the connector advertises CredSSP *only*, because offering the legacy TLS layer lets a server negotiate down to one where the connection completes *before* any credential is checked (a live test against xrdp produced a healthy session from a deliberately wrong password) - and **SSH requires a host key**, with no trust-on-first-use, though the connection editor can survey a target's keys so approval is a decision rather than a hunt. Adds **RDP certificate trust** (CA bundle or pinned SHA-256, precedence pin > bundle > ignore-cert) with in-app discovery, since RDP presents its certificate only after X.224 and `openssl s_client` cannot fetch one. Every `guacd` parameter was audited and is now **honoured or removed**, each removal carrying a migration that clears it from existing connections (migrations `082`-`088`). **Custom DNS was rebuilt, not lost** - the engine resolves targets against your nameservers with search-suffix expansion while infrastructure lookups stay on Docker's resolver, and only the socket uses the address so TLS verification and the Kerberos SPN still see the hostname. Removes `STRATA_SESSION_ENGINE`, `GUACD_*` and `STRATA_CLIPBOARD_*`; drops the per-engine metrics split; renames the bandwidth counters to `bytes_down`/`bytes_up` (migration `089`). ([details](CHANGELOG.md#200--2026-09-09)) |
 | 1.14.6  | 2026-08-19 | **Patch release - large RDP clipboard copies were being discarded outright, and the setting meant to prevent it had never worked for RDP.** A 12,747-line, 281,852-character file produced *no* inbound clipboard events at all - not a truncated one - while small copies in the same session worked. `guacd` allocates one fixed-size clipboard buffer per connection, and on the copy-from-remote path the calls that publish the result sit inside a success branch that is skipped when the conversion runs out of buffer, so an oversize copy is dropped wholesale with no error. Strata had been sending `clipboard-buffer-size=8388608` for RDP since v1.3.x, but that parameter has never existed for RDP in the pinned `guacd` - absent from the RDP argument list, clipboard hard-coded to 262,144 bytes - so it was silently discarded at every connect. 281,852 against 262,144 is a 7.5% overrun, which is why a 12,747-line script failed and an 8,000-line certificate did not. Fixed by pinning `guacd` to an upstream commit that accepts the parameter and heap-allocates the buffer (verified by image build), reworking the v1.14.1 stall watchdog so a paused transfer completes instead of being abandoned, and making the ceiling visible via handshake logging plus a new `STRATA_CLIPBOARD_BUFFER_BYTES` override. Mandatory `guacd` rebuild. ([details](CHANGELOG.md#1146--2026-08-19)) |
@@ -263,47 +266,48 @@ cp .env.example .env        # review and edit as needed
 
 ### 2. Run
 
-You have two options. **Pre-built images is the faster path** (~30 s on a cold host); building from source takes ~5 minutes on first boot but is the right choice if you've forked the repo or are running unreleased commits.
+Strata does **not** publish container images to any public registry. Build the images from this repository, and — for anything beyond a single host — push them to your own private registry.
 
-#### Option A — Pull pre-built images from GHCR (recommended)
-
-Every tagged release publishes Cosign-signed, SLSA Level-3-provenance, CycloneDX-SBOM-attached container images to GitHub Container Registry. The `docker-compose.ghcr.yml` overlay points the stack at them:
-
-```bash
-export STRATA_VERSION=1.10.2                                  # or "latest"
-docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
-docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
-```
-
-Images:
-
-| Image                                                   | What it is                                  |
-| ------------------------------------------------------- | ------------------------------------------- |
-| `ghcr.io/bails309/strata-client/backend:<version>`      | Rust backend (Axum + Tokio)                 |
-| `ghcr.io/bails309/strata-client/frontend:<version>`     | Frontend SPA (nginx + static React)         |
-
-Verify image signatures + provenance with [Cosign](https://docs.sigstore.dev/cosign/installation/) before deploying to production:
-
-```bash
-cosign verify ghcr.io/bails309/strata-client/backend:1.10.2 \
-  --certificate-identity-regexp '^https://github.com/Bails309/strata-client/.github/workflows/release.yml@.*' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
-```
-
-The published SBOM is also attached as an in-toto attestation:
-
-```bash
-cosign download attestation ghcr.io/bails309/strata-client/backend:1.10.0 \
-  --predicate-type https://cyclonedx.org/bom
-```
-
-#### Option B — Build from source
+#### Option A — Build and run on this host
 
 ```bash
 docker compose up -d --build
 ```
 
-This builds `backend` and `frontend` locally from the Dockerfiles in this repo. Use this path when you've modified source, are testing an unreleased commit, or need an air-gapped build.
+This builds `backend` and `frontend` locally from the Dockerfiles in this repo (tagged `strata/backend:latest` and `strata/frontend:latest`) and starts the stack. It is also the path for an air-gapped build.
+
+#### Option B — Deploy from your private registry
+
+Build once, tag with the release version, and push to the registry your hosts pull from:
+
+```bash
+export REGISTRY=registry.example.com/strata    # your private registry
+export STRATA_VERSION=2.1.1
+
+docker compose build backend frontend
+for svc in backend frontend; do
+  docker tag "strata/$svc:latest" "$REGISTRY/$svc:$STRATA_VERSION"
+  docker push "$REGISTRY/$svc:$STRATA_VERSION"
+done
+```
+
+On each deployment host, point the two services at those images with a local `docker-compose.override.yml` (picked up automatically by `docker compose`), log in to the registry, and pull:
+
+```yaml
+services:
+  backend:
+    image: registry.example.com/strata/backend:2.1.1
+  frontend:
+    image: registry.example.com/strata/frontend:2.1.1
+```
+
+```bash
+docker login registry.example.com
+docker compose pull backend frontend
+docker compose up -d
+```
+
+Pin by digest (`image: …@sha256:<digest>`) where your registry supports it, so a re-pushed tag cannot change what a host runs. Up to v2.1.0 each tagged release was also published to GitHub Container Registry with Cosign signatures and SLSA provenance; that pipeline was removed in v2.1.1 — see the [CHANGELOG](CHANGELOG.md#211--2026-09-24).
 
 ### ⌨️ Windows Key Proxy
 

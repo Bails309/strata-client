@@ -683,6 +683,7 @@ impl ProtocolEngine for RasterisingEngine {
 mod tests {
     use super::*;
     use crate::engine::mock::MockEngine;
+    use crate::engine::DisconnectCause;
 
     fn renderer(cols: usize, rows: usize) -> TerminalRenderer {
         let font = TerminalFont::discover(DEFAULT_FONT_SIZE_PX)
@@ -847,13 +848,15 @@ mod tests {
         events
             .send(TargetEvent::Disconnected {
                 reason: "bye".to_owned(),
+                cause: DisconnectCause::Ended,
             })
             .unwrap();
         let event = wrapper.next_event().await.unwrap().unwrap();
         assert_eq!(
             event,
             TargetEvent::Disconnected {
-                reason: "bye".to_owned()
+                reason: "bye".to_owned(),
+                cause: DisconnectCause::Ended,
             }
         );
     }

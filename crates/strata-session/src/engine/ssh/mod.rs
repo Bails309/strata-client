@@ -27,7 +27,9 @@ use secrecy::{ExposeSecret, SecretString};
 use tokio::sync::{mpsc, Mutex};
 
 use crate::engine::keymap::{keysym_to_bytes_with, Backspace, CellSize, Modifiers};
-use crate::engine::{EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec};
+use crate::engine::{
+    DisconnectCause, EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec,
+};
 use crate::error::EngineError;
 
 /// How the engine decides whether a host key is acceptable.
@@ -876,15 +878,21 @@ impl ProtocolEngine for SshEngine {
                     ..
                 }) => {
                     return Ok(Some(TargetEvent::Disconnected {
-                        reason: format!("remote shell killed by {signal_name:?}: {error_message}"),
+                        reason: format!(
+                            "The remote shell was terminated by signal {signal_name:?}: {error_message}"
+                        ),
+                        cause: DisconnectCause::Ended,
                     }));
                 }
                 Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
                     let reason = match self.exit_status {
-                        Some(0) | None => "remote shell exited".to_owned(),
-                        Some(status) => format!("remote shell exited with status {status}"),
+                        Some(0) | None => "The remote shell exited.".to_owned(),
+                        Some(status) => format!("The remote shell exited with status {status}."),
                     };
-                    return Ok(Some(TargetEvent::Disconnected { reason }));
+                    return Ok(Some(TargetEvent::Disconnected {
+                        reason,
+                        cause: DisconnectCause::Ended,
+                    }));
                 }
                 // Flow control and request acknowledgements carry no
                 // user-visible payload.

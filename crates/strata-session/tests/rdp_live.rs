@@ -97,7 +97,7 @@ async fn first_image(engine: &mut RdpEngine) -> (i32, i32, Vec<u8>) {
                 Ok(Some(TargetEvent::ImageUpdate { x, y, data, .. })) => {
                     return Ok((x, y, data.to_vec()))
                 }
-                Ok(Some(TargetEvent::Disconnected { reason })) => {
+                Ok(Some(TargetEvent::Disconnected { reason, .. })) => {
                     return Err(format!("disconnected before any frame: {reason}"))
                 }
                 Ok(Some(other)) => {
@@ -285,7 +285,7 @@ async fn a_client_disconnect_ends_the_session() {
     let outcome = tokio::time::timeout(CONNECT_TIMEOUT, async {
         loop {
             match engine.next_event().await {
-                Ok(Some(TargetEvent::Disconnected { reason })) => return reason,
+                Ok(Some(TargetEvent::Disconnected { reason, .. })) => return reason,
                 Ok(Some(_)) => {}
                 Ok(None) => return "stream ended".to_owned(),
                 Err(err) => panic!("engine error: {err}"),

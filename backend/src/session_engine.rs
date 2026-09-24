@@ -912,7 +912,7 @@ pub async fn run_native(
                     None => std::future::pending().await,
                 }
             } => {
-                send_error(&mut sink, "Session terminated by administrator").await;
+                send_error(&mut sink, "Session terminated by administrator", SESSION_CONFLICT).await;
                 break "terminated by administrator";
             }
 
@@ -934,7 +934,7 @@ pub async fn run_native(
                         )
                         .await;
                     }
-                    send_error(&mut sink, reason.client).await;
+                    send_error(&mut sink, reason.client, SESSION_CLOSED).await;
                     break reason.audit;
                 }
             }
@@ -1046,28 +1046,32 @@ fn watchdog_verdict(
 ) -> Option<WatchdogVerdict> {
     if token.is_some_and(crate::services::token_revocation::is_revoked) {
         return Some(WatchdogVerdict {
-            client: "Session closed: token revoked",
+            client: "This session was closed because your sign-in was revoked.",
             audit: "revoked",
         });
     }
     if started_at.elapsed() >= MAX_TUNNEL_DURATION {
         return Some(WatchdogVerdict {
-            client: "Session closed: maximum duration reached",
+            client: "This session reached the maximum allowed duration and was closed.",
             audit: "max_duration",
         });
     }
     None
 }
 
+/// Guacamole `SESSION_CONFLICT`: someone else ended the session.
+const SESSION_CONFLICT: i32 = 0x0209;
+/// Guacamole `SESSION_CLOSED`: the session ended by design.
+const SESSION_CLOSED: i32 = 0x020B;
+
 /// Tell the client why it is being disconnected, best effort.
-async fn send_error<S>(sink: &mut S, message: &str)
+async fn send_error<S>(sink: &mut S, message: &str, status: i32)
 where
     S: SinkExt<Message> + Unpin,
 {
     let instruction = ServerInstruction::Error {
         text: message.to_owned(),
-        // 521 = SESSION_CLOSED, matching the guacd path.
-        status: 521,
+        status,
     }
     .to_bytes();
     let Ok(text) = String::from_utf8(instruction.to_vec()) else {

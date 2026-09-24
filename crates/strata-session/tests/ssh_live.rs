@@ -87,7 +87,7 @@ async fn read_until(engine: &mut SshEngine, needle: &str) -> String {
                         return Ok::<_, EngineError>(());
                     }
                 }
-                Ok(Some(TargetEvent::Disconnected { reason })) => {
+                Ok(Some(TargetEvent::Disconnected { reason, .. })) => {
                     panic!("target disconnected while waiting for {needle:?}: {reason}\n{seen}")
                 }
                 Ok(Some(_)) => {}
@@ -290,7 +290,7 @@ async fn a_remote_exit_ends_the_session() {
     let outcome = tokio::time::timeout(IO_TIMEOUT, async {
         loop {
             match engine.next_event().await {
-                Ok(Some(TargetEvent::Disconnected { reason })) => return reason,
+                Ok(Some(TargetEvent::Disconnected { reason, .. })) => return reason,
                 Ok(Some(_)) => {}
                 Ok(None) => panic!("stream ended without a Disconnected event"),
                 Err(err) => panic!("engine error: {err}"),

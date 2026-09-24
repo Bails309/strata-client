@@ -130,7 +130,7 @@ async fn read_until(engine: &mut KubeEngine, needle: &str) -> String {
                     return seen;
                 }
             }
-            Some(TargetEvent::Disconnected { reason }) => {
+            Some(TargetEvent::Disconnected { reason, .. }) => {
                 panic!("session ended waiting for {needle:?}: {reason}; saw {seen:?}")
             }
             Some(_) => {}
@@ -236,7 +236,7 @@ async fn a_pod_that_does_not_exist_is_reported() {
             .expect("timed out; the engine neither connected nor complained")
             .expect("engine error");
         match event {
-            Some(TargetEvent::Disconnected { reason }) => {
+            Some(TargetEvent::Disconnected { reason, .. }) => {
                 assert!(
                     reason.contains("strata-no-such-pod") || reason.contains("not found"),
                     "unhelpful reason: {reason}"

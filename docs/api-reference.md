@@ -614,7 +614,7 @@ Detailed service health status.
 > | Field           | Meaning                                                                                     |
 > | --------------- | ------------------------------------------------------------------------------------------- |
 > | `protocols`     | What this build will serve. Sorted.                                                          |
-> | `withheld`      | Compiled out, or disabled by `STRATA_SESSION_ENGINE`. Requests for these are **refused**, not routed elsewhere \u2014 there is nowhere else to route them. |
+> | `withheld`      | Compiled out, or excluded by `STRATA_SESSION_NATIVE_PROTOCOLS`. Requests for these are **refused**, not routed elsewhere — there is nowhere else to route them. |
 > | `terminal_font` | Whether a usable monospace face was found. `false` breaks SSH and Kubernetes rendering; install `fonts-dejavu-core`. |
 
 #### `GET /api/admin/health/av` (v1.12.1+)
@@ -2400,6 +2400,17 @@ Upgrades to a WebSocket connection carrying the Guacamole-style instruction stre
 | `height`   | integer | Requested display height in pixels (default: 1080)                                          |
 | `dpi`      | integer | Requested display DPI (default: 96)                                                         |
 
+> **(v2.1.1 note) Size is in device pixels; DPI is 96 unless the user opts in.**
+> Strata's own client sends `width` / `height` as the container's CSS size
+> multiplied by `devicePixelRatio` — real device pixels — and `dpi` as `96`,
+> or `96 × devicePixelRatio` only when the user has ticked **Match my display
+> scale**. The RDP engine turns `dpi` into an MS-RDPEDISP desktop scale
+> factor, so a client that sends CSS pixels *and* a scaled DPI gets a desktop
+> that is both undersized and drawn larger — the "zoomed in" session fixed in
+> v2.1.1. Third-party clients should follow the same rule. The same applies
+> to the optional third argument of the client `size` instruction
+> (`size,<width>,<height>[,<dpi>]`).
+
 **Credential Resolution Order**:
 
 1. **Vault-stored** — if the user has an encrypted credential saved for this connection (via `PUT /api/user/connections/:id/credential`), it is decrypted and used
@@ -2437,6 +2448,46 @@ Upgrades to a WebSocket connection carrying the Guacamole-style instruction stre
 4. Spawns a transparent byte-pump that copies WebSocket frames between the public TCP socket and the h2 stream — masking, ping/pong, fragmentation, and close frames flow through unmodified.
 
 On the internal side the new `LoopbackUpgradeHandler` accepts the inbound Extended CONNECT and bridges it to a regular HTTP/1.1 WebSocket upgrade against `127.0.0.1:8080` (overridable via `STRATA_DMZ_LOOPBACK_ADDR`), so the same axum router and the same `verify_edge_headers` middleware promote the forwarded `x-strata-edge-client-ip` to the real client IP for audit / RBAC. The guacd connection always originates from the **internal** node's IP, never the DMZ node's IP. Individual h2 frames on the DMZ→public direction are capped at 8 MiB to prevent memory amplification by a misbehaving internal node; h2 flow-control windows are honoured in both directions so back-pressure from a slow public client transparently slows the upstream guacd traffic. See [security.md](security.md#dmz-deployment-mode-v150) for the full trust-boundary analysis.
+
+### Session end: the `error` instruction (v2.1.1)
+
+A native session always ends with exactly one server → client instruction
+of the form `error,<text>,<status>;` before the socket closes — with one
+deliberate exception, **gateway shutdown**, which drops the socket without an
+instruction so that clients reconnect on their own once the backend is back.
+`<text>` is a complete, user-presentable sentence. `<status>` is a Guacamole
+status code (decimal on the wire) that classifies the end.
+
+| Status | Name | Meaning | Examples of `<text>` |
+| ------ | ---- | ------- | -------------------- |
+| `523` (`0x020B`) | `SESSION_CLOSED` | Ended normally, by the user or by policy | *You signed out of the remote session.* · *You disconnected from the remote session. It is still running on the remote computer; reconnect to pick up where you left off.* · *The remote shell exited with status 1.* · *This session reached the maximum allowed duration and was closed.* · *This session was closed because your sign-in was revoked.* |
+| `522` (`0x020A`) | `SESSION_TIMEOUT` | The target's idle-session limit | *The remote computer disconnected the session because it was idle for too long.* |
+| `521` (`0x0209`) | `SESSION_CONFLICT` | Ended by someone else | *This session was opened from another window or device, which disconnected it here.* · *An administrator on the remote computer signed this session out.* · *Session terminated by administrator* (Strata admin kill) |
+| `520` (`0x0208`) | `UPSTREAM_UNAVAILABLE` | The target refused or could not serve the session | *The remote computer refused the connection.* · licensing and connection-broker failures |
+| `769` (`0x0301`) | `CLIENT_UNAUTHORIZED` | The target does not admit this account | *Your account is not allowed to sign in to the remote computer over Remote Desktop.* · *The remote computer rejected the credentials.* |
+| `515` (`0x0203`) | `UPSTREAM_ERROR` | The network path to the target failed | *The network connection to the remote computer was lost.* · *The remote computer stopped responding, so the connection was dropped.* · *The remote computer closed the connection without giving a reason. It may have restarted, shut down, or dropped off the network.* |
+| `512` (`0x0200`) | `SERVER_ERROR` | Protocol violation or a failed component on the target | *The session ended because of an unexpected response from the remote computer.* · *The session ended because a component on the remote computer stopped unexpectedly.* |
+
+Client guidance:
+
+- **Branch on `<status>`, display `<text>`.** The text is written for people
+  and will be reworded; the codes are the contract. The administrator kill
+  is the one case Strata's own client also recognises by text (it contains
+  *terminated*) to suppress its Reconnect button.
+- **Treat every `error` as terminal.** `guacamole-common-js` already does:
+  its `error` handler calls `onerror` and then `disconnect()`.
+- **Do not auto-reconnect on `521`.** A `SESSION_CONFLICT` end usually means
+  the same Windows session was opened elsewhere; reconnecting automatically
+  would take it back and start a tug-of-war between the two clients.
+
+> **Changed in v2.1.1.** Up to v2.1.0 every native session end carried
+> status `519` (`UPSTREAM_NOT_FOUND`, mis-commented in the source as
+> `UPSTREAM_ERROR`) with the engine's internal reason — for RDP, the
+> MS-RDPBCGR description of the Set Error Info code — and an engine failure
+> sent **no** instruction at all. The gateway's own watchdog closes used
+> `521` with *Session closed: maximum duration reached* / *Session closed:
+> token revoked*. The mapping and its rationale are in
+> [architecture.md § How a session ends](architecture.md#how-a-session-ends-v211).
 
 ### `POST /api/tunnel/ticket`
 
@@ -3527,8 +3578,10 @@ The `connection_defaults` field accepts a JSON object of connection parameter ke
 | `disable-bitmap-caching`     | Disable RDP bitmap cache                                                                                                                                                                                                                                                                                      |
 | `disable-glyph-caching`      | Disable glyph (font symbol) cache                                                                                                                                                                                                                                                                             |
 | `disable-offscreen-caching`  | Disable off-screen region cache                                                                                                                                                                                                                                                                               |
-| `disable-gfx`                | Disable the Graphics Pipeline Extension (GFX)                                                                                                                                                                                                                                                                 |
-| `enable-h264`                | Enable H.264 GFX passthrough (v0.28.0+). Requires `disable-gfx=false`, `color-depth=32`, and AVC444 configured on the RDP host. When `false`, the session falls back to the bitmap path. The legacy parameter name `enable-gfx-h264` is **not** recognised by guacd and was a documented bug prior to v0.28.0 |
+| `disable-gfx`                | Controls the Graphics Pipeline Extension (GFX). **Inverted:** `"false"` *enables* it, and with it opt-in H.264 passthrough on the native engine (v2.1.0+). See [h264-passthrough.md](h264-passthrough.md)                                                                                                    |
+| `enable-h264`                | **Removed in v2.0.0** (stripped from every connection by migration `087` and no longer whitelisted). It gated the `guacd`-era passthrough (v0.28.0 – v1.14.6); since v2.1.0 H.264 is governed by `disable-gfx` alone                                                                                        |
+| `disable-audio`              | Stop the RDP host redirecting desktop audio (`INFO_NOAUDIOPLAYBACK`). **Honoured since v2.1.1**; before that it was accepted and ignored, and audio never played either way                                                                                                                                  |
+| `server-layout`              | Keyboard layout announced to the RDP host. Governs positional keys (shortcuts, navigation, modifiers). Since v2.1.1 printable characters are sent as Unicode and do not depend on it; the *Failsafe (Unicode events)* value is therefore equivalent to any other                                              |
 | `force-lossless`             | Force lossless encoding (disables H.264; falls back to RemoteFX). Use only for screens where colour fidelity is critical (e.g. medical imaging)                                                                                                                                                               |
 | `color-depth`                | Colour depth in bits per pixel. **Must be `32` for H.264 GFX**; lower values silently disable H.264 and fall back to RemoteFX. The backend defaults this to `32` when empty (v0.28.0+)                                                                                                                        |
 | `recording-path`             | Directory for screen recording files                                                                                                                                                                                                                                                                          |

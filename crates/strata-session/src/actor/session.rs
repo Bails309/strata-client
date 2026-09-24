@@ -24,8 +24,8 @@ use bytes::{Bytes, BytesMut};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::actor::audit::{AuditRecord, AuditSink};
-use crate::engine::{FileRequest, InputEvent, ProtocolEngine, TargetEvent};
-use crate::error::SessionError;
+use crate::engine::{DisconnectCause, FileRequest, InputEvent, ProtocolEngine, TargetEvent};
+use crate::error::{EngineError, SessionError};
 use crate::protocol::guacamole::encode_instruction;
 use crate::protocol::ClientInstruction;
 use crate::transport::{ClientFrame, FrameEncoder};
@@ -41,6 +41,9 @@ pub const CLIENT_QUEUE_DEPTH: usize = 256;
 pub const OBSERVER_QUEUE_DEPTH: usize = 128;
 
 const SYNC_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How long to wait for a failed engine to say why it closed.
+const CLOSE_REASON_GRACE: Duration = Duration::from_secs(1);
 
 /// Largest clipboard payload accepted from the client.
 pub const MAX_CLIPBOARD_BYTES: usize = 8 * 1024 * 1024;
@@ -275,8 +278,13 @@ impl SessionActor {
                 command = self.commands.recv() => {
                     match command {
                         Some(SessionCommand::ClientInput(instruction)) => {
-                            if let Some(reason) = self.on_client_input(instruction).await? {
-                                break reason;
+                            match self.on_client_input(instruction).await {
+                                Ok(Some(reason)) => break reason,
+                                Ok(None) => {}
+                                Err(SessionError::Engine(err)) => {
+                                    break self.end_after_input_failure(err).await;
+                                }
+                                Err(err) => return Err(err),
                             }
                         }
                         Some(SessionCommand::AttachObserver(reply)) => {
@@ -301,9 +309,18 @@ impl SessionActor {
                                 break "target disconnected".to_owned();
                             }
                         }
-                        Ok(None) => break "target closed the stream".to_owned(),
+                        Ok(None) => {
+                            self.notify_end(
+                                "The remote session has ended.".to_owned(),
+                                DisconnectCause::Ended,
+                            )
+                            .await;
+                            break "target closed the stream".to_owned();
+                        }
                         Err(err) => {
                             tracing::warn!(session = %self.id, error = %err, "engine failure");
+                            let (reason, cause) = describe_engine_failure(&err);
+                            self.notify_end(reason, cause).await;
                             break format!("engine failure: {err}");
                         }
                     }
@@ -312,6 +329,30 @@ impl SessionActor {
         };
 
         self.teardown(&reason).await
+    }
+
+    /// Tell the client why the session is ending, best effort.
+    async fn notify_end(&mut self, reason: String, cause: DisconnectCause) {
+        let _ = self
+            .on_target_event(TargetEvent::Disconnected { reason, cause })
+            .await;
+    }
+
+    /// Wind down after the engine refused input.
+    ///
+    /// An engine that has closed has usually queued the reason it closed,
+    /// which says far more than the failed write does.
+    async fn end_after_input_failure(&mut self, err: EngineError) -> String {
+        if let Ok(Ok(Some(event @ TargetEvent::Disconnected { .. }))) =
+            tokio::time::timeout(CLOSE_REASON_GRACE, self.engine.next_event()).await
+        {
+            let _ = self.on_target_event(event).await;
+            return "target disconnected".to_owned();
+        }
+        tracing::warn!(session = %self.id, error = %err, "engine failure on input");
+        let (reason, cause) = describe_engine_failure(&err);
+        self.notify_end(reason, cause).await;
+        format!("engine failure: {err}")
     }
 
     /// Returns `Some(reason)` when the session should end.
@@ -542,6 +583,33 @@ impl SessionActor {
         credential?;
         audit
     }
+}
+
+/// What the user is told when the engine fails rather than ending cleanly.
+fn describe_engine_failure(err: &EngineError) -> (String, DisconnectCause) {
+    let (reason, cause) = match err {
+        EngineError::Transport(io) if io.kind() == std::io::ErrorKind::TimedOut => (
+            "The remote computer stopped responding, so the connection was dropped.",
+            DisconnectCause::ConnectionLost,
+        ),
+        EngineError::Transport(_) => (
+            "The network connection to the remote computer was lost.",
+            DisconnectCause::ConnectionLost,
+        ),
+        EngineError::Closed(_) => (
+            "The remote computer closed the connection unexpectedly.",
+            DisconnectCause::ConnectionLost,
+        ),
+        EngineError::AuthRejected => (
+            "The remote computer rejected the credentials.",
+            DisconnectCause::Unauthorized,
+        ),
+        EngineError::Protocol(_) | EngineError::Unsupported(_) => (
+            "The session ended because of an unexpected response from the remote computer.",
+            DisconnectCause::Failed,
+        ),
+    };
+    (reason.to_owned(), cause)
 }
 
 /// Milliseconds since the Unix epoch, saturating at zero before 1970.
@@ -1069,6 +1137,7 @@ mod tests {
         events
             .send(TargetEvent::Disconnected {
                 reason: "host rebooted".to_owned(),
+                cause: DisconnectCause::Ended,
             })
             .unwrap();
 
@@ -1082,6 +1151,52 @@ mod tests {
         while handle.send(ClientInstruction::Nop).await.is_ok() {
             tokio::task::yield_now().await;
         }
+    }
+
+    struct BrokenEngine;
+
+    #[async_trait]
+    impl ProtocolEngine for BrokenEngine {
+        fn protocol(&self) -> Protocol {
+            Protocol::Rdp
+        }
+        async fn handle_input(&mut self, _input: InputEvent) -> Result<(), EngineError> {
+            Ok(())
+        }
+        async fn next_event(&mut self) -> Result<Option<TargetEvent>, EngineError> {
+            Err(EngineError::Transport(
+                std::io::ErrorKind::ConnectionReset.into(),
+            ))
+        }
+        async fn shutdown(&mut self) -> Result<(), EngineError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_engine_tells_the_client_the_connection_was_lost() {
+        // Without this the socket just closed, and the browser could only
+        // guess — it guessed "you logged out".
+        let (_handle, mut frames) = SessionActor::spawn(SessionConfig {
+            id: "broken".to_owned(),
+            engine: Box::new(BrokenEngine),
+            encoder: Box::new(GuacWireEncoder::new()),
+            audit: Box::new(NullAuditSink),
+            recording: RecordingPolicy::default(),
+            moderator: None,
+            credential: None,
+        });
+
+        let ClientFrame::Text(bytes) = frames.recv().await.unwrap() else {
+            panic!("expected a text error instruction");
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.starts_with("5.error,"), "{text}");
+        assert!(
+            text.contains("connection to the remote computer was lost"),
+            "{text}"
+        );
+        assert!(text.ends_with(",3.515;"), "{text}");
     }
 
     #[test]

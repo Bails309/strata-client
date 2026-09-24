@@ -45,12 +45,10 @@ The previous Java/Tomcat + AngularJS stack is a maintenance burden and the SPA h
 git clone https://github.com/Bails309/strata-client.git
 cd strata-client
 cp .env.example .env
-export STRATA_VERSION=1.9.6
-docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
-docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+docker compose up -d --build
 ```
 
-That pulls signed, SBOM-attached, SLSA-provenance images from GHCR and starts the full stack with bundled PostgreSQL and Vault. Open `http://127.0.0.1` and the setup wizard takes you the rest of the way.
+That builds the `backend` and `frontend` images locally and starts the full stack with bundled PostgreSQL and Vault. Open `http://127.0.0.1` and the setup wizard takes you the rest of the way. Strata publishes no pre-built images; for multi-host deployments, push the images you build to your own private registry (see the [README Quick Start](../README.md#2-run)).
 
 ### Should I use the bundled PostgreSQL or an external one?
 
@@ -66,7 +64,7 @@ You scale the **backend**, because as of v2.0.0 the engine is part of it. The `s
 
 Sessions are memory-cheap and CPU-hungry, which is the opposite of the shape people usually assume. Measured at roughly **24 MB of RSS per active session**, so RAM is rarely the limit; frame encoding is, and that is CPU-bound. Size on cores, not gigabytes, and see [deployment.md § High Availability](deployment.md#high-availability) for the host table.
 
-One consequence worth planning for: the engine is stateful in the same way `guacd` was, so **restarting the backend drops active sessions**. Previously you could restart the backend without touching sessions because they lived in a separate container. That is no longer true \u2014 schedule backend upgrades in a maintenance window.
+One consequence worth planning for: the engine is stateful in the same way `guacd` was, so **restarting the backend drops active sessions**. Previously you could restart the backend without touching sessions because they lived in a separate container. That is no longer true — schedule backend upgrades in a maintenance window.
 
 ### Can I run Strata behind an existing reverse proxy?
 
@@ -132,7 +130,41 @@ Yes — via the Window Management API (Chromium 100+). Best supported with all-l
 
 ### Why is RDP H.264 important?
 
-On Windows hosts with AVC444 + hardware encoding enabled, RDP H.264 is roughly an order of magnitude lower bandwidth than the legacy bitmap path, and renders crisp text during rapid window animations. Strata passes H.264 NAL units end-to-end (FreeRDP 3 → guacd → WebSocket → browser WebCodecs `VideoDecoder`) with no proxy-side transcode. See [docs/h264-passthrough.md](h264-passthrough.md) and the [`docs/Configure-RdpAvc444.ps1`](Configure-RdpAvc444.ps1) helper.
+On Windows hosts with AVC444 and hardware encoding enabled, RDP H.264 costs far less bandwidth than the bitmap path during motion — video, scrolling, dragging windows. Since v2.1.0 the native engine forwards the host's MS-RDPEGFX H.264 frames straight to the browser's WebCodecs `VideoDecoder`, with no decode or re-encode on the server. It is **off by default** and enabled per connection with **Enable graphics pipeline (GFX)**, because it is a genuine trade: enabling it stops the host sending lossless bitmap updates, and H.264 is lossy, so the bitmap path is still the better choice for reading text. (Up to v1.14.6 the same passthrough ran through FreeRDP and `guacd`; v2.0.0 shipped without it.) See [docs/h264-passthrough.md](h264-passthrough.md) and the [`docs/Configure-RdpAvc444.ps1`](Configure-RdpAvc444.ps1) host-preparation script.
+
+### What do the messages mean when a session ends?
+
+Since v2.1.1 the heading tells you what kind of end it was, and the sentence underneath says what happened:
+
+| Heading | What it means | What to do |
+| ------- | ------------- | ---------- |
+| **Session Ended** | You signed out, disconnected from the Start menu, the remote program exited, or a time limit was reached. | **Reconnect** starts a new session. After a Start-menu *Disconnect* the Windows session is still running, so reconnecting resumes it. |
+| **Session Timed Out** | The remote computer's idle-session limit disconnected you. | Reconnect. The limit is set on the remote computer, not in Strata. |
+| **Session Disconnected** | Someone else ended it: the same Windows session was opened from another window or device, or an administrator on the remote computer disconnected or signed it out. | Check you do not have the session open elsewhere before reconnecting, or the two will keep taking it from each other. |
+| **Session Terminated** | A Strata administrator ended the session. | Reconnect is not offered. Contact your administrator. |
+| **Connection Lost** | The network path between Strata and the remote computer failed, or the remote computer closed the connection without saying why (typically a restart). | Reconnect once the remote computer is reachable. |
+| **Connection Refused** | The remote computer refused the session — including Remote Desktop licensing and connection-broker problems. | Usually needs the remote computer's administrator. |
+| **Access Denied** | The remote computer does not let this account in over Remote Desktop, or rejected the credentials. | Check the account's Remote Desktop rights and the credential profile. |
+| **Connection Error** | Something failed unexpectedly. | Reconnect; if it recurs, report it with the time and connection name. |
+
+A separate **Reconnecting…** overlay means the connection between *your browser* and Strata dropped; that one retries automatically. Operators can trace any of these to a log line with the [session-disconnects runbook](runbooks/session-disconnects.md).
+
+### There is no sound in my RDP session.
+
+RDP audio works from v2.1.1. Before that, every session told Windows not to send audio, and Windows additionally sends none unless a device-redirection channel is offered beside the audio one. If audio is still silent:
+
+1. **Click or press a key inside the session.** Browsers keep web audio paused until the page has had a user gesture.
+2. Check the connection does not have `disable-audio` set.
+3. Check the remote computer has audio redirection allowed (Group Policy *Allow audio and video playback redirection*).
+4. Look for `opening audio stream` in the backend log. If it is present, the remote computer is sending audio and the problem is in the browser; if it is absent, the remote computer never sent any.
+
+### The wrong characters appear when I type in an RDP session on a non-US keyboard.
+
+Fixed in v2.1.1. Your browser applies your local keyboard layout, and the engine used to send the result as a US key position that Windows then re-interpreted through *its* layout — so on a UK keyboard `\` arrived as `#` and `@` and `"` were swapped. Typed characters are now sent as characters, which works for every layout. Shortcuts (anything held with Ctrl, Alt or the Windows key) are still sent as key positions so they keep working; AltGr is treated as a character key, not a shortcut. The **Failsafe (Unicode events)** keyboard-layout option no longer changes anything, because every layout now behaves that way.
+
+### My RDP session looks zoomed in, or everything looks smaller than it used to.
+
+Both are about Windows display scaling. Before v2.1.1, a monitor scaled to 125% asked for a desktop 20% too small **and** told Windows to draw everything 25% larger, so sessions looked zoomed in and slightly soft. The desktop now matches your monitor's real pixels and the remote screen is drawn at 100%, so it looks the same on every computer. If you preferred remote text at your local size, open **Display Settings** in the session bar and tick **Match my display scale** — it applies immediately, is remembered per browser, and needs no reconnect.
 
 ### Copy/paste has stopped working in an RDP session. What now?
 
@@ -181,7 +213,7 @@ Use [GitHub's Private Vulnerability Reporting](https://github.com/Bails309/strat
 
 ### Are container images signed?
 
-Yes. Every tagged release pushes Cosign-signed (keyless, OIDC) images to GHCR with attached SBOMs (CycloneDX) and SLSA Level-3 build provenance. README Quick Start includes the verification commands.
+Strata no longer publishes images at all. Up to v2.1.0, every tagged release pushed Cosign-signed images with CycloneDX SBOMs and SLSA Level-3 provenance to GitHub Container Registry; since v2.1.1 you build the images from this repository and keep them in your own private registry. Signing is then a control of that registry — see [deployment.md § Image provenance](deployment.md#image-provenance-private-registry).
 
 ### Is the bundled Vault really safe to use?
 

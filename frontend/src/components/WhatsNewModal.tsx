@@ -29,6 +29,43 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.1.1",
+    subtitle:
+      "Sessions now tell you how they actually ended. Signing out of Windows used to show 'Connection Error', choosing Disconnect from the Start menu blamed 'an administrative tool', and a dropped network suggested you might have logged out. Every ended session now carries a reason the screen can title properly, in plain language. This release also brings working RDP audio, the right characters on non-US keyboards, and a correctly sized desktop on displays scaled above 100%.",
+    sections: [
+      {
+        title: "What you will see when a session ends",
+        description:
+          "Signing out shows 'Session Ended: You signed out of the remote session.' Disconnecting from the Start menu says the session is still running on the remote computer and that reconnecting picks up where you left off. Opening the same Windows session somewhere else explains that it was opened from another window or device. An idle limit on the remote computer shows 'Session Timed Out'. A lost network path shows 'Connection Lost' and says the connection to the remote computer was lost, rather than guessing that you logged out. The small thumbnail in the session bar uses the same wording, where it used to say 'Connection Lost' for everything.",
+      },
+      {
+        title: "Why the old messages were wrong",
+        description:
+          "Three things combined. Every ended session sent the browser the same status code, so the screen had to guess from the wording. Windows' own disconnect reasons reached the screen as text from the protocol specification, which is written for software developers and describes the Start-menu Disconnect as an administrative tool. And when the connection to the remote computer failed, nothing was sent to the browser at all, so it filled in a guess. All three are fixed, and fixing the last one also made sure the session recording is finalised and the session's credential revoked in that case, which previously could be skipped.",
+      },
+      {
+        title: "RDP audio now plays",
+        description:
+          "Every RDP session had been telling Windows not to send audio. Windows also refuses to send any until a second channel, used for device redirection, is offered alongside the audio one. Both are fixed; the second channel is offered with no devices at all, so no drive, printer or smart card can be redirected through it. Sound starts after your first click or keypress in the session, which is a browser rule. Administrators can keep a connection silent with the disable-audio setting.",
+      },
+      {
+        title: "Non-US keyboards type the right characters",
+        description:
+          "On a UK keyboard a backslash arrived as a hash sign, and the at sign and double quote were swapped. Your browser had already applied your keyboard layout, and Windows then applied its own on top. Typed characters are now sent as the characters themselves, which fixes every layout rather than one key. Shortcuts held with Ctrl, Alt or the Windows key still send key positions, so they keep working.",
+      },
+      {
+        title: "No more zoomed-in sessions on scaled displays",
+        description:
+          "On a monitor scaled to 125%, sessions asked for a desktop sized in scaled units and also told Windows to draw everything 25% larger, so the session looked zoomed in and slightly soft. The desktop now matches your monitor's real pixels and the remote screen is drawn at 100%, so it looks the same on every computer. If you preferred remote text to match your local size, tick 'Match my display scale' in Display Settings; it applies without reconnecting. Multi-monitor and shared sessions now size themselves the same way.",
+      },
+      {
+        title: "Less background chatter on every RDP session",
+        description:
+          "The client offered Windows a network speed measurement it could not complete, so Windows repeated the measurement dozens of times a second for as long as the session stayed open. That offer is no longer made, and Windows sizes the session from the connection type instead.",
+      },
+    ],
+  },
+  {
     version: "2.1.0",
     subtitle:
       "H.264 streaming is back for RDP, running natively with no server-side decode. Hardware-accelerated H.264 was a property of the patched guacd image and went away when guacd did, and it now runs on the native engine: the Windows host's graphics frames are handed to the browser's video decoder untouched, so nothing decodes, rasterises and re-encodes them in the middle. It is off by default and opt-in per connection, because it is a genuine trade rather than a free win — turning it on stops the host sending lossless bitmap updates, and H.264 is lossy. Use it for motion-heavy work such as video, scrolling and dragging windows, and leave it off for reading text.",

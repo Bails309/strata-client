@@ -7,7 +7,202 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+## [2.1.1] — 2026-09-24
+
+### Patch release — sessions now say how they actually ended, and five RDP fidelity defects are fixed
+
+### The ask
+
+> "Now we are using our own ironrdp implementation instead of guacamole
+> guacd, is it possible to make the disconnect messages that come up when
+> connections are ended either through log off, network error, latency or
+> disconnect appear more appropriately as the message that comes up when
+> sessions end rather than the generic messages now that are questionable
+> and not particularly accurate?"
+
+The rest of this release rolls up the RDP fixes merged to `main` after
+v2.1.0 (#420, #421, #422, #424, #425), which were recorded under
+_Unreleased_ but never shipped, together with CI and dependency
+maintenance (#423, #426, #427, #428).
+
+### Fixed — session-end messages
+
+#### The symptom
+
+Every way a session could end produced one of a small number of messages,
+and several of them were actively misleading:
+
+| What actually happened | What the user saw |
+| ---------------------- | ----------------- |
+| Signed out of Windows | Overlay titled **Connection Error**, body *"[Protocol independent error] The disconnection was initiated by the user logging off his or her session on the server"* |
+| **Start → Disconnect** inside Windows | **Connection Error** — *"[Protocol independent error] The disconnection was initiated by an administrative tool on the server running in the user's session"*. Nobody used an administrative tool. |
+| Idle-session limit on the host | **Connection Error** with the MS-RDPBCGR spec text for `ERRINFO_IDLE_TIMEOUT` |
+| Same Windows session opened from a second tab or device | **Connection Error** with spec text, indistinguishable from a fault |
+| Network path to the host failed mid-session | **Session Ended** — *"The remote session has ended. You may have logged out of the server."* The user had not logged out. |
+| Host restarted or dropped the TCP connection | *"target closed the connection"* |
+| SSH shell exited | *"remote shell exited"* |
+
+The session-bar thumbnail compounded it: it labelled **every** ended
+session **Connection Lost**, including a deliberate sign-out.
+
+#### Root cause
+
+Three independent defects, each sufficient to produce a wrong message on
+its own:
+
+1. **Every end carried the same status code.** The Guacamole wire encoder
+   ([`transport/guac_wire.rs`](crates/strata-session/src/transport/guac_wire.rs))
+   turned every `TargetEvent::Disconnected` into an `error` instruction with
+   status `519`, commented as `UPSTREAM_ERROR`. `519` is actually
+   `0x0207 UPSTREAM_NOT_FOUND`, and in any case one code for every end gave
+   the browser nothing to distinguish a sign-out from a network failure. The
+   overlay therefore fell back to guessing from the message text:
+   [`SessionClient.tsx`](frontend/src/pages/SessionClient.tsx) titled the
+   overlay **Session Ended** only if the text happened to contain
+   *"session has ended"*, and **Connection Error** otherwise.
+2. **RDP disconnect reasons were displayed as protocol-specification
+   prose.** When Windows ends a session it sends a Set Error Info PDU with a
+   code (`ERRINFO_LOGOFF_BY_USER` = `0x0C`,
+   `ERRINFO_RPC_INITIATED_DISCONNECT_BYUSER` = `0x0B`, and so on).
+   `ironrdp-session` 0.11 does not surface the code: it renders it through
+   `ErrorInfo::description()` — the MS-RDPBCGR wording, written for protocol
+   implementers — and hands over only the resulting string, as
+   `GracefulDisconnectReason::Other(String)`. The engine forwarded that
+   string verbatim. The spec wording for `0x0B` is the source of the
+   *"administrative tool"* message: it is technically accurate (the Start
+   menu's Disconnect goes through the same RPC as an admin tool) and
+   useless to a person.
+3. **Engine failures ended the session in silence.** When the engine
+   returned an error — a TCP reset, a timeout, a protocol violation — the
+   session actor
+   ([`actor/session.rs`](crates/strata-session/src/actor/session.rs)) logged
+   it and tore down **without sending the client anything**. The backend
+   then closed the WebSocket normally, the browser saw a clean close with no
+   reason, and fell back to its hard-coded *"You may have logged out of the
+   server."* That guess is where the most-questioned message came from.
+
+A fourth, related defect surfaced while fixing the third: an engine error
+raised while **forwarding input** to the target propagated with `?` straight
+out of the actor's run loop, which **skipped teardown entirely** — the
+engine was not shut down, the audit sink was not finalised and the
+credential guard was not revoked. See *Scope & safety*.
+
+#### The fix
+
+- **Every end now carries a cause.** `TargetEvent::Disconnected` gains a
+  `cause: DisconnectCause` field
+  ([`engine/mod.rs`](crates/strata-session/src/engine/mod.rs)) — `Ended`,
+  `IdleTimeout`, `Conflict`, `Refused`, `Unauthorized`, `ConnectionLost`,
+  `Failed` — and the wire encoder maps it onto the Guacamole status set:
+
+  | Cause | Status | Overlay title | Thumbnail label |
+  | ----- | ------ | ------------- | --------------- |
+  | `Ended` | `0x020B` `SESSION_CLOSED` (523) | Session Ended | Ended Remotely |
+  | `IdleTimeout` | `0x020A` `SESSION_TIMEOUT` (522) | Session Timed Out | Idle Timeout |
+  | `Conflict` | `0x0209` `SESSION_CONFLICT` (521) | Session Disconnected | Disconnected Remotely |
+  | `Refused` | `0x0208` `UPSTREAM_UNAVAILABLE` (520) | Connection Refused | Connection Refused |
+  | `Unauthorized` | `0x0301` `CLIENT_UNAUTHORIZED` (769) | Access Denied | Access Denied |
+  | `ConnectionLost` | `0x0203` `UPSTREAM_ERROR` (515) | Connection Lost | Connection Lost |
+  | `Failed` | `0x0200` `SERVER_ERROR` (512) | Connection Error | Connection Error |
+
+- **RDP reasons are translated into plain language.**
+  `describe_termination()` in
+  [`engine/rdp/mod.rs`](crates/strata-session/src/engine/rdp/mod.rs)
+  recovers the Set Error Info code by rendering each known
+  `ProtocolIndependentCode` through the same `ErrorInfo::description()`
+  and comparing — so the match cannot drift if `ironrdp` rewords its
+  descriptions, because both sides come from the same function. The table
+  `PROTOCOL_INDEPENDENT_ENDS` maps each code to a message and a cause:
+
+  | Windows code | Message | Cause |
+  | ------------ | ------- | ----- |
+  | `LOGOFF_BY_USER` (0x0C) | You signed out of the remote session. | Ended |
+  | `RPC_INITIATED_DISCONNECT_BYUSER` (0x0B) | You disconnected from the remote session. It is still running on the remote computer; reconnect to pick up where you left off. | Ended |
+  | `RPC_INITIATED_DISCONNECT` (0x01) | An administrator on the remote computer disconnected this session. It is still running; reconnect to pick up where you left off. | Conflict |
+  | `RPC_INITIATED_LOGOFF` (0x02) | An administrator on the remote computer signed this session out. | Conflict |
+  | `DISCONNECTED_BY_OTHERCONNECTION` (0x05) | This session was opened from another window or device, which disconnected it here. | Conflict |
+  | `IDLE_TIMEOUT` (0x03) | The remote computer disconnected the session because it was idle for too long. | IdleTimeout |
+  | `LOGON_TIMEOUT` (0x04) | The session reached the time limit set on the remote computer. | Ended |
+  | `SERVER_DENIED_CONNECTION` (0x07) | The remote computer refused the connection. | Refused |
+  | `OUT_OF_MEMORY` (0x06) | The remote computer ran out of memory and ended the session. | Refused |
+  | `SERVER_INSUFFICIENT_PRIVILEGES` (0x09) | Your account is not allowed to sign in to the remote computer over Remote Desktop. | Unauthorized |
+  | `SERVER_FRESH_CREDENTIALS_REQUIRED` (0x0A) | The remote computer requires the password to be entered for every connection. | Unauthorized |
+  | DWM / Winlogon / CSRSS crash, display-driver start-up failures (0x0F–0x18) | The session ended because a component on the remote computer stopped unexpectedly. | Failed |
+
+  Codes outside that table are classified by category — licensing
+  (`0x100`–`0x10A`) → *"…because of a Remote Desktop licensing problem:
+  <detail>"* / `Refused`; connection broker (`0x400`–`0x412`) → *"The Remote
+  Desktop connection broker could not place this session: <detail>"* /
+  `Refused`; RDP-specific protocol errors (`0x10C9`–`0x1195`) → *"…after a
+  protocol error: <detail>"* / `Failed` — keeping the spec description as
+  detail but stripping its `[category]` tag. An MCS Disconnect Provider
+  Ultimatum with no error info becomes *"The remote computer ended the
+  session."*, and a TCP close with neither becomes *"The remote computer
+  closed the connection without giving a reason. It may have restarted,
+  shut down, or dropped off the network."* (`ConnectionLost`). The raw
+  `ironrdp` reason is still logged at `INFO` as
+  `rdp target ended the session`.
+- **Engine failures are reported, not swallowed.** The actor now emits a
+  `Disconnected` event before teardown on every exit path that previously
+  said nothing, via `describe_engine_failure()`:
+
+  | Engine outcome | Message | Cause |
+  | -------------- | ------- | ----- |
+  | `Transport` with `ErrorKind::TimedOut` | The remote computer stopped responding, so the connection was dropped. | ConnectionLost |
+  | Any other `Transport` error | The network connection to the remote computer was lost. | ConnectionLost |
+  | `Closed` | The remote computer closed the connection unexpectedly. | ConnectionLost |
+  | `AuthRejected` | The remote computer rejected the credentials. | Unauthorized |
+  | `Protocol` / `Unsupported` | The session ended because of an unexpected response from the remote computer. | Failed |
+  | Engine stream ended with no event | The remote session has ended. | Ended |
+
+  When the failure is raised on the **input** path,
+  `end_after_input_failure()` first waits up to one second
+  (`CLOSE_REASON_GRACE`) for the engine's own `Disconnected` event. A closed
+  RDP engine has almost always queued its real reason — a sign-out, say —
+  and reporting the failed write instead would replace an accurate message
+  with a vaguer one.
+- **SSH, Kubernetes and VNC** messages are rewritten as sentences:
+  *"The remote shell exited."*, *"The remote shell exited with status
+  N."*, *"The remote shell was terminated by signal …"*, *"The command
+  exited."*, *"The pod closed the connection."*, *"The VNC server
+  connection failed: …"*.
+- **Gateway-initiated ends** in
+  [`backend/src/session_engine.rs`](backend/src/session_engine.rs) now
+  choose their status. `send_error()` takes a status argument; the
+  maximum-duration and revoked-sign-in watchdog closes send
+  `SESSION_CLOSED` with *"This session reached the maximum allowed
+  duration and was closed."* and *"This session was closed because your
+  sign-in was revoked."* (previously *"Session closed: maximum duration
+  reached"* / *"Session closed: token revoked"*). The administrator kill
+  keeps `SESSION_CONFLICT` and its existing text, which the browser keys
+  on. The comment that described `521` as `SESSION_CLOSED` was wrong and
+  has been corrected alongside.
+- **The browser titles by status code.** New
+  [`frontend/src/utils/sessionEnd.ts`](frontend/src/utils/sessionEnd.ts)
+  (`describeSessionEnd(message, code)`) drives both the full-screen
+  overlay and the session-bar thumbnail. `GuacSession` gains `errorCode`,
+  set from `Guacamole.Status.code` in both `tunnel.onerror` and
+  `client.onerror`. The overlay keys the code by message
+  (`errorStatus`), so a later client-side `setError()` — "Automatic
+  reconnection failed…", say — can never inherit a stale code from an
+  earlier end. An administrator termination is still recognised by its
+  text and still suppresses **Reconnect**. With no status code (the
+  rollback-era `guacd` path, or a client-side failure) the old text
+  heuristics apply, and the speculative *"You may have logged out of the
+  server."* suffix is removed from the fallback.
+
+**Rejected approaches.** Forking `ironrdp-session` to expose the raw
+`ErrorInfo` would have been the cleanest data path, but it would be a
+fourth vendored fork carried for a presentation concern, when the same
+code is recoverable with no fork at all. Matching on hand-copied English
+strings was rejected for the opposite reason: it would silently stop
+matching the first time `ironrdp` reworded a description. Auto-reconnecting
+on `ConnectionLost` was deliberately **not** added — the ask was accuracy,
+and an automatic reconnect after a target-side failure is a behavioural
+change that deserves its own decision. The overlay offers **Reconnect**, as
+it did before.
+
+### Fixed — RDP fidelity
 
 - **RDP sessions carried no audio.** The RDPSND implementation was
   complete and the channel was negotiated, but every session declared
@@ -29,6 +224,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a no-op backend, so no drive, printer, port or smart card can be
   redirected through it; it exists only to satisfy that pairing.
 
+  *(Backfill — not previously recorded.)* The browser half needed a fix
+  too. Browsers create an `AudioContext` **suspended** until the page has
+  seen a user gesture, and never resume it on their own; a player writing
+  into a suspended context produces no sound and no error.
+  `Guacamole.AudioContextFactory.resumeOnGesture()` in the vendored
+  [`guacamole-vendor.js`](frontend/src/lib/guacamole-vendor.js) now
+  resumes it on the first `mousedown` / `keydown` / `touchstart` /
+  `pointerdown`, listening in the **capture** phase because the session
+  display stops propagation of most input it handles. The backend also
+  now logs `opening audio stream` when the first audio packet arrives, so
+  "the target sent nothing" and "the target sent audio nobody played" are
+  distinguishable in the log — before, they produced identical output.
+
 - **RDP sessions retried network auto-detection endlessly.** The client
   advertised support for the bandwidth measurement in MS-RDPBCGR 2.2.14
   but only answered the round-trip part of it, so the results PDU the
@@ -36,8 +244,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measurement dozens of times a second for the life of every session,
   each attempt costing a round trip on a connection already tunnelled
   through a browser, and never resolved the link's characteristics. The
-  capability is no longer advertised, and the server sizes the session
-  from the reported connection type instead.
+  capability (`SUPPORT_NET_CHAR_AUTODETECT`) is no longer advertised — a
+  change to the vendored `ironrdp-connector` fork — and the server sizes
+  the session from the reported connection type instead.
 
 - **Sessions arrived zoomed in on a display scaled above 100%.** Three
   users on identical 1920x1080 monitors got different results, because one
@@ -57,14 +266,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client still reported the local scale as the session DPI, so a user at
   125% received a correctly sized desktop that the target then drew 25%
   larger — the same zoomed-in session, from the other cause. Size and DPI
-  now come from one place so they cannot disagree, and the scale is
-  reported only if asked for, under "Match my display scale" in Display
-  Settings. A remote desktop therefore looks the same on every client
-  regardless of local zoom; anyone who preferred remote text to match
-  their local size can turn the option back on without reconnecting.
-  Session sharing sent its size the same way and could zoom the owner's
-  session, and the initial connection was still sending CSS pixels long
-  after the first resize had corrected them; both now take the same path.
+  now come from one place (`remoteDisplayMetrics()` in
+  [`SessionManager.tsx`](frontend/src/components/SessionManager.tsx)) so
+  they cannot disagree, and the scale is reported only if asked for, under
+  "Match my display scale" in Display Settings. A remote desktop therefore
+  looks the same on every client regardless of local zoom; anyone who
+  preferred remote text to match their local size can turn the option back
+  on without reconnecting. The preference is per browser (`localStorage`
+  key `strata-display-scale-passthrough`), not per account. Session sharing
+  sent its size the same way and could zoom the owner's session, and the
+  initial connection was still sending CSS pixels long after the first
+  resize had corrected them; both now take the same path.
 
 - **Multi-monitor sessions had the same fault, and sent no DPI at all.**
   The aggregate desktop was summed from CSS widths, so a scaled monitor
@@ -96,6 +308,215 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and still governs those positional keys, but it no longer determines
   which character you get. The **Failsafe (Unicode events)** option is
   consequently now a no-op: what it selected is what every layout does.
+
+### Changed — tooling, CI and dependencies
+
+- **`docs/Configure-RdpAvc444.ps1` detects GPUs the host can actually
+  encode with (#425).** GPU detection keyed off
+  `Win32_VideoController.AdapterRAM`, a deprecated `uint32` that cannot
+  represent 4 GB or more and reads empty on current Windows builds. A
+  16 GB Tesla T4 and Hyper-V's synthetic adapter therefore both read as
+  "no hardware GPU", and the script silently skipped
+  `AVCHardwareEncodePreferred` and `bEnumerateHWBeforeSW` — the two settings
+  the host was provisioned for. Detection now matches the PCI vendor ID.
+  Azure N-series VMs whose GPU has no driver (the device sits under *Other
+  devices* as a raw PCI function) are now reported with the device problem
+  code, and the script points at the Azure extension log. The gpedit note
+  now says the hardware-graphics policy is the `bEnumerateHWBeforeSW` value
+  the script already writes.
+- **CodeQL excludes vendored crates (#423).** CodeQL opened 26
+  high-severity "broken or weak cryptographic algorithm" alerts against
+  `crates/vendor/sspi`, every one of them NTLM (RC4 sealing keys, MD4
+  password hashing, HMAC-MD5 proofs) — MS-NLMP defines the scheme in terms
+  of those primitives. `.github/codeql/codeql-config.yml` now excludes
+  `crates/vendor` by **path**, not by rule, so weak cryptography in
+  first-party code still fails the scan. This is the fourth path-based gate
+  that needed the same exclusion, after `cargo-audit`, `tarpaulin` and
+  `gitleaks`.
+- **Dependencies.** `nginx` `1.31.5-alpine` → `1.31.6-alpine` (frontend
+  image, #426). Frontend group (#427): `marked` 18.0.13, `react-i18next`
+  17.0.14, `react-router-dom` 7.18.4, `@testing-library/dom` 10.4.2,
+  `@vitest/coverage-v8` 5.0.1, `jsdom` 30.1.0, `prettier` 3.9.8, `vitest`
+  5.0.1. Actions group (#428): `docker/setup-buildx-action` 4.4.1,
+  `docker/build-push-action` 7.4.0, `github/codeql-action` 4.38.1. New
+  Rust dependency `ironrdp-rdpdr` 0.7 (audio pairing, above), resolving on
+  the existing single `ironrdp-svc` 0.8.
+
+### Removed — public container images (GitHub Container Registry)
+
+> "We no longer wish to store any images in github container registry so
+> can we remove any that we have stored there. We're storing images
+> privately so we no longer need github container images like in
+> docker-compose.ghcr.yml"
+
+Strata no longer publishes container images anywhere public. Images are
+built from this repository and kept in a private registry.
+
+| Removed | What it did |
+| ------- | ----------- |
+| `.github/workflows/release.yml` | On every `v*.*.*` tag: built `backend` and `frontend`, pushed them to `ghcr.io/bails309/strata-client/*`, signed each digest keyless with Cosign, attached a CycloneDX SBOM attestation, generated SLSA Level 3 provenance, and attached the SBOMs to the GitHub Release |
+| `docker-compose.ghcr.yml` | Compose overlay that swapped the local `build:` for the GHCR images |
+| `scripts/verify-image.sh` | Verified the Cosign signature, SBOM attestation and SLSA provenance against the release workflow's identity — meaningless without that workflow |
+| `actions/unpinned-tag` CodeQL exclusion | Existed only because the SLSA generator must be referenced by tag; every remaining first-party workflow is SHA-pinned, so the rule is enforced again |
+
+`deploy/helm/strata-dmz` (chart **0.1.0 → 0.2.0**, versioned independently)
+no longer defaults `image.repository` to `ghcr.io/bails309/strata-dmz`. The
+value is now empty and **required** — `helm install` fails with an
+explanatory message until it is set to your registry path. CI's own image
+builds (`ci.yml`, `trivy.yml`) were already build-only and are unchanged, so
+the Trivy image scan still runs on every push.
+
+The images already stored in GitHub Container Registry are **not** deleted
+by this change: that is an action on the GitHub account, not the
+repository. See *Deploying*.
+
+**Security consequence.** The Cosign signature, SBOM attestation and SLSA
+provenance were properties of images this repository published. With no
+published images they have nothing to attach to, and image integrity
+becomes a control of the private registry — authenticated push and pull,
+deploy by digest, and signing on push if the registry supports it. See
+[docs/deployment.md § Image provenance](docs/deployment.md#image-provenance-private-registry).
+
+### Scope and safety
+
+| Area | Change |
+| ---- | ------ |
+| Schema | None. No migration. |
+| REST API | None. |
+| WebSocket wire | The `error` instruction that ends a native session now carries one of seven status codes instead of always `519`, and human-readable text. Additive for any client that treats every `error` as terminal, which is what `guacamole-common-js` does. See [api-reference.md](docs/api-reference.md#session-end-the-error-instruction-v211). |
+| Environment variables | None. |
+| Connection parameters | `disable-audio` is now **honoured** on RDP (previously accepted and ignored). |
+| Dependencies | `ironrdp-rdpdr` 0.7 added; `ironrdp-connector` fork edited; frontend, nginx and Actions bumps as listed. |
+| Distribution | No images published to GHCR; release workflow, GHCR compose overlay and `verify-image.sh` removed; DMZ Helm chart requires `image.repository` (chart 0.2.0). |
+| Behaviour | RDP audio now plays by default. Printable RDP keystrokes are sent as Unicode. Sizes are sent in device pixels and DPI is pinned to 96 unless the user opts in. Messages and overlay titles change as tabled above. |
+
+**Security-relevant points** (full analysis in
+[docs/security.md](docs/security.md#session-end-reporting-v211)):
+
+- **Teardown now always runs after an input-path engine failure.**
+  Previously such a failure returned from the actor before teardown, so the
+  engine was not shut down, the recording was not finalised and the
+  credential guard's `revoke()` never ran. All three now run on that path.
+  The path is **post-authentication**: it needs an established session.
+- **Client-facing text discloses no internal detail.** Engine error chains
+  (I/O error text, protocol diagnostics) are logged server-side and never
+  sent; the browser receives the fixed sentences tabled above. The only
+  variable text is RDP's own spec descriptions for licensing, broker and
+  protocol-error codes, which are constants compiled into `ironrdp-pdu`,
+  and target-supplied text on the Kubernetes and VNC paths, which was
+  already forwarded before this release. The SPA renders all of it as text,
+  never markup.
+- **The device-redirection channel is advertised with no devices.** RDPDR
+  is registered with an empty device list and `NoopRdpdrBackend`; drive,
+  printer, port and smart-card redirection remain removed, as in v2.0.0.
+  Trust boundary: backend ↔ RDP target, post-authentication.
+
+### Testing
+
+- **`strata-session`: 239 unit tests pass** with
+  `--features rdp,vnc,kubernetes,terminal,sftp`, including new coverage:
+  `a_logoff_is_reported_as_a_sign_out`,
+  `a_start_menu_disconnect_is_not_blamed_on_an_administrator`,
+  `idle_and_takeover_ends_keep_their_own_cause`,
+  `a_licensing_failure_keeps_the_spec_detail`,
+  `a_server_ultimatum_is_a_clean_end` (RDP),
+  `a_failed_engine_tells_the_client_the_connection_was_lost` (actor), and
+  `a_clean_logoff_is_not_reported_as_an_upstream_failure` (wire encoder).
+  The existing wire test now pins `515` rather than `519`. Live test
+  suites (`ssh_live`, `rdp_live`, `kube_live`) compile.
+- **Clippy clean** on `strata-session` (all engine features) and
+  `strata-backend --all-targets`; the only warning is the pre-existing
+  unfulfilled lint expectation inside the vendored `ironrdp-connector`.
+- **Frontend: 1647 tests across 83 files pass**, including new
+  `sessionEnd.test.ts` (title, label and admin-kill mapping; no-code
+  fallback) and a `SessionClient` case asserting a `SESSION_CLOSED` sign-out
+  is titled **Session Ended**, not **Connection Error**. `tsc --noEmit`
+  clean.
+- The RDP fidelity fixes carry their own regression tests, merged with
+  them: keycode resolution (Unicode for printable characters, scancodes
+  under shortcut modifiers, AltGr not a shortcut), the audio default and
+  RDPDR/RDPSND pairing assertion, `displayScale.test.ts`, and multi-monitor
+  and pop-out sizing.
+- **Not yet live-verified:** the session-end mapping against a real
+  Windows host (sign out, Start → Disconnect, idle limit, second-device
+  takeover, pulled network cable). The RDP audio, keyboard and display
+  fixes were verified live when they were merged.
+
+### Deploying
+
+Rebuild both images. There is no migration and no configuration change.
+
+```sh
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+DMZ topologies do not need an edge rebuild: `strata-dmz` carries no code
+changed by this release (its version string moves with the workspace).
+
+**If you pulled from GHCR**, switch to building and pushing to your private
+registry before upgrading — the `docker-compose.ghcr.yml` overlay is gone and
+no `2.1.1` image exists on GHCR. The steps are in the README Quick Start.
+Helm users of `strata-dmz` must now pass `image.repository` (and usually
+`imagePullSecrets`).
+
+**Deleting the images already on GHCR** is done on GitHub, not in the
+repository: *Profile → Packages*, open each of `strata-client/backend`,
+`strata-client/frontend` (and `strata-dmz` or `custom-guacd` if present) →
+*Package settings* → *Delete this package*. Or, with a token carrying
+`delete:packages`:
+
+```sh
+gh api -X DELETE /user/packages/container/strata-client%2Fbackend
+gh api -X DELETE /user/packages/container/strata-client%2Ffrontend
+```
+
+Do **not** delete `strata-rust-models`: that is the CodeQL model pack
+`codeql.yml` consumes, not a container image.
+
+After upgrading:
+
+1. The in-app **What's New** modal shows the v2.1.1 card.
+2. Sign out of a Windows session from the Start menu: the overlay reads
+   **Session Ended — "You signed out of the remote session."**
+3. RDP audio plays after the first click or keypress in the session. A
+   connection that must stay silent needs `disable-audio` set — this is a
+   behaviour change for any connection that relied on audio never working.
+4. If users report the remote UI now looks *smaller* than before on a
+   scaled display, that is the corrected behaviour; **Display Settings →
+   Match my display scale** restores the previous look per browser.
+
+### Reference documentation
+
+- **`docs/architecture.md`** — new *How a session ends* section; new
+  *Native RDP input, display and audio* section (Unicode keyboard, device-
+  pixel sizing and DPI, RDPSND/RDPDR pairing, auto-detect); session-engine
+  table corrected (RDP has run as an ordinary Tokio task since the
+  `ironrdp` 0.17 upgrade, not on a dedicated thread); runbook table.
+- **`docs/security.md`** — new *Session-end reporting* subsection; RDPDR
+  exposure note; CodeQL gate scope. *Backfill for v2.1.0:* the *H.264 GFX
+  Encoding* section and the parameter whitelist still said the pipeline was
+  removed; both now record that v2.1.0 restored it as opt-in passthrough.
+  A corrupted sentence fragment in the whitelist section was repaired.
+- **`docs/api-reference.md`** — new *Session end: the `error`
+  instruction* reference; `width` / `height` / `dpi` semantics;
+  `disable-audio`; stale `enable-h264` row and `STRATA_SESSION_ENGINE`
+  reference corrected.
+- **`docs/faq.md`** — new entries for session-end messages, missing audio,
+  wrong characters on non-US keyboards and zoomed-in sessions; the H.264
+  answer, which still described the removed FreeRDP → `guacd` path, is
+  rewritten.
+- **`docs/deployment.md`** — v2.1.0 → v2.1.1 upgrade notes; *Supply-chain
+  verification* replaced by *Image provenance (private registry)*.
+- **`README.md`** Quick Start, **`docs/faq.md`**, **`docs/RELEASE_PROCESS.md`**,
+  **`docs/dmz-implementation-plan.md`** and the Helm chart README — GHCR
+  instructions replaced with build-and-push to a private registry.
+- **New runbook [`docs/runbooks/session-disconnects.md`](docs/runbooks/session-disconnects.md)**,
+  indexed in `docs/runbooks/README.md` and the architecture runbook table.
+- **`ARCHITECTURE.md`** — session-end and remote-display data flows.
+- Several documents contained literal `\u2014` escape sequences where an
+  em dash was intended; they now render correctly.
 
 ## [2.1.0] — 2026-09-16 — RDP H.264 GFX passthrough
 

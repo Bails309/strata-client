@@ -36,8 +36,8 @@ optionally scaled with round-robin sidecars. **None of that exists now.**
 | Item | Value |
 | ---- | ----- |
 | Location | `crates/strata-session`, linked into the backend binary |
-| Concurrency | One Tokio task per session; RDP additionally runs on a dedicated thread with its own current-thread runtime, because `ironrdp-async`'s connection future is not `Send` |
-| RDP | `ironrdp` — CredSSP/NLA only, PNG-encoded damage regions, RDPSND audio, Display Control resize, CLIPRDR clipboard |
+| Concurrency | One Tokio task per session. RDP ran on a dedicated thread with its own current-thread runtime until the `ironrdp` 0.17 upgrade, because `ironrdp-async` 0.7's connection future was not `Send`; since 0.10 made it `Send`, an RDP session is an ordinary `tokio::spawn` like the others |
+| RDP | `ironrdp` — CredSSP/NLA only, PNG/WebP-encoded damage regions, opt-in MS-RDPEGFX H.264 passthrough (v2.1.0), RDPSND audio paired with an empty RDPDR channel (v2.1.1), Unicode keyboard events for printable characters (v2.1.1), Display Control resize, CLIPRDR clipboard, Set Error Info codes translated for the user (v2.1.1) |
 | SSH | `russh` — interactive PTY, mandatory host-key pinning, key or password auth, keyboard-interactive |
 | VNC | `vnc-rs` — standard RFB security types, repeaters, reverse connections |
 | Kubernetes | native exec client over `v4.channel.k8s.io` with client-certificate auth |
@@ -318,7 +318,7 @@ sequenceDiagram
 > process reached over TCP 4822, to which the backend sent a `select` +
 > `connect` handshake with the plaintext password injected. Both the hop and
 > the handshake are gone. Note what this removes from the diagram besides a
-> box \u2014 credentials no longer cross a process boundary in the clear, and there
+> box — credentials no longer cross a process boundary in the clear, and there
 > is no socket between the router and the engine on which to interpose.
 
 #### Session loop: bounded queues, one task per session
@@ -335,7 +335,7 @@ backpressure, a burst of draw instructions (the Windows Win+Arrow window-snap
 animation emits one in ~200 ms) fills the browser's receive buffer, the send
 blocks, and *while it is blocked* the loop cannot service client input. Mouse
 and keyboard events queue in the kernel buffer and arrive in bursts. Users
-perceive this as rendering freezes, mouse "acceleration" and keyboard lag \u2014 a
+perceive this as rendering freezes, mouse "acceleration" and keyboard lag — a
 performance complaint that sounds like a network problem and is not.
 
 The structure that prevents it:
@@ -358,7 +358,7 @@ Additional session details:
   ([`crates/strata-session/src/transport/decoder.rs`](../crates/strata-session/src/transport/decoder.rs))
   buffers the remainder.
 - The decode buffer is hard-capped at **16 MiB** (`DEFAULT_DECODE_LIMIT`).
-  Exceeding it closes the session rather than clearing the buffer \u2014 resuming
+  Exceeding it closes the session rather than clearing the buffer — resuming
   mid-token is not safe.
 - **Gateway shutdown drops the socket** rather than sending a clean
   disconnect. This is deliberate and easy to get wrong: a disconnect
@@ -413,8 +413,124 @@ Additional session details:
   that path. Full prose at
   [`docs/security.md` § WebSocket-tunnel auth watchdog](security.md#websocket-tunnel-auth-watchdog-v132-revised-v141).
 
+#### How a session ends (v2.1.1)
+
+Every way a native session can end reaches the browser as **one** Guacamole
+`error` instruction — `error,<text>,<status>;` — whose status code says what
+*kind* of end it was and whose text says what happened. The browser picks
+its overlay title from the code and shows the text as-is. It never has to
+infer the kind of end from the wording, which is what it did before v2.1.1
+and why a Windows sign-out was titled *Connection Error*.
+
+```mermaid
+flowchart LR
+    subgraph Engine["Protocol engine"]
+        RDP["RDP: Set Error Info /<br/>MCS ultimatum / EOF"]
+        SSH["SSH / K8s / VNC:<br/>exit, close, error"]
+    end
+    Fail["Engine error<br/>(transport, protocol)"]
+    GW["Gateway: admin kill,<br/>max duration, revoked"]
+    RDP -->|describe_termination| Ev["TargetEvent::Disconnected<br/>{ reason, cause }"]
+    SSH --> Ev
+    Fail -->|describe_engine_failure| Ev
+    Ev -->|GuacWireEncoder| Wire["error,text,status"]
+    GW -->|send_error| Wire
+    Wire --> SPA["describeSessionEnd()<br/>overlay title + thumbnail label"]
+```
+
+**The cause.** `TargetEvent::Disconnected` carries a human-readable `reason`
+and a `cause: DisconnectCause`
+([`engine/mod.rs`](../crates/strata-session/src/engine/mod.rs)). Only the
+wire encoder
+([`transport/guac_wire.rs`](../crates/strata-session/src/transport/guac_wire.rs),
+`disconnect_status()`) knows how a cause is spelled on the Guacamole wire, so
+engines stay protocol-agnostic:
+
+| `DisconnectCause` | Status | Browser title | Typical source |
+| ----------------- | ------ | ------------- | -------------- |
+| `Ended` | `0x020B` `SESSION_CLOSED` | Session Ended | Sign-out, Start → Disconnect, shell exit, host time limit |
+| `IdleTimeout` | `0x020A` `SESSION_TIMEOUT` | Session Timed Out | Host idle-session limit |
+| `Conflict` | `0x0209` `SESSION_CONFLICT` | Session Disconnected | Session opened elsewhere; host administrator disconnect/logoff |
+| `Refused` | `0x0208` `UPSTREAM_UNAVAILABLE` | Connection Refused | Host refused, out of memory, licensing, connection broker |
+| `Unauthorized` | `0x0301` `CLIENT_UNAUTHORIZED` | Access Denied | No Remote Desktop right; credentials rejected |
+| `ConnectionLost` | `0x0203` `UPSTREAM_ERROR` | Connection Lost | TCP reset or timeout; host closed without a reason |
+| `Failed` | `0x0200` `SERVER_ERROR` | Connection Error | Protocol violation; a Windows component crashed |
+
+**RDP.** Windows ends a session with a *Set Error Info* PDU carrying a code,
+and/or an MCS *Disconnect Provider Ultimatum*. `ironrdp-session` 0.11 does
+not expose the code — it renders it through `ErrorInfo::description()`, the
+MS-RDPBCGR wording, and returns only the string as
+`GracefulDisconnectReason::Other`. `describe_termination()` in
+[`engine/rdp/mod.rs`](../crates/strata-session/src/engine/rdp/mod.rs)
+recovers the code by rendering each entry of `PROTOCOL_INDEPENDENT_ENDS`
+through that same function and comparing. Because both sides of the
+comparison come from one function, a rewording upstream cannot break the
+match. Codes outside the table are classified by their category tag
+(licensing, connection broker, RDP-specific protocol error) with the spec
+text kept as detail. The raw reason is logged at `INFO` as
+`rdp target ended the session` before translation.
+
+The distinction that matters most to users is between the two
+"disconnect" codes. `ERRINFO_RPC_INITIATED_DISCONNECT_BYUSER` (`0x0B`) is the
+Start-menu **Disconnect**: the Windows session keeps running and reconnecting
+resumes it. The specification describes it as *"initiated by an
+administrative tool on the server running in the user's session"*, which is
+what users saw before v2.1.1. `ERRINFO_LOGOFF_BY_USER` (`0x0C`) is a real
+sign-out, after which reconnecting starts a fresh Windows session.
+
+**Engine failures.** An engine that returns an error rather than a
+`Disconnected` event is reported by `describe_engine_failure()` in
+[`actor/session.rs`](../crates/strata-session/src/actor/session.rs):
+I/O timeouts and resets become `ConnectionLost`, credential rejection
+`Unauthorized`, protocol violations `Failed`, and an event stream that ends
+with nothing to say `Ended` with *"The remote session has ended."* The
+error chain itself is logged, never sent. When the failure surfaces on the
+**input** path — a keystroke written to a socket that has just closed —
+`end_after_input_failure()` gives the engine up to one second
+(`CLOSE_REASON_GRACE`) to yield its own `Disconnected` event first, because
+a closed RDP engine has usually queued the real reason and the failed write
+would otherwise mask it. Either way, teardown then runs: engine shutdown,
+audit-sink finalisation and credential revocation. Before v2.1.1 the input
+path returned from the actor with `?` and skipped all three.
+
+**Gateway-initiated ends** bypass the engine and are written by
+`send_error()` in
+[`backend/src/session_engine.rs`](../backend/src/session_engine.rs):
+
+| Trigger | Text | Status |
+| ------- | ---- | ------ |
+| Administrator kill | Session terminated by administrator | `SESSION_CONFLICT` |
+| `MAX_TUNNEL_DURATION` (8 h) | This session reached the maximum allowed duration and was closed. | `SESSION_CLOSED` |
+| Access token revoked | This session was closed because your sign-in was revoked. | `SESSION_CLOSED` |
+| Gateway shutdown | *(no instruction — socket dropped so the browser auto-reconnects; see above)* | — |
+
+**Browser.** `describeSessionEnd(message, code)` in
+[`frontend/src/utils/sessionEnd.ts`](../frontend/src/utils/sessionEnd.ts)
+returns the overlay title, the session-bar thumbnail label, and whether the
+end was an administrator termination (recognised by its text, which
+suppresses **Reconnect**). `GuacSession.errorCode` is set from
+`Guacamole.Status.code` in both `tunnel.onerror` and `client.onerror`
+([`SessionManager.tsx`](../frontend/src/components/SessionManager.tsx),
+[`SessionClient.tsx`](../frontend/src/pages/SessionClient.tsx)).
+`SessionClient` stores the code keyed by the message it arrived with, so a
+later client-side error cannot inherit it. With no code — a clean close with
+nothing said, or a client-side failure such as exhausted reconnect attempts —
+the title falls back to text heuristics.
+
+**Reconnect behaviour is unchanged.** Any `error` instruction marks the end
+as server-initiated, so the browser shows the overlay with a **Reconnect**
+button rather than retrying on its own. Automatic reconnection remains
+reserved for the browser-side tunnel failing (receive timeout, WebSocket
+error) with no instruction received, which is the only case where retrying
+without asking is always safe.
+
 #### H.264 GFX passthrough (v0.28.0 – v1.14.6; removed in v2.0.0)
 
+> **Restored in v2.1.0** as opt-in native passthrough on `ironrdp-egfx`. The
+> current design is documented in [h264-passthrough.md](h264-passthrough.md);
+> this section is kept as the record of the `guacd`-era pipeline and of why
+> v2.0.0 shipped without it.
+>
 > **This capability is not in v2.0.0.** It is documented as removed rather
 > than deleted, because it is the one user-visible thing the migration cost,
 > and an operator who upgrades and finds the `enable-h264` toggle missing
@@ -1370,6 +1486,7 @@ strata-client/
 │       ├── main.rs        Entry point, bootstrap
 │       ├── config.rs      config.toml model
 │       ├── error.rs       Unified error type
+│       ├── session_engine.rs  WebSocket ↔ SessionActor bridge, preflight, watchdog, gateway-initiated session ends
 │       ├── tunnel.rs      Guacamole protocol + WS↔TCP proxy
 │       ├── db/            Database pool, migrations
 │       ├── routes/        HTTP & WebSocket handlers
@@ -1422,13 +1539,15 @@ strata-client/
 │       ├── api.ts         Typed API client
 │       ├── App.tsx        Router + boot detection
 │       ├── components/    Shared components (Layout, Select, SessionBar, SessionManager, clipboardSync, QuickShare, SessionTimeoutWarning, ThemeProvider, ToastProvider, CredentialProfileExpiryWatcher, WhatsNewModal)
+│       ├── utils/         Pure helpers (keybindings, sessionEnd, popoutPalette, browserCapabilities, keyboardLock, winKeyProxy, …)
 │       └── pages/         Page components (Dashboard, Documentation, SessionClient, AdminSettings, AuditLogs, Approvals, Login, SetupWizard, SharedViewer)
 │           ├── admin/     One module per Admin Settings tab (Security, Network, Display, SSO, Kerberos, Recordings, Vault, Tags, Health, Sessions, Passwords, AdSync, Access) plus the shared connection-form helpers
 │           └── credentials/  Credentials page child components (RequestCheckoutForm, ProfileEditor)
 ├── crates/                Workspace crates
 │   ├── strata-session/    In-process session engine (RDP / VNC / SSH / SFTP / K8s)
 │   ├── strata-protocol/   Guacamole instruction + media envelope codecs
-│   └── strata-dmz/        DMZ edge proxy
+│   ├── strata-dmz/        DMZ edge proxy
+│   └── vendor/            Patched forks (ironrdp-connector, ironrdp-egfx, sspi) — see scripts/check-vendored-forks.sh
 ├── certs/                 TLS certificates (mount for HTTPS)
 ├── docker-compose.yml     Full stack orchestration
 ├── CHANGELOG.md
@@ -1636,6 +1755,7 @@ Step-by-step procedures for on-call engineers live under
 | [dmz-incident.md](runbooks/dmz-incident.md)                   | DMZ link flap, links-up:0, edge-HMAC/PSK rotation, suspected DMZ host compromise                              |
 | [av-operations.md](runbooks/av-operations.md)                 | AV scanner outage, signature update failure, false-positive triage, EICAR smoke test, capacity check          |
 | [clipboard-diagnostics.md](runbooks/clipboard-diagnostics.md) | RDP copy/paste reported broken — classify stalled-transfer vs wedged `rdpclip.exe`, recover, capture evidence |
+| [session-disconnects.md](runbooks/session-disconnects.md)     | A user reports an unexpected or unexplained session end — map the on-screen message to its cause and log line |
 
 ## Session-activity bus and proactive token refresh (v1.6.1)
 
@@ -1962,15 +2082,15 @@ Outbound events are `queued`, `skip-duplicate`, `skip-disconnected`,
 The browser-side buffer above is the primary diagnostic.
 
 Two of the four failure modes the tracer existed to catch are now
-structurally impossible \u2014 interleaved transfers splicing payloads, and an
-oversize copy being discarded rather than truncated \u2014 because the engine
+structurally impossible — interleaved transfers splicing payloads, and an
+oversize copy being discarded rather than truncated — because the engine
 gives each direction its own ceiling and logs a truncation. The remaining
 two are properties of the *target*, not the gateway, and stay visible in
 the browser buffer:
 
-- A `stream-open` with no matching `stream-end` \u2014 the remote never
+- A `stream-open` with no matching `stream-end` — the remote never
   finished the transfer (the delayed-render CLIPRDR hang).
-- `blobs=0` on a completed inbound stream \u2014 the remote announced a
+- `blobs=0` on a completed inbound stream — the remote announced a
   format and then produced nothing.
 
 ## OIDC discovery and JWKS cache consolidation (v1.6.1)
@@ -2003,6 +2123,121 @@ Strata and the cache hit/miss can be reasoned about) or they are
 small while the user still waited minutes (in which case the time
 was spent inside Keycloak's broker path or a federated upstream
 IdP, and the trail continues outside the Strata logs).
+
+## Native RDP input, display and audio (v2.1.1)
+
+Four behaviours of the RDP engine that a user notices directly, each of
+which was wrong until v2.1.1 for a reason that is easy to reintroduce.
+
+### Keyboard: Unicode for text, scancodes for positions
+
+RDP can carry a keystroke two ways: as a **scancode** (a physical key
+position, which the target maps through *its* keyboard layout) or as a
+**Unicode** key event (a character, which the target inserts as-is). The
+browser reports X11 keysyms, and a keysym is the character the user's
+**local** layout already produced.
+
+Sending that character as a US-layout scancode applies a layout twice.
+On a UK keyboard, `\` is the key that sits where US has `#`; translated to
+the US position and re-mapped by a UK-configured Windows host it arrives
+as `#`. Every step is individually correct, which is why it survived.
+`mstsc` does not hit this because it sends the physical key, not the
+character.
+
+`resolve_key(keysym, shortcut_held)` in
+[`engine/rdp/keycodes.rs`](../crates/strata-session/src/engine/rdp/keycodes.rs)
+decides per keystroke:
+
+| Keystroke | Sent as | Why |
+| --------- | ------- | --- |
+| Printable character, no shortcut modifier held | `KeyEvent::Unicode` | Layout-independent: the character the user sees is the character that arrives |
+| Any key while Ctrl, Alt (left) or Super is held | Scancode | `Ctrl+C` must be the C *position*; a Unicode `c` is text, not a shortcut |
+| Space, Enter, Tab, arrows, function keys, modifiers | Scancode | Positions, not text |
+| Character with no US position (`£`, `é`, `中`) | `KeyEvent::Unicode` | There is no scancode to send |
+
+**AltGr is not a shortcut modifier.** `shortcut_modifier_bit()` deliberately
+omits `Alt_R`: on most non-US layouts it is AltGr, which composes
+characters, and counting it would send `AltGr+Q` on a German keyboard as a
+US key position instead of `@`.
+
+The connection's `server-layout` is still sent in the Client Core Data and
+still governs the positional keys. The **Failsafe (Unicode events)** layout
+option is now a no-op, because what it selected is what every layout does.
+
+### Display: device pixels, and DPI only on request
+
+A browser on a display scaled to 125% reports **CSS pixels**: a 1920-wide
+monitor is 1536 CSS pixels wide. Two things used to go wrong:
+
+1. The desktop was requested in CSS pixels (1536 wide), so less fitted, and
+   the canvas was then stretched back over 1920 real pixels, softening it.
+2. The DPI was reported as `96 × devicePixelRatio` (120). The engine maps
+   that onto an MS-RDPEDISP desktop scale factor via
+   `desktop_scale_from_dpi()`, so Windows drew its UI at 125% **on top of**
+   the already-undersized desktop.
+
+`remoteDisplayMetrics(cssWidth, cssHeight)` in
+[`SessionManager.tsx`](../frontend/src/components/SessionManager.tsx) is now
+the single source of both numbers, used by the connect-time ticket, every
+later `size` instruction, the shared viewer and multi-monitor layout:
+
+| Output | Value |
+| ------ | ----- |
+| `width`, `height` | CSS size × `devicePixelRatio`, rounded — real device pixels |
+| `dpi` | `96`, unless the user has ticked **Match my display scale**, in which case `96 × devicePixelRatio` |
+
+The canvas-fit scaling divides device pixels back down, so a 1920×1080
+desktop maps 1:1 onto a 1920×1080 panel whatever the local zoom. The opt-in
+is stored per browser in `localStorage` (`strata-display-scale-passthrough`)
+and re-applied immediately through `applyDisplayConfig`, without a
+reconnect.
+
+**Multi-monitor.** `useMultiMonitor` sums each screen's **device** width
+into the aggregate desktop and sends the primary screen's DPI with the
+resize; each pop-up canvas is backed in device pixels so its slice draws 1:1.
+Window *placement* stays in CSS pixels, because that is the unit
+`window.moveTo` speaks.
+
+### Audio: RDPSND needs RDPDR beside it
+
+Two independent faults each silenced RDP audio on their own:
+
+- **The Client Info PDU declared `INFO_NOAUDIOPLAYBACK`.** The connector
+  field behind that flag, `enable_audio_playback`, is a negative and
+  defaulted to `false`. `RdpConfig::enable_audio` now defaults to `true`, and
+  the backend sets it to `!disable-audio`.
+- **Windows will not use RDPSND without RDPDR.** With the flag cleared the
+  host still joined the audio channel and sent nothing — no Server Audio
+  Formats, no training, no wave data, no error. MS-RDPEFS Appendix A<1>
+  documents the dependency in the other direction only; on Server 2019 and
+  2022 it holds both ways, and `mstsc` always advertises both.
+  `with_audio_channels()` in
+  [`engine/rdp/mod.rs`](../crates/strata-session/src/engine/rdp/mod.rs)
+  therefore registers `Rdpsnd` **and** `Rdpdr` together, the latter with an
+  empty device list and `NoopRdpdrBackend`. A unit test asserts both are
+  present, because the RDPDR registration looks like dead weight and would
+  not otherwise survive a tidy-up.
+
+Audio leaves the engine as `audio/L16;rate=44100,channels=2` on a single
+Guacamole audio stream; the backend logs `opening audio stream` when it
+allocates it. In the browser the vendored
+`Guacamole.AudioContextFactory.resumeOnGesture()` resumes the
+`AudioContext` on the first capture-phase `mousedown` / `keydown` /
+`touchstart` / `pointerdown`, since browsers create it suspended and a
+suspended context plays nothing without raising an error.
+
+### Network auto-detection is not advertised
+
+The vendored
+[`ironrdp-connector`](../crates/vendor/ironrdp-connector/src/connection.rs)
+no longer sets `SUPPORT_NET_CHAR_AUTODETECT` in the client early-capability
+flags. `ironrdp-session` answers the RTT part of the MS-RDPBCGR 2.2.14
+sequence but drops Bandwidth Measure Start / Payload / Stop, so the
+Bandwidth Measure Results PDU that 3.2.5.10 requires never goes back and
+Windows re-runs the measurement dozens of times a second for the life of the
+session. Without the flag the host sizes the session from the declared
+`connectionType`. Re-add the flag only once the bandwidth measurement is
+answered; `scripts/check-vendored-forks.sh` tracks the fork.
 
 ## Extended protocols
 

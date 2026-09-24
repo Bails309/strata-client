@@ -28,7 +28,9 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 
 use crate::engine::keymap::{keysym_to_bytes_with, Backspace, CellSize, Modifiers};
-use crate::engine::{EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec};
+use crate::engine::{
+    DisconnectCause, EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec,
+};
 use crate::error::EngineError;
 
 /// Stream indices defined by `v4.channel.k8s.io`.
@@ -311,10 +313,13 @@ impl ProtocolEngine for KubeEngine {
                 Message::Close(frame) => {
                     self.finished = true;
                     let reason = frame.map_or_else(
-                        || "pod closed the connection".to_owned(),
+                        || "The pod closed the connection.".to_owned(),
                         |f| f.reason.to_string(),
                     );
-                    return Ok(Some(TargetEvent::Disconnected { reason }));
+                    return Ok(Some(TargetEvent::Disconnected {
+                        reason,
+                        cause: DisconnectCause::Ended,
+                    }));
                 }
                 // Ping/pong are answered by the library; text frames are
                 // not part of this subprotocol.
@@ -336,6 +341,7 @@ impl ProtocolEngine for KubeEngine {
                     self.finished = true;
                     return Ok(Some(TargetEvent::Disconnected {
                         reason: exec_status_reason(body),
+                        cause: DisconnectCause::Ended,
                     }));
                 }
                 other => tracing::debug!(channel = other, "unexpected kubernetes exec stream"),
@@ -399,10 +405,10 @@ fn encode(value: &str) -> String {
 fn exec_status_reason(body: &[u8]) -> String {
     let text = String::from_utf8_lossy(body);
     if text.contains(r#""status":"Success""#) {
-        return "command exited".to_owned();
+        return "The command exited.".to_owned();
     }
     if text.trim().is_empty() {
-        return "pod closed the connection".to_owned();
+        return "The pod closed the connection.".to_owned();
     }
     text.into_owned()
 }
@@ -548,7 +554,7 @@ mod tests {
     #[test]
     fn a_clean_exit_reads_as_one() {
         let body = br#"{"metadata":{},"status":"Success"}"#;
-        assert_eq!(exec_status_reason(body), "command exited");
+        assert_eq!(exec_status_reason(body), "The command exited.");
     }
 
     #[test]

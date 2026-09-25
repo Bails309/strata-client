@@ -1095,8 +1095,12 @@ describe("AccessTab", () => {
     expect(screen.getByText("CustomRole-5")).toBeInTheDocument();
     expect(screen.queryByText("CustomRole-6")).not.toBeInTheDocument();
 
-    // Pagination info
-    expect(screen.getByText(/showing 1–5 of 8 roles/i)).toBeInTheDocument();
+    // Pagination info (the range and total are separate spans)
+    expect(
+      screen.getByText((_, el) =>
+        /^Showing 1–5 of 8 roles \(Page 1 of 2\)$/i.test(el?.textContent?.trim() ?? "")
+      )
+    ).toBeInTheDocument();
 
     // Click Next
     await user.click(screen.getByRole("button", { name: /next page/i }));

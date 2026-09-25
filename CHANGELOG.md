@@ -5,7 +5,353 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
-## [Unreleased]
+## [2.2.0] — 2026-09-25
+
+### Minor release — the admin console is rebuilt for estate-scale privileged access: a fleet manager for connections, a folder tree, a risk-aware role editor, and one notification system with a credential-lease manager
+
+### The ask
+
+This release is the product of a run of design briefs. The first three
+asked for the sign-in page and the connections dashboard to be brought to
+the approved enterprise mock-ups, and for approval and credential-expiry
+notifications to share one surface with a place to manage every lease. The
+last three are kept here by their own titles, because they are what a future
+reader will search for:
+
+> - *"Connection Folders Enterprise Tree View"*
+> - *"Strata Client: Connections Admin (Fleet Management) Implementation Plan"*
+> - *"Strata Client: Enterprise Role Management Modal Implementation Plan"*
+
+The reskin, unified notifications and lease manager merged to `main` as
+#432 **without a CHANGELOG entry**; they are backfilled below. The release
+also rolls up the two fixes recorded under *Unreleased* after v2.1.1 (#430,
+#431).
+
+Every brief was implemented against the backend as it actually behaves,
+which in several places is not what the brief — or this repository's own
+documentation — assumed. Those differences are listed under
+[*Documentation corrected against the code*](#documentation-corrected-against-the-code)
+and [*Known issues*](#known-issues-found-while-building-this-release-not-changed),
+because a privileged-access console that describes access it does not grant,
+or hides access it does, is worse than an ugly one.
+
+### Added — enterprise reskin (backfill, #432)
+
+- **Login page** rebuilt to the approved mock-up: constellation background,
+  gateway diagram, and a theme menu cycling **System → Light → Dark**. SSO
+  providers render as up to three button variants — the first non-Capita
+  provider as the primary, Capita providers in their own style, the rest as
+  secondary — each linking to `/api/auth/sso/login?provider=<id>`. The local
+  form appears below an *"or use a local account"* separator only when
+  `local_auth_enabled` is true. No authentication behaviour changed.
+- **Design tokens** in [`styles/dashboard-theme.css`](frontend/src/styles/dashboard-theme.css):
+  a cyan/navy palette (accent `#3aceef` dark, `#0891b2` light) with a full
+  light-theme equivalent, and a layered background plus constellation behind
+  the workspace ([`DashboardBackground.tsx`](frontend/src/components/DashboardBackground.tsx)).
+- **Global header** ([`GlobalHeader.tsx`](frontend/src/components/GlobalHeader.tsx))
+  with breadcrumbs derived from the route and the lease pill (below).
+- **Admin mega-menu** ([`AdminMegaMenu.tsx`](frontend/src/components/AdminMegaMenu.tsx),
+  [`adminMegaMenuConfig.ts`](frontend/src/components/adminMegaMenuConfig.ts)):
+  three columns — *Identity & Access*, *Network & Connectivity* with *Secrets
+  & Security*, *Overview* with *Workspace*. Items are filtered by
+  `isMegaMenuItemVisible(id, user)`, which mirrors the per-tab permission
+  predicates the sidebar already used; it hides navigation only and is not an
+  access control.
+- **Dashboard**: glass cards, restyled toolbar, striped table, protocol
+  badges and status dots. Filtering moved into
+  [`hooks/useConnectionFilter.ts`](frontend/src/hooks/useConnectionFilter.ts)
+  (search, favourites, tag, protocol), with active filters shown as removable
+  chips ([`ActiveFilterChips.tsx`](frontend/src/components/ActiveFilterChips.tsx)) and
+  an empty state that says when matches exist outside the current scope and
+  offers to show them ([`ConnectionEmptyState.tsx`](frontend/src/components/ConnectionEmptyState.tsx)).
+- **`EnterpriseCheckbox`** ([`EnterpriseCheckbox.tsx`](frontend/src/components/EnterpriseCheckbox.tsx)):
+  one 16 px checkbox with controlled/uncontrolled modes, `indeterminate`,
+  `onCheckedChange`, and an `as` prop for use inside an existing `<label>`.
+  Admin tabs (AD Sync, Kerberos, Network, Notifications, Password Mgmt,
+  Recordings, Safeguard, Security, Tags) were restyled onto it without
+  functional change.
+
+### Added — one notification system and a credential-lease manager (backfill, #432)
+
+**One toast surface.** [`ToastProvider.tsx`](frontend/src/components/ToastProvider.tsx)
+is now the only notification system. Approval requests and credential expiry
+previously rendered their own cards; they now share one card with a severity
+strip, icon badge, monospace details and a countdown bar that pauses on hover
+or focus.
+
+| Variant | Default lifetime |
+| ------- | ---------------- |
+| `info`, `success` | 6 s |
+| `warning` | 8 s |
+| `error` | Sticky until dismissed |
+
+Toasts stack top-right at `4.25rem` so they clear the header, can be replaced
+in place by `key`, fire `onDismiss` exactly once on any dismissal path, and
+can hold themselves open with `useToastHold()` while the user types (the deny
+reason on an approval card uses this). A toast with interactive `content`
+announces as `alertdialog`. The auto-dismiss timer arms in `useLayoutEffect`
+so it is registered in the same commit as the toast.
+
+**Approvals stay inline.** [`PendingApprovalWatcher.tsx`](frontend/src/components/PendingApprovalWatcher.tsx)
+still polls every **45 s** (plus on focus and `visibilitychange`), de-duplicates
+across tabs through `localStorage` key `strata.pendingApprovalShown.v1`, and
+auto-dismisses an untouched card after **30 s**. Approve and Deny (with a
+required reason) act from the toast; *View all* opens `/approvals`. Checkout
+cards carry an **Emergency** chip for break-glass requests; outbound-share
+cards carry a **DLP** chip when the score is 50 or more or reasons are
+present.
+
+**Grouped credential-expiry alerts.**
+[`CredentialProfileExpiryWatcher.tsx`](frontend/src/components/CredentialProfileExpiryWatcher.tsx)
+polls `GET /api/user/credential-profiles` every **60 s** and warns at:
+
+| Profile | Thresholds |
+| ------- | ---------- |
+| Standard (TTL ≤ 12 h) | 1 day, 1 hour, 10 minutes, 5 minutes |
+| Extended expiry | 7 days, 1 day, 1 hour, 5 minutes |
+
+Thresholds wider than the profile's own TTL are dropped and only the tightest
+unfired one fires, so a 12-hour profile never shows a "1 day" warning. Expiries
+arriving within a **20 s** window collapse into one toast — *"N Privileged
+Credentials Expired"* — with a three-row matrix that expands inline, **Extend
+All** (Safeguard JIT leases only, via `POST /api/user/safeguard/bulk-checkout`),
+**Dismiss All** (also `Esc`, unless the user is typing or a modal owns the
+keyboard) and **View Vault** (`/credentials`). Pre-expiry warnings batch the
+same way, and their titles state the **actual time remaining** rather than the
+threshold that fired. Fired thresholds are remembered per profile and expiry
+timestamp in `strata.credExpiryFired.v1`, so a re-issued TTL re-arms them.
+
+**Lease pill and lease manager.** The header pill
+([`LeaseIndicator.tsx`](frontend/src/components/LeaseIndicator.tsx)) reads
+*"N Lease(s) Expired"*, *"N Active · X left"* (inside one hour) or *"N Active
+Lease(s)"*, and opens a slide-over manager
+([`LeaseDrawer.tsx`](frontend/src/components/LeaseDrawer.tsx)) grouping leases
+into Expired, Expiring within 1 hour and Active. It offers bulk **Extend**
+(Safeguard JIT only) and a **confirmed** check-in that calls
+`POST /api/user/safeguard/checkin` for JIT leases and the checkout check-in
+endpoint for password checkouts. Both only appear when Vault is configured.
+The pill and drawer poll nothing themselves: they read
+[`leaseStore.ts`](frontend/src/components/leaseStore.ts), which the expiry
+watcher publishes to, so the release adds **no** request traffic.
+
+### Added — Connections fleet manager
+
+The **Admin → Connections** table is replaced by a fleet manager
+([`pages/admin/fleet/`](frontend/src/pages/admin/fleet/)).
+
+- **Telemetry strip** — five cards: total connections with a protocol
+  breakdown; reachability of the connections that have been probed; security
+  alerts (connections carrying an alert-tone policy badge); active sessions
+  and live users; and the time of the last health sweep. The brief's *"Vault
+  Enforced"* card was not built: whether a connection's credential is
+  Vault-sealed is a property of each user's credential profile, not of the
+  connection, so no per-connection figure exists to show.
+- **Toolbar** — search (250 ms debounce) over name, host, port, description,
+  folder and protocol; filters for protocol, folder (including *No folder* and a folder's whole
+  subtree) and health (*Reachable*, *Unreachable*, *Not checked*); a **Sync AD /
+  LDAP** menu that triggers existing AD sync sources (listed only for
+  `can_manage_system`, because that endpoint requires it); **Verify Host Keys**
+  (the existing SSH host-key survey); and **+ Add Connection**.
+- **Table** — 20 rows per page. Each row shows name and a copyable target
+  (`extra.url` for `web`), protocol, health — including the measured TCP
+  latency after an on-demand probe — policy badges, live session count and
+  folder (*Root* when unfiled). Row actions: **Configure**, **Probe**, and a
+  menu with **Duplicate**, **Clear pinned host key** (SSH connections that have
+  one) and **Delete connection**.
+- **Policy badges are derived only from settings the engine honours:**
+
+  | Badge | Source | Tone |
+  | ----- | ------ | ---- |
+  | NLA | `security` = `nla` / `nla-ext` | normal |
+  | Legacy Sec | `security` = `rdp` | **alert** |
+  | Kerberos | `auth-pkg` | normal |
+  | HostKey / **Unpinned** | SSH `host-key` present / absent | normal / **alert** |
+  | Cert Ignored | `ignore-cert` = `true` | **alert** |
+  | Read-only | `read-only` = `true` | normal |
+  | Clip Locked / No Copy / No Paste | `disable-copy`, `disable-paste` | normal |
+
+  *Vault* and *Rec* badges from the brief were not built for the same reason
+  as the Vault card.
+- **Bulk dock** — appears when rows are selected: **Move to folder**,
+  **Trigger Probe**, **Pin Host Keys (n)** (opens the host-key review panel
+  scoped to the selected SSH connections, so every key is still an explicit
+  approval), **Clear**, and **Delete Selected**, which asks for confirmation
+  and warns when any selected connection has a live session. The brief's
+  *"Enforce Vault"* bulk action was not built.
+- **On-demand probe** — new endpoint `POST /api/admin/connections/{id}/probe`
+  runs the health sweep's TCP check for one connection now, stores the result,
+  and returns the connect latency. The UI runs at most **4** probes at once.
+  Active sessions are polled every **30 s** only when the user holds
+  `can_manage_system` or `can_view_sessions`.
+
+The brief's ▶ launch-in-sandbox action and *"View Session Audit History"* were
+not built: the first has no backend, and the audit and session pages do not
+accept URL filters to deep-link into.
+
+### Added — connection folder tree
+
+[`ConnectionFoldersView.tsx`](frontend/src/pages/admin/ConnectionFoldersView.tsx)
+replaces the flat folder list with a WAI-ARIA tree (`role="tree"` /
+`treeitem`, `aria-level`, `aria-posinset`, `aria-setsize`, `aria-expanded`,
+`aria-selected`).
+
+- Guide lines, direct and total connection counts per folder, Expand all /
+  Collapse all.
+- Search matches folder **and connection** names and keeps the ancestors of a
+  match visible, marking folders that match only through a connection.
+- Inline **+ New Root Folder** and subfolder creation; rename by
+  double-click, `F2` or the rename button, committed at most once per edit.
+- Keyboard: arrows, `Home` / `End`, `Enter` / `Space`, `F2`, `Delete`.
+- **Deletion is blocked in the UI** while a folder has subfolders or
+  connections filed directly in it, with the reason in the dialog. The API
+  does not block it — see [*Scope & safety*](#scope--safety).
+
+### Added — risk-aware role editor
+
+The Edit Role dialog ([`pages/admin/roles/`](frontend/src/pages/admin/roles/))
+replaces the 400 px two-tab form.
+
+- **Permissions** grouped into four categories — *Platform & system
+  administration*, *Audit & observability*, *Data loss prevention & file
+  transfer*, *Session collaboration* — each collapsible, with a filter, a
+  granted count, and a **Critical / Elevated / Standard** risk badge on every
+  permission. The layout defect where the *PERMISSIONS* caption shared a line
+  with the first checkbox is gone.
+- **Every role flag is now visible.** `can_manage_users` and
+  `can_manage_connections` were stored on every role but **had no control in
+  the old dialog**; both are now shown and marked Critical (see *Known issues*
+  for why).
+- **Asset assignments** is one tree of folders and connections. Granting a
+  folder marks the connections filed **directly** in it as *Inherited from
+  folder* (ticked and locked). Subfolders show *Not covered by parent folder*,
+  because the backend grants folder access non-recursively; the brief's
+  cascading model would have displayed access that does not exist. A
+  connection granted both ways shows *Inherited · also granted directly* with
+  a **Remove direct** control, so a redundant direct grant cannot silently
+  outlive the folder grant. A summary line counts reachable connections, and
+  a banner explains when the role already reaches every connection through
+  `can_manage_system` or `can_manage_connections`.
+- **Members** lists the users holding the role, with auth type and last
+  sign-in. Directory groups are not listed: a user holds exactly one role and
+  AD sync imports connections, not role membership.
+- **Description** — a new free-text field (see *Scope & safety*).
+- **Change tracking** — the footer counts each changed field, permission,
+  folder and connection; Save is disabled until something changes; Cancel or
+  `Esc` with unsaved changes asks before discarding. Duplicate role names are
+  rejected before submission. The built-in `admin` and `user` roles keep their
+  names locked and are labelled *System role*.
+- The dialog is rendered in a portal on `document.body`, so the sidebar can no
+  longer be drawn over it.
+
+### Fixed
+
+- **The old role dialog could erase a role's assignments.** It opened with an
+  empty assignment list and filled it once `GET /api/admin/roles/{id}/mappings`
+  returned; if that request failed it logged to the console and left the list
+  empty, and **Save** then sent the empty list to
+  `PUT /api/admin/roles/{id}/mappings`, which replaces all mappings. The new
+  dialog refuses to open when the mappings cannot be loaded, and only sends
+  mappings when they changed.
+- **A partially failed role create no longer duplicates the role.** If the
+  role is created but its mappings fail, the dialog keeps the created role,
+  says so, and a retry updates that role instead of creating a second one.
+- **Folder renames and moves were not audited.** `PUT
+  /api/admin/connection-folders/{id}` now writes `connection_folder.updated`
+  with `{ id, name, parent_id }`. `connection_folder.created` now records the
+  new folder's `id`, and `connection_folder.deleted` and `connection.deleted`
+  now record the `name`, so the audit log reads *"Deleted folder Production"*
+  rather than a truncated UUID.
+- **Frontend CI failing with every test passing** (#431) and **OpenSSF
+  Scorecard `Vulnerabilities`** (#430) — both carried from *Unreleased* and
+  described in full at the end of this entry.
+
+### Documentation corrected against the code
+
+Building an editor that tells an administrator what each permission does
+meant checking each one against the handlers. Several long-standing
+statements in this repository's documentation were wrong. They are corrected
+in [docs/security.md](docs/security.md#granular-admin-permissions),
+[docs/api-reference.md](docs/api-reference.md#roles),
+[docs/architecture.md](docs/architecture.md#database-schema) and
+[docs/faq.md](docs/faq.md#how-does-rbac-work), and recorded here as a
+backfill:
+
+| Statement | What the code does |
+| --------- | ------------------ |
+| `can_manage_system` does **not** bypass `can_use_quick_share_outbound` (security.md, api-reference.md, architecture.md, since v1.11.0) | `check_quick_share_outbound_permission()` **does** accept `can_manage_system` for submit, ingest-token mint, list and download. Only the HTTPS-snippet **consume** path re-reads the role's own flag, so a super-admin without the flag can mint a token that is then refused. |
+| `can_create_users`, `can_create_user_groups` and `can_create_connections` grant provisioning, role CRUD, and connection/folder CRUD | **No handler checks them.** They pass the coarse `require_admin` gate and reveal admin navigation; the create endpoints require `can_manage_users`, `can_manage_system` and `can_manage_connections` respectively. |
+| `can_view_sessions` is *"View own sessions (own sessions only)"* (old role dialog and the Access → Permissions matrix) | It lists, observes (NVR) and terminates **every** live session and opens every recording. Relabelled *Monitor sessions* in the role editor. |
+| A folder grant covers a folder's subfolders (implied by the brief; unstated in the docs) | Every access query compares `role_folders.folder_id = connections.folder_id`, so a grant covers only connections filed directly in that folder. |
+| Ten-permission role model (README, faq.md — with two flag names that do not exist) | Eleven flags; the FAQ's `can_audit_system` and `can_create_roles` are `can_view_audit_logs` and `can_create_user_groups`. |
+| `GET/POST/PUT/DELETE /api/admin/connection-groups`, `PUT /api/admin/role-connections` (api-reference.md) | The routes are `/api/admin/connection-folders` and `/api/admin/roles/{id}/mappings`; `role-connections` no longer exists. |
+| Schema diagram lists `connection_groups` and no `role_folders` (architecture.md) | Migration `023` renamed the table to `connection_folders`; `role_folders` (migration `024`) is the folder-grant table. |
+| `WHATSNEW.md` v1.14.6 entry | Was missing its `# What's New in v1.14.6` heading and read as part of v2.0.0; heading restored. |
+
+### Known issues found while building this release (not changed)
+
+Each is a pre-existing behaviour, not introduced here. They are recorded so the
+decision to change them is made deliberately rather than as a side effect of a
+UI release.
+
+| Issue | Effect | Where |
+| ----- | ------ | ----- |
+| `can_view_sessions` was introduced as *own-session* access, but the admin session and recording endpoints accept it | The SPA's Sessions page shows a holder only their own sessions, yet the API lets them list, observe and terminate every session and open every recording. The role editor now describes the API behaviour. | `check_session_permission` in [`services/middleware.rs`](backend/src/services/middleware.rs) |
+| `can_manage_users` can change **any** user's role, including the holder's own, to `admin` | A holder can escalate to super-admin. Marked **Critical** in the role editor. | `update_user` in [`routes/admin.rs`](backend/src/routes/admin.rs) |
+| `can_create_users` / `can_create_user_groups` / `can_create_connections` are not enforced | Granting one alone shows an admin area whose actions then return `403`. | `services/middleware.rs` has no `check_*` for them |
+| Outbound Quick Share mint vs consume disagree for super-admins | A super-admin without the role flag can mint an upload token that is refused on use. | [`routes/outbound_shares.rs`](backend/src/routes/outbound_shares.rs) consume re-check |
+| Role changes are audited without their content | `role.updated` records `{ id, name }` and `role_mappings.updated` records `{ role_id }`, not which permissions or grants changed. | [`routes/admin.rs`](backend/src/routes/admin.rs) |
+| **Access → Session Policies** shows fixed values | The panel's durations, watermark and recording text are hard-coded display, not read from settings, and one line (*".cast"*) does not match the `.guac` format. | [`AccessTab.tsx`](frontend/src/pages/admin/AccessTab.tsx) |
+| Probe and health sweep resolve with the container resolver | *Reachable* can differ from what a session sees when admin-configured DNS is in use, because sessions resolve targets against those nameservers. | [`services/health_check.rs`](backend/src/services/health_check.rs) |
+| `DELETE /api/admin/connection-folders/{id}` cascades | The API deletes subfolders (`ON DELETE CASCADE`) and unfiles their connections; only the UI blocks it. Access moves in the safe direction — folder grants are removed, never widened. | migrations `006`, `024` |
+
+### Scope & safety
+
+| Area | Change |
+| ---- | ------ |
+| Schema | Migration **`090_role_description.sql`** adds `roles.description TEXT NOT NULL DEFAULT ''`. Migration **`092_prune_shipped_roadmap_statuses.sql`** removes the `workflows-quick-share-outbound` and `protocols-ironrdp-upgrade` overrides from `system_settings.roadmap_statuses` (tolerates a missing or non-JSON value). Both are additive or data-only and run automatically at boot. |
+| API | **New** `POST /api/admin/connections/{id}/probe` (`can_manage_connections`; `404` for unknown or soft-deleted connections). `GET/POST/PUT /api/admin/roles` carry `description` (trimmed, ≤ 500 characters, `400` beyond that; omitted on `PUT` = unchanged). Audit payloads gained fields as listed under *Fixed*; no event was renamed or removed. |
+| Authorisation | **Unchanged.** No handler's permission check moved. The probe endpoint uses the existing `check_connection_management_permission`, is post-authentication, and probes only the host and port already stored on the connection — it takes no target from the request, so it adds no new reachability beyond what the 2-minute sweep already performs. It is not audited, matching the sweep. |
+| Env vars | None. |
+| Dependencies | None. |
+| Frontend | New modules `pages/admin/fleet/`, `pages/admin/roles/`, `ConnectionFoldersView`, lease and toast components, `hooks/useConnectionFilter`. The in-app roadmap drops *Quick-Share Outbound* (shipped v1.11.0) and *IronRDP Upgrade & Tokio-Native RDP Sessions* (shipped by v2.1.0); `docs/roadmap.md` also drops *Kubernetes Pod Console* (v2.0.0) and *Antivirus scanning* (v1.12.0). The IronRDP item's one open task — dropping the `ironrdp-connector` and `sspi` forks — is dependency maintenance tracked by `scripts/check-vendored-forks.sh` and [ADR-0015](docs/adr/ADR-0015-native-rust-session-engine.md), not a roadmap feature. |
+| DMZ edge | No change; does not need rebuilding. |
+
+### Testing
+
+- **Backend**: `cargo fmt --check` and `cargo clippy --all-targets -- -D
+  warnings` clean; role tests (19, including two new `normalize_description`
+  tests) and the `health_check` tests (10, including two for the timed probe)
+  pass.
+- **Frontend**: new suites `FleetManager.test.tsx` (13),
+  `ConnectionFoldersView.test.tsx` (11), `EditRoleModal.test.tsx` (14), and
+  #432's `LeaseIndicator`, `EnterpriseCheckbox`, `ToastProvider` and watcher
+  suites; `AdminSettings.test.tsx` updated for the new tree, fleet table and
+  role dialog. `tsc --noEmit` clean.
+- **Browser check** against mocked APIs: fleet KPIs, bulk dock, probe latency,
+  the role editor's three tabs, inherited and direct grants, and the members
+  list.
+- *AdminSettings › AccessTab › paginates roles* fails against the in-progress
+  roles-list markup; it asserts text that the new pagination splits across
+  elements.
+
+### Deploy
+
+```bash
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+Migrations `090` and `092` apply at backend start. No `.env` change. The DMZ
+edge does not need rebuilding.
+
+**Operator action — review custom roles.** Open each custom role in
+**Admin → Access → Roles**. The editor now shows two flags the old dialog hid
+(*Manage users*, *Manage all connections*), both Critical, and marks folder
+grants that do not reach subfolders. Roles that relied on
+`can_create_users`, `can_create_user_groups` or `can_create_connections`
+alone should be given the flag the server actually checks, or have those
+flags removed.
 
 ### Fixed — frontend CI failing with every test passing
 

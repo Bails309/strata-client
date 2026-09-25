@@ -69,14 +69,14 @@ export const EnterpriseCheckbox: React.FC<EnterpriseCheckboxProps> = ({
           enterprise-checkbox-box
           w-4 h-4 rounded-[4px] border flex items-center justify-center transition-colors duration-100 ease-in-out shrink-0
           /* Unchecked State */
-          bg-[#0B131F]/70 border-slate-600/40
+          bg-[var(--cb-bg-unchecked)] border-slate-400/50
           /* Hover State */
-          hover:border-[#3ACEEF] hover:bg-[#3ACEEF]/10
+          hover:border-[var(--cb-bg-checked)] hover:bg-[rgba(var(--accent-rgb),0.1)]
           /* Checked & Indeterminate States */
-          peer-checked:bg-[#3ACEEF] peer-checked:border-[#3ACEEF]
-          peer-indeterminate:bg-[#3ACEEF] peer-indeterminate:border-[#3ACEEF]
+          peer-checked:bg-[var(--cb-bg-checked)] peer-checked:border-[var(--cb-bg-checked)]
+          peer-indeterminate:bg-[var(--cb-bg-checked)] peer-indeterminate:border-[var(--cb-bg-checked)]
           /* Keyboard Focus-Visible */
-          peer-focus-visible:ring-2 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-[#070B12] peer-focus-visible:ring-[#3ACEEF]
+          peer-focus-visible:ring-2 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-[var(--bg-app-base)] peer-focus-visible:ring-[var(--cb-bg-checked)]
         "
         style={{
           width: "var(--cb-size, 16px)",

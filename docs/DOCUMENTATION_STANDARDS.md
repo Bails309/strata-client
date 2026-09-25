@@ -72,7 +72,8 @@ Additional conventions:
 carry it. See the table in
 [RELEASE_PROCESS.md § 2](RELEASE_PROCESS.md#2-bump-the-version--every-version-bearing-file)
 for the authoritative list, which includes both `package-lock.json` files and the
-three workspace crate entries in `Cargo.lock`.
+four workspace crate entries in `Cargo.lock` (`strata-backend`, `strata-dmz`,
+`strata-protocol`, `strata-session`).
 
 `deploy/helm/strata-dmz` versions independently and is **not** bumped on an app
 release.

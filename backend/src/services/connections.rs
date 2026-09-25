@@ -183,16 +183,16 @@ pub async fn update(
     Ok(row)
 }
 
-/// Soft-delete a connection. Returns `true` if a row was updated, `false` if
+/// Soft-delete a connection. Returns `Some(name)` if a row was updated, `None` if
 /// no active row with that id exists.
-pub async fn soft_delete(pool: &Pool<Postgres>, id: Uuid) -> Result<bool, AppError> {
-    let result = sqlx::query(
-        "UPDATE connections SET soft_deleted_at = now() WHERE id = $1 AND soft_deleted_at IS NULL",
+pub async fn soft_delete(pool: &Pool<Postgres>, id: Uuid) -> Result<Option<String>, AppError> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "UPDATE connections SET soft_deleted_at = now() WHERE id = $1 AND soft_deleted_at IS NULL RETURNING name",
     )
     .bind(id)
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
-    Ok(result.rows_affected() > 0)
+    Ok(row.map(|(name,)| name))
 }
 
 // ── Connection Folders ─────────────────────────────────────────────────
@@ -291,12 +291,14 @@ pub async fn update_folder(
     Ok(row)
 }
 
-pub async fn delete_folder(pool: &Pool<Postgres>, id: Uuid) -> Result<bool, AppError> {
-    let result = sqlx::query("DELETE FROM connection_folders WHERE id = $1")
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected() > 0)
+pub async fn delete_folder(pool: &Pool<Postgres>, id: Uuid) -> Result<Option<ConnectionFolderRow>, AppError> {
+    let row: Option<ConnectionFolderRow> = sqlx::query_as(
+        "DELETE FROM connection_folders WHERE id = $1 RETURNING id, name, parent_id",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
 }
 
 /// Minimal fields used by `connection_info` to decide client-side auth prompts.

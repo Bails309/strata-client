@@ -802,24 +802,26 @@ List all roles with their full permission matrix.
 ]
 ```
 
-| Field                          | Type    | Description                                                                                                                                                                                             |
-| ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `description`                  | string  | Free-text purpose of the role, trimmed, at most 500 characters. Empty string when unset (migration 090).                                                                                               |
-| `can_manage_system`            | boolean | Super-admin: system settings, Vault, SSO, bypass for all other checks                                                                                                                                   |
-| `can_manage_users`             | boolean | User CRUD, role assignment, password resets                                                                                                                                                             |
-| `can_manage_connections`       | boolean | Connection CRUD, folders, sharing profiles, AD sync, Kerberos                                                                                                                                           |
-| `can_view_audit_logs`          | boolean | Audit log listing and export                                                                                                                                                                            |
-| `can_create_users`             | boolean | Provision new user accounts                                                                                                                                                                             |
-| `can_create_user_groups`       | boolean | Role CRUD                                                                                                                                                                                               |
-| `can_create_connections`       | boolean | Create and manage connections **and** connection folders (unified as of v0.24.0)                                                                                                                        |
-| `can_use_quick_share`          | boolean | Upload files via the in-session Quick Share endpoint (user-facing permission, not admin)                                                                                                                |
-| `can_use_quick_share_outbound` | boolean | **(v1.11.0+)** Submit files **out of** a remote session via the Outbound Quick-Share pipeline (drive-channel ingest and HTTPS upload-command mint). **`can_manage_system` does NOT bypass this check.** |
-| `can_create_sharing_profiles`  | boolean | Generate live session share links                                                                                                                                                                       |
-| `can_view_sessions`            | boolean | NVR observation, active session listing, kill session                                                                                                                                                   |
+All role endpoints require `can_manage_system`. The permission column below states what the **server enforces**; see [security.md § Granular Admin Permissions](security.md#granular-admin-permissions) for the full matrix and known limitations.
+
+| Field | Type | Enforced effect |
+| ----- | ---- | --------------- |
+| `description` | string | Free-text purpose of the role, trimmed, at most 500 characters. Empty string when unset. **(v2.2.0, migration 090)** |
+| `can_manage_system` | boolean | Super-admin: settings, Vault, SSO, roles and role mappings; accepted by every other permission check |
+| `can_manage_users` | boolean | User create / update / delete / restore / password reset, **including changing any user's `role_id`** |
+| `can_manage_connections` | boolean | Connection and folder CRUD, discovery, probe, tags, AD sync, Kerberos — and opening **every** connection regardless of mappings |
+| `can_view_audit_logs` | boolean | Audit log listing and export |
+| `can_view_sessions` | boolean | List, observe (NVR) and terminate **every** active session; list, stream and download every recording |
+| `can_create_sharing_profiles` | boolean | Generate live-session share links |
+| `can_create_users` | boolean | **Not enforced by any handler.** Reveals the provisioning UI; `POST /api/admin/users` requires `can_manage_users` |
+| `can_create_user_groups` | boolean | **Not enforced by any handler.** Reveals the roles UI; role endpoints require `can_manage_system` |
+| `can_create_connections` | boolean | **Not enforced by any handler.** Reveals the connections UI; connection and folder endpoints require `can_manage_connections` |
+| `can_use_quick_share` | boolean | Upload via the in-session Quick Share endpoint. User-facing; `can_manage_system` also passes |
+| `can_use_quick_share_outbound` | boolean | **(v1.11.0+)** Submit files out of a session (drive-channel ingest, HTTPS upload-token mint, list, download). `can_manage_system` **also passes** these checks; the HTTPS-snippet consume re-reads the role flag alone. *(v2.2.0 correction: earlier versions of this page said super-admins were not allowed.)* |
 
 #### `POST /api/admin/roles`
 
-Create a new role. All permission fields are optional and default to `false`; `description` defaults to an empty string. `PUT /api/admin/roles/{id}` takes the same fields, and any field left out keeps its current value.
+Create a new role. All permission fields are optional and default to `false`; `description` defaults to an empty string.
 
 **Request Body**
 
@@ -831,6 +833,43 @@ Create a new role. All permission fields are optional and default to `false`; `d
   "can_use_quick_share": true
 }
 ```
+
+**Response** `200 OK` — the created role, in the `GET` shape. Audited as `role.created` (`{ name }`).
+
+#### `PUT /api/admin/roles/{id}`
+
+Partial update: any field left out keeps its current value (`COALESCE` in SQL). Returns the updated role. Audited as `role.updated` (`{ id, name }`).
+
+| Status | When |
+| ------ | ---- |
+| `400` | `description` longer than 500 characters after trimming |
+| `403` | Caller lacks `can_manage_system` |
+
+#### `DELETE /api/admin/roles/{id}`
+
+| Status | When |
+| ------ | ---- |
+| `200` | Deleted. Audited as `role.deleted` (`{ id, name }`) |
+| `400` | The role is `admin` or `user`, or at least one user still holds it |
+| `404` | No such role |
+
+#### `GET /api/admin/roles/{id}/mappings`
+
+The connections and folders a role is granted.
+
+```json
+{ "connection_ids": ["uuid"], "folder_ids": ["uuid"] }
+```
+
+#### `PUT /api/admin/roles/{id}/mappings`
+
+**Replaces** both lists atomically (one transaction: delete all, insert the given). Sending empty arrays removes every grant. Audited as `role_mappings.updated` (`{ role_id }`).
+
+```json
+{ "connection_ids": ["uuid"], "folder_ids": ["uuid"] }
+```
+
+**Folder grants are not recursive.** A `folder_ids` entry grants the connections whose `folder_id` equals that folder, and nothing in its subfolders. To grant a subtree, list every folder in it.
 
 ### Connections
 
@@ -850,7 +889,9 @@ List all remote connections.
     "port": 3389,
     "domain": "CORP",
     "description": "Primary production RDP host",
-    "group_id": "uuid",
+    "folder_id": "uuid",
+    "folder_name": "Production",
+    "extra": { "security": "nla" },
     "last_accessed": "2026-04-05T14:30:00Z",
     "health_status": "online",
     "health_checked_at": "2026-04-20T10:02:00Z"
@@ -874,7 +915,7 @@ Create a new connection.
   "port": 3389,
   "domain": "CORP",
   "description": "Primary production RDP host",
-  "group_id": "uuid-of-group"
+  "folder_id": "uuid-of-folder"
 }
 ```
 
@@ -886,84 +927,68 @@ Create a new connection.
 | `port`        | integer                                                               | No       | 3389    |
 | `domain`      | string                                                                | No       | null    |
 | `description` | string                                                                | No       | `""`    |
-| `group_id`    | UUID                                                                  | No       | null    |
+| `folder_id`   | UUID                                                                  | No       | null    |
 
-#### `PUT /api/admin/role-connections`
+#### `POST /api/admin/connections/{id}/probe` (v2.2.0)
 
-Map a role to a set of connections (replaces existing mappings).
+TCP-probe one connection now, instead of waiting for the next 2-minute sweep, and store the result. Uses the sweep's target rules: the connection's `hostname:port`, or for `web` the host and port of `extra.url` (443 / 80 by scheme). Requires `can_manage_connections`. Not audited.
 
-**Request Body**
+**Response** `200 OK`
 
 ```json
 {
-  "role_id": "uuid",
-  "connection_ids": ["uuid1", "uuid2"]
+  "id": "uuid",
+  "health_status": "online",
+  "latency_ms": 12,
+  "health_checked_at": "2026-09-25T10:02:00Z"
 }
 ```
 
-### Connection Groups
+`latency_ms` is the TCP connect time and is `null` unless `health_status` is `online`. `health_status` is `unknown` when a `web` connection has no usable URL.
 
-#### `GET /api/admin/connection-groups`
+| Status | When |
+| ------ | ---- |
+| `403` | Caller lacks `can_manage_connections` |
+| `404` | No such connection, or it is soft-deleted |
 
-List all connection groups.
+> **Removed:** `PUT /api/admin/role-connections` is no longer routed. Use [`PUT /api/admin/roles/{id}/mappings`](#put-apiadminrolesidmappings).
 
-**Response** `200 OK`
+### Connection Folders
+
+All folder endpoints require `can_manage_connections`. (This section was titled *Connection Groups* and listed `/api/admin/connection-groups` routes until v2.2.0; migration `023` renamed the table and routes to *folders*.)
+
+#### `GET /api/admin/connection-folders`
 
 ```json
 [
-  {
-    "id": "uuid",
-    "name": "Production Servers",
-    "parent_id": null
-  },
-  {
-    "id": "uuid",
-    "name": "EU Region",
-    "parent_id": "uuid-of-parent"
-  }
+  { "id": "uuid", "name": "Production", "parent_id": null },
+  { "id": "uuid", "name": "Web tier", "parent_id": "uuid-of-production" }
 ]
 ```
 
-#### `POST /api/admin/connection-groups`
-
-Create a new connection group.
-
-**Request Body**
+#### `POST /api/admin/connection-folders`
 
 ```json
-{
-  "name": "Production Servers",
-  "parent_id": null
-}
+{ "name": "Production", "parent_id": null }
 ```
 
-| Field       | Type   | Required | Description                                 |
-| ----------- | ------ | -------- | ------------------------------------------- |
-| `name`      | string | Yes      | Group display name                          |
-| `parent_id` | UUID   | No       | Parent group for nesting (null = top-level) |
+Returns the created folder. Audited as `connection_folder.created` (`{ id, name }`).
 
-#### `PUT /api/admin/connection-groups/:id`
-
-Update a connection group.
-
-**Request Body**
+#### `PUT /api/admin/connection-folders/{id}`
 
 ```json
-{
-  "name": "Updated Name",
-  "parent_id": "uuid-of-parent"
-}
+{ "name": "Production EU", "parent_id": null }
 ```
 
-#### `DELETE /api/admin/connection-groups/:id`
+**Both fields are written**: omitting `parent_id` moves the folder to the root. To rename in place, send the current `parent_id`. Audited as `connection_folder.updated` (`{ id, name, parent_id }`) **since v2.2.0**; renames and moves were previously unaudited. `404` if the folder does not exist.
 
-Delete a connection group. Connections in the group are moved to ungrouped.
-
-**Response** `200 OK`
+#### `DELETE /api/admin/connection-folders/{id}`
 
 ```json
 { "status": "deleted" }
 ```
+
+The database cascades: **subfolders are deleted** (`ON DELETE CASCADE`), connections filed in any deleted folder become unfiled (`ON DELETE SET NULL`), and `role_folders` grants on the deleted folders are removed. The admin UI refuses to delete a folder that still holds subfolders or connections; the API does not. Audited as `connection_folder.deleted` (`{ id, name }`). `404` if the folder does not exist.
 
 ### Users
 
@@ -1587,7 +1612,7 @@ Folders are not user-scoped — every authenticated user needs to be able to dra
 
 ### `GET /api/user/connections`
 
-Connections accessible to the authenticated user. Admin users see **all** connections; non-admin users see only connections mapped to their role via `role_connections`.
+Connections accessible to the authenticated user. Holders of `can_manage_system` or `can_manage_connections` see **all** connections; everyone else sees the connections mapped to their role directly (`role_connections`) or through a granted folder (`role_folders`). Folder grants cover only connections filed directly in that folder, not its subfolders.
 
 **Response** `200 OK`
 
@@ -1600,8 +1625,8 @@ Connections accessible to the authenticated user. Admin users see **all** connec
     "hostname": "10.0.1.10",
     "port": 3389,
     "description": "Development environment",
-    "group_id": "uuid",
-    "group_name": "Dev Servers",
+    "folder_id": "uuid",
+    "folder_name": "Dev Servers",
     "last_accessed": "2026-04-05T10:00:00Z",
     "watermark": "none",
     "health_status": "online",
@@ -3421,10 +3446,21 @@ required, but the response intentionally omits the PEM bytes.
 | `role.created`                    | New role created                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `connection.created`              | New connection created                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `connection.updated`              | Connection settings changed                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `connection.deleted`              | Connection removed                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `connection_group.created`        | New connection group created                                                                                                                                                                                                                                                                                                                                                                                                |
-| `connection_group.deleted`        | Connection group removed                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `role_connections.updated`        | Role-connection mapping changed                                                                                                                                                                                                                                                                                                                                                                                             |
+| `connection.deleted`              | Connection soft-deleted. `details`: `{ id, name }` (`name` added in v2.2.0) |
+| `connection_folder.created`       | Folder created. `details`: `{ id, name }` (`id` added in v2.2.0) |
+| `connection_folder.updated`       | Folder renamed or moved. `details`: `{ id, name, parent_id }`. Added in v2.2.0 |
+| `connection_folder.deleted`       | Folder deleted. `details`: `{ id, name }` (`name` added in v2.2.0) |
+| `connection.host_keys_surveyed`   | SSH host-key survey run. `details`: `{ count, differs }` |
+| `connection.host_key_read`        | One SSH host key read for review. `details`: `{ id, hostname, fingerprint }` |
+| `connection.host_key_approved`    | Reviewed SSH host key stored. `details`: `{ id, fingerprint }` |
+| `connection.certificate_read`     | One RDP TLS certificate read for review. `details`: `{ id, hostname, fingerprint }` |
+| `role.updated`                    | Role saved. `details`: `{ id, name }` — changed flags are not recorded |
+| `role.deleted`                    | Role deleted. `details`: `{ id, name }` |
+| `role_mappings.updated`           | Role's connection and folder grants replaced. `details`: `{ role_id }` — the grants are not recorded |
+| `user.created`                    | User provisioned. `details`: `{ user_id, email, auth_type }` |
+| `user.role_changed`               | User's role changed. `details`: `{ user_id, role_id }` |
+| `user.deleted`, `user.restored`   | User soft-deleted or restored. `details`: `{ id }` |
+| `user.password_reset`             | Local user's password reset by an admin. `details`: `{ target_user_id }` |
 | `credential.updated`              | User saves encrypted credential                                                                                                                                                                                                                                                                                                                                                                                             |
 | `tunnel.connected`                | User opens a remote session                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `tunnel.terminated`               | WebSocket tunnel closed by the in-band auth watchdog. `details`: `{ connection_id, reason }`. The `reason` field takes one of: `revoked` (the access token used at upgrade time appeared in the in-memory revocation set after a `/api/auth/logout` call), `max_duration` (`MAX_TUNNEL_DURATION = 8h` wall-clock cap exceeded — added in v1.4.1, replaces the v1.3.2 `expired` reason). Added in v1.3.2; revised in v1.4.1. |
@@ -3530,7 +3566,7 @@ Create a new AD sync source.
   "default_port": 3389,
   "sync_interval_minutes": 60,
   "enabled": true,
-  "group_id": "uuid-or-null",
+  "folder_id": "uuid-or-null",
   "tls_skip_verify": false,
   "ca_cert_pem": "-----BEGIN CERTIFICATE-----\n...",
   "connection_defaults": {
@@ -3555,7 +3591,7 @@ Create a new AD sync source.
 | `auth_method`               | `"simple"` \| `"kerberos"`              | No       | `"simple"`                         | LDAP authentication method                                                                                                                                                                                                                                                             |
 | `keytab_path`               | string                                  | No       | —                                  | Path to keytab file (kerberos auth)                                                                                                                                                                                                                                                    |
 | `krb5_principal`            | string                                  | No       | —                                  | Kerberos principal (kerberos auth)                                                                                                                                                                                                                                                     |
-| `group_id`                  | UUID                                    | No       | null                               | Connection group for imported connections                                                                                                                                                                                                                                              |
+| `folder_id`                 | UUID                                    | No       | null                               | Connection folder for imported connections                                                                                                                                                                                                                                              |
 | `domain_override`           | string                                  | No       | null                               | Force domain on imported connections                                                                                                                                                                                                                                                   |
 | `tls_skip_verify`           | boolean                                 | No       | false                              | Skip TLS certificate verification                                                                                                                                                                                                                                                      |
 | `ca_cert_pem`               | string                                  | No       | null                               | Custom CA certificate in PEM format                                                                                                                                                                                                                                                    |

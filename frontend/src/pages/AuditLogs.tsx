@@ -112,7 +112,11 @@ function formatDetails(log: AuditLog): React.ReactNode {
         </>
       );
     case "connection.deleted":
-      return <>Deleted connection {shortId(d.id)}</>;
+      return (
+        <>
+          Deleted connection {d.name ? <strong>{String(d.name)}</strong> : shortId(d.id)}
+        </>
+      );
     case "connection.shared":
       return (
         <>
@@ -130,7 +134,11 @@ function formatDetails(log: AuditLog): React.ReactNode {
         </>
       );
     case "connection_folder.deleted":
-      return <>Deleted folder {shortId(d.id)}</>;
+      return (
+        <>
+          Deleted folder {d.name ? <strong>{String(d.name)}</strong> : shortId(d.id)}
+        </>
+      );
     case "connection_folder.updated":
       return (
         <>

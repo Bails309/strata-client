@@ -435,7 +435,24 @@ describe("AuditLogs", () => {
     expect(await screen.findByText(/Created folder/)).toBeInTheDocument();
   });
 
-  it("shows connection_folder.deleted", async () => {
+  it("shows connection_folder.deleted with name", async () => {
+    vi.mocked(getAuditLogs).mockResolvedValue([
+      {
+        id: 1,
+        created_at: "2026-01-01T00:00:00Z",
+        action_type: "connection_folder.deleted",
+        user_id: "u1",
+        username: "admin",
+        details: { id: "abcdef12-3456", name: "Production Servers" },
+        current_hash: "aabbccdd11223344",
+      },
+    ]);
+    render(<AuditLogs />);
+    expect(await screen.findByText(/Deleted folder/)).toBeInTheDocument();
+    expect(screen.getByText("Production Servers")).toBeInTheDocument();
+  });
+
+  it("shows connection_folder.deleted fallback when name is absent", async () => {
     vi.mocked(getAuditLogs).mockResolvedValue([
       {
         id: 1,
@@ -449,6 +466,7 @@ describe("AuditLogs", () => {
     ]);
     render(<AuditLogs />);
     expect(await screen.findByText(/Deleted folder/)).toBeInTheDocument();
+    expect(screen.getByText(/abcdef12/)).toBeInTheDocument();
   });
 
   it("shows role.created", async () => {

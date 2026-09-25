@@ -57,19 +57,22 @@ export const PERMISSION_CATEGORIES: PermissionCategory[] = [
       {
         flag: "can_create_users",
         name: "Create new users",
-        description: "Provision new user accounts.",
+        description:
+          "Opens the user admin area. Creating or editing a user also needs Manage users — the server does not act on this permission alone.",
         risk: "elevated",
       },
       {
         flag: "can_create_user_groups",
         name: "Create new roles",
-        description: "Create and manage platform roles.",
+        description:
+          "Opens the roles admin area. Creating, editing or deleting a role needs Administer system — the server does not act on this permission alone.",
         risk: "elevated",
       },
       {
         flag: "can_create_connections",
         name: "Create new connections",
-        description: "Add target hosts, protocol settings and connection folders.",
+        description:
+          "Opens the connections admin area. Adding or changing connections and folders needs Manage all connections — the server does not act on this permission alone.",
         risk: "elevated",
       },
     ],

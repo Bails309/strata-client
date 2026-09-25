@@ -35,6 +35,7 @@ vi.mock("../components/SessionManager", () => ({
 }));
 
 import Layout, { useSidebarWidth } from "../components/Layout";
+import { publishPendingApprovals } from "../components/approvalStore";
 
 const adminUser: import("../api").MeResponse = {
   id: "u1",
@@ -73,13 +74,13 @@ describe("Layout", () => {
   it("renders navigation links", () => {
     renderLayout();
     expect(screen.getByText("Connections")).toBeInTheDocument();
-    expect(screen.getByText("Admin")).toBeInTheDocument();
-    expect(screen.getByText("Audit Logs")).toBeInTheDocument();
+    expect(screen.getByText("Platform Admin")).toBeInTheDocument();
+    expect(screen.getByText("Audit Trail")).toBeInTheDocument();
   });
 
   it("renders credentials link", () => {
     renderLayout();
-    expect(screen.getByText("Credentials")).toBeInTheDocument();
+    expect(screen.getByText("Credentials & Vault")).toBeInTheDocument();
   });
 
   it("renders brand logo", () => {
@@ -96,8 +97,63 @@ describe("Layout", () => {
 
   it("highlights active nav item based on route", () => {
     renderLayout("/admin");
-    const adminLink = screen.getByText("Admin").closest("a");
-    expect(adminLink?.className).toContain("font-semibold");
+    const admin = screen.getByRole("button", { name: "Platform Admin" });
+    expect(admin.className).toContain("is-active");
+    expect(screen.getByRole("link", { name: "Connections" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("groups items under section headers", () => {
+    renderLayout();
+    expect(screen.getByRole("group", { name: "Workspace" })).toHaveTextContent("Connections");
+    expect(screen.getByRole("group", { name: "Security & Audit" })).toHaveTextContent(
+      "Audit Trail"
+    );
+    // Not an approver: the approvals item and nothing else is hidden.
+    expect(screen.queryByText("Pending Approvals")).not.toBeInTheDocument();
+  });
+
+  it("shows the admin sub-tree with real admin routes", async () => {
+    renderLayout("/admin/access");
+    expect(screen.getByRole("link", { name: "Roles & RBAC" })).toHaveAttribute(
+      "aria-current",
+      "page"
+    );
+    expect(screen.getByRole("link", { name: "Fleet Endpoints" })).toHaveAttribute(
+      "href",
+      "/admin/connections"
+    );
+    expect(screen.getByRole("link", { name: "Connection Folders" })).toHaveAttribute(
+      "href",
+      "/admin/connections#connection-folders"
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Platform Admin" }));
+    expect(screen.queryByRole("link", { name: "Roles & RBAC" })).not.toBeInTheDocument();
+  });
+
+  it("shows a pending-approval badge from the watcher's count", () => {
+    publishPendingApprovals(3);
+    render(
+      <MemoryRouter>
+        <Layout user={{ ...adminUser, is_outbound_approver: true }} onLogout={vi.fn()} />
+      </MemoryRouter>
+    );
+    expect(screen.getByRole("link", { name: /Pending Approvals/ })).toHaveTextContent("3 pending");
+    publishPendingApprovals(0);
+  });
+
+  it("remembers the collapsed rail and labels icons for assistive tech", async () => {
+    localStorage.removeItem("strata-sidebar-collapsed");
+    const { unmount } = renderLayout();
+    await userEvent.click(screen.getByTitle("Collapse sidebar"));
+    expect(localStorage.getItem("strata-sidebar-collapsed")).toBe("1");
+    unmount();
+
+    renderLayout();
+    expect(screen.getByTitle("Expand sidebar")).toBeInTheDocument();
+    expect(screen.queryByText("Workspace")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Connections" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand navigation" })).toBeInTheDocument();
+    localStorage.removeItem("strata-sidebar-collapsed");
   });
 
   it("collapses sidebar when collapse button is clicked", async () => {

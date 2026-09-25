@@ -13,6 +13,7 @@ import {
   listPendingOutboundShares,
 } from "../api";
 import { useToast, useToastHold, type ToastDetail, type ToastVariant } from "./ToastProvider";
+import { publishPendingApprovals } from "./approvalStore";
 
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Tunables                                                                  */
@@ -255,6 +256,7 @@ export default function PendingApprovalWatcher({
       liveUids.add(uid);
       incoming.push({ uid, kind: "outbound", id: s.id, data: s });
     }
+    publishPendingApprovals(incoming.length);
 
     // Persist the shown-set first so a concurrent tab sees the same view.
     const shown = pruneShown(loadShown(), liveUids);

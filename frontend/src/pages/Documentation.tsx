@@ -488,28 +488,6 @@ interface RoadmapTheme {
 
 const ROADMAP: RoadmapTheme[] = [
   {
-    id: "protocols",
-    title: "Protocols & Session Types",
-    subtitle: "What the session engine can reach, and how it runs.",
-    accent: "#38bdf8",
-    items: [
-      {
-        id: "protocols-ironrdp-upgrade",
-        title: "IronRDP Upgrade & Tokio-Native RDP Sessions",
-        status: "In Progress",
-        areas: ["Protocols", "Session engine"],
-        description:
-          "Move the RDP engine onto the current IronRDP release and let sessions run as ordinary Tokio tasks, as SSH and VNC already do. The previous IronRDP had a connection future that could not move between threads, so RDP sessions were multiplexed across a small dedicated worker pool instead. That pool is now gone.",
-        bullets: [
-          "The upstream dependency conflict that held this back is resolved: the current IronRDP now runs alongside the patched SSH library, on stable cryptography rather than a pre-release.",
-          "Two small vendored patches carry it — one to let IronRDP reach a fixed dependency, one to drop a Kerberos check added upstream that wrongly rejected sessions against Windows hosts.",
-          "Both patches are temporary. A repository check reports when each can be dropped, and it is run on every dependency bump and before every release.",
-          "Remaining: drop both patches as soon as upstream releases carry the fixes.",
-        ],
-      },
-    ],
-  },
-  {
     id: "recordings",
     title: "Recording Enhancements",
     subtitle: "Capture, search, and protect playback.",
@@ -605,22 +583,6 @@ const ROADMAP: RoadmapTheme[] = [
         areas: ["Analytics"],
         description:
           "Per-user dashboards (my sessions this month, time per host) and admin views (top users, idle servers, peak concurrency), exportable to CSV / PDF for management reporting.",
-      },
-    ],
-  },
-  {
-    id: "workflows",
-    title: "Workflows & Collaboration",
-    subtitle: "Turn the client into a team tool.",
-    accent: "#34d399",
-    items: [
-      {
-        id: "workflows-quick-share-outbound",
-        title: "Quick-Share Outbound (Approval-Gated)",
-        status: "Proposed",
-        areas: ["File Transfer", "DLP"],
-        description:
-          "Reverse of the current Quick-Share: a user exports a file from a session into an encrypted staging area. An admin (or automated DLP policy) approves before release; rejected files are purged. Every request + decision is logged.",
       },
     ],
   },

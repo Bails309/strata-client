@@ -210,17 +210,15 @@ describe("Documentation", () => {
       await waitFor(() => expect(getRoadmapStatusesMock).toHaveBeenCalled());
     });
 
-    it("renders the protocols theme and the Blocked status option", async () => {
+    it("renders the recordings theme and the Blocked status option", async () => {
       getRoadmapStatusesMock.mockResolvedValue({ statuses: {} });
       const user = userEvent.setup();
       render(<Documentation />);
       await user.click(screen.getByText("Roadmap"));
       await screen.findByRole("heading", { level: 1, name: "Product Roadmap" });
 
-      expect(screen.getByText("Protocols & Session Types")).toBeInTheDocument();
-      expect(screen.getByText("IronRDP Upgrade & Tokio-Native RDP Sessions")).toBeInTheDocument();
-      // Both the summary card and the item's own badge.
-      expect(screen.getAllByText("In Progress").length).toBeGreaterThanOrEqual(2);
+      expect(screen.getByText("Recording Enhancements")).toBeInTheDocument();
+      expect(screen.getByText("Historic Recording Screenshots")).toBeInTheDocument();
       // Blocked stays a selectable status even with nothing currently in it.
       expect(screen.getByText("Blocked")).toBeInTheDocument();
       await waitFor(() => expect(getRoadmapStatusesMock).toHaveBeenCalled());

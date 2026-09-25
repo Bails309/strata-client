@@ -13,7 +13,7 @@ For deeper coverage see [docs/architecture.md](architecture.md),
 The reference webapp is a Tomcat-hosted JDBC-or-LDAP authentication shell over `guacd`. Strata replaces **both** — the shell, with a Rust backend, a React 19 SPA and a Docker-native deployment; and, since v2.0.0, the proxy daemon itself with an in-process Rust session engine. On top of that it adds the operations surface a Guacamole deployment usually has to bolt on:
 
 - OIDC SSO with dynamic JWKS validation and proactive refresh-token rotation
-- 10-permission RBAC enforced at every admin endpoint
+- 11-flag RBAC checked per handler at every admin endpoint
 - HashiCorp Vault Transit envelope encryption (bundled and auto-unsealed by default)
 - Append-only, SHA-256 hash-chained audit log
 - NVR-style live session observation with a 5-minute rewind buffer
@@ -97,7 +97,24 @@ Yes. Local username/password is built in for environments without an OIDC provid
 
 ### How does RBAC work?
 
-Strata has a 10-permission role model (`can_manage_system`, `can_manage_users`, `can_manage_connections`, `can_audit_system`, `can_view_sessions`, `can_create_users`, `can_create_roles`, `can_create_connections`, `can_create_sharing_profiles`, `can_use_quick_share`). Every admin API endpoint is gated by the appropriate `check_*_permission` helper. `can_manage_system` is a universal override; `can_use_quick_share` is a feature flag, not an admin permission, so granting only that does not unlock any admin UI.
+Each user holds exactly one role, and a role carries eleven permission flags: `can_manage_system`, `can_manage_users`, `can_manage_connections`, `can_view_audit_logs`, `can_view_sessions`, `can_create_users`, `can_create_user_groups`, `can_create_connections`, `can_create_sharing_profiles`, `can_use_quick_share` and `can_use_quick_share_outbound`. Admin endpoints check the relevant flag in each handler; `can_manage_system` passes every check. A few flags do more, or less, than their names suggest:
+
+| Flag | What the server actually does with it |
+| ---- | ------------------------------------- |
+| `can_manage_users` | Can change any user's role, including the holder's own — treat it as equivalent to `can_manage_system` |
+| `can_manage_connections` | Opens **every** connection, regardless of the role's assignments |
+| `can_view_sessions` | Watches and terminates **everyone's** sessions and opens every recording, not only the holder's |
+| `can_create_users`, `can_create_user_groups`, `can_create_connections` | Show the matching admin area only; the actions there need `can_manage_users`, `can_manage_system` and `can_manage_connections` respectively |
+
+The **role editor** (v2.2.0) states this beside each permission and marks it Critical, Elevated or Standard. The full matrix is in [security.md § Granular Admin Permissions](security.md#granular-admin-permissions).
+
+### Why can't a user see the connections in a subfolder of a folder their role is assigned?
+
+Because folder grants are not recursive. Assigning a folder to a role grants the connections filed **directly** in that folder; connections in its subfolders need their own folder, or connection, assignment. This has always been the enforced behaviour. Since v2.2.0 the role editor's **Asset assignments** tab shows it: connections covered by a folder grant are marked *Inherited from folder*, and each subfolder that is not covered says *Not covered by parent folder*.
+
+### What does "Probe" do on the Connections page?
+
+It opens a TCP connection to the connection's stored host and port (for `web`, the host and port of its URL), records whether it answered, and shows how long the handshake took. It is the same check the background health sweep runs every two minutes, run now. It sends no protocol data or credentials, and it resolves names with the backend container's resolver — not the custom DNS configured under **Admin → Network** — so a connection can probe as unreachable while sessions reach it through that DNS, or the reverse.
 
 ### How long do sessions last?
 

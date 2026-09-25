@@ -341,7 +341,7 @@ export default function ConnectionFoldersView({
     deleteTarget !== null && (deleteTarget.children.length > 0 || deleteTarget.directCount > 0);
 
   return (
-    <div className="card cf-card">
+    <div id="connection-folders" className="card cf-card">
       <div className="cf-header">
         <div>
           <h2 className="!mb-0">Connection Folders</h2>

@@ -1881,14 +1881,15 @@ pub async fn delete_connection(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
-    if !connections::soft_delete(&db.pool, id).await? {
-        return Err(AppError::NotFound("Connection not found".into()));
-    }
+    let conn_name = match connections::soft_delete(&db.pool, id).await? {
+        Some(name) => name,
+        None => return Err(AppError::NotFound("Connection not found".into())),
+    };
     audit::log(
         &db.pool,
         Some(user.id),
         "connection.deleted",
-        &json!({ "id": id.to_string() }),
+        &json!({ "id": id.to_string(), "name": conn_name }),
     )
     .await?;
     Ok(Json(json!({ "status": "deleted" })))
@@ -2310,7 +2311,7 @@ pub async fn create_connection_folder(
         &db.pool,
         Some(user.id),
         "connection_folder.created",
-        &json!({ "name": name }),
+        &json!({ "id": row.id.to_string(), "name": name }),
     )
     .await?;
     Ok(Json(row))
@@ -2348,14 +2349,15 @@ pub async fn delete_connection_folder(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
-    if !connections::delete_folder(&db.pool, id).await? {
-        return Err(AppError::NotFound("Folder not found".into()));
-    }
+    let folder = match connections::delete_folder(&db.pool, id).await? {
+        Some(f) => f,
+        None => return Err(AppError::NotFound("Folder not found".into())),
+    };
     audit::log(
         &db.pool,
         Some(user.id),
         "connection_folder.deleted",
-        &json!({ "id": id.to_string() }),
+        &json!({ "id": id.to_string(), "name": folder.name }),
     )
     .await?;
     Ok(Json(json!({ "status": "deleted" })))

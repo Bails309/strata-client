@@ -29,6 +29,43 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.2.0",
+    subtitle:
+      "A new look across the whole app, one notification system with a place to manage every credential lease, and an admin console rebuilt for running a large estate: a fleet manager for connections, a proper folder tree, and a role editor that shows the risk of every permission and exactly what each folder grant reaches.",
+    sections: [
+      {
+        title: "A fresh design, in dark and light",
+        description:
+          "The sign-in page, dashboard, sidebar and admin screens move to a new cyan-and-navy design with a matching light theme. The header shows where you are with breadcrumbs, and the admin menu opens as a single panel grouped by area. The dashboard shows your active filters as chips you can remove one at a time, and tells you when there are matches outside the folder or tag you are looking at.",
+      },
+      {
+        title: "One kind of notification, and a lease manager",
+        description:
+          "Approval requests and credential-expiry warnings now look and behave the same, and approvers can still approve or deny without leaving the page. When several credentials expire together you get one notification listing them, with Extend All for Safeguard leases, Dismiss All (or press Esc) and View Vault. Warnings say how long is actually left. The pill in the header shows your active and expired leases and opens a panel where you can extend several at once or check them in after confirming.",
+      },
+      {
+        title: "Connections as a fleet",
+        description:
+          "Admin, Connections now opens with five summary cards: how many connections you have, how many are reachable, how many carry a security alert, how many sessions are live, and when the last health check ran. Filter by protocol, folder or health. Each row shows badges for the security settings that apply, such as NLA, an unpinned SSH host key or an ignored certificate, and a Probe button that checks reachability straight away and shows the connection time. Select several rows to move them to a folder, probe them, review their SSH host keys, or delete them, with a warning if any is in use.",
+      },
+      {
+        title: "Folders as a tree",
+        description:
+          "Connection folders are shown as a tree with guide lines and counts. Search finds connections inside folders as well as the folders themselves. Create and rename folders in place, use the keyboard throughout, and see why a folder cannot be deleted while it still holds subfolders or connections.",
+      },
+      {
+        title: "A role editor that tells you what you are granting",
+        description:
+          "Permissions are grouped by area and marked Critical, Elevated or Standard. Two powerful permissions that were stored but never shown, Manage users and Manage all connections, are now visible. Asset assignments show exactly what a folder grant reaches: only the connections filed directly in that folder, not those in its subfolders, and the editor says so on each subfolder. A Members tab lists who holds the role, roles can have a description, and unsaved changes are counted and confirmed before they are discarded. The old editor could lose a role's assignments if they failed to load; the new one will not open in that case.",
+      },
+      {
+        title: "For administrators: review your custom roles",
+        description:
+          "Checking every permission against the server showed that some descriptions were wrong. Monitor sessions, previously shown as View own sessions, lets its holder watch and end everyone's sessions. Manage users can change any user's role, including their own. Create new users, Create new roles and Create new connections open the matching admin areas but do not, on their own, let the holder make changes. Please open each custom role once after upgrading and check it grants what you intend.",
+      },
+    ],
+  },
+  {
     version: "2.1.1",
     subtitle:
       "Sessions now tell you how they actually ended. Signing out of Windows used to show 'Connection Error', choosing Disconnect from the Start menu blamed 'an administrative tool', and a dropped network suggested you might have logged out. Every ended session now carries a reason the screen can title properly, in plain language. This release also brings working RDP audio, the right characters on non-US keyboards, and a correctly sized desktop on displays scaled above 100%.",

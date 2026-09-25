@@ -364,7 +364,7 @@ export default function Layout({
             displayName={user?.full_name || user?.username || "Guest"}
             roleName={user?.role || "User"}
             email={
-              (user as any)?.email ||
+              (user as MeResponse & { email?: string })?.email ||
               (user?.username ? `${user.username}@strataclient.io` : "admin@strataclient.io")
             }
             isOnline={isOnline}

@@ -291,7 +291,10 @@ pub async fn update_folder(
     Ok(row)
 }
 
-pub async fn delete_folder(pool: &Pool<Postgres>, id: Uuid) -> Result<Option<ConnectionFolderRow>, AppError> {
+pub async fn delete_folder(
+    pool: &Pool<Postgres>,
+    id: Uuid,
+) -> Result<Option<ConnectionFolderRow>, AppError> {
     let row: Option<ConnectionFolderRow> = sqlx::query_as(
         "DELETE FROM connection_folders WHERE id = $1 RETURNING id, name, parent_id",
     )

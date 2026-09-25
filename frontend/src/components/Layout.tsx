@@ -2,10 +2,13 @@
    react-hooks v7 compiler-strict suppressions: legitimate prop->state sync, session
    decoration, or render-time time/derivation patterns. See
    eslint.config.js W4-1 commentary. */
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { useTheme } from "./ThemeProvider";
 import { MeResponse } from "../api";
+import AdminMegaMenu from "./AdminMegaMenu";
+import GlobalHeader from "./GlobalHeader";
+import DashboardBackground from "./DashboardBackground";
 
 /* ── Sidebar context so other components can read the width ── */
 const SidebarContext = createContext(180);
@@ -13,8 +16,8 @@ export function useSidebarWidth() {
   return useContext(SidebarContext);
 }
 
-const SIDEBAR_EXPANDED = 200; // Increased slightly for better fit
-const SIDEBAR_COLLAPSED = 60;
+const SIDEBAR_EXPANDED = 240; // 240px expanded per specification
+const SIDEBAR_COLLAPSED = 72; // 72px collapsed per specification
 
 const NAV_ITEMS = [
   {
@@ -160,33 +163,89 @@ export default function Layout({
 }) {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
-  // When inside a connected session (`/session/:id`), the sidebar is hidden
-  // entirely so the remote canvas gets the full viewport width. A floating
-  // chevron at the left edge lets the user pull it back in. The hidden state
-  // auto-resets when the user navigates away from a session route.
   const inSession = location.pathname.startsWith("/session/");
   const [sessionHidden, setSessionHidden] = useState(true);
+
   useEffect(() => {
-    // Re-hide the sidebar each time the user enters a new session.
     if (inSession) setSessionHidden(true);
   }, [inSession, location.pathname]);
   const hidden = inSession && sessionHidden;
 
-  // ── Draggable chevron position ──
-  // The floating show/hide chevrons sit at the vertical centre of the
-  // viewport by default, which can cover content in the remote session
-  // (e.g. a file-picker's scrollbar). Let the user drag them up/down;
-  // the offset is shared between the two chevrons so the handle stays
-  // where the user put it across show/hide toggles. Session-scoped
-  // state only — it resets to centre on the next visit, mirroring the
-  // right-side SessionBar tab.
+  // ── Admin Mega-Menu Flyout state ──
+  const [isMegaMenuOpen, setIsMegaMenuOpen] = useState(false);
+  const [isKeyboardTriggered, setIsKeyboardTriggered] = useState(false);
+  const [adminItemTop, setAdminItemTop] = useState(140);
+  const adminItemRef = useRef<HTMLAnchorElement | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 150ms intent debounce for hover
+  const handleAdminMouseEnter = useCallback(() => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => {
+      if (adminItemRef.current) {
+        const rect = adminItemRef.current.getBoundingClientRect();
+        setAdminItemTop(rect.top);
+      }
+      setIsKeyboardTriggered(false);
+      setIsMegaMenuOpen(true);
+    }, 150);
+  }, []);
+
+  const handleAdminMouseLeave = useCallback(() => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => {
+      setIsMegaMenuOpen(false);
+    }, 150);
+  }, []);
+
+  const handleMegaMenuMouseEnter = useCallback(() => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+  }, []);
+
+  const handleMegaMenuMouseLeave = useCallback(() => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => {
+      setIsMegaMenuOpen(false);
+    }, 150);
+  }, []);
+
+  const handleAdminClick = () => {
+    // If clicking on Admin, toggle the mega menu
+    if (adminItemRef.current) {
+      const rect = adminItemRef.current.getBoundingClientRect();
+      setAdminItemTop(rect.top);
+    }
+    setIsMegaMenuOpen((prev) => !prev);
+  };
+
+  const handleAdminKeyDown = (e: React.KeyboardEvent<HTMLAnchorElement>) => {
+    if (e.key === "Enter" || e.key === " " || e.key === "ArrowRight") {
+      e.preventDefault();
+      if (adminItemRef.current) {
+        const rect = adminItemRef.current.getBoundingClientRect();
+        setAdminItemTop(rect.top);
+      }
+      setIsKeyboardTriggered(true);
+      setIsMegaMenuOpen(true);
+    }
+  };
+
+  // Close mega menu when navigating
+  useEffect(() => {
+    setIsMegaMenuOpen(false);
+  }, [location.pathname]);
+
+  // Clean up timers on unmount
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    };
+  }, []);
+
+  // ── Draggable chevron position for sessions ──
   const [chevronOffsetY, setChevronOffsetY] = useState(0);
   const [chevronDragging, setChevronDragging] = useState(false);
   const chevronDragRef = useRef<{ startY: number; startOffset: number } | null>(null);
-  // Set on pointer-up when the gesture moved far enough to count as a
-  // drag; the subsequent synthetic click consumes it and skips the
-  // toggle. Keyboard activation (Enter/Space) never sets it, so the
-  // buttons stay fully keyboard-accessible.
   const chevronWasDragRef = useRef(false);
 
   const onChevronPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
@@ -198,7 +257,7 @@ export default function Layout({
     if (!chevronDragRef.current) return;
     if (!chevronDragging) setChevronDragging(true);
     const delta = e.clientY - chevronDragRef.current.startY;
-    const maxOffset = window.innerHeight / 2 - 48; // keep within viewport
+    const maxOffset = window.innerHeight / 2 - 48;
     setChevronOffsetY(
       Math.max(-maxOffset, Math.min(maxOffset, chevronDragRef.current.startOffset + delta))
     );
@@ -217,14 +276,7 @@ export default function Layout({
     action();
   };
 
-  // Width of the actual sidebar element. When the sidebar is hidden it
-  // collapses to 0; otherwise it expands to its normal width.
   const sidebarWidth = hidden ? 0 : collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
-  // Width that downstream layout consumers see. While inside a session the
-  // sidebar floats over the remote canvas (matching the right-side
-  // SessionBar behaviour) so the canvas never gets resized when the user
-  // toggles the menu — report 0 so SessionClient/TiledView keep using the
-  // full viewport width.
   const layoutSidebarWidth = inSession ? 0 : sidebarWidth;
   const { theme, preference, cycle } = useTheme();
 
@@ -233,9 +285,7 @@ export default function Layout({
   return (
     <SidebarContext.Provider value={layoutSidebarWidth}>
       <div className="flex min-h-screen">
-        {/* WCAG 2.4.1 — skip-to-content link for keyboard and screen-
-            reader users. Hidden until focused; jumps past the
-            sidebar to the main region. */}
+        {/* Skip to content */}
         <a
           href="#main-content"
           className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[10001] focus:px-3 focus:py-2 focus:rounded focus:bg-bg-elevated focus:text-txt-primary focus:outline focus:outline-2 focus:outline-accent"
@@ -243,10 +293,10 @@ export default function Layout({
           Skip to main content
         </a>
 
-        {/* ── Floating "show sidebar" chevron — only visible while in a
-             session AND the sidebar is hidden. Mirrors the right-side
-             SessionBar collapse handle. Draggable vertically so it can be
-             moved off content it would otherwise cover. ── */}
+        {/* Layered canvas + constellation behind the workspace */}
+        {!inSession && <DashboardBackground />}
+
+        {/* Floating "show sidebar" chevron in session */}
         {hidden && (
           <button
             onClick={chevronClickGuard(() => setSessionHidden(false))}
@@ -261,9 +311,6 @@ export default function Layout({
               transform: "translateY(-50%)",
               cursor: "grab",
               touchAction: "none",
-              // Same translucent + blurred surface as the right-side
-              // SessionBar toggle tab so the two edge handles read as a
-              // matching pair.
               background: theme === "dark" ? "rgba(15, 15, 20, 0.75)" : "rgba(255, 255, 255, 0.75)",
               backdropFilter: "blur(16px)",
               WebkitBackdropFilter: "blur(16px)",
@@ -289,13 +336,7 @@ export default function Layout({
           </button>
         )}
 
-        {/* ── Floating "hide sidebar" chevron — only visible while in a
-             session AND the sidebar is shown. Mirrors the right-side
-             SessionBar collapse handle: a pill protruding from the outer
-             edge of the panel. Rendered as a sibling of the <aside> so it
-             stays visible when the sidebar collapses to a narrow rail and
-             can be positioned independently. Shares the drag offset with
-             the "show" chevron so the handle stays where the user put it. ── */}
+        {/* Floating "hide sidebar" chevron in session */}
         {inSession && !hidden && (
           <button
             onClick={chevronClickGuard(() => setSessionHidden(true))}
@@ -336,17 +377,13 @@ export default function Layout({
           </button>
         )}
 
-        {/* ── Sidebar ── */}
+        {/* ── Single Primary Rail Sidebar (72px collapsed / 240px expanded) ── */}
         <aside
-          className="fixed top-0 left-0 bottom-0 z-50 flex flex-col justify-between overflow-hidden transition-[width] duration-200 ease-out"
+          className={`strata-sidebar fixed top-0 left-0 bottom-0 z-50 flex flex-col justify-between overflow-hidden transition-[width] duration-200 ease-out ${inSession ? "is-session" : ""}`}
           style={{
             width: sidebarWidth,
             pointerEvents: hidden ? "none" : "auto",
             padding: hidden ? 0 : collapsed ? "1.25rem 0.5rem" : "1.25rem 0.75rem",
-            // While inside a session the sidebar floats over the remote
-            // canvas — use the same translucent + blurred surface that
-            // the right-side SessionBar uses so it reads as an overlay
-            // rather than an opaque side rail.
             background: inSession
               ? theme === "dark"
                 ? "rgba(15, 15, 20, 0.75)"
@@ -405,32 +442,31 @@ export default function Layout({
                   return user?.vault_configured;
                 }
                 if (item.to === "/approvals") {
-                  // Two flows feed this surface:
-                  //  - Credential checkout approvals (Safeguard JIT) require
-                  //    `vault_configured && is_approver`.
-                  //  - Outbound Quick-Share approvals require
-                  //    `is_outbound_approver` (super-admins are implicit
-                  //    approvers, see routes/user.rs).
-                  // Show the nav item if EITHER flow is available so a
-                  // compliance officer delegated outbound approvals doesn't
-                  // need vault to be configured to see the queue.
                   return (
                     (user?.vault_configured && user?.is_approver) || user?.is_outbound_approver
                   );
                 }
                 return true;
               }).map((item) => {
+                const isAdminItem = item.to === "/admin";
                 const active =
                   item.to === "/"
                     ? location.pathname === "/" || location.pathname.startsWith("/session/")
                     : item.to === "/admin"
                       ? location.pathname === "/admin" || location.pathname.startsWith("/admin/")
                       : location.pathname.startsWith(item.to);
+
                 return (
                   <Link
                     key={item.to}
+                    ref={isAdminItem ? adminItemRef : undefined}
                     to={item.to}
-                    className={`flex items-center gap-2.5 rounded-sm no-underline text-[0.8125rem] font-medium transition-all duration-150
+                    onMouseEnter={isAdminItem ? handleAdminMouseEnter : undefined}
+                    onMouseLeave={isAdminItem ? handleAdminMouseLeave : undefined}
+                    onClick={isAdminItem ? handleAdminClick : undefined}
+                    onKeyDown={isAdminItem ? handleAdminKeyDown : undefined}
+                    aria-current={active ? "page" : undefined}
+                    className={`strata-nav-link ${active ? "is-active" : ""} flex items-center gap-2.5 rounded-sm no-underline text-[0.8125rem] font-medium transition-all duration-150 relative
                       ${collapsed ? "justify-center p-2.5" : "py-2 px-2.5"}
                       ${
                         active
@@ -441,6 +477,23 @@ export default function Layout({
                   >
                     {item.icon}
                     {!collapsed && item.label}
+
+                    {/* Subtle flyout indicator arrow on Admin item */}
+                    {isAdminItem && !collapsed && (
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="ml-auto text-txt-tertiary opacity-60"
+                      >
+                        <polyline points="9 18 15 12 9 6" />
+                      </svg>
+                    )}
                   </Link>
                 );
               })}
@@ -452,7 +505,7 @@ export default function Layout({
             className="flex flex-col gap-3 pt-4"
             style={{ borderTop: "1px solid var(--color-border)" }}
           >
-            {/* User Profile — click to open the profile/settings page */}
+            {/* User Profile */}
             <Link
               to="/profile"
               className={`flex items-center gap-2.5 rounded-lg transition-colors hover:bg-white/5 ${
@@ -479,11 +532,11 @@ export default function Layout({
             {!collapsed && (
               <div className="flex flex-col gap-2 px-2.5">
                 <div className="flex items-center gap-1.5 text-[0.65rem] text-txt-tertiary">
-                  <div className="w-1 h-1 rounded-full bg-success shadow-[0_0_6px_var(--color-success)]" />
+                  <div className="strata-status-dot w-1 h-1 rounded-full bg-success shadow-[0_0_6px_var(--color-success)]" />
                   System Online
                 </div>
                 <button
-                  className="btn-danger-outline w-full text-[0.7rem] py-2 font-medium"
+                  className="strata-signout btn-danger-outline w-full text-[0.7rem] py-2 font-medium"
                   onClick={onLogout}
                 >
                   Sign Out
@@ -569,15 +622,37 @@ export default function Layout({
           </div>
         </aside>
 
-        {/* ── Main Content ── */}
-        <main
-          id="main-content"
-          tabIndex={-1}
-          className="flex-1 min-h-screen animate-fade-in transition-[margin-left] duration-200 ease-out"
-          style={{ marginLeft: layoutSidebarWidth, padding: "2rem 2.5rem" }}
+        {/* ── Admin Mega-Menu Flyout (Floating panel docked to primary rail's Admin item) ── */}
+        <AdminMegaMenu
+          isOpen={isMegaMenuOpen}
+          onClose={() => setIsMegaMenuOpen(false)}
+          user={user}
+          sidebarWidth={sidebarWidth}
+          anchorTop={adminItemTop}
+          onMouseEnter={handleMegaMenuMouseEnter}
+          onMouseLeave={handleMegaMenuMouseLeave}
+          isKeyboardTriggered={isKeyboardTriggered}
+          theme={theme}
+        />
+
+        {/* ── Flexible Workspace Grid Area (flex: 1 with full horizontal width) ── */}
+        <div
+          className="flex-1 flex flex-col min-w-0 min-h-screen transition-[margin-left] duration-200 ease-out"
+          style={{ marginLeft: layoutSidebarWidth }}
         >
-          <Outlet />
-        </main>
+          {/* ── Global Top Header with Breadcrumbs ── */}
+          {!inSession && <GlobalHeader user={user} />}
+
+          {/* ── Main Content Region ── */}
+          <main
+            id="main-content"
+            tabIndex={-1}
+            className="flex-1 w-full max-w-full animate-fade-in"
+            style={{ padding: inSession ? 0 : "2rem 2.5rem" }}
+          >
+            <Outlet />
+          </main>
+        </div>
       </div>
     </SidebarContext.Provider>
   );

@@ -1,8 +1,8 @@
-/* Polls the approval queues an approver is gated for and surfaces in-session
-   popup cards so a decision can be made without leaving the current page. */
-import { useCallback, useEffect, useMemo, useState } from "react";
+/* Polls the approval queues an approver is gated for and publishes an
+   actionable toast per request so a decision can be made without leaving
+   the current page. */
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { createPortal } from "react-dom";
 import {
   CheckoutRequest,
   MeResponse,
@@ -12,7 +12,7 @@ import {
   getPendingApprovals,
   listPendingOutboundShares,
 } from "../api";
-import { useToast } from "./ToastProvider";
+import { useToast, useToastHold, type ToastDetail, type ToastVariant } from "./ToastProvider";
 
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Tunables                                                                  */
@@ -23,13 +23,13 @@ import { useToast } from "./ToastProvider";
  *  approval lands while the approver is mid-session. */
 const POLL_INTERVAL_MS = 45_000;
 
-/** How long an unactioned popup stays on screen before it auto-dismisses.
+/** How long an unactioned toast stays on screen before it auto-dismisses.
  *  Once dismissed, it does not re-appear until the underlying queue entry
  *  is decided/withdrawn — see `STORAGE_KEY` below. */
 const AUTO_DISMISS_MS = 30_000;
 
 /** localStorage namespace. Tracks `<kind>:<id> → firstShownAtMs` so a
- *  dismissed popup does not re-spawn on the next poll, and so two tabs
+ *  dismissed toast does not re-spawn on the next poll, and so two tabs
  *  do not double-up. Pruned to the live pending set each cycle to keep
  *  the record bounded. */
 const STORAGE_KEY = "strata.pendingApprovalShown.v1";
@@ -110,6 +110,63 @@ function cnFromDn(dn: string): string {
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
+/*  Toast presentation per request kind                                       */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+const CHECKOUT_ICON = (
+  <>
+    <rect x="3" y="11" width="18" height="11" rx="2" />
+    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+  </>
+);
+
+const OUTBOUND_ICON = (
+  <>
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="17 8 12 3 7 8" />
+    <line x1="12" y1="3" x2="12" y2="15" />
+  </>
+);
+
+function isDlpFlagged(data: OutboundShare): boolean {
+  // DLP score is 0–100 on the wire; ≥ 50 is flagged in the queue UI.
+  return data.dlp_score >= 50 || (data.dlp_reasons?.length ?? 0) > 0;
+}
+
+function presentation(card: ApprovalCard): {
+  title: string;
+  variant: ToastVariant;
+  description: string;
+  details: ToastDetail[];
+} {
+  if (card.kind === "checkout") {
+    const d = card.data;
+    return {
+      title: "Credential checkout requested",
+      variant: d.emergency_bypass ? "error" : "info",
+      description: d.justification_comment
+        ? `“${d.justification_comment}”`
+        : "No justification provided",
+      details: [
+        { label: "User", value: d.requester_username ?? "(unknown user)" },
+        { label: "Account", value: d.friendly_name ?? cnFromDn(d.managed_ad_dn) },
+        { label: "Duration", value: formatDurationMins(d.requested_duration_mins) },
+      ],
+    };
+  }
+  const d = card.data;
+  return {
+    title: "Outbound file share requested",
+    variant: "warning",
+    description: d.justification ? `“${d.justification}”` : "No justification provided",
+    details: [
+      { label: "User", value: d.requester_username ?? "(unknown user)" },
+      { label: "File", value: d.filename, meta: formatSize(d.size) },
+    ],
+  };
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
 /*  Watcher                                                                    */
 /* ────────────────────────────────────────────────────────────────────────── */
 
@@ -117,9 +174,11 @@ export interface PendingApprovalWatcherProps {
   user: MeResponse;
   /** Override for the poll interval (used by tests to compress time). */
   pollIntervalMs?: number;
-  /** Override for the per-card auto-dismiss window. */
+  /** Override for the per-toast auto-dismiss window. */
   autoDismissMs?: number;
 }
+
+const toastKey = (uid: string) => `approval:${uid}`;
 
 export default function PendingApprovalWatcher({
   user,
@@ -129,14 +188,47 @@ export default function PendingApprovalWatcher({
   const toast = useToast();
   const navigate = useNavigate();
 
-  // Source-of-truth flags for which queues to poll. Re-derived per render but
-  // captured in the polling closure via the explicit dependency below.
   const watchCheckouts = !!(user.vault_configured && user.is_approver);
   const watchOutbound = !!user.is_outbound_approver;
 
-  const [cards, setCards] = useState<ApprovalCard[]>([]);
+  // Uids this tab has published, so withdrawn/decided-elsewhere requests
+  // can be pulled from the stack on the next poll.
+  const publishedRef = useRef<Set<string>>(new Set());
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
 
-  // Refresh is stable across renders so the polling effect doesn't re-arm.
+  const publish = useCallback(
+    (card: ApprovalCard) => {
+      const key = toastKey(card.uid);
+      const view = presentation(card);
+      toast.show({
+        key,
+        ...view,
+        icon: card.kind === "checkout" ? CHECKOUT_ICON : OUTBOUND_ICON,
+        duration: autoDismissMs,
+        content: (
+          <ApprovalControls
+            card={card}
+            onResolved={async (verb) => {
+              toast.dismiss(key);
+              publishedRef.current.delete(card.uid);
+              toast.success({
+                title: verb === "approved" ? "Approval recorded" : "Denial recorded",
+              });
+              await refreshRef.current();
+            }}
+            onError={(message) => toast.error({ title: "Decision failed", description: message })}
+            onViewAll={() => {
+              toast.dismiss(key);
+              navigate("/approvals");
+            }}
+          />
+        ),
+      });
+      publishedRef.current.add(card.uid);
+    },
+    [toast, navigate, autoDismissMs]
+  );
+
   const refresh = useCallback(async () => {
     if (!watchCheckouts && !watchOutbound) return;
 
@@ -149,7 +241,6 @@ export default function PendingApprovalWatcher({
         : Promise.resolve([]),
     ]);
 
-    // Build the incoming set and the de-dup key index in one pass.
     const incoming: ApprovalCard[] = [];
     const liveUids = new Set<string>();
     for (const c of checks) {
@@ -172,21 +263,20 @@ export default function PendingApprovalWatcher({
     for (const c of newOnes) shown[c.uid] = now;
     saveShown(shown);
 
-    setCards((prev) => {
-      // Keep cards already visible (so an in-progress "deny + reason" flow
-      // isn't wiped on poll), update their bodies in case the server-side
-      // record changed, and append cards we haven't shown yet.
-      const stillLive = prev
-        .filter((c) => liveUids.has(c.uid))
-        .map((c) => {
-          const fresh = incoming.find((i) => i.uid === c.uid);
-          return fresh ?? c;
-        });
-      const visibleUids = new Set(stillLive.map((c) => c.uid));
-      const additions = newOnes.filter((c) => !visibleUids.has(c.uid));
-      return [...stillLive, ...additions];
-    });
-  }, [watchCheckouts, watchOutbound]);
+    for (const uid of [...publishedRef.current]) {
+      if (!liveUids.has(uid)) {
+        toast.dismiss(toastKey(uid));
+        publishedRef.current.delete(uid);
+      }
+    }
+    // Already-visible toasts are left alone so an in-progress deny flow
+    // isn't reset by a poll.
+    for (const c of newOnes) publish(c);
+  }, [watchCheckouts, watchOutbound, toast, publish]);
+
+  useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
 
   // Mount/poll lifecycle. Mirrors CredentialProfileExpiryWatcher's wake-up
   // strategy (focus + visibilitychange) so a tab that slept through several
@@ -211,215 +301,87 @@ export default function PendingApprovalWatcher({
     };
   }, [refresh, pollIntervalMs, watchCheckouts, watchOutbound]);
 
-  const dismiss = useCallback((uid: string) => {
-    setCards((prev) => prev.filter((c) => c.uid !== uid));
-  }, []);
-
-  if (typeof document === "undefined") return null;
-  if (!watchCheckouts && !watchOutbound) return null;
-  if (cards.length === 0) return null;
-
-  // Top-LEFT placement so the popup never collides with the regular toast
-  // stack (top-right) or the session-timeout warning (bottom-right).
-  return createPortal(
-    <div
-      className="fixed top-4 left-4 z-[9999] flex flex-col gap-2"
-      style={{ maxWidth: "min(420px, calc(100vw - 2rem))" }}
-      role="region"
-      aria-label="Pending approvals"
-    >
-      {cards.map((c) => (
-        <ApprovalCardView
-          key={c.uid}
-          card={c}
-          autoDismissMs={autoDismissMs}
-          onDismiss={() => dismiss(c.uid)}
-          onResolved={async (verb) => {
-            dismiss(c.uid);
-            toast.success({ title: verb === "approved" ? "Approval recorded" : "Denial recorded" });
-            await refresh();
-          }}
-          onError={(message) => toast.error({ title: "Decision failed", description: message })}
-          onViewAll={() => {
-            dismiss(c.uid);
-            navigate("/approvals");
-          }}
-        />
-      ))}
-    </div>,
-    document.body
-  );
+  return null;
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
-/*  Card                                                                       */
+/*  Inline approve / deny controls                                            */
 /* ────────────────────────────────────────────────────────────────────────── */
 
-interface CardProps {
+interface ControlsProps {
   card: ApprovalCard;
-  autoDismissMs: number;
-  onDismiss: () => void;
   onResolved: (verb: "approved" | "denied") => void | Promise<void>;
   onError: (message: string) => void;
   onViewAll: () => void;
 }
 
-function ApprovalCardView({
-  card,
-  autoDismissMs,
-  onDismiss,
-  onResolved,
-  onError,
-  onViewAll,
-}: CardProps) {
+function ApprovalControls({ card, onResolved, onError, onViewAll }: ControlsProps) {
   const [denying, setDenying] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // Auto-dismiss timer. Paused while the user is composing a deny reason
-  // (so the form doesn't disappear under them) or while a decision is in
-  // flight (so a slow network doesn't drop the card before the API
-  // responds).
-  useEffect(() => {
-    if (denying || busy) return;
-    const t = setTimeout(onDismiss, autoDismissMs);
-    return () => clearTimeout(t);
-  }, [denying, busy, autoDismissMs, onDismiss]);
+  // Keep the toast on screen while a deny reason is being written or a
+  // decision is in flight.
+  useToastHold(denying || busy);
 
-  const heading = useMemo(() => {
-    if (card.kind === "checkout") return "Credential checkout requested";
-    return "Outbound file share requested";
-  }, [card.kind]);
-
-  const accent =
-    card.kind === "checkout" ? "var(--color-accent, #8b5cf6)" : "var(--color-warning, #eab308)";
-  const dim =
-    card.kind === "checkout"
-      ? "var(--color-accent-dim, rgba(139, 92, 246, 0.12))"
-      : "var(--color-warning-dim, rgba(234, 179, 8, 0.12))";
+  const decide = useCallback(
+    async (approve: boolean, why?: string) => {
+      const send = card.kind === "checkout" ? decideCheckout : decideOutboundShare;
+      if (why === undefined) await send(card.id, approve);
+      else await send(card.id, approve, why);
+    },
+    [card]
+  );
 
   const approve = useCallback(async () => {
     if (busy) return;
     setBusy(true);
     try {
-      if (card.kind === "checkout") {
-        await decideCheckout(card.id, true);
-      } else {
-        await decideOutboundShare(card.id, true);
-      }
+      await decide(true);
       await onResolved("approved");
     } catch (e) {
       onError(e instanceof Error ? e.message : "Unable to approve");
       setBusy(false);
     }
-  }, [busy, card, onResolved, onError]);
+  }, [busy, decide, onResolved, onError]);
 
   const confirmDeny = useCallback(async () => {
-    if (busy) return;
     const trimmed = reason.trim();
-    if (trimmed.length === 0) return; // gated by disabled button below
+    if (busy || trimmed.length === 0) return;
     setBusy(true);
     try {
-      if (card.kind === "checkout") {
-        await decideCheckout(card.id, false, trimmed);
-      } else {
-        await decideOutboundShare(card.id, false, trimmed);
-      }
+      await decide(false, trimmed);
       await onResolved("denied");
     } catch (e) {
       onError(e instanceof Error ? e.message : "Unable to deny");
       setBusy(false);
     }
-  }, [busy, reason, card, onResolved, onError]);
+  }, [busy, reason, decide, onResolved, onError]);
+
+  const chips =
+    card.kind === "checkout" ? (
+      card.data.emergency_bypass ? (
+        <span className="toast-chip toast-chip-danger">Emergency</span>
+      ) : null
+    ) : isDlpFlagged(card.data) ? (
+      <div>
+        <span className="toast-chip toast-chip-warning">DLP {card.data.dlp_score}</span>
+        {card.data.dlp_reasons && card.data.dlp_reasons.length > 0 && (
+          <span className="toast-summary">{card.data.dlp_reasons.join(", ")}</span>
+        )}
+      </div>
+    ) : null;
 
   return (
-    <div
-      className="card flex flex-col gap-2 shadow-2xl pointer-events-auto animate-fade-in"
-      role="alertdialog"
-      aria-label={heading}
-      style={{
-        border: `1px solid ${accent}`,
-        borderLeftWidth: "3px",
-        background: "var(--color-surface)",
-        backdropFilter: "blur(8px)",
-        padding: "0.75rem 0.875rem",
-      }}
-    >
-      <div className="flex items-start gap-3">
-        <div
-          className="flex items-center justify-center w-8 h-8 rounded-full shrink-0"
-          style={{ background: dim }}
-          aria-hidden="true"
-        >
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{ color: accent }}
-          >
-            {card.kind === "checkout" ? (
-              <>
-                <rect x="3" y="11" width="18" height="11" rx="2" />
-                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-              </>
-            ) : (
-              <>
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="17 8 12 3 7 8" />
-                <line x1="12" y1="3" x2="12" y2="15" />
-              </>
-            )}
-          </svg>
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-txt-primary mb-0.5">{heading}</p>
-          {card.kind === "checkout" ? (
-            <CheckoutBody data={card.data} />
-          ) : (
-            <OutboundBody data={card.data} />
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="shrink-0 -mr-1 -mt-1 p-1 rounded text-txt-secondary hover:text-txt-primary"
-          aria-label="Dismiss notification"
-          style={{ background: "transparent" }}
-          disabled={busy}
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-      </div>
-
+    <>
+      {chips}
       {!denying ? (
-        <div className="flex gap-2 mt-1 flex-wrap">
+        <div className="toast-actions">
           <button
             type="button"
             onClick={approve}
             disabled={busy}
-            className="btn btn-sm"
-            style={{
-              background: "var(--color-success, #22c55e)",
-              color: "#fff",
-              opacity: busy ? 0.6 : 1,
-            }}
+            className="toast-btn toast-btn-success"
           >
             {busy ? "Working…" : "Approve"}
           </button>
@@ -427,28 +389,17 @@ function ApprovalCardView({
             type="button"
             onClick={() => setDenying(true)}
             disabled={busy}
-            className="btn btn-sm"
-            style={{
-              background: "var(--color-danger, #ef4444)",
-              color: "#fff",
-              opacity: busy ? 0.6 : 1,
-            }}
+            className="toast-btn toast-btn-danger"
           >
             Deny
           </button>
-          <button
-            type="button"
-            onClick={onViewAll}
-            disabled={busy}
-            className="btn btn-sm"
-            style={{ background: "var(--color-surface-secondary, var(--color-surface))" }}
-          >
+          <button type="button" onClick={onViewAll} disabled={busy} className="toast-btn">
             View all
           </button>
         </div>
       ) : (
-        <div className="flex flex-col gap-2 mt-1">
-          <label className="text-xs text-txt-secondary" htmlFor={`deny-reason-${card.uid}`}>
+        <>
+          <label className="toast-field-label" htmlFor={`deny-reason-${card.uid}`}>
             Reason for denial (required)
           </label>
           <textarea
@@ -457,27 +408,16 @@ function ApprovalCardView({
             onChange={(e) => setReason(e.target.value)}
             rows={2}
             placeholder="e.g. Outside change window, contact owner first"
-            className="w-full text-sm rounded-sm p-2"
-            style={{
-              background: "var(--color-surface-secondary, var(--color-surface))",
-              border: "1px solid var(--color-border)",
-              color: "var(--color-text-primary, inherit)",
-              resize: "vertical",
-            }}
+            className="toast-textarea"
             autoFocus
             disabled={busy}
           />
-          <div className="flex gap-2 flex-wrap">
+          <div className="toast-actions">
             <button
               type="button"
               onClick={confirmDeny}
               disabled={busy || reason.trim().length === 0}
-              className="btn btn-sm"
-              style={{
-                background: "var(--color-danger, #ef4444)",
-                color: "#fff",
-                opacity: busy || reason.trim().length === 0 ? 0.6 : 1,
-              }}
+              className="toast-btn toast-btn-danger"
             >
               {busy ? "Working…" : "Confirm deny"}
             </button>
@@ -488,85 +428,13 @@ function ApprovalCardView({
                 setReason("");
               }}
               disabled={busy}
-              className="btn btn-sm"
-              style={{ background: "var(--color-surface-secondary, var(--color-surface))" }}
+              className="toast-btn"
             >
               Cancel
             </button>
           </div>
-        </div>
+        </>
       )}
-    </div>
-  );
-}
-
-/* ────────────────────────────────────────────────────────────────────────── */
-/*  Per-kind body                                                             */
-/* ────────────────────────────────────────────────────────────────────────── */
-
-function CheckoutBody({ data }: { data: CheckoutRequest }) {
-  const requester = data.requester_username ?? "(unknown user)";
-  const target = data.friendly_name ?? cnFromDn(data.managed_ad_dn);
-  return (
-    <div className="text-xs text-txt-secondary leading-relaxed">
-      <div>
-        <span className="text-txt-primary font-medium">{requester}</span> wants{" "}
-        <span className="text-txt-primary">{target}</span>
-        {data.emergency_bypass ? (
-          <span
-            className="ml-1 inline-block text-[10px] uppercase font-semibold tracking-wider px-1.5 py-0.5 rounded"
-            style={{
-              background: "var(--color-danger-dim, rgba(239, 68, 68, 0.15))",
-              color: "var(--color-danger, #ef4444)",
-            }}
-          >
-            Emergency
-          </span>
-        ) : null}
-      </div>
-      <div className="mt-0.5">Duration: {formatDurationMins(data.requested_duration_mins)}</div>
-      {data.justification_comment ? (
-        <div className="mt-1 italic">“{data.justification_comment}”</div>
-      ) : (
-        <div className="mt-1 italic text-txt-tertiary">No justification provided</div>
-      )}
-    </div>
-  );
-}
-
-function OutboundBody({ data }: { data: OutboundShare }) {
-  const requester = data.requester_username ?? "(unknown user)";
-  // DLP score is 0–100 on the wire. Anything ≥ 50 is flagged in the queue UI;
-  // we surface the score itself so an approver can decide whether to dig in.
-  const dlpFlagged = data.dlp_score >= 50 || (data.dlp_reasons?.length ?? 0) > 0;
-  return (
-    <div className="text-xs text-txt-secondary leading-relaxed">
-      <div>
-        <span className="text-txt-primary font-medium">{requester}</span> wants to send{" "}
-        <span className="text-txt-primary break-all">{data.filename}</span>{" "}
-        <span className="text-txt-tertiary">({formatSize(data.size)})</span>
-      </div>
-      {dlpFlagged && (
-        <div className="mt-0.5">
-          <span
-            className="inline-block text-[10px] uppercase font-semibold tracking-wider px-1.5 py-0.5 rounded"
-            style={{
-              background: "var(--color-warning-dim, rgba(234, 179, 8, 0.15))",
-              color: "var(--color-warning, #eab308)",
-            }}
-          >
-            DLP {data.dlp_score}
-          </span>
-          {data.dlp_reasons && data.dlp_reasons.length > 0 && (
-            <span className="ml-1 text-txt-tertiary">{data.dlp_reasons.join(", ")}</span>
-          )}
-        </div>
-      )}
-      {data.justification ? (
-        <div className="mt-1 italic">“{data.justification}”</div>
-      ) : (
-        <div className="mt-1 italic text-txt-tertiary">No justification provided</div>
-      )}
-    </div>
+    </>
   );
 }

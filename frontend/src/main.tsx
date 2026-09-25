@@ -8,6 +8,7 @@ import App from "./App";
 // before <App /> mounts.
 import "./i18n";
 import "./index.css";
+import "./styles/dashboard-theme.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

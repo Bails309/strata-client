@@ -1,15 +1,21 @@
-/* Reusable toast notification provider with theme-aware variants. */
+/* Unified toast notification provider: every in-app notification (approval
+   requests, credential expiry, uploads, version updates, …) renders through
+   the same card so they share one stack, one look and one timing model. */
 import {
   createContext,
   useCallback,
   useContext,
   useEffect,
+  useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import "./Toast.css";
 
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Public API                                                                */
@@ -24,6 +30,13 @@ export interface ToastAction {
    *  it returns `false` (allowing the action to keep the toast visible
    *  while a long-running operation completes, for example). */
   onClick: () => boolean | void | Promise<boolean | void>;
+}
+
+/** One row of the monospace details box: `LABEL  value — meta`. */
+export interface ToastDetail {
+  label: string;
+  value: string;
+  meta?: string;
 }
 
 export interface ToastOptions {
@@ -44,23 +57,32 @@ export interface ToastOptions {
    *  watcher to update the same toast as the deadline approaches). */
   key?: string;
   /** Optional progress indicator rendered as a thin bar below the
-   *  description. A number in `[0, 1]` shows determinate progress
-   *  (uploaded bytes / total bytes). The string `"indeterminate"`
-   *  renders an animated sweep — used for the post-upload AV scan
-   *  phase where the server gives no progress events. Combine with
-   *  `duration: null` and the replace-by-key pattern to drive a
-   *  single live-updating toast through both phases. */
+   *  description. A number in `[0, 1]` shows determinate progress; the
+   *  string `"indeterminate"` renders an animated sweep. */
   progress?: number | "indeterminate";
+  /** Key/value rows rendered in the monospace details box. */
+  details?: ToastDetail[];
+  /** Replaces the variant's default icon glyph (SVG children, 24×24 box). */
+  icon?: ReactNode;
+  /** Interactive body rendered under the details (e.g. approve/deny
+   *  controls). Toasts with content are announced as an alertdialog. */
+  content?: ReactNode;
+  /** Called once when the toast leaves the stack (any dismissal path). */
+  onDismiss?: () => void;
 }
 
-interface ToastEntry extends Required<
-  Omit<ToastOptions, "description" | "action" | "duration" | "progress">
-> {
+interface ToastEntry {
   id: string;
+  title: string;
   description?: string;
-  action?: ToastAction;
+  variant: ToastVariant;
   duration: number | null;
+  action?: ToastAction;
   progress?: number | "indeterminate";
+  details?: ToastDetail[];
+  icon?: ReactNode;
+  content?: ReactNode;
+  onDismiss?: () => void;
   createdAt: number;
 }
 
@@ -90,11 +112,22 @@ export function useToast(): ToastApi {
 
 /** Same as `useToast`, but returns `null` when no provider is mounted
  *  instead of throwing. Use this from providers/hooks that may legitimately
- *  be rendered in isolation (e.g. SessionManager unit tests that don't
- *  also mount ToastProvider). Production paths always have a provider
- *  in scope. */
+ *  be rendered in isolation. */
 export function useOptionalToast(): ToastApi | null {
   return useContext(ToastContext);
+}
+
+const HoldContext = createContext<(key: string, held: boolean) => void>(() => {});
+
+/** Pauses the enclosing toast's countdown while `held` is true — e.g. while
+ *  the user is typing a deny reason inside `content`. */
+export function useToastHold(held: boolean): void {
+  const setHold = useContext(HoldContext);
+  const key = useId();
+  useEffect(() => {
+    setHold(key, held);
+    return () => setHold(key, false);
+  }, [setHold, key, held]);
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
@@ -108,6 +141,9 @@ const DEFAULT_DURATIONS: Record<ToastVariant, number | null> = {
   error: null, // sticky — user must dismiss
 };
 
+/** Must match the `.toast-leaving` animation in Toast.css. */
+const EXIT_MS = 150;
+
 let toastCounter = 0;
 function nextId(): string {
   toastCounter += 1;
@@ -116,77 +152,49 @@ function nextId(): string {
 
 export default function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
-  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const toastsRef = useRef<ToastEntry[]>([]);
+  useEffect(() => {
+    toastsRef.current = toasts;
+  }, [toasts]);
 
   const dismiss = useCallback((id: string) => {
-    const timer = timersRef.current.get(id);
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      timersRef.current.delete(id);
-    }
+    const entry = toastsRef.current.find((t) => t.id === id);
     setToasts((prev) => prev.filter((t) => t.id !== id));
+    entry?.onDismiss?.();
   }, []);
 
-  const armAutoDismiss = useCallback(
-    (id: string, duration: number | null) => {
-      if (duration === null || duration <= 0) return;
-      const timer = setTimeout(() => dismiss(id), duration);
-      timersRef.current.set(id, timer);
-    },
-    [dismiss]
-  );
+  const show = useCallback((opts: ToastOptions): string => {
+    const variant: ToastVariant = opts.variant ?? "info";
+    const duration = opts.duration === undefined ? DEFAULT_DURATIONS[variant] : opts.duration;
+    const id = opts.key ?? nextId();
 
-  const show = useCallback(
-    (opts: ToastOptions): string => {
-      const variant: ToastVariant = opts.variant ?? "info";
-      const duration = opts.duration === undefined ? DEFAULT_DURATIONS[variant] : opts.duration;
-      const id = opts.key ?? nextId();
-
-      // Replace-by-key semantics: cancel any existing timer for the same id
-      // and overwrite the entry in place so the watcher can update a single
-      // "expires in 1h" toast without spawning duplicates.
-      const existingTimer = timersRef.current.get(id);
-      if (existingTimer !== undefined) {
-        clearTimeout(existingTimer);
-        timersRef.current.delete(id);
-      }
-
-      const entry: ToastEntry = {
-        id,
-        title: opts.title,
-        description: opts.description,
-        variant,
-        duration,
-        action: opts.action,
-        key: opts.key ?? id,
-        progress: opts.progress,
-        createdAt: Date.now(),
-      };
-
-      setToasts((prev) => {
-        const idx = prev.findIndex((t) => t.id === id);
-        if (idx >= 0) {
-          const next = prev.slice();
-          next[idx] = entry;
-          return next;
-        }
-        return [...prev, entry];
-      });
-
-      armAutoDismiss(id, duration);
-      return id;
-    },
-    [armAutoDismiss]
-  );
-
-  // Cancel every outstanding timer when the provider unmounts so tests
-  // (and real logouts) don't leak setTimeout handles.
-  useEffect(() => {
-    const timers = timersRef.current;
-    return () => {
-      timers.forEach(clearTimeout);
-      timers.clear();
+    const entry: ToastEntry = {
+      id,
+      title: opts.title,
+      description: opts.description,
+      variant,
+      duration,
+      action: opts.action,
+      progress: opts.progress,
+      details: opts.details,
+      icon: opts.icon,
+      content: opts.content,
+      onDismiss: opts.onDismiss,
+      createdAt: Date.now(),
     };
+
+    // Replace-by-key: overwrite in place so a watcher can update a single
+    // "expires in 1h" toast without spawning duplicates.
+    setToasts((prev) => {
+      const idx = prev.findIndex((t) => t.id === id);
+      if (idx >= 0) {
+        const next = prev.slice();
+        next[idx] = entry;
+        return next;
+      }
+      return [...prev, entry];
+    });
+    return id;
   }, []);
 
   const api = useMemo<ToastApi>(
@@ -204,7 +212,7 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <ToastViewport toasts={toasts} onDismiss={dismiss} />
+      <ToastViewport toasts={toasts} onRemove={dismiss} />
     </ToastContext.Provider>
   );
 }
@@ -213,29 +221,26 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
 /*  Viewport (portal-mounted)                                                 */
 /* ────────────────────────────────────────────────────────────────────────── */
 
-interface ViewportProps {
+function ToastViewport({
+  toasts,
+  onRemove,
+}: {
   toasts: ToastEntry[];
-  onDismiss: (id: string) => void;
-}
-
-function ToastViewport({ toasts, onDismiss }: ViewportProps) {
-  // Render into document.body so the stack escapes any transformed /
-  // overflow-hidden ancestors. SSR-safe guard for vitest jsdom + Vite SSR.
+  onRemove: (id: string) => void;
+}) {
   if (typeof document === "undefined") return null;
   if (toasts.length === 0) return null;
 
   return createPortal(
     <div
-      // Top-right corner. Below the SessionTimeoutWarning which lives at
-      // bottom-right (z-9999) so the two never overlap visually.
-      className="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none"
+      // Top-right; the session-timeout warning owns bottom-right.
+      className="toast-viewport"
       role="region"
       aria-label="Notifications"
       aria-live="polite"
-      style={{ maxWidth: "min(380px, calc(100vw - 2rem))" }}
     >
       {toasts.map((t) => (
-        <ToastCard key={t.id} toast={t} onDismiss={() => onDismiss(t.id)} />
+        <ToastCard key={t.id} toast={t} onRemove={() => onRemove(t.id)} />
       ))}
     </div>,
     document.body
@@ -246,156 +251,222 @@ function ToastViewport({ toasts, onDismiss }: ViewportProps) {
 /*  Card                                                                       */
 /* ────────────────────────────────────────────────────────────────────────── */
 
-const VARIANT_STYLES: Record<ToastVariant, { color: string; dim: string; iconPath: ReactNode }> = {
-  info: {
-    color: "var(--color-accent, #8b5cf6)",
-    dim: "var(--color-accent-dim, rgba(139, 92, 246, 0.12))",
-    iconPath: (
-      <>
-        <circle cx="12" cy="12" r="10" />
-        <line x1="12" y1="16" x2="12" y2="12" />
-        <line x1="12" y1="8" x2="12.01" y2="8" />
-      </>
-    ),
-  },
-  success: {
-    color: "var(--color-success, #22c55e)",
-    dim: "var(--color-success-dim, rgba(34, 197, 94, 0.12))",
-    iconPath: (
-      <>
-        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-        <polyline points="22 4 12 14.01 9 11.01" />
-      </>
-    ),
-  },
-  warning: {
-    color: "var(--color-warning, #eab308)",
-    dim: "var(--color-warning-dim, rgba(234, 179, 8, 0.12))",
-    iconPath: (
-      <>
-        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-        <line x1="12" y1="9" x2="12" y2="13" />
-        <line x1="12" y1="17" x2="12.01" y2="17" />
-      </>
-    ),
-  },
-  error: {
-    color: "var(--color-danger, #ef4444)",
-    dim: "var(--color-danger-dim, rgba(239, 68, 68, 0.12))",
-    iconPath: (
-      <>
-        <circle cx="12" cy="12" r="10" />
-        <line x1="15" y1="9" x2="9" y2="15" />
-        <line x1="9" y1="9" x2="15" y2="15" />
-      </>
-    ),
-  },
+const VARIANT_ICONS: Record<ToastVariant, ReactNode> = {
+  info: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="16" x2="12" y2="12" />
+      <line x1="12" y1="8" x2="12.01" y2="8" />
+    </>
+  ),
+  success: (
+    <>
+      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+      <polyline points="22 4 12 14.01 9 11.01" />
+    </>
+  ),
+  warning: (
+    <>
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+      <line x1="12" y1="9" x2="12" y2="13" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </>
+  ),
+  error: (
+    <>
+      <polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2" />
+      <line x1="12" y1="8" x2="12" y2="12" />
+      <line x1="12" y1="16" x2="12.01" y2="16" />
+    </>
+  ),
 };
 
-function ToastCard({ toast, onDismiss }: { toast: ToastEntry; onDismiss: () => void }) {
-  const { color, dim, iconPath } = VARIANT_STYLES[toast.variant];
+function ToastCard({ toast, onRemove }: { toast: ToastEntry; onRemove: () => void }) {
   const [busy, setBusy] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [holds, setHolds] = useState<Set<string>>(() => new Set());
+  const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onRemoveRef = useRef(onRemove);
+
+  const setHold = useCallback((key: string, held: boolean) => {
+    setHolds((prev) => {
+      if (prev.has(key) === held) return prev;
+      const next = new Set(prev);
+      if (held) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
+
+  const close = useCallback(() => {
+    if (exitTimerRef.current !== null) return;
+    setLeaving(true);
+    exitTimerRef.current = setTimeout(() => onRemoveRef.current(), EXIT_MS);
+  }, []);
+
+  useEffect(() => {
+    onRemoveRef.current = onRemove;
+  }, [onRemove]);
+
+  useEffect(
+    () => () => {
+      if (exitTimerRef.current !== null) clearTimeout(exitTimerRef.current);
+    },
+    []
+  );
+
+  // Auto-dismiss that pauses on hover / focus / hold and resumes with the
+  // remaining time. A replace-by-key update (new createdAt) restarts it.
+  const timed = toast.duration !== null && toast.duration > 0;
+  const paused = hovered || focused || busy || holds.size > 0;
+  const remainingRef = useRef(toast.duration ?? 0);
+  const cycleRef = useRef(toast.createdAt);
+  // Layout effect so the timer is armed at commit, not whenever passive
+  // effects happen to flush.
+  useLayoutEffect(() => {
+    if (!timed || paused || leaving) return;
+    if (cycleRef.current !== toast.createdAt) {
+      cycleRef.current = toast.createdAt;
+      remainingRef.current = toast.duration ?? 0;
+    }
+    const startedAt = Date.now();
+    const t = setTimeout(close, Math.max(0, remainingRef.current));
+    return () => {
+      clearTimeout(t);
+      remainingRef.current -= Date.now() - startedAt;
+    };
+  }, [timed, paused, leaving, toast.createdAt, toast.duration, close]);
 
   const handleAction = useCallback(async () => {
     if (!toast.action || busy) return;
     setBusy(true);
     try {
       const keep = await toast.action.onClick();
-      if (keep !== false) onDismiss();
+      if (keep !== false) close();
     } finally {
       setBusy(false);
     }
-  }, [toast.action, busy, onDismiss]);
+  }, [toast.action, busy, close]);
+
+  const isDialog = toast.content !== undefined;
+  const role = isDialog
+    ? "alertdialog"
+    : toast.variant === "error" || toast.variant === "warning"
+      ? "alert"
+      : "status";
 
   return (
-    <div
-      className="card flex items-start gap-3 shadow-2xl pointer-events-auto animate-fade-in"
-      role={toast.variant === "error" || toast.variant === "warning" ? "alert" : "status"}
-      style={{
-        border: `1px solid ${color}`,
-        borderLeftWidth: "3px",
-        background: "var(--color-surface)",
-        backdropFilter: "blur(8px)",
-      }}
-    >
+    <HoldContext.Provider value={setHold}>
+      {/* Hover/focus handlers only pause the countdown; they add no interaction. */}
+      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
       <div
-        className="flex items-center justify-center w-8 h-8 rounded-full shrink-0"
-        style={{ background: dim }}
-        aria-hidden="true"
+        className={`toast-card toast-${toast.variant} ${leaving ? "toast-leaving" : ""}`}
+        role={role}
+        aria-label={isDialog ? toast.title : undefined}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onFocus={() => setFocused(true)}
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(false);
+        }}
       >
-        <svg
-          width="18"
-          height="18"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          style={{ color }}
-        >
-          {iconPath}
-        </svg>
-      </div>
+        <div className="toast-strip" aria-hidden="true" />
 
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-txt-primary mb-0.5">{toast.title}</p>
-        {toast.description && (
-          <p className="text-xs text-txt-secondary leading-relaxed mb-2">{toast.description}</p>
-        )}
-        {toast.progress !== undefined && <ToastProgressBar value={toast.progress} color={color} />}
+        <div className="toast-body">
+          <div className="toast-badge" aria-hidden="true">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              {toast.icon ?? VARIANT_ICONS[toast.variant]}
+            </svg>
+          </div>
 
-        {toast.action && (
-          <div className="flex gap-2 mt-1">
-            <button
-              type="button"
-              onClick={handleAction}
-              disabled={busy}
-              className="btn btn-sm"
-              style={{
-                background: color,
-                color: "#fff",
-                opacity: busy ? 0.6 : 1,
-              }}
+          <div className="toast-content">
+            <p className="toast-title">{toast.title}</p>
+            {toast.description && <p className="toast-summary">{toast.description}</p>}
+
+            {toast.details && toast.details.length > 0 && (
+              <div className="toast-details">
+                {toast.details.map((d) => (
+                  <div key={`${d.label}:${d.value}`} className="toast-detail-row">
+                    <span className="toast-detail-label">{d.label}</span>
+                    <span className="toast-detail-text">
+                      <span className="toast-detail-value">{d.value}</span>
+                      {d.meta && <span className="toast-detail-meta"> — {d.meta}</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {toast.progress !== undefined && <ToastProgressBar value={toast.progress} />}
+
+            {toast.content}
+
+            {toast.action && (
+              <div className="toast-actions">
+                <button
+                  type="button"
+                  onClick={handleAction}
+                  disabled={busy}
+                  className="toast-btn toast-btn-primary"
+                >
+                  {busy ? "Working…" : toast.action.label}
+                </button>
+                <button type="button" onClick={close} className="toast-btn">
+                  Dismiss
+                </button>
+              </div>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={close}
+            className="toast-close"
+            aria-label="Dismiss notification"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
             >
-              {busy ? "Working…" : toast.action.label}
-            </button>
-            <button
-              type="button"
-              onClick={onDismiss}
-              className="btn btn-sm"
-              style={{ background: "var(--color-surface-secondary, var(--color-surface))" }}
-            >
-              Dismiss
-            </button>
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+
+        {timed && (
+          <div className="toast-countdown" aria-hidden="true">
+            <div
+              key={toast.createdAt}
+              className="toast-countdown-bar"
+              style={
+                {
+                  "--toast-duration": `${toast.duration}ms`,
+                  animationPlayState: paused || leaving ? "paused" : "running",
+                } as CSSProperties
+              }
+            />
           </div>
         )}
       </div>
-
-      {/* Always-visible close affordance in the corner. Doubles as the only
-          dismiss path for actionless toasts. */}
-      <button
-        type="button"
-        onClick={onDismiss}
-        className="shrink-0 -mr-1 -mt-1 p-1 rounded text-txt-secondary hover:text-txt-primary"
-        aria-label="Dismiss notification"
-        style={{ background: "transparent" }}
-      >
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
-      </button>
-    </div>
+    </HoldContext.Provider>
   );
 }
 
@@ -403,21 +474,9 @@ function ToastCard({ toast, onDismiss }: { toast: ToastEntry; onDismiss: () => v
 /*  Progress bar                                                              */
 /* ────────────────────────────────────────────────────────────────────────── */
 
-/**
- * Thin horizontal progress bar slotted into the toast body. Two modes:
- *
- * - **Determinate** (`value` is a finite number) — clamps `value` into
- *   `[0, 1]` and renders a fill at that fraction. Includes proper ARIA
- *   so screen readers announce the percentage.
- * - **Indeterminate** (`value === "indeterminate"`) — renders an
- *   animated sweeping segment. Used for the post-upload AV scan phase
- *   where clamd gives no progress events; the bar communicates
- *   "still working" without lying about completion.
- *
- * `color` matches the parent toast's variant accent so the bar reads as
- * part of the card, not a generic widget.
- */
-function ToastProgressBar({ value, color }: { value: number | "indeterminate"; color: string }) {
+/** Determinate (clamped `[0, 1]`) or indeterminate sweep, in the toast's
+ *  accent colour. */
+function ToastProgressBar({ value }: { value: number | "indeterminate" }) {
   const isIndeterminate = value === "indeterminate";
   const pct = isIndeterminate ? 0 : Math.min(1, Math.max(0, value));
   const rounded = Math.round(pct * 100);
@@ -429,38 +488,13 @@ function ToastProgressBar({ value, color }: { value: number | "indeterminate"; c
       aria-valuemax={100}
       aria-valuenow={isIndeterminate ? undefined : rounded}
       aria-label={isIndeterminate ? "In progress" : `${rounded}% complete`}
-      className="relative w-full h-1 mt-1 mb-1 rounded-full overflow-hidden"
-      style={{ background: "var(--color-surface-secondary, rgba(127,127,127,0.18))" }}
+      className="toast-progress"
     >
       {isIndeterminate ? (
-        <div
-          className="absolute top-0 h-full rounded-full"
-          style={{
-            background: color,
-            width: "33%",
-            animation: "strata-toast-indeterminate 1.4s ease-in-out infinite",
-          }}
-        />
+        <div className="toast-progress-fill toast-progress-indeterminate" />
       ) : (
-        <div
-          className="absolute top-0 left-0 h-full rounded-full"
-          style={{
-            background: color,
-            width: `${rounded}%`,
-            transition: "width 120ms linear",
-          }}
-        />
+        <div className="toast-progress-fill" style={{ width: `${rounded}%` }} />
       )}
-      {/* Keyframes are scoped inline so the component is fully
-          self-contained — no Tailwind / global CSS edits needed. The
-          rule is idempotent: defining the same @keyframes twice is a
-          no-op per CSS spec. */}
-      <style>{`
-        @keyframes strata-toast-indeterminate {
-          0%   { left: -33%; }
-          100% { left: 100%; }
-        }
-      `}</style>
     </div>
   );
 }

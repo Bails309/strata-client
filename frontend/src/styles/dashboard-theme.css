@@ -1,0 +1,489 @@
+/* ── Strata Client: enterprise theme (dashboard reskin) ────────────────
+   Spec tokens for the dark theme, with light-theme equivalents, plus the
+   layered background and the component styling that consumes them. */
+
+:root,
+html.dark {
+  /* Surface & Base Colors */
+  --bg-app-base: #070b12;
+  --bg-app-subtle: #0b131f;
+  --bg-surface-card: rgba(14, 23, 38, 0.75);
+  --bg-surface-card-hover: rgba(18, 30, 49, 0.85);
+  --bg-surface-table-header: rgba(11, 19, 31, 0.85);
+  --bg-surface-row-even: rgba(14, 23, 38, 0.4);
+  --bg-surface-row-odd: rgba(11, 19, 31, 0.4);
+  --bg-surface-row-hover: rgba(58, 206, 239, 0.08);
+
+  /* Primary Brand & Neon Glow Accents */
+  --accent-cyan: #3aceef;
+  --accent-cyan-glow: rgba(58, 206, 239, 0.25);
+  --accent-teal: #45f6ce;
+  --accent-teal-glow: rgba(69, 246, 206, 0.25);
+  --accent-amber: #f59e0b;
+  --accent-amber-glow: rgba(245, 158, 11, 0.2);
+
+  /* Borders & Dividers */
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-card: rgba(58, 206, 239, 0.18);
+  --border-card-hover: rgba(58, 206, 239, 0.5);
+  --border-active: #3aceef;
+
+  /* Typography Colors */
+  --text-white: #ffffff;
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --text-accent: #3aceef;
+
+  /* Status Colors */
+  --status-connected: #10b981;
+  --status-connected-glow: rgba(16, 185, 129, 0.4);
+  --status-warning: #f59e0b;
+  --status-error: #ef4444;
+  --status-expired: #f43f5e;
+  --status-expired-text: #fda4af;
+
+  /* Shadows & Backdrops */
+  --card-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.5), 0 0 15px -3px var(--accent-cyan-glow);
+  --card-shadow-hover: 0 8px 24px -4px rgba(0, 0, 0, 0.6), 0 0 12px var(--accent-cyan-glow);
+  --card-backdrop-blur: blur(12px);
+
+  /* Channel values for translucent tints */
+  --accent-rgb: 58, 206, 239;
+  --teal-rgb: 69, 246, 206;
+  --control-rgb: 11, 19, 31;
+  --nav-active-glow: 0 0 8px rgba(58, 206, 239, 0.4);
+
+  /* Background layers */
+  --bg-glow-1: rgba(12, 37, 52, 0.5);
+  --bg-glow-2: rgba(14, 28, 48, 0.4);
+  --bg-glow-3: rgba(11, 23, 38, 0.6);
+  --constellation-color: #3aceef;
+  --constellation-opacity: 1;
+}
+
+html.light {
+  --bg-app-base: #f3f7fb;
+  --bg-app-subtle: rgba(255, 255, 255, 0.88);
+  --bg-surface-card: rgba(255, 255, 255, 0.82);
+  --bg-surface-card-hover: rgba(255, 255, 255, 0.96);
+  --bg-surface-table-header: rgba(241, 245, 249, 0.92);
+  --bg-surface-row-even: rgba(248, 250, 252, 0.7);
+  --bg-surface-row-odd: rgba(255, 255, 255, 0.7);
+  --bg-surface-row-hover: rgba(8, 145, 178, 0.06);
+
+  --accent-cyan: #0891b2;
+  --accent-cyan-glow: rgba(8, 145, 178, 0.16);
+  --accent-teal: #0d9488;
+  --accent-teal-glow: rgba(13, 148, 136, 0.16);
+  --accent-amber: #d97706;
+  --accent-amber-glow: rgba(217, 119, 6, 0.12);
+
+  --border-subtle: rgba(15, 23, 42, 0.08);
+  --border-card: rgba(8, 145, 178, 0.2);
+  --border-card-hover: rgba(8, 145, 178, 0.5);
+  --border-active: #0891b2;
+
+  --text-white: #0f172a;
+  --text-primary: #1e293b;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --text-accent: #0891b2;
+
+  --status-expired: #e11d48;
+  --status-expired-text: #be123c;
+
+  --card-shadow: 0 4px 20px -6px rgba(15, 23, 42, 0.12), 0 0 12px -4px var(--accent-cyan-glow);
+  --card-shadow-hover: 0 10px 28px -8px rgba(15, 23, 42, 0.18), 0 0 12px var(--accent-cyan-glow);
+
+  --accent-rgb: 8, 145, 178;
+  --teal-rgb: 13, 148, 136;
+  --control-rgb: 255, 255, 255;
+  --nav-active-glow: none;
+
+  --bg-glow-1: rgba(58, 206, 239, 0.12);
+  --bg-glow-2: rgba(69, 246, 206, 0.1);
+  --bg-glow-3: rgba(8, 145, 178, 0.08);
+  --constellation-color: #0891b2;
+  --constellation-opacity: 0.55;
+}
+
+/* ── Layers 0–2: canvas, radial glows, constellation ──
+   Fixed and painted beneath the in-flow layout (z-index -1 inside the
+   #root stacking context) so modals and popovers keep their own z-order. */
+.dashboard-background {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+  background-color: var(--bg-app-base);
+  background-image:
+    radial-gradient(circle at 10% 20%, var(--bg-glow-1) 0%, transparent 45%),
+    radial-gradient(circle at 85% 15%, var(--bg-glow-2) 0%, transparent 40%),
+    radial-gradient(circle at 50% 90%, var(--bg-glow-3) 0%, transparent 50%);
+}
+
+.dashboard-constellation {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  color: var(--constellation-color);
+  opacity: var(--constellation-opacity);
+  /* Fade out toward the lower content so tables stay legible */
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 35%, transparent 80%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 35%, transparent 80%);
+}
+
+.dashboard-constellation-junction {
+  filter: drop-shadow(0 0 4px var(--accent-cyan-glow));
+}
+
+/* Solid accent fills written as utilities get the primary gradient so
+   white labels stay legible on the brighter cyan accent. */
+.bg-accent.text-white {
+  background: var(--primary-gradient);
+}
+
+/* ── Surfaces: glass cards and data tables app-wide ──
+   Layered so per-element utilities (e.g. `!p-0`, `hover:bg-*`) still win. */
+@layer components {
+  .card {
+    background: var(--bg-surface-card);
+    border: 1px solid var(--border-card);
+    border-radius: 12px;
+    backdrop-filter: var(--card-backdrop-blur);
+    -webkit-backdrop-filter: var(--card-backdrop-blur);
+    box-shadow: var(--card-shadow);
+  }
+
+  .card:hover {
+    border-color: var(--border-card-hover);
+  }
+
+  .tabs {
+    background: rgba(var(--control-rgb), 0.6);
+    border-color: var(--border-card);
+  }
+}
+
+@layer base {
+  th {
+    background: var(--bg-surface-table-header);
+    border-bottom: 1px solid var(--border-card);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+  }
+
+  td {
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  tbody tr:hover {
+    background: var(--bg-surface-row-hover);
+  }
+}
+
+/* ── Sidebar ── */
+.strata-sidebar:not(.is-session) {
+  --color-nav-bg: var(--bg-app-subtle);
+  --color-nav-border: var(--border-subtle);
+  --color-border: var(--border-subtle);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.strata-sidebar .strata-nav-link {
+  border-left: 3px solid transparent;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--text-secondary);
+  transition: all 150ms ease;
+}
+
+.strata-sidebar .strata-nav-link:hover {
+  background: rgba(var(--accent-rgb), 0.05);
+  color: var(--text-primary);
+}
+
+.strata-sidebar .strata-nav-link.is-active {
+  background: linear-gradient(
+    90deg,
+    rgba(var(--accent-rgb), 0.15) 0%,
+    rgba(var(--accent-rgb), 0.03) 100%
+  );
+  border-left-color: var(--accent-cyan);
+  color: var(--text-white);
+  text-shadow: var(--nav-active-glow);
+}
+
+.strata-sidebar .user-avatar-premium {
+  border-radius: 9999px;
+  border: 1px solid var(--accent-cyan);
+}
+
+.strata-sidebar .user-avatar-premium > div {
+  bottom: 2px;
+  right: 2px;
+}
+
+.strata-sidebar .strata-status-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--status-connected);
+  box-shadow: 0 0 0 0 var(--status-connected-glow);
+  animation: strata-status-pulse 2s ease-out infinite;
+}
+
+@keyframes strata-status-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--status-connected-glow);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+.strata-sidebar .strata-signout {
+  border-radius: 9999px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: rgba(220, 38, 38, 0.9);
+  background: transparent;
+}
+
+html.dark .strata-sidebar .strata-signout {
+  color: rgba(248, 113, 113, 0.9);
+}
+
+.strata-sidebar .strata-signout:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+/* ── Quick-access cards ── */
+.strata-dashboard .recent-card {
+  background: var(--bg-surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: 12px;
+  backdrop-filter: var(--card-backdrop-blur);
+  -webkit-backdrop-filter: var(--card-backdrop-blur);
+  box-shadow: var(--card-shadow);
+}
+
+.strata-dashboard .recent-card::before {
+  background: none;
+}
+
+.strata-dashboard .recent-card:hover {
+  background: var(--bg-surface-card-hover);
+  border-color: var(--border-card-hover);
+  box-shadow: var(--card-shadow-hover);
+  transform: translateY(-2px);
+}
+
+.strata-dashboard .recent-card-icon-badge {
+  color: var(--accent-cyan);
+  background: rgba(var(--accent-rgb), 0.08);
+  border-color: var(--border-card);
+  box-shadow: none;
+}
+
+.strata-dashboard .recent-card-title {
+  font-weight: 600;
+  color: var(--text-white);
+}
+
+.strata-dashboard .recent-card-detail {
+  color: var(--text-secondary);
+}
+
+.strata-dashboard .recent-card-meta {
+  color: var(--text-muted);
+}
+
+.strata-dashboard .recent-card-meta-value {
+  color: var(--text-secondary);
+}
+
+/* Card + row Connect buttons: cyan outline, rose when the profile expired */
+.strata-dashboard .btn-connect-glass {
+  background: transparent;
+  border: 1px solid rgba(var(--accent-rgb), 0.3);
+  color: var(--accent-cyan);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.strata-dashboard .btn-connect-glass svg {
+  filter: none;
+}
+
+.strata-dashboard .btn-connect-glass:hover {
+  background: linear-gradient(135deg, rgba(var(--teal-rgb), 0.2), rgba(var(--accent-rgb), 0.2));
+  border-color: var(--accent-cyan);
+  color: var(--text-white);
+  box-shadow: 0 0 10px var(--accent-cyan-glow);
+}
+
+.strata-dashboard .btn-connect-glass.dash-row-connect {
+  border-radius: 9999px;
+  border-color: rgba(var(--accent-rgb), 0.4);
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+.strata-dashboard .btn-connect-glass[data-status="expired"] {
+  border-color: rgba(244, 63, 94, 0.4);
+  color: var(--status-expired-text);
+  background: rgba(244, 63, 94, 0.08);
+}
+
+.strata-dashboard .btn-connect-glass[data-status="expired"]:hover {
+  border-color: var(--status-expired);
+  background: rgba(244, 63, 94, 0.16);
+  color: var(--text-white);
+  box-shadow: 0 0 10px rgba(244, 63, 94, 0.25);
+}
+
+/* ── Toolbar ── */
+.dash-search {
+  background: rgba(var(--control-rgb), 0.75);
+  border: 1px solid var(--border-card);
+}
+
+.dash-search:focus-within {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 8px var(--accent-cyan-glow);
+}
+
+.dash-search input::placeholder {
+  color: var(--text-muted);
+}
+
+.strata-dashboard .dash-type-select .cs-trigger {
+  background: rgba(var(--control-rgb), 0.75);
+  border: 1px solid var(--border-card);
+  color: var(--text-primary);
+}
+
+.strata-dashboard .dash-type-select .cs-trigger:hover,
+.strata-dashboard .dash-type-select .cs-trigger-open {
+  border-color: var(--accent-cyan);
+}
+
+.strata-dashboard .btn-sm {
+  background: rgba(var(--control-rgb), 0.6);
+  border: 1px solid var(--border-card);
+  color: var(--text-secondary);
+}
+
+.strata-dashboard .btn-sm:hover {
+  border-color: var(--accent-cyan);
+  color: var(--text-primary);
+}
+
+.strata-dashboard .dash-toggle[aria-pressed="true"] {
+  background: rgba(var(--accent-rgb), 0.15);
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+}
+
+/* ── Connections table ── */
+.strata-dashboard .dash-table-card th {
+  text-transform: uppercase;
+}
+
+.strata-dashboard .dash-table-card tbody tr {
+  background: var(--bg-surface-row-odd);
+  transition: background 120ms ease;
+}
+
+.strata-dashboard .dash-table-card tbody tr:nth-child(even) {
+  background: var(--bg-surface-row-even);
+}
+
+.strata-dashboard .dash-table-card tbody tr:hover {
+  background: var(--bg-surface-row-hover);
+}
+
+/* Protocol badges */
+.strata-dashboard .badge[data-protocol] {
+  border: 1px solid rgba(34, 211, 238, 0.4);
+  background: rgba(6, 182, 212, 0.2);
+  color: #67e8f9;
+}
+
+.strata-dashboard .badge[data-protocol="rdp"] {
+  background: rgba(124, 58, 237, 0.2);
+  border-color: rgba(139, 92, 246, 0.4);
+  color: #c4b5fd;
+}
+
+.strata-dashboard .badge[data-protocol="ssh"] {
+  background: rgba(20, 184, 166, 0.2);
+  border-color: rgba(45, 212, 191, 0.4);
+  color: #5eead4;
+}
+
+html.light .strata-dashboard .badge[data-protocol] {
+  background: rgba(6, 182, 212, 0.1);
+  color: #0e7490;
+}
+
+html.light .strata-dashboard .badge[data-protocol="rdp"] {
+  background: rgba(124, 58, 237, 0.1);
+  color: #6d28d9;
+}
+
+html.light .strata-dashboard .badge[data-protocol="ssh"] {
+  background: rgba(20, 184, 166, 0.1);
+  color: #0f766e;
+}
+
+/* Actions column: icon buttons, then Connect pill, then account pill */
+.strata-dashboard .dash-action-icon {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+.strata-dashboard .dash-action-icon:hover {
+  background: rgba(var(--accent-rgb), 0.08);
+  border-color: transparent;
+  color: var(--accent-cyan);
+}
+
+.strata-dashboard .dash-action-fav {
+  color: var(--text-muted);
+}
+
+.strata-dashboard .dash-action-fav:hover {
+  background: var(--accent-amber-glow);
+  color: var(--accent-amber);
+}
+
+.strata-dashboard .dash-account-select .cs-trigger {
+  border-radius: 9999px;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.75rem;
+  background: rgba(var(--control-rgb), 0.8);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.strata-dashboard .dash-account-select .cs-trigger:hover,
+.strata-dashboard .dash-account-select .cs-trigger-open {
+  border-color: var(--border-card-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .strata-sidebar .strata-status-dot {
+    animation: none;
+  }
+  .strata-dashboard .recent-card:hover {
+    transform: none;
+  }
+}

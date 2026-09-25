@@ -181,6 +181,22 @@ export default function App() {
                           )
                         }
                       />
+                      <Route
+                        path="/admin/:tab"
+                        element={
+                          user?.can_manage_system ||
+                          user?.can_manage_users ||
+                          user?.can_manage_connections ||
+                          user?.can_create_users ||
+                          user?.can_create_user_groups ||
+                          user?.can_create_connections ||
+                          user?.can_create_sharing_profiles ? (
+                            <AdminSettings user={user} />
+                          ) : (
+                            <Navigate to="/" replace />
+                          )
+                        }
+                      />
                       <Route path="/session/:connectionId" element={<SessionClient />} />
                       <Route path="/tiled" element={<TiledView />} />
                       <Route

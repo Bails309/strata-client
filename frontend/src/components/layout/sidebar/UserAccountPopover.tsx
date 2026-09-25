@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 
 export interface UserAccountPopoverProps {
   isOpen: boolean;
@@ -41,8 +41,8 @@ export const UserAccountPopover: React.FC<UserAccountPopoverProps> = ({
         onClose();
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isOpen, onClose, triggerRef]);
 
   if (!isOpen) return null;
@@ -52,7 +52,7 @@ export const UserAccountPopover: React.FC<UserAccountPopoverProps> = ({
       ref={popoverRef}
       role="menu"
       className={`absolute bottom-[calc(100%+8px)] z-50 overflow-hidden rounded-[8px] border border-[var(--border-subtle)] sb-surface p-1.5 shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2 duration-150 ${
-        isCollapsed ? 'left-2 w-56' : 'left-2 right-2'
+        isCollapsed ? "left-2 w-56" : "left-2 right-2"
       }`}
     >
       {/* Principal Identity Context */}
@@ -76,7 +76,7 @@ export const UserAccountPopover: React.FC<UserAccountPopoverProps> = ({
             if (onOpenSettings) {
               onOpenSettings();
             } else {
-              navigate('/profile');
+              navigate("/profile");
             }
             onClose();
           }}
@@ -94,7 +94,7 @@ export const UserAccountPopover: React.FC<UserAccountPopoverProps> = ({
             if (onOpenLeases) {
               onOpenLeases();
             } else {
-              navigate('/credentials');
+              navigate("/credentials");
             }
             onClose();
           }}
@@ -121,7 +121,13 @@ export const UserAccountPopover: React.FC<UserAccountPopoverProps> = ({
           }}
           className="w-full flex items-center gap-2 rounded-[4px] px-3 py-1.5 text-xs font-medium text-[var(--status-expired-text)] hover:bg-rose-500/10 transition-colors cursor-pointer text-left"
         >
-          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg
+            className="h-3.5 w-3.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
             <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
             <polyline points="16 17 21 12 16 7" />
             <line x1="21" y1="12" x2="9" y2="12" />

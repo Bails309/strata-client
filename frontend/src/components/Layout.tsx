@@ -204,7 +204,9 @@ export default function Layout({
   }, []);
 
   // Real-time online status
-  const [isOnline, setIsOnline] = useState(() => (typeof navigator !== "undefined" ? navigator.onLine : true));
+  const [isOnline, setIsOnline] = useState(() =>
+    typeof navigator !== "undefined" ? navigator.onLine : true
+  );
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
@@ -361,7 +363,10 @@ export default function Layout({
           <SidebarFooter
             displayName={user?.full_name || user?.username || "Guest"}
             roleName={user?.role || "User"}
-            email={(user as any)?.email || (user?.username ? `${user.username}@strataclient.io` : "admin@strataclient.io")}
+            email={
+              (user as any)?.email ||
+              (user?.username ? `${user.username}@strataclient.io` : "admin@strataclient.io")
+            }
             isOnline={isOnline}
             isCollapsed={collapsed}
             isDark={theme === "dark"}

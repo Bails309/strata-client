@@ -1,7 +1,7 @@
-import React, { useState, useRef } from 'react';
-import { UserProfileCard } from './UserProfileCard';
-import { UserAccountPopover } from './UserAccountPopover';
-import { SidebarUtilityDock } from './SidebarUtilityDock';
+import React, { useState, useRef } from "react";
+import { UserProfileCard } from "./UserProfileCard";
+import { UserAccountPopover } from "./UserAccountPopover";
+import { SidebarUtilityDock } from "./SidebarUtilityDock";
 
 export interface SidebarFooterProps {
   displayName: string;
@@ -40,7 +40,7 @@ export const SidebarFooter: React.FC<SidebarFooterProps> = ({
   return (
     <div
       className={`relative border-t border-[var(--border-subtle)] bg-[var(--color-nav-bg)] backdrop-blur-md space-y-1.5 ${
-        isCollapsed ? 'p-2' : 'p-2.5'
+        isCollapsed ? "p-2" : "p-2.5"
       }`}
     >
       {/* Anchor Container */}

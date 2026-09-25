@@ -49,9 +49,7 @@ export function useConnectionFilter<T extends ConnectionFilterItem>(
     selectedProtocol: filtersOrInitial?.selectedProtocol ?? "ALL",
   });
 
-  const filters: FilterState = isControlled
-    ? (filtersOrInitial as FilterState)
-    : internalFilters;
+  const filters: FilterState = isControlled ? (filtersOrInitial as FilterState) : internalFilters;
 
   const setFilters = isControlled ? controlledSetFilters : setInternalFilters;
 

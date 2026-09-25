@@ -102,15 +102,15 @@
 
   /* ── Sidebar Footer & Account Menu Tokens ──────────────────── */
   --footer-bg: rgba(7, 11, 18, 0.65);
-  --card-user-bg: rgba(11, 19, 31, 0.70);
-  --card-user-hover: rgba(18, 30, 49, 0.90);
+  --card-user-bg: rgba(11, 19, 31, 0.7);
+  --card-user-hover: rgba(18, 30, 49, 0.9);
   --card-user-border: 1px solid rgba(255, 255, 255, 0.07);
   --card-user-border-hover: 1px solid rgba(58, 206, 239, 0.35);
   --avatar-size: 32px;
   --avatar-radius: 6px;
-  --status-online-dot: #10B981;
+  --status-online-dot: #10b981;
   --popover-bg: rgba(11, 19, 31, 0.98);
-  --popover-border: 1px solid rgba(58, 206, 239, 0.20);
+  --popover-border: 1px solid rgba(58, 206, 239, 0.2);
 }
 
 /* ── Utility Classes ────────────────────────────────────────── */

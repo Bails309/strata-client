@@ -1,4 +1,4 @@
-import React from 'react';
+import React from "react";
 
 export interface UserProfileCardProps {
   displayName: string;
@@ -17,7 +17,7 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
   isOpen,
   onClick,
 }) => {
-  const initial = (displayName || 'U').charAt(0).toUpperCase();
+  const initial = (displayName || "U").charAt(0).toUpperCase();
 
   return (
     <button
@@ -28,10 +28,10 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
       className={`group w-full flex items-center justify-between rounded-[8px] border transition-all duration-150 outline-none cursor-pointer
         ${
           isOpen
-            ? 'bg-[rgba(var(--accent-rgb),0.08)] border-[rgba(var(--accent-rgb),0.4)] shadow-[0_0_12px_rgba(var(--accent-rgb),0.15)]'
-            : 'bg-[rgba(var(--control-rgb),0.7)] border-[var(--border-subtle)] hover:bg-[rgba(var(--accent-rgb),0.07)] hover:border-[rgba(var(--accent-rgb),0.3)]'
+            ? "bg-[rgba(var(--accent-rgb),0.08)] border-[rgba(var(--accent-rgb),0.4)] shadow-[0_0_12px_rgba(var(--accent-rgb),0.15)]"
+            : "bg-[rgba(var(--control-rgb),0.7)] border-[var(--border-subtle)] hover:bg-[rgba(var(--accent-rgb),0.07)] hover:border-[rgba(var(--accent-rgb),0.3)]"
         }
-        ${isCollapsed ? 'p-2 justify-center' : 'p-2.5'}`}
+        ${isCollapsed ? "p-2 justify-center" : "p-2.5"}`}
     >
       <div className="flex items-center gap-2.5 min-w-0">
         {/* Geometric Avatar */}
@@ -40,7 +40,7 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
           {/* Status Dot */}
           <span
             className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full border border-[var(--bg-app-base)] ${
-              isOnline ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]' : 'bg-slate-500'
+              isOnline ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]" : "bg-slate-500"
             }`}
           />
         </div>
@@ -62,7 +62,7 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
       {!isCollapsed && (
         <svg
           className={`h-4 w-4 shrink-0 text-[var(--text-secondary)] transition-transform duration-150 group-hover:text-[var(--text-white)] ${
-            isOpen ? 'rotate-180 text-[var(--accent-cyan)]' : ''
+            isOpen ? "rotate-180 text-[var(--accent-cyan)]" : ""
           }`}
           viewBox="0 0 24 24"
           fill="none"

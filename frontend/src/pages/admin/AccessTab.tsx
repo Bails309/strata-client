@@ -377,7 +377,9 @@ export default function AccessTab({
                                         getRoles().then(onRolesChanged);
                                       } catch (err) {
                                         alert(
-                                          err instanceof Error ? err.message : "Failed to delete role"
+                                          err instanceof Error
+                                            ? err.message
+                                            : "Failed to delete role"
                                         );
                                       } finally {
                                         setConfirmModal(null);
@@ -407,8 +409,7 @@ export default function AccessTab({
                     {(safeRolePage - 1) * rolePerPage + 1}–
                     {Math.min(safeRolePage * rolePerPage, filteredRoles.length)}
                   </span>{" "}
-                  of{" "}
-                  <span className="font-medium text-txt-secondary">{filteredRoles.length}</span>{" "}
+                  of <span className="font-medium text-txt-secondary">{filteredRoles.length}</span>{" "}
                   roles (Page {safeRolePage} of {roleTotalPages})
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -756,9 +757,7 @@ export default function AccessTab({
                             onUsersChanged(refreshed);
                           } catch (err) {
                             alert(
-                              err instanceof Error
-                                ? err.message
-                                : "Failed to toggle Safeguard JIT"
+                              err instanceof Error ? err.message : "Failed to toggle Safeguard JIT"
                             );
                           }
                         }}

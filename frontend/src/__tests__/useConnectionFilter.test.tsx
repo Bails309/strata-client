@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { useConnectionFilter, FilterState, ConnectionFilterItem } from "../hooks/useConnectionFilter";
+import {
+  useConnectionFilter,
+  FilterState,
+  ConnectionFilterItem,
+} from "../hooks/useConnectionFilter";
 import ConnectionEmptyState from "../components/ConnectionEmptyState";
 import ActiveFilterChips from "../components/ActiveFilterChips";
 
@@ -241,7 +245,9 @@ describe("ConnectionEmptyState component", () => {
     );
 
     expect(
-      screen.getByText(/No connections available\. Ask your administrator to assign connections to your role\./i)
+      screen.getByText(
+        /No connections available\. Ask your administrator to assign connections to your role\./i
+      )
     ).toBeDefined();
   });
 });

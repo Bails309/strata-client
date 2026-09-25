@@ -1,16 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
-import React, { useRef } from 'react';
-import { UserProfileCard } from '../components/layout/sidebar/UserProfileCard';
-import { UserAccountPopover } from '../components/layout/sidebar/UserAccountPopover';
-import { GatewayTelemetryChip } from '../components/layout/sidebar/GatewayTelemetryChip';
-import { SidebarUtilityDock } from '../components/layout/sidebar/SidebarUtilityDock';
-import { SidebarFooter } from '../components/layout/sidebar/SidebarFooter';
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
+import React, { useRef } from "react";
+import { UserProfileCard } from "../components/layout/sidebar/UserProfileCard";
+import { UserAccountPopover } from "../components/layout/sidebar/UserAccountPopover";
+import { GatewayTelemetryChip } from "../components/layout/sidebar/GatewayTelemetryChip";
+import { SidebarUtilityDock } from "../components/layout/sidebar/SidebarUtilityDock";
+import { SidebarFooter } from "../components/layout/sidebar/SidebarFooter";
 
-describe('UserProfileCard', () => {
-  it('renders geometric avatar with initial and status dot', () => {
+describe("UserProfileCard", () => {
+  it("renders geometric avatar with initial and status dot", () => {
     render(
       <UserProfileCard
         displayName="Alice Smith"
@@ -22,12 +22,12 @@ describe('UserProfileCard', () => {
       />
     );
 
-    expect(screen.getByText('A')).toBeInTheDocument();
-    expect(screen.getByText('Alice Smith')).toBeInTheDocument();
-    expect(screen.getByText('administrator')).toBeInTheDocument();
+    expect(screen.getByText("A")).toBeInTheDocument();
+    expect(screen.getByText("Alice Smith")).toBeInTheDocument();
+    expect(screen.getByText("administrator")).toBeInTheDocument();
   });
 
-  it('hides display name and role when collapsed', () => {
+  it("hides display name and role when collapsed", () => {
     render(
       <UserProfileCard
         displayName="Alice Smith"
@@ -39,12 +39,12 @@ describe('UserProfileCard', () => {
       />
     );
 
-    expect(screen.getByText('A')).toBeInTheDocument();
-    expect(screen.queryByText('Alice Smith')).not.toBeInTheDocument();
-    expect(screen.queryByText('administrator')).not.toBeInTheDocument();
+    expect(screen.getByText("A")).toBeInTheDocument();
+    expect(screen.queryByText("Alice Smith")).not.toBeInTheDocument();
+    expect(screen.queryByText("administrator")).not.toBeInTheDocument();
   });
 
-  it('triggers onClick when clicked', async () => {
+  it("triggers onClick when clicked", async () => {
     const handleClick = vi.fn();
     render(
       <UserProfileCard
@@ -57,12 +57,12 @@ describe('UserProfileCard', () => {
       />
     );
 
-    await userEvent.click(screen.getByRole('button'));
+    await userEvent.click(screen.getByRole("button"));
     expect(handleClick).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('UserAccountPopover', () => {
+describe("UserAccountPopover", () => {
   function PopoverWrapper(props: Partial<React.ComponentProps<typeof UserAccountPopover>>) {
     const triggerRef = useRef<HTMLDivElement>(null);
     return (
@@ -87,54 +87,54 @@ describe('UserAccountPopover', () => {
     );
   }
 
-  it('renders user email, role, and active leases count', () => {
+  it("renders user email, role, and active leases count", () => {
     render(<PopoverWrapper />);
 
-    expect(screen.getByText('alice@strataclient.io')).toBeInTheDocument();
-    expect(screen.getByText('Security Admin')).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText("alice@strataclient.io")).toBeInTheDocument();
+    expect(screen.getByText("Security Admin")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
     expect(screen.getByText(/Profile & Settings/i)).toBeInTheDocument();
     expect(screen.getByText(/Active Leases/i)).toBeInTheDocument();
     expect(screen.queryByText(/Preferences/i)).not.toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: /Sign Out/i })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Sign Out/i })).toBeInTheDocument();
   });
 
-  it('does not render when isOpen is false', () => {
+  it("does not render when isOpen is false", () => {
     render(<PopoverWrapper isOpen={false} />);
-    expect(screen.queryByText('alice@strataclient.io')).not.toBeInTheDocument();
+    expect(screen.queryByText("alice@strataclient.io")).not.toBeInTheDocument();
   });
 
-  it('calls onSignOut when Sign Out menuitem is clicked', async () => {
+  it("calls onSignOut when Sign Out menuitem is clicked", async () => {
     const handleSignOut = vi.fn();
     render(<PopoverWrapper onSignOut={handleSignOut} />);
 
-    const signoutBtn = screen.getByRole('menuitem', { name: /Sign Out/i });
+    const signoutBtn = screen.getByRole("menuitem", { name: /Sign Out/i });
     await userEvent.click(signoutBtn);
     expect(handleSignOut).toHaveBeenCalledTimes(1);
   });
 
-  it('calls onClose when clicking outside popover and trigger', () => {
+  it("calls onClose when clicking outside popover and trigger", () => {
     const handleClose = vi.fn();
     render(<PopoverWrapper onClose={handleClose} />);
 
-    fireEvent.mouseDown(screen.getByTestId('outside'));
+    fireEvent.mouseDown(screen.getByTestId("outside"));
     expect(handleClose).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('GatewayTelemetryChip', () => {
-  it('renders latency ms value and daemon status tooltip', () => {
+describe("GatewayTelemetryChip", () => {
+  it("renders latency ms value and daemon status tooltip", () => {
     render(<GatewayTelemetryChip engineLatencyMs={14} />);
 
-    expect(screen.getByText('14ms')).toBeInTheDocument();
-    expect(screen.getByText('Tokio Session Daemon')).toBeInTheDocument();
-    expect(screen.getByText('Rust In-Process Gateway')).toBeInTheDocument();
-    expect(screen.getByText('Status: Active & Connected')).toBeInTheDocument();
+    expect(screen.getByText("14ms")).toBeInTheDocument();
+    expect(screen.getByText("Tokio Session Daemon")).toBeInTheDocument();
+    expect(screen.getByText("Rust In-Process Gateway")).toBeInTheDocument();
+    expect(screen.getByText("Status: Active & Connected")).toBeInTheDocument();
   });
 });
 
-describe('SidebarUtilityDock', () => {
-  it('renders telemetry chip, theme button, and collapse button when expanded', () => {
+describe("SidebarUtilityDock", () => {
+  it("renders telemetry chip, theme button, and collapse button when expanded", () => {
     render(
       <SidebarUtilityDock
         isDark={true}
@@ -145,12 +145,12 @@ describe('SidebarUtilityDock', () => {
       />
     );
 
-    expect(screen.getByText('8ms')).toBeInTheDocument();
+    expect(screen.getByText("8ms")).toBeInTheDocument();
     expect(screen.getByTitle(/Switch to Light Theme/i)).toBeInTheDocument();
     expect(screen.getByTitle(/Collapse sidebar/i)).toBeInTheDocument();
   });
 
-  it('hides telemetry chip when collapsed and updates titles', () => {
+  it("hides telemetry chip when collapsed and updates titles", () => {
     render(
       <SidebarUtilityDock
         isDark={false}
@@ -161,18 +161,18 @@ describe('SidebarUtilityDock', () => {
       />
     );
 
-    expect(screen.queryByText('8ms')).not.toBeInTheDocument();
+    expect(screen.queryByText("8ms")).not.toBeInTheDocument();
     expect(screen.getByTitle(/Switch to Dark Theme/i)).toBeInTheDocument();
     expect(screen.getByTitle(/Expand sidebar/i)).toBeInTheDocument();
   });
 });
 
-describe('SidebarFooter', () => {
+describe("SidebarFooter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('toggles the account popover on clicking user profile card', async () => {
+  it("toggles the account popover on clicking user profile card", async () => {
     render(
       <MemoryRouter>
         <SidebarFooter
@@ -192,23 +192,23 @@ describe('SidebarFooter', () => {
     );
 
     // Initially popover is closed
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 
     // Click profile card to open popover
-    const profileCardBtn = screen.getByRole('button', { name: /Super Admin/i });
+    const profileCardBtn = screen.getByRole("button", { name: /Super Admin/i });
     await userEvent.click(profileCardBtn);
 
     // Popover is now visible
-    expect(screen.getByRole('menu')).toBeInTheDocument();
-    expect(screen.getByText('admin@strataclient.io')).toBeInTheDocument();
-    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.getByText("admin@strataclient.io")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
 
     // Clicking profile card again closes it
     await userEvent.click(profileCardBtn);
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it('fires onSignOut from within the popover', async () => {
+  it("fires onSignOut from within the popover", async () => {
     const handleSignOut = vi.fn();
     render(
       <MemoryRouter>
@@ -226,17 +226,17 @@ describe('SidebarFooter', () => {
       </MemoryRouter>
     );
 
-    const profileCardBtn = screen.getByRole('button', { name: /Super Admin/i });
+    const profileCardBtn = screen.getByRole("button", { name: /Super Admin/i });
     await userEvent.click(profileCardBtn);
 
-    const signoutBtn = screen.getByRole('menuitem', { name: /Sign Out/i });
+    const signoutBtn = screen.getByRole("menuitem", { name: /Sign Out/i });
     await userEvent.click(signoutBtn);
 
     expect(handleSignOut).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it('renders cleanly in collapsed mode', () => {
+  it("renders cleanly in collapsed mode", () => {
     render(
       <MemoryRouter>
         <SidebarFooter
@@ -254,10 +254,10 @@ describe('SidebarFooter', () => {
     );
 
     // Displays initial
-    expect(screen.getByText('S')).toBeInTheDocument();
+    expect(screen.getByText("S")).toBeInTheDocument();
     // Does not display user details in collapsed mode
-    expect(screen.queryByText('Super Admin')).not.toBeInTheDocument();
+    expect(screen.queryByText("Super Admin")).not.toBeInTheDocument();
     // Latency chip hidden
-    expect(screen.queryByText('ms')).not.toBeInTheDocument();
+    expect(screen.queryByText("ms")).not.toBeInTheDocument();
   });
 });

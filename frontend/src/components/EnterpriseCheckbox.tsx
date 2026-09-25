@@ -1,7 +1,9 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 
-export interface EnterpriseCheckboxProps
-  extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "type"> {
+export interface EnterpriseCheckboxProps extends Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  "type"
+> {
   checked?: boolean;
   indeterminate?: boolean;
   onCheckedChange?: (checked: boolean) => void;

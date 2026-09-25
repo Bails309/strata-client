@@ -383,7 +383,8 @@ export default function AccessTab({
         {subTab === "permissions" && (
           <div className="space-y-4">
             <p className="text-xs text-txt-secondary">
-              Role permissions dictate operational access across authentication, connection creation, audit visibility, and sharing profiles.
+              Role permissions dictate operational access across authentication, connection
+              creation, audit visibility, and sharing profiles.
             </p>
             <div className="table-responsive w-full">
               <table className="w-full text-xs">
@@ -392,21 +393,59 @@ export default function AccessTab({
                     <th>Capability</th>
                     <th>Scope</th>
                     {roles.map((r) => (
-                      <th key={r.id} className="text-center">{r.name}</th>
+                      <th key={r.id} className="text-center">
+                        {r.name}
+                      </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {[
-                    { key: "can_manage_system", label: "Administer System", scope: "Settings, Vault, Auth, Infra" },
-                    { key: "can_view_audit_logs", label: "Audit System", scope: "Monitor audit logs & activity" },
-                    { key: "can_create_users", label: "Create Users", scope: "User provisioning lifecycle" },
-                    { key: "can_create_user_groups", label: "Create Roles", scope: "RBAC roles and mappings" },
-                    { key: "can_create_connections", label: "Create Connections", scope: "Endpoints & remote protocols" },
-                    { key: "can_use_quick_share", label: "Inbound Quick Share", scope: "Upload files into session" },
-                    { key: "can_use_quick_share_outbound", label: "Outbound Quick Share", scope: "Export files out of session" },
-                    { key: "can_create_sharing_profiles", label: "Share Connections", scope: "Co-pilot screen sharing" },
-                    { key: "can_view_sessions", label: "View Own Sessions", scope: "Live and recorded sessions" },
+                    {
+                      key: "can_manage_system",
+                      label: "Administer System",
+                      scope: "Settings, Vault, Auth, Infra",
+                    },
+                    {
+                      key: "can_view_audit_logs",
+                      label: "Audit System",
+                      scope: "Monitor audit logs & activity",
+                    },
+                    {
+                      key: "can_create_users",
+                      label: "Create Users",
+                      scope: "User provisioning lifecycle",
+                    },
+                    {
+                      key: "can_create_user_groups",
+                      label: "Create Roles",
+                      scope: "RBAC roles and mappings",
+                    },
+                    {
+                      key: "can_create_connections",
+                      label: "Create Connections",
+                      scope: "Endpoints & remote protocols",
+                    },
+                    {
+                      key: "can_use_quick_share",
+                      label: "Inbound Quick Share",
+                      scope: "Upload files into session",
+                    },
+                    {
+                      key: "can_use_quick_share_outbound",
+                      label: "Outbound Quick Share",
+                      scope: "Export files out of session",
+                    },
+                    {
+                      key: "can_create_sharing_profiles",
+                      label: "Share Connections",
+                      scope: "Co-pilot screen sharing",
+                    },
+                    {
+                      key: "can_view_sessions",
+                      label: "View Own Sessions",
+                      scope: "Live and recorded sessions",
+                    },
                   ].map((row) => (
                     <tr key={row.key}>
                       <td className="font-medium text-txt-primary">{row.label}</td>
@@ -415,7 +454,9 @@ export default function AccessTab({
                         const enabled = !!(r as unknown as Record<string, boolean>)[row.key];
                         return (
                           <td key={r.id} className="text-center">
-                            <span className={`inline-block w-2.5 h-2.5 rounded-full ${enabled ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]" : "bg-white/10"}`} />
+                            <span
+                              className={`inline-block w-2.5 h-2.5 rounded-full ${enabled ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]" : "bg-white/10"}`}
+                            />
                           </td>
                         );
                       })}
@@ -431,12 +472,17 @@ export default function AccessTab({
         {subTab === "policies" && (
           <div className="space-y-4">
             <p className="text-xs text-txt-secondary">
-              Session Policies govern tunnel timeouts, watermarking, recording behaviors, and transfer limits across active user sessions.
+              Session Policies govern tunnel timeouts, watermarking, recording behaviors, and
+              transfer limits across active user sessions.
             </p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="p-4 rounded-lg bg-surface-secondary/40 border border-border/60">
-                <div className="text-sm font-semibold text-txt-primary mb-1">Session Duration Caps</div>
-                <div className="text-xs text-txt-secondary mb-3">Hard limits enforced by the WebSocket watchdog.</div>
+                <div className="text-sm font-semibold text-txt-primary mb-1">
+                  Session Duration Caps
+                </div>
+                <div className="text-xs text-txt-secondary mb-3">
+                  Hard limits enforced by the WebSocket watchdog.
+                </div>
                 <div className="text-xs space-y-1.5">
                   <div className="flex justify-between py-1 border-b border-border/40">
                     <span className="text-txt-tertiary">Max Session Duration:</span>
@@ -454,16 +500,24 @@ export default function AccessTab({
               </div>
 
               <div className="p-4 rounded-lg bg-surface-secondary/40 border border-border/60">
-                <div className="text-sm font-semibold text-txt-primary mb-1">Watermark & Screen Recording</div>
-                <div className="text-xs text-txt-secondary mb-3">Compliance overlays and auditing protections.</div>
+                <div className="text-sm font-semibold text-txt-primary mb-1">
+                  Watermark & Screen Recording
+                </div>
+                <div className="text-xs text-txt-secondary mb-3">
+                  Compliance overlays and auditing protections.
+                </div>
                 <div className="text-xs space-y-1.5">
                   <div className="flex justify-between py-1 border-b border-border/40">
                     <span className="text-txt-tertiary">Global Watermark Default:</span>
-                    <span className="font-mono text-txt-primary">Enabled (Client IP + Timestamp)</span>
+                    <span className="font-mono text-txt-primary">
+                      Enabled (Client IP + Timestamp)
+                    </span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-border/40">
                     <span className="text-txt-tertiary">Screen Recording Format:</span>
-                    <span className="font-mono text-txt-primary">Guacamole Session Recording (.cast)</span>
+                    <span className="font-mono text-txt-primary">
+                      Guacamole Session Recording (.cast)
+                    </span>
                   </div>
                   <div className="flex justify-between py-1">
                     <span className="text-txt-tertiary">Outbound Share Queue:</span>
@@ -902,8 +956,8 @@ export default function AccessTab({
                     <div className="flex flex-col">
                       <span className="text-sm font-medium">Use Outbound Quick Share</span>
                       <span className="text-[10px] text-txt-tertiary">
-                        Export files out of a session. Approval is required for every submission
-                        by default; individual users may be opted out on the Users tab below.
+                        Export files out of a session. Approval is required for every submission by
+                        default; individual users may be opted out on the Users tab below.
                       </span>
                     </div>
                   </label>
@@ -1040,19 +1094,11 @@ export default function AccessTab({
                   try {
                     if (editingRole) {
                       const r = await updateRole(editingRole.id, newRole);
-                      await updateRoleMappings(
-                        r.id,
-                        assignmentConnectionIds,
-                        assignmentFolderIds
-                      );
+                      await updateRoleMappings(r.id, assignmentConnectionIds, assignmentFolderIds);
                       onRolesChanged(roles.map((x) => (x.id === r.id ? r : x)));
                     } else {
                       const r = await createRole(newRole);
-                      await updateRoleMappings(
-                        r.id,
-                        assignmentConnectionIds,
-                        assignmentFolderIds
-                      );
+                      await updateRoleMappings(r.id, assignmentConnectionIds, assignmentFolderIds);
                       onRolesChanged([...roles, r]);
                     }
                     setRoleModalOpen(false);

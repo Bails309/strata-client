@@ -93,11 +93,11 @@
   --cb-radius: 4px;
   --cb-bg-unchecked: rgba(11, 19, 31, 0.65);
   --cb-border-unchecked: 1px solid rgba(148, 163, 184, 0.28);
-  --cb-border-hover: 1px solid #3ACEEF;
-  --cb-bg-checked: #3ACEEF;
-  --cb-border-checked: 1px solid #3ACEEF;
-  --cb-icon-color: #FFFFFF;
-  --cb-focus-ring: 0 0 0 2px #070B12, 0 0 0 4px #3ACEEF;
+  --cb-border-hover: 1px solid #3aceef;
+  --cb-bg-checked: #3aceef;
+  --cb-border-checked: 1px solid #3aceef;
+  --cb-icon-color: #ffffff;
+  --cb-focus-ring: 0 0 0 2px #070b12, 0 0 0 4px #3aceef;
   --row-selected-bg: rgba(58, 206, 239, 0.05);
 }
 
@@ -1265,19 +1265,19 @@ html.light .recent-card-btn:hover {
     outline: none;
   }
   .checkbox:hover {
-    border: var(--cb-border-hover, 1px solid #3ACEEF);
+    border: var(--cb-border-hover, 1px solid #3aceef);
     background: rgba(58, 206, 239, 0.1);
   }
   .checkbox:focus-visible {
-    box-shadow: var(--cb-focus-ring, 0 0 0 2px #070B12, 0 0 0 4px #3ACEEF);
+    box-shadow: var(--cb-focus-ring, 0 0 0 2px #070b12, 0 0 0 4px #3aceef);
   }
   .checkbox:checked {
-    border: var(--cb-border-checked, 1px solid #3ACEEF);
-    background: var(--cb-bg-checked, #3ACEEF);
+    border: var(--cb-border-checked, 1px solid #3aceef);
+    background: var(--cb-bg-checked, #3aceef);
     box-shadow: none;
   }
   .checkbox:checked:hover {
-    border: var(--cb-border-checked, 1px solid #3ACEEF);
+    border: var(--cb-border-checked, 1px solid #3aceef);
     background: #33b8d6;
     box-shadow: none;
   }
@@ -1294,8 +1294,8 @@ html.light .recent-card-btn:hover {
     transform: rotate(45deg);
   }
   .checkbox:indeterminate {
-    border: var(--cb-border-checked, 1px solid #3ACEEF);
-    background: var(--cb-bg-checked, #3ACEEF);
+    border: var(--cb-border-checked, 1px solid #3aceef);
+    background: var(--cb-bg-checked, #3aceef);
     box-shadow: none;
   }
   .checkbox:indeterminate::after {

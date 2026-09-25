@@ -123,20 +123,21 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
   const { tab: routeTab } = useParams<{ tab?: string }>();
   const navigate = useNavigate();
 
-  const initialTab: Tab = routeTab && TAB_ALIASES[routeTab]
-    ? TAB_ALIASES[routeTab]
-    : user.can_manage_system
-      ? "health"
-      : user.can_manage_users ||
-          user.can_manage_connections ||
-          user.can_create_users ||
-          user.can_create_user_groups ||
-          user.can_create_connections ||
-          user.can_create_sharing_profiles
-        ? "access"
-        : user.can_view_audit_logs
-          ? "sessions"
-          : "health";
+  const initialTab: Tab =
+    routeTab && TAB_ALIASES[routeTab]
+      ? TAB_ALIASES[routeTab]
+      : user.can_manage_system
+        ? "health"
+        : user.can_manage_users ||
+            user.can_manage_connections ||
+            user.can_create_users ||
+            user.can_create_user_groups ||
+            user.can_create_connections ||
+            user.can_create_sharing_profiles
+          ? "access"
+          : user.can_view_audit_logs
+            ? "sessions"
+            : "health";
 
   const [tab, setTab] = useState<Tab>(initialTab);
   const [settings, setSettings] = useState<Record<string, string>>({});

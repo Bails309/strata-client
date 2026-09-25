@@ -1467,6 +1467,21 @@ pub async fn update_connection(
     Ok(Json(row))
 }
 
+/// `POST /api/admin/connections/{id}/probe` — TCP-probe one target now
+/// instead of waiting for the next 2-minute sweep, and store the result.
+pub async fn probe_connection(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<crate::services::health_check::ProbeOutcome>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
+    let db = require_running(&state).await?;
+    let outcome = crate::services::health_check::probe_one(&db.pool, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
+    Ok(Json(outcome))
+}
+
 /// One SSH connection, and how its stored key compares to the live one.
 #[derive(serde::Serialize)]
 pub struct HostKeySurveyRow {
@@ -1866,14 +1881,15 @@ pub async fn delete_connection(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
-    if !connections::soft_delete(&db.pool, id).await? {
-        return Err(AppError::NotFound("Connection not found".into()));
-    }
+    let conn_name = match connections::soft_delete(&db.pool, id).await? {
+        Some(name) => name,
+        None => return Err(AppError::NotFound("Connection not found".into())),
+    };
     audit::log(
         &db.pool,
         Some(user.id),
         "connection.deleted",
-        &json!({ "id": id.to_string() }),
+        &json!({ "id": id.to_string(), "name": conn_name }),
     )
     .await?;
     Ok(Json(json!({ "status": "deleted" })))
@@ -2295,7 +2311,7 @@ pub async fn create_connection_folder(
         &db.pool,
         Some(user.id),
         "connection_folder.created",
-        &json!({ "name": name }),
+        &json!({ "id": row.id.to_string(), "name": name }),
     )
     .await?;
     Ok(Json(row))
@@ -2312,6 +2328,17 @@ pub async fn update_connection_folder(
     let row = connections::update_folder(&db.pool, id, &body)
         .await?
         .ok_or_else(|| AppError::NotFound("Folder not found".into()))?;
+    audit::log(
+        &db.pool,
+        Some(user.id),
+        "connection_folder.updated",
+        &json!({
+            "id": id.to_string(),
+            "name": row.name,
+            "parent_id": row.parent_id.map(|p| p.to_string()),
+        }),
+    )
+    .await?;
     Ok(Json(row))
 }
 
@@ -2322,14 +2349,15 @@ pub async fn delete_connection_folder(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
-    if !connections::delete_folder(&db.pool, id).await? {
-        return Err(AppError::NotFound("Folder not found".into()));
-    }
+    let folder = match connections::delete_folder(&db.pool, id).await? {
+        Some(f) => f,
+        None => return Err(AppError::NotFound("Folder not found".into())),
+    };
     audit::log(
         &db.pool,
         Some(user.id),
         "connection_folder.deleted",
-        &json!({ "id": id.to_string() }),
+        &json!({ "id": id.to_string(), "name": folder.name }),
     )
     .await?;
     Ok(Json(json!({ "status": "deleted" })))
@@ -4657,6 +4685,7 @@ mod tests {
         let r = RoleRow {
             id: Uuid::nil(),
             name: "admin".into(),
+            description: String::new(),
             can_manage_system: false,
             can_manage_users: false,
             can_manage_connections: false,
@@ -5468,6 +5497,7 @@ mod tests {
         let r = RoleRow {
             id: Uuid::nil(),
             name: "superadmin".into(),
+            description: String::new(),
             can_manage_system: true,
             can_manage_users: true,
             can_manage_connections: true,

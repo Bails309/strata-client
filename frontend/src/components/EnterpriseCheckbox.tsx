@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 
 export interface EnterpriseCheckboxProps extends Omit<
   React.InputHTMLAttributes<HTMLInputElement>,
@@ -8,21 +8,31 @@ export interface EnterpriseCheckboxProps extends Omit<
   indeterminate?: boolean;
   onCheckedChange?: (checked: boolean) => void;
   label?: string;
+  children?: React.ReactNode;
+  as?: "label" | "span" | "div";
 }
 
 export const EnterpriseCheckbox: React.FC<EnterpriseCheckboxProps> = ({
-  checked = false,
+  checked,
+  defaultChecked,
   indeterminate = false,
   onCheckedChange,
   className = "",
   disabled = false,
   id,
   label,
+  children,
+  title,
+  as: Component = "label",
   ...props
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const generatedId = useId();
   const inputId = id || generatedId;
+
+  const isControlled = checked !== undefined;
+  const [internalChecked, setInternalChecked] = useState(Boolean(defaultChecked));
+  const isChecked = isControlled ? checked : internalChecked;
 
   useEffect(() => {
     if (inputRef.current) {
@@ -31,9 +41,10 @@ export const EnterpriseCheckbox: React.FC<EnterpriseCheckboxProps> = ({
   }, [indeterminate]);
 
   return (
-    <label
-      htmlFor={inputId}
-      className={`relative inline-flex items-center justify-center select-none cursor-pointer ${
+    <Component
+      {...(Component === "label" ? { htmlFor: inputId } : {})}
+      title={title}
+      className={`relative inline-flex items-center select-none cursor-pointer ${
         disabled ? "opacity-40 cursor-not-allowed" : ""
       } ${className}`}
     >
@@ -41,9 +52,14 @@ export const EnterpriseCheckbox: React.FC<EnterpriseCheckboxProps> = ({
         ref={inputRef}
         id={inputId}
         type="checkbox"
-        checked={checked}
+        checked={isControlled ? checked : undefined}
+        defaultChecked={!isControlled ? defaultChecked : undefined}
         disabled={disabled}
+        title={title}
         onChange={(e) => {
+          if (!isControlled) {
+            setInternalChecked(e.target.checked);
+          }
           onCheckedChange?.(e.target.checked);
           props.onChange?.(e);
         }}
@@ -52,16 +68,17 @@ export const EnterpriseCheckbox: React.FC<EnterpriseCheckboxProps> = ({
       />
       <div
         className="
+          enterprise-checkbox-box
           w-4 h-4 rounded-[4px] border flex items-center justify-center transition-colors duration-100 ease-in-out shrink-0
           /* Unchecked State */
-          bg-[#0B131F]/70 border-slate-600/40
+          bg-[var(--cb-bg-unchecked)] border-slate-400/50
           /* Hover State */
-          hover:border-[#3ACEEF] hover:bg-[#3ACEEF]/10
+          hover:border-[var(--cb-bg-checked)] hover:bg-[rgba(var(--accent-rgb),0.1)]
           /* Checked & Indeterminate States */
-          peer-checked:bg-[#3ACEEF] peer-checked:border-[#3ACEEF]
-          peer-indeterminate:bg-[#3ACEEF] peer-indeterminate:border-[#3ACEEF]
+          peer-checked:bg-[var(--cb-bg-checked)] peer-checked:border-[var(--cb-bg-checked)]
+          peer-indeterminate:bg-[var(--cb-bg-checked)] peer-indeterminate:border-[var(--cb-bg-checked)]
           /* Keyboard Focus-Visible */
-          peer-focus-visible:ring-2 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-[#070B12] peer-focus-visible:ring-[#3ACEEF]
+          peer-focus-visible:ring-2 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-[var(--bg-app-base)] peer-focus-visible:ring-[var(--cb-bg-checked)]
         "
         style={{
           width: "var(--cb-size, 16px)",
@@ -69,7 +86,7 @@ export const EnterpriseCheckbox: React.FC<EnterpriseCheckboxProps> = ({
           borderRadius: "var(--cb-radius, 4px)",
         }}
       >
-        {checked && !indeterminate && (
+        {isChecked && !indeterminate && (
           <svg
             className="w-3 h-3 text-white pointer-events-none"
             viewBox="0 0 16 16"
@@ -96,7 +113,10 @@ export const EnterpriseCheckbox: React.FC<EnterpriseCheckboxProps> = ({
         )}
       </div>
       {label && <span className="ml-2 text-sm text-txt-primary">{label}</span>}
-    </label>
+      {children && (
+        <span className="ml-2 inline-flex items-center text-sm text-txt-primary">{children}</span>
+      )}
+    </Component>
   );
 };
 

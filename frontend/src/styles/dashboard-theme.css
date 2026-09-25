@@ -308,6 +308,183 @@ html.dark .strata-sidebar .strata-signout {
   color: var(--text-secondary);
 }
 
+/* Card layout: identity + state header, lease chip, pinned action bar */
+.strata-dashboard .recent-card {
+  display: flex;
+  flex-direction: column;
+  cursor: default;
+}
+
+.strata-dashboard .recent-card.is-live {
+  border-color: var(--border-active);
+  box-shadow:
+    0 0 16px rgba(var(--accent-rgb), 0.18),
+    var(--card-shadow);
+}
+
+.rc-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  margin-bottom: 0.875rem;
+}
+
+.rc-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.rc-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.rc-identity .recent-card-icon-badge {
+  flex-shrink: 0;
+  margin-bottom: 0;
+}
+
+.rc-identity .recent-card-title {
+  max-width: none;
+  margin-bottom: 0.125rem;
+}
+
+.rc-address {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rc-dot,
+.dash-state-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  background: currentColor;
+}
+
+.rc-live-pill {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
+  border-radius: 9999px;
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--accent-cyan);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.rc-health,
+.dash-host-health {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.375rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.dash-host-health {
+  font-size: 12px;
+}
+
+.rc-health[data-health="online"],
+.dash-host-health[data-health="online"] {
+  color: var(--status-connected);
+}
+
+.rc-health[data-health="offline"],
+.dash-host-health[data-health="offline"] {
+  color: var(--status-expired-text);
+}
+
+.rc-health[data-health="unknown"],
+.dash-host-health[data-health="unknown"] {
+  color: var(--text-muted);
+}
+
+.rc-lease-row {
+  display: flex;
+  min-width: 0;
+}
+
+.rc-lease {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: rgba(var(--control-rgb), 0.5);
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+}
+
+.rc-lease svg {
+  flex-shrink: 0;
+}
+
+.rc-lease-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rc-lease[data-lease="expired"] {
+  border-color: rgba(244, 63, 94, 0.3);
+  background: rgba(244, 63, 94, 0.1);
+  color: var(--status-expired-text);
+}
+
+.rc-lease[data-lease="unassigned"] {
+  padding-left: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.rc-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.dash-session-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--accent-cyan);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dash-session-idle {
+  color: var(--text-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
 /* Card + row Connect buttons: cyan outline, rose when the profile expired */
 .strata-dashboard .btn-connect-glass {
   background: transparent;
@@ -335,17 +512,51 @@ html.dark .strata-sidebar .strata-signout {
   background: rgba(var(--accent-rgb), 0.08);
 }
 
-.strata-dashboard .btn-connect-glass[data-status="expired"] {
-  border-color: rgba(244, 63, 94, 0.4);
-  color: var(--status-expired-text);
-  background: rgba(244, 63, 94, 0.08);
+.strata-dashboard .btn-connect-glass[data-variant="resume"] {
+  border-color: var(--accent-cyan);
+  background: var(--accent-cyan);
+  color: var(--bg-app-base);
+  box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.3);
 }
 
-.strata-dashboard .btn-connect-glass[data-status="expired"]:hover {
+.strata-dashboard .btn-connect-glass[data-variant="resume"]:hover {
+  border-color: var(--accent-teal);
+  background: var(--accent-teal);
+  color: var(--bg-app-base);
+}
+
+.strata-dashboard .btn-connect-glass[data-variant="danger"] {
+  border-color: rgba(244, 63, 94, 0.3);
+  background: rgba(244, 63, 94, 0.1);
+  color: var(--status-expired-text);
+}
+
+.strata-dashboard .btn-connect-glass[data-variant="danger"]:hover {
   border-color: var(--status-expired);
-  background: rgba(244, 63, 94, 0.16);
-  color: var(--text-white);
-  box-shadow: 0 0 10px rgba(244, 63, 94, 0.25);
+  background: rgba(244, 63, 94, 0.2);
+  color: var(--status-expired-text);
+  box-shadow: none;
+}
+
+.strata-dashboard .btn-connect-glass[data-variant="renew"] {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: var(--accent-amber-glow);
+  color: var(--accent-amber);
+}
+
+.strata-dashboard .btn-connect-glass[data-variant="renew"]:hover {
+  border-color: var(--accent-amber);
+  background: rgba(245, 158, 11, 0.2);
+  color: var(--accent-amber);
+  box-shadow: none;
+}
+
+.strata-dashboard .btn-connect-glass:disabled,
+.strata-dashboard .btn-connect-glass:disabled:hover {
+  cursor: not-allowed;
+  opacity: 0.4;
+  transform: none;
+  box-shadow: none;
 }
 
 /* ── Toolbar ── */

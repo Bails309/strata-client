@@ -9,6 +9,7 @@ import {
   ApiError,
 } from "../../api";
 import Select from "../../components/Select";
+import EnterpriseCheckbox from "../../components/EnterpriseCheckbox";
 
 /**
  * Admin → Safeguard JIT tab.
@@ -147,9 +148,8 @@ export default function SafeguardTab({ onSave }: { onSave: () => void }) {
             Access tab — onboard users one at a time.
           </div>
         </div>
-        <input
-          type="checkbox"
-          className="checkbox flex-none"
+        <EnterpriseCheckbox
+          className="flex-none"
           checked={cfg.enabled}
           onChange={(e) => update("enabled", e.target.checked)}
           aria-label="Enable Safeguard JIT"
@@ -191,9 +191,8 @@ export default function SafeguardTab({ onSave }: { onSave: () => void }) {
               pin a CA below.
             </div>
           </div>
-          <input
-            type="checkbox"
-            className="checkbox flex-none"
+          <EnterpriseCheckbox
+            className="flex-none"
             checked={cfg.verify_tls}
             onChange={(e) => update("verify_tls", e.target.checked)}
             aria-label="Verify TLS certificate"
@@ -330,9 +329,8 @@ export default function SafeguardTab({ onSave }: { onSave: () => void }) {
               window matches actual usage.
             </div>
           </div>
-          <input
-            type="checkbox"
-            className="checkbox flex-none"
+          <EnterpriseCheckbox
+            className="flex-none"
             checked={cfg.auto_checkin_on_session_end}
             onChange={(e) => update("auto_checkin_on_session_end", e.target.checked)}
             aria-label="Auto check-in on session end"
@@ -348,9 +346,8 @@ export default function SafeguardTab({ onSave }: { onSave: () => void }) {
               the access request open until its own rotation policy fires.
             </div>
           </div>
-          <input
-            type="checkbox"
-            className="checkbox flex-none"
+          <EnterpriseCheckbox
+            className="flex-none"
             checked={cfg.password_cache_enabled}
             onChange={(e) => update("password_cache_enabled", e.target.checked)}
             aria-label="Cache checked-out passwords"

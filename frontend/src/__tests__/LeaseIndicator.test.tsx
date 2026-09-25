@@ -153,6 +153,20 @@ describe("LeaseIndicator", () => {
     expect(checkinCheckout).toHaveBeenCalledWith("co-9");
     await waitFor(() => expect(screen.getByText("2 leases checked in")).toBeInTheDocument());
   });
+
+  it("deselects all checkboxes when Deselect is clicked", async () => {
+    const u = userEvent.setup();
+    mount();
+    act(() => publishLeases([lease({ id: "p-1", label: "sa1" })]));
+    await u.click(screen.getByRole("button", { name: /Active Lease/ }));
+    const checkbox = screen.getByRole("checkbox", { name: "Select sa1" });
+    await u.click(checkbox);
+    expect(checkbox).toBeChecked();
+    expect(screen.getByRole("button", { name: "Deselect" })).toBeInTheDocument();
+    await u.click(screen.getByRole("button", { name: "Deselect" }));
+    expect(checkbox).not.toBeChecked();
+    expect(screen.queryByRole("button", { name: "Deselect" })).toBeNull();
+  });
 });
 
 describe("lease time formatting", () => {

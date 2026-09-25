@@ -3,6 +3,7 @@
    decoration, or render-time time/derivation patterns. See
    eslint.config.js W4-1 commentary. */
 import { useEffect, useState } from "react";
+import EnterpriseCheckbox from "../../components/EnterpriseCheckbox";
 import { updateDns } from "../../api";
 
 export default function NetworkTab({
@@ -116,19 +117,15 @@ export default function NetworkTab({
             certificate verification are unaffected.
           </p>
           <div className="form-group">
-            <label
-              className="flex items-center gap-3 cursor-pointer group"
+            <EnterpriseCheckbox
+              className="gap-3 group items-start"
               aria-label="Enable Custom DNS"
+              checked={dnsEnabled}
+              onChange={(e) => {
+                setDnsEnabled(e.target.checked);
+                setRestartNeeded(false);
+              }}
             >
-              <input
-                type="checkbox"
-                checked={dnsEnabled}
-                onChange={(e) => {
-                  setDnsEnabled(e.target.checked);
-                  setRestartNeeded(false);
-                }}
-                className="checkbox"
-              />
               <div>
                 <span className="font-medium group-hover:text-txt-primary transition-colors">
                   Enable Custom DNS
@@ -137,7 +134,7 @@ export default function NetworkTab({
                   Apply custom nameservers to the backend&apos;s target lookups.
                 </p>
               </div>
-            </label>
+            </EnterpriseCheckbox>
           </div>
         </div>
 

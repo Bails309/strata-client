@@ -13,6 +13,7 @@ import {
   setAdminConnectionTags,
   updateAdminTag,
 } from "../../api";
+import EnterpriseCheckbox from "../../components/EnterpriseCheckbox";
 
 const ADMIN_TAG_COLORS = [
   "#ef4444",
@@ -321,27 +322,23 @@ export default function TagsTab({
               <p className="text-txt-tertiary text-[0.8125rem]">No connections available.</p>
             ) : (
               connections.map((conn) => (
-                <label
+                <EnterpriseCheckbox
                   key={conn.id}
-                  className="flex items-center gap-2 py-1 cursor-pointer text-[0.8125rem]"
+                  className="flex items-center gap-2 py-1 text-[0.8125rem] w-full justify-start"
+                  checked={assignedConnIds.has(conn.id)}
+                  onChange={() => handleToggleConnection(assignTag, conn.id)}
                 >
-                  <input
-                    type="checkbox"
-                    className="checkbox"
-                    checked={assignedConnIds.has(conn.id)}
-                    onChange={() => handleToggleConnection(assignTag, conn.id)}
-                  />
                   <span
                     className="badge badge-accent text-[0.625rem]"
                     style={{ padding: "1px 6px" }}
                   >
                     {conn.protocol.toUpperCase()}
                   </span>
-                  {conn.name}
+                  <span>{conn.name}</span>
                   <span className="text-txt-tertiary ml-auto">
                     {conn.hostname}:{conn.port}
                   </span>
-                </label>
+                </EnterpriseCheckbox>
               ))
             )}
           </div>

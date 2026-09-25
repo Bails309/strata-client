@@ -35,52 +35,6 @@ release that delivered them, then are removed. In practice:
 
 ---
 
----
-
-## Protocols & Session Types
-
-### IronRDP upgrade and Tokio-native RDP sessions
-
-**Status:** In progress
-**Area:** Protocols · Session engine
-
-Move `ironrdp` from the 0.7 line to current, and retire the bounded
-`LocalSet` worker pool the RDP engine used in its place. `ironrdp-async`
-0.7's connection future was not `Send`, so RDP sessions could not run on
-the shared Tokio runtime the SSH and VNC engines use. 0.10 replaced the
-boxed network-client hook with an RPITIT trait, the pool is gone, and RDP
-sessions are now ordinary Tokio tasks.
-
-The dependency conflict that held this back — `ironrdp` requiring a
-`curve25519-dalek` pre-release that cannot coexist with a `russh`
-carrying the RUSTSEC-2026-0154 fix — is resolved, at the cost of **two
-vendored forks** in `crates/vendor/`: three lines in `ironrdp-connector`
-to unpin `picky`, and one line in `sspi` to drop a `mechListMIC`
-sequence check added in 0.22.0 that rejects Kerberos NLA against Windows
-RDP hosts.
-
-Both forks are temporary and both are liabilities.
-`scripts/check-vendored-forks.sh` reports, per fork, whether the reason
-it exists still holds — **run it on every dependency bump and before
-every release**, and delete each fork as soon as upstream catches up.
-The reasoning and the un-fork procedure are in
-[ADR-0015](adr/ADR-0015-native-rust-session-engine.md#pinning-ironrdp-and-russh-so-both-engines-can-coexist).
-
-Remaining: drop both forks once upstream catches up.
-
----
-
-### Kubernetes Pod Console
-
-**Status:** Proposed
-**Area:** Protocols · Session engine
-
-Native terminal execution inside Kubernetes pods without requiring SSH or
-tunnels to the node. Uses the backend's Kubernetes client to pipe stdin/stdout
-to the session WebSocket stream.
-
----
-
 ## Recording Enhancements
 
 ### Historic Recording Screenshots
@@ -116,45 +70,9 @@ an audit trail of every rule change.
 
 ## Security & Zero Trust Access
 
-### Antivirus scanning on Quick Share uploads
-
-**Status:** Shipped — v1.12.0 (operator-experience polish in v1.12.1)
-**Area:** File Transfer · DLP
-
-Pluggable AV scanner runs against both Quick Share upload paths
-(inbound `POST /api/files/upload` and outbound
-`POST /api/user/outbound-shares/submit` plus its token-auth shell
-variant `POST /api/outbound-shares/ingest/{token}`). Three backends
-ship: `off` (default no-op, preserves v1.11.x behaviour), `clamav`
-(full `clamd` INSTREAM TCP wire protocol against the opt-in
-bundled sidecar), and `command` (exit-code contract for Microsoft
-Defender, Sophos, ESET, or any wrapper script). Fail-closed by
-default (`STRATA_AV_FAIL_MODE=block`); infected verdicts are
-always rejected. Migration 078 persists the verdict on each
-`outbound_shares` row in four new columns (`av_scan_status`,
-`av_signature`, `av_scanned_at`, `av_scanner_backend`) with a
-partial index keeping the operator-attention dashboard query
-cheap. See [av-scanning.md](av-scanning.md),
-[ADR-0011](adr/ADR-0011-av-scanning.md), and the
-[av-operations runbook](runbooks/av-operations.md).
-
-**v1.12.1 follow-on (Shipped):** friendly user-facing block
-messages (`Verdict::user_facing_block_message()`), hourly
-`freshclam` + forced `clamd` reload after every signature update,
-500 MiB default scan-size cap aligned with the Quick Share upload
-cap, real on-wire CVD / `clamd` fixtures in the unit suite, and
-two new admin surfaces — `GET /api/admin/health/av` (AV Health
-card on Admin → Health tab) and `GET /api/admin/files/av-blocked`
-(unified Admin → AV-Blocked Files audit grid covering inbound
-`file.av_blocked` events and outbound `(infected|error)` rows).
-The outbound copy-snippet flow gained an indeterminate "Awaiting
-AV scan" progress indicator plus explicit `Expect: 100-continue`
-suppression in the shipped curl / PowerShell snippets so progress
-meters render even when the public ingest router rejects a stale
-token with `400 Bad Request`.
-
-Future iterations on the trail of this feature live below as
-separate proposals.
+Antivirus scanning on Quick Share uploads shipped in v1.12.0 and has left the
+roadmap; see [av-scanning.md](av-scanning.md). The two proposals below build on
+it.
 
 ### Per-role AV scan-policy editor
 

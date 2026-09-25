@@ -192,7 +192,7 @@ The central orchestrator. Responsibilities:
 - **Config push** — generates `krb5.conf` (multi-realm), toggles recordings, manages SSO settings
 - **AD sync** — scheduled LDAP/LDAPS queries against Active Directory to discover and import computer accounts; supports simple bind and Kerberos keytab auth, custom CA certificates, multiple search bases per source, gMSA/MSA exclusion filters, and configurable connection defaults (RDP performance flags, session recording parameters)
 - **Password management** — privileged account password checkout and rotation for AD-managed service accounts; configurable password generation policy, LDAP `unicodePwd` reset, Vault-sealed credential storage, approval workflows with explicit account-to-role scoping (each approval role is mapped to specific managed AD accounts), dedicated "Search Base OUs" for user discovery (allowing separate scoping from device discovery), **scheduled future-dated checkouts** (requests between now + 30 s and now + 14 days sit idle with no credential material until the scheduled moment, at which point the existing 60-second expiration worker activates them), **emergency approval bypass (break-glass)** per AD sync config — gated by `pm_allow_emergency_bypass`, requires ≥ 10-character justification, **hard-capped at 30 minutes** server-side, writes a dedicated `checkout.emergency_bypass` audit event, surfaces an ⚡ Emergency badge across Credentials and Approvals views, background workers for checkout expiration and zero-knowledge auto-rotation, requester username resolution for approver visibility, and decided-by tracking with self-approval detection
-- **Connection health checks** — background TCP probing of every connection's hostname:port every 2 minutes; results (online/offline/unknown) persisted and exposed via API for dashboard status indicators
+- **Connection health checks** — background TCP probing of every connection's hostname:port every 2 minutes; results (online/offline/unknown) persisted and exposed via API for dashboard status indicators. Since v2.2.0 `POST /api/admin/connections/{id}/probe` runs the same check for one connection on demand (`health_check::probe_one`) and also returns the TCP connect latency; see [Admin console](#admin-console-fleet-folders-and-roles-v220)
 - **DNS configuration** — admin-configurable nameservers and search suffixes used by the session engine to resolve **target** hostnames in-process; applies to new sessions with no restart. Strata's own infrastructure lookups stay on Docker's embedded resolver. See [Target hostname resolution](#target-hostname-resolution-v200).
 - **Quick Share (file store)** — session-scoped temporary file CDN; files uploaded via multipart POST are stored on disk, each keyed by a random unguessable token. Download endpoint is unauthenticated (the token is the capability). Files are automatically cleaned up when the tunnel disconnects. Limits: 20 files per session, 500 MB each. The frontend Quick Share panel is **protocol-aware (v1.3.0+)**: SSH / Telnet sessions render the copy-snippet as `curl -fLOJ '<url>'` (paste-into-shell friendly); RDP / VNC / web kiosks render the bare HTTPS URL. A "Copy as" `Select` dropdown lets the operator override per-session: `URL`, `curl`, `wget --content-disposition`, or `Invoke-WebRequest -Uri … -OutFile … (Windows)`. **v1.12.0+:** every upload is streamed through a pluggable antivirus scanner before it lands in the session file store. Three backends ship (`off` default, `clamav` over the `clamd` INSTREAM TCP wire protocol against the opt-in bundled sidecar, and `command` for exec-driven engines like Defender / Sophos / ESET). Fail-closed by default; infected verdicts always reject; blocked uploads emit a `file.av_blocked` audit event with the signature name. See [av-scanning.md](av-scanning.md) and [ADR-0011](adr/ADR-0011-av-scanning.md). **v1.12.1+ refinements:** (1) `AppError::AvScanFailed` is now mapped to a friendly, engine-classified user-facing message via `Verdict::user_facing_block_message()` (infected → "Your file was blocked by the antivirus scanner (<signature>)", timeout → "the scanner did not respond in time", transport error → "the scanner is unreachable", missing signatures → "the scanner's signature database isn't loaded yet", everything else → a generic "the scanner returned an error"), so end users never see raw stderr or `clamd` panic strings. (2) The frontend exposes scanner health without `docker exec` via a new `GET /api/admin/health/av` endpoint and an **AV Health** card on the Admin → Health tab (engine, version, signature freshness, last-seen, error-since timestamp). (3) The Admin → **AV-Blocked Files** tab unifies inbound `file.av_blocked` audit rows and outbound `outbound_shares` rows with `av_scan_status IN ('infected','error')` into a single audit grid keyed off `GET /api/admin/files/av-blocked`. (4) The Quick Share outbound copy-snippet flow now renders an indeterminate **Awaiting AV scan** progress bar on each pending row, and the curl / PowerShell snippets explicitly disable `Expect: 100-continue` (`-H 'Expect:'` on curl, `$client.DefaultRequestHeaders.ExpectContinue = $false` on .NET `HttpClient`) so a stale-token 400 from the public ingest router doesn't swallow the byte-stream before the progress meter has anything to draw.
 - **Outbound Quick-Share (approval-gated, v1.11.0+)** — separate, audited pipeline for files **leaving** a remote session. Two ingest paths feed the same backend service:
@@ -226,7 +226,10 @@ justification)` helper at **both** outbound entry points
   endpoints. 45 s poll cadence plus extra polls on tab focus /
   visibilitychange; 30 s auto-dismiss; cross-tab de-dup via
   `localStorage`. Architecturally mirrors the existing
-  `CredentialProfileExpiryWatcher`.
+  `CredentialProfileExpiryWatcher`. **v2.2.0:** the card is now an
+  ordinary toast from the shared `ToastProvider` (top-right), not a
+  separate popup; see
+  [Notifications and credential leases](#notifications-and-credential-leases-v220).
 
 - **Audit** — SHA-256 hash-chained append-only log
 
@@ -258,7 +261,8 @@ Pages:
 - **NVR Player** — admin-only read-only session observer with 5-minute rewind buffer plus a per-session persistent-state log (v1.9.4) that salvages drawing instructions as they age out of the ring buffer so newly-joining observers reconstruct the full canvas instead of seeing a black frame; supports replay→live transition and timeline controls
 - **Sessions** — unified role-based page with Live Sessions and Recording History tabs; users see their own sessions, admins see all with kill/observe/rewind controls
 - **Login** — unified login portal supporting local credentials and OIDC Single Sign-On; dynamically adjusts based on enabled authentication methods
-- **Admin Settings** — left-sidebar nav (v1.5.3+) grouped into five sections — **Overview** (Health, Sessions), **Identity & Access** (Access, AD Sync, SSO / OIDC, Kerberos, Password Mgmt), **Connectivity** (Network, DMZ Links, Trusted CAs, VDI), **Workspace** (Display, Tags, Notifications, Recordings), and **Secrets & Security** (Vault, Security). Sections are permission-aware and collapse out of the nav entirely when the current user has no item visible inside them; on screens narrower than the Tailwind `lg` breakpoint the sidebar wraps inline above the content as a horizontal flex row of buttons. The 17 underlying tab panes provide health monitoring, SSO, auth method toggles, Kerberos (multi-realm), vault, recordings, network (DNS configuration), access control, connection group management, AD sync sources (with inline password management configuration: enable toggle, credential source, target filter with preview, password policy, auto-rotation), password management (approval roles with explicit account scoping via searchable dropdown and chip tags, account mappings, checkout requests with decided-by column and self-approval detection), session analytics and metrics, DMZ link health, trusted CAs, and VDI image management.
+- **Global chrome (v2.2.0)** — `GlobalHeader` (route breadcrumbs and the lease pill), `AdminMegaMenu` (three-column admin navigation filtered by `isMegaMenuItemVisible`, which hides links only and is not an access control), `DashboardBackground` (layered background and constellation), and the design tokens in `styles/dashboard-theme.css` for dark and light themes.
+- **Admin Settings** — left-sidebar nav (v1.5.3+) grouped into five sections — **Overview** (Health, Sessions), **Identity & Access** (Access, AD Sync, SSO / OIDC, Kerberos, Password Mgmt), **Connectivity** (Network, DMZ Links, Trusted CAs, VDI), **Workspace** (Display, Tags, Notifications, Recordings), and **Secrets & Security** (Vault, Security). Sections are permission-aware and collapse out of the nav entirely when the current user has no item visible inside them; on screens narrower than the Tailwind `lg` breakpoint the sidebar wraps inline above the content as a horizontal flex row of buttons. The 17 underlying tab panes provide health monitoring, SSO, auth method toggles, Kerberos (multi-realm), vault, recordings, network (DNS configuration), access control, connection group management, AD sync sources (with inline password management configuration: enable toggle, credential source, target filter with preview, password policy, auto-rotation), password management (approval roles with explicit account scoping via searchable dropdown and chip tags, account mappings, checkout requests with decided-by column and self-approval detection), session analytics and metrics, DMZ link health, trusted CAs, and VDI image management. **v2.2.0:** the Connections tab is a fleet manager with a folder tree, and roles are edited in a risk-aware dialog — see [Admin console](#admin-console-fleet-folders-and-roles-v220).
 - **Approvals** — dedicated page for pending password checkout approval decisions, visible only to users assigned to approval roles. Premium card layout with requester avatar, CN-from-DN display, labeled duration and justification sections, and approve/deny action buttons
 - **Audit Logs** — paginated, hash-chained log viewer
 - **Theme Toggle** — sidebar button cycling System → Light → Dark themes with localStorage persistence
@@ -1032,15 +1036,21 @@ orphaned pop-out windows.
 system_settings ──── key/value config store (now excluding OIDC settings)
 sso_providers ────── multi-tenant OIDC configurations (provider_id, name, issuer, client_id, vault-sealed client_secret)
 users ──────────────── OIDC subject, username, role FK
-roles ────────────── granular permissions (can_manage_system, can_manage_users, can_manage_connections,
+roles ────────────── name, description (v2.2.0, migration 090) and eleven permission flags
+                       (can_manage_system, can_manage_users, can_manage_connections,
                        can_view_audit_logs, can_view_sessions, can_create_users, can_create_user_groups,
-                       can_create_connections [unified with folders], can_create_sharing_profiles,
+                       can_create_connections, can_create_sharing_profiles,
                        can_use_quick_share — user-facing, excluded from admin-surface checks,
-                       can_use_quick_share_outbound — v1.11.0+, user-facing, gates Outbound Quick-Share UI
-                       and ingest-token mint; NOT bypassed by can_manage_system)
-connections ──────── target host, protocol, port, domain, description, group FK, ad_source FK, health_status, health_checked_at
-connection_groups ── folder hierarchy with parent_id self-reference
-role_connections ──── many-to-many role ↔ connection
+                       can_use_quick_share_outbound — v1.11.0+, user-facing; can_manage_system also passes
+                       its checks except the HTTPS-snippet consume re-check). What each flag enforces:
+                       security.md § Granular Admin Permissions
+connections ──────── target host, protocol, port, domain, description, folder_id FK (ON DELETE SET NULL),
+                       extra (JSONB parameters), health_status, health_checked_at, soft_deleted_at
+connection_folders ─ folder hierarchy with parent_id self-reference (ON DELETE CASCADE); named
+                       connection_groups until migration 023
+role_connections ──── many-to-many role ↔ connection (direct grants)
+role_folders ──────── many-to-many role ↔ folder (migration 024). Grants the connections whose
+                       folder_id equals the folder — NOT connections in its subfolders
 user_credentials ──── encrypted password + DEK + nonce per user/connection
 credential_profiles ─ saved credential profiles with optional TTL expiry, optional per-profile extended_expiry flag (raises the cap from 12 h to 2160 h / 90 d, enforced by the `chk_ttl_hours` two-arm CHECK constraint), and optional checkout_id link to password management
 user_favorites ────── user ↔ connection favorites (composite PK)
@@ -1065,7 +1075,7 @@ outbound_share_approvers ─ v1.11.0+ approver-delegation list: user_id FK (PK),
 outbound_share_ingest_tokens ─ v1.11.0+ single-use HTTPS upload tokens backing the snippet path: token (PK, 32-byte URL-safe base64), user_id FK, session_id, connection_id, justification, expires_at (mint + 10 min), used_at (nullable; atomic SET on first consume), created_at. Atomically consumed by `UPDATE … SET used_at = now() WHERE token = $1 AND used_at IS NULL AND expires_at > now()`. Reaped daily by user_cleanup.
 ```
 
-See `backend/migrations/001_initial_schema.sql` through `062_sso_providers.sql` for the full DDL.
+See `backend/migrations/001_initial_schema.sql` through `092_prune_shipped_roadmap_statuses.sql` for the full DDL.
 
 ## Multiplayer / Co-Pilot Mode (v1.9.6+)
 
@@ -1538,10 +1548,14 @@ strata-client/
 │   └── src/
 │       ├── api.ts         Typed API client
 │       ├── App.tsx        Router + boot detection
-│       ├── components/    Shared components (Layout, Select, SessionBar, SessionManager, clipboardSync, QuickShare, SessionTimeoutWarning, ThemeProvider, ToastProvider, CredentialProfileExpiryWatcher, WhatsNewModal)
+│       ├── components/    Shared components (Layout, GlobalHeader, AdminMegaMenu, Select, EnterpriseCheckbox, SessionBar, SessionManager, clipboardSync, QuickShare, SessionTimeoutWarning, ThemeProvider, ToastProvider, PendingApprovalWatcher, CredentialProfileExpiryWatcher, leaseStore, LeaseIndicator, LeaseDrawer, WhatsNewModal)
+│       ├── hooks/         Shared hooks (useConnectionFilter)
+│       ├── styles/        Design tokens (dashboard-theme.css)
 │       ├── utils/         Pure helpers (keybindings, sessionEnd, popoutPalette, browserCapabilities, keyboardLock, winKeyProxy, …)
 │       └── pages/         Page components (Dashboard, Documentation, SessionClient, AdminSettings, AuditLogs, Approvals, Login, SetupWizard, SharedViewer)
-│           ├── admin/     One module per Admin Settings tab (Security, Network, Display, SSO, Kerberos, Recordings, Vault, Tags, Health, Sessions, Passwords, AdSync, Access) plus the shared connection-form helpers
+│           ├── admin/     One module per Admin Settings tab (Security, Network, Display, SSO, Kerberos, Recordings, Vault, Tags, Health, Sessions, Passwords, AdSync, Access) plus the shared connection-form helpers and ConnectionFoldersView
+│           │   ├── fleet/ Connections fleet manager (FleetManager, FleetToolbar, FleetTable, FleetBulkDock, FleetTelemetryStrip, fleetModel)
+│           │   └── roles/ Role editor (EditRoleModal, RolePermissionsTab, RoleAssignmentsTab, RoleMembersTab, roleModel, useRoleEditor)
 │           └── credentials/  Credentials page child components (RequestCheckoutForm, ProfileEditor)
 ├── crates/                Workspace crates
 │   ├── strata-session/    In-process session engine (RDP / VNC / SSH / SFTP / K8s)
@@ -2238,6 +2252,96 @@ Windows re-runs the measurement dozens of times a second for the life of the
 session. Without the flag the host sizes the session from the declared
 `connectionType`. Re-add the flag only once the bandwidth measurement is
 answered; `scripts/check-vendored-forks.sh` tracks the fork.
+
+## Admin console: fleet, folders and roles (v2.2.0)
+
+v2.2.0 rebuilt three admin surfaces. None of them adds an authorisation
+decision: each calls endpoints that already enforce their own permission,
+and the UI's own gating only decides what to show.
+
+### Connections fleet manager
+
+`pages/admin/fleet/` renders **Admin → Connections**. `FleetManager` owns
+state and data loading; the other modules are presentational.
+
+```
+getConnections() ───────┐
+getConnectionFolders() ─┼─► buildFleet() ─► filters ─► 20-row pages ─► FleetTable
+getActiveSessions() ────┘   (health, policy     │
+  (every 30 s, only with     badges, folder)    └─► computeTelemetry() ─► FleetTelemetryStrip
+   can_manage_system or
+   can_view_sessions)
+```
+
+| Piece | Behaviour |
+| ----- | --------- |
+| `fleetModel.policiesFor()` | Badges derived only from `extra` keys the engine honours: `security`, `auth-pkg`, `host-key`, `ignore-cert`, `read-only`, `disable-copy`, `disable-paste`. Alert tone for legacy RDP security, an unpinned SSH host key and an ignored certificate |
+| `computeTelemetry()` | Total and protocol mix; reachability over **probed** connections only (`unknown` is excluded, not counted as down); alert count; sessions and distinct live users; latest `health_checked_at` |
+| Probe | `POST /api/admin/connections/{id}/probe`, at most **4** in flight from a client-side worker pool; the returned latency is shown in the health cell until the page reloads |
+| Bulk move | `PUT /api/admin/connections/{id}` per connection with `connectionPayload()`, which re-sends every field because the PUT replaces the row |
+| Pin host keys | Opens the existing host-key survey panel scoped to the selected SSH connections; nothing is stored without an explicit approval |
+| Delete | Confirmation, with a warning listing connections that have live sessions |
+
+### Connection folder tree
+
+`ConnectionFoldersView` builds the hierarchy with `utils/folderTree.buildFolderTree()`,
+which nests the flat `{ id, name, parent_id }` list, sorts siblings, treats an
+unknown parent as a root, and attaches `directCount` / `totalCount`. The tree is
+flattened to rows for rendering, so the WAI-ARIA `tree` pattern (roving focus,
+`aria-level`, `aria-posinset`, `aria-setsize`) and the guide lines are computed
+per row. Renames send the folder's current `parent_id`, because
+`PUT /api/admin/connection-folders/{id}` writes both fields.
+
+### Role editor
+
+`pages/admin/roles/` replaces the role dialog on **Admin → Access**.
+
+```
+EditRoleModal ── loads GET /roles/{id}/mappings ──► refuses to open on failure
+     │
+     └─ RoleEditor ── useRoleEditor(initial, connections)
+            ├─ RolePermissionsTab   PERMISSION_CATEGORIES (roleModel.ts)
+            ├─ RoleAssignmentsTab   buildFolderTree + inheritedConnectionIds()
+            └─ RoleMembersTab       users filtered by role_name
+Save ─► PUT /roles/{id}  (or POST /roles)
+     └► PUT /roles/{id}/mappings   only when folder or connection grants changed
+```
+
+- **`roleModel.ts`** is the single description of every role flag — category,
+  label, enforced effect and risk tier. It must describe what the server
+  enforces; see [security.md § Granular Admin Permissions](security.md#granular-admin-permissions).
+- **`inheritedConnectionIds()`** mirrors the backend's non-recursive folder
+  check (`connections.folder_id` ∈ granted folders). Changing it without
+  changing the SQL would make the editor display access that does not exist.
+- **`useRoleEditor`** keeps the draft, the two grant sets and a per-item change
+  count (each field, flag, folder and connection that differs from what was
+  loaded).
+- The dialog renders into `document.body` through a portal, so page-level
+  stacking contexts cannot draw the sidebar over it.
+
+## Notifications and credential leases (v2.2.0)
+
+```
+PendingApprovalWatcher (45 s) ─────────┐
+                                       ├──► ToastProvider (one stack, top-right)
+CredentialProfileExpiryWatcher (60 s) ─┤
+          │                            │
+          └──► leaseStore ──► LeaseIndicator (header pill) ──► LeaseDrawer
+```
+
+- **`ToastProvider`** is the only notification surface. Toasts are keyed
+  (replaced in place), carry optional `details` and interactive `content`,
+  pause on hover or focus, and can hold themselves open with `useToastHold()`.
+  The dismiss timer arms in `useLayoutEffect`.
+- **`CredentialProfileExpiryWatcher`** polls `GET /api/user/credential-profiles`,
+  computes warning thresholds per profile, batches expiries that land within
+  20 s into one toast (`LeaseBatchBody`), and publishes every lease to
+  `leaseStore`.
+- **`leaseStore`** is a small subscribe/snapshot store. The header pill and the
+  drawer only read it, so the lease UI adds **no** requests of its own.
+- **Extend** calls `POST /api/user/safeguard/bulk-checkout` for Safeguard JIT
+  leases only; **check-in** calls the Safeguard or password-checkout check-in
+  endpoint for each lease after a confirmation.
 
 ## Extended protocols
 

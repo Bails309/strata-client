@@ -1,0 +1,348 @@
+/* Connection folder tree — theme tokens come from styles/dashboard-theme.css. */
+
+.cf-card {
+  --cf-guide: rgba(255, 255, 255, 0.08);
+  --cf-guide-hover: rgba(var(--accent-rgb), 0.35);
+  --cf-row-hover: rgba(var(--accent-rgb), 0.04);
+  --cf-row-active: rgba(var(--accent-rgb), 0.08);
+  --cf-badge-bg: rgba(255, 255, 255, 0.05);
+}
+
+html.light .cf-card {
+  --cf-guide: rgba(15, 23, 42, 0.12);
+  --cf-badge-bg: rgba(15, 23, 42, 0.04);
+}
+
+.cf-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.cf-subtitle {
+  margin: 0.25rem 0 0;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.cf-toolbar {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.cf-new-root {
+  padding: 0.4rem 0.9rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.cf-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--border-card);
+  border-radius: 6px;
+  background: rgba(var(--control-rgb), 0.75);
+  color: var(--text-muted);
+}
+.cf-search:focus-within {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 8px var(--accent-cyan-glow);
+}
+.cf-search input {
+  flex: 1;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0.45rem 0;
+  font-size: 0.75rem;
+}
+
+.cf-error {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(244, 63, 94, 0.35);
+  border-radius: 6px;
+  background: rgba(244, 63, 94, 0.08);
+  font-size: 0.75rem;
+  color: var(--status-expired-text);
+}
+
+.cf-empty {
+  padding: 3rem 0;
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.cf-tree {
+  margin-top: 0.75rem;
+}
+
+.cf-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 34px;
+  padding-right: 0.5rem;
+  border-radius: 6px;
+  outline: none;
+  transition: background 150ms ease;
+}
+.cf-row:hover {
+  background: var(--cf-row-hover);
+}
+.cf-row:focus-visible,
+.cf-row-active {
+  background: var(--cf-row-active);
+}
+.cf-row:focus-visible {
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.45);
+}
+.cf-row-match .cf-name {
+  color: var(--accent-cyan);
+}
+
+/* Branch guides: one vertical per open ancestor level, plus this row's elbow. */
+.cf-guide {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  background: var(--cf-guide);
+  pointer-events: none;
+}
+.cf-elbow {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 1px;
+  background: var(--cf-guide);
+  pointer-events: none;
+}
+.cf-row:hover > .cf-guide-own,
+.cf-row:hover > .cf-elbow {
+  background: var(--cf-guide-hover);
+}
+
+.cf-chevron {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    transform 150ms ease,
+    color 150ms ease;
+}
+.cf-chevron:hover:not(:disabled) {
+  color: var(--text-white);
+}
+.cf-chevron:disabled {
+  visibility: hidden;
+}
+.cf-chevron-open {
+  transform: rotate(90deg);
+  color: var(--accent-cyan);
+}
+.cf-row .cf-chevron-open:disabled {
+  visibility: visible;
+  cursor: default;
+}
+
+.cf-folder-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--accent-cyan);
+  filter: drop-shadow(0 0 6px var(--accent-cyan-glow));
+}
+
+.cf-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: default;
+}
+.cf-row:hover .cf-name {
+  color: var(--text-white);
+}
+
+.cf-badge {
+  flex-shrink: 0;
+  padding: 0.05rem 0.375rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--cf-badge-bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.cf-matches {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: var(--accent-cyan);
+}
+
+.cf-actions {
+  display: flex;
+  gap: 0.125rem;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.cf-row:hover .cf-actions,
+.cf-row:focus-within .cf-actions,
+.cf-row-active .cf-actions {
+  opacity: 1;
+}
+
+.cf-action {
+  display: inline-flex;
+  padding: 0.25rem;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.cf-action:hover {
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--accent-cyan);
+}
+.cf-action-danger:hover {
+  background: rgba(244, 63, 94, 0.1);
+  color: var(--status-expired-text);
+}
+
+.cf-input {
+  width: 14rem !important;
+  height: 26px;
+  padding: 0 0.5rem !important;
+  border: 1px solid var(--accent-cyan) !important;
+  border-radius: 4px !important;
+  background: var(--bg-app-base) !important;
+  font-size: 0.75rem !important;
+  box-shadow: 0 0 0 1px var(--accent-cyan) !important;
+}
+
+.cf-draft {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 34px;
+  margin: 0.25rem 0;
+}
+
+.cf-btn {
+  cursor: pointer;
+  padding: 0.3rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  font-family: inherit;
+  border: 1px solid var(--border-subtle);
+  background: rgba(var(--control-rgb), 0.6);
+  color: var(--text-primary);
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+.cf-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.cf-btn-ghost:hover:not(:disabled) {
+  border-color: var(--border-card-hover);
+  color: var(--text-white);
+}
+.cf-btn-primary {
+  border-color: transparent;
+  background: var(--primary-gradient);
+  color: #fff;
+  font-weight: 600;
+}
+.cf-btn-danger {
+  border-color: rgba(244, 63, 94, 0.45);
+  background: rgba(244, 63, 94, 0.14);
+  color: var(--status-expired-text);
+  font-weight: 600;
+}
+.cf-btn-danger:hover:not(:disabled) {
+  background: rgba(244, 63, 94, 0.24);
+}
+
+.cf-hint {
+  margin: 0.75rem 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.cf-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 6, 12, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+.cf-modal {
+  width: min(24rem, calc(100vw - 2rem));
+  padding: 1.25rem;
+  border: 1px solid rgba(244, 63, 94, 0.4);
+  border-radius: 8px;
+  background: var(--bg-app-subtle);
+  box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.6);
+}
+html.light .cf-modal {
+  background: #fff;
+}
+.cf-modal h3 {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-white);
+}
+.cf-modal p {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.cf-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cf-chevron,
+  .cf-actions,
+  .cf-row {
+    transition: none;
+  }
+}

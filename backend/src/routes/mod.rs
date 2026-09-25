@@ -160,6 +160,10 @@ pub fn build_router(state: SharedState) -> Router {
             post(admin::discover_connection_host_key),
         )
         .route(
+            "/api/admin/connections/{id}/probe",
+            post(admin::probe_connection),
+        )
+        .route(
             "/api/admin/connections/{id}/certificate",
             post(admin::discover_connection_certificate),
         )

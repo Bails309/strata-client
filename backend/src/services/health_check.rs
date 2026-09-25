@@ -139,6 +139,64 @@ async fn update_health(
     Ok(())
 }
 
+/// Result of an on-demand probe of a single connection.
+#[derive(serde::Serialize, Debug)]
+pub struct ProbeOutcome {
+    pub id: Uuid,
+    pub health_status: String,
+    /// TCP connect time; only set when the target answered.
+    pub latency_ms: Option<u64>,
+    pub health_checked_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Probe one connection now, using the same target rules as the periodic
+/// sweep, and store the result. `None` when the connection does not exist.
+pub async fn probe_one(pool: &Pool<Postgres>, id: Uuid) -> anyhow::Result<Option<ProbeOutcome>> {
+    let target: Option<ConnTarget> = sqlx::query_as(
+        "SELECT id, protocol, hostname, port, extra FROM connections \
+         WHERE id = $1 AND soft_deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(t) = target else {
+        return Ok(None);
+    };
+
+    let host_port = if t.protocol == "web" {
+        web_probe_target(&t.extra)
+    } else {
+        u16::try_from(t.port).ok().map(|p| (t.hostname.clone(), p))
+    };
+    let (status, latency_ms) = match host_port {
+        Some((host, port)) => timed_probe(&host, port).await,
+        None => ("unknown", None),
+    };
+
+    let checked_at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+        "UPDATE connections SET health_status = $1, health_checked_at = now() \
+         WHERE id = $2 RETURNING health_checked_at",
+    )
+    .bind(status)
+    .bind(t.id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(Some(ProbeOutcome {
+        id: t.id,
+        health_status: status.to_owned(),
+        latency_ms,
+        health_checked_at: checked_at,
+    }))
+}
+
+async fn timed_probe(host: &str, port: u16) -> (&'static str, Option<u64>) {
+    let started = std::time::Instant::now();
+    let status = probe_tcp(host, port).await;
+    let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    (status, (status == "online").then_some(elapsed))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +212,22 @@ mod tests {
     async fn test_probe_tcp_invalid_host() {
         let status = probe_tcp("invalid-host-name-123", 80).await;
         assert_eq!(status, "offline");
+    }
+
+    #[tokio::test]
+    async fn timed_probe_reports_no_latency_when_offline() {
+        let (status, latency) = timed_probe("127.0.0.1", 54321).await;
+        assert_eq!(status, "offline");
+        assert!(latency.is_none());
+    }
+
+    #[tokio::test]
+    async fn timed_probe_reports_latency_when_online() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (status, latency) = timed_probe("127.0.0.1", port).await;
+        assert_eq!(status, "online");
+        assert!(latency.is_some());
     }
 
     #[test]

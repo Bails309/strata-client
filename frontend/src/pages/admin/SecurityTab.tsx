@@ -4,6 +4,7 @@
    eslint.config.js W4-1 commentary. */
 import { useEffect, useState } from "react";
 import ConfirmModal from "../../components/ConfirmModal";
+import EnterpriseCheckbox from "../../components/EnterpriseCheckbox";
 import { updateAuthMethods, updateSettings } from "../../api";
 
 export default function SecurityTab({
@@ -94,20 +95,16 @@ export default function SecurityTab({
           </h4>
           <div className="space-y-5">
             <div className="form-group">
-              <label
-                className="flex items-center gap-3 cursor-pointer group"
+              <EnterpriseCheckbox
+                className="gap-3 group items-start"
                 aria-label="Local Authentication"
+                checked={localAuthEnabled}
+                onChange={(e) => {
+                  const val = e.target.checked;
+                  if (!val && !ssoEnabled) return; // Prevent disabling both
+                  setLocalAuthEnabled(val);
+                }}
               >
-                <input
-                  type="checkbox"
-                  checked={localAuthEnabled}
-                  onChange={(e) => {
-                    const val = e.target.checked;
-                    if (!val && !ssoEnabled) return; // Prevent disabling both
-                    setLocalAuthEnabled(val);
-                  }}
-                  className="checkbox"
-                />
                 <div>
                   <span className="font-medium group-hover:text-txt-primary transition-colors">
                     Local Authentication
@@ -116,24 +113,20 @@ export default function SecurityTab({
                     Allow users to log in with a username and password stored in the local database.
                   </p>
                 </div>
-              </label>
+              </EnterpriseCheckbox>
             </div>
 
             <div className="form-group">
-              <label
-                className="flex items-center gap-3 cursor-pointer group"
+              <EnterpriseCheckbox
+                className="gap-3 group items-start"
                 aria-label="SSO / OIDC (Keycloak)"
+                checked={ssoEnabled}
+                onChange={(e) => {
+                  const val = e.target.checked;
+                  if (!val && !localAuthEnabled) return; // Prevent disabling both
+                  setSsoEnabled(val);
+                }}
               >
-                <input
-                  type="checkbox"
-                  checked={ssoEnabled}
-                  onChange={(e) => {
-                    const val = e.target.checked;
-                    if (!val && !localAuthEnabled) return; // Prevent disabling both
-                    setSsoEnabled(val);
-                  }}
-                  className="checkbox"
-                />
                 <div>
                   <span className="font-medium group-hover:text-txt-primary transition-colors">
                     SSO / OIDC (Keycloak)
@@ -143,7 +136,7 @@ export default function SecurityTab({
                     provider settings in the SSO tab.
                   </p>
                 </div>
-              </label>
+              </EnterpriseCheckbox>
             </div>
           </div>
         </div>
@@ -153,16 +146,12 @@ export default function SecurityTab({
             Session Protection
           </h4>
           <div className="form-group">
-            <label
-              className="flex items-center gap-3 cursor-pointer group"
+            <EnterpriseCheckbox
+              className="gap-3 group items-start"
               aria-label="Session Watermark"
+              checked={watermarkEnabled}
+              onChange={(e) => setWatermarkEnabled(e.target.checked)}
             >
-              <input
-                type="checkbox"
-                checked={watermarkEnabled}
-                onChange={(e) => setWatermarkEnabled(e.target.checked)}
-                className="checkbox"
-              />
               <div>
                 <span className="font-medium group-hover:text-txt-primary transition-colors">
                   Session Watermark
@@ -173,7 +162,7 @@ export default function SecurityTab({
                   capture.
                 </p>
               </div>
-            </label>
+            </EnterpriseCheckbox>
           </div>
         </div>
 

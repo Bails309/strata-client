@@ -614,6 +614,64 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v2.1.1 → v2.2.0 (admin console rebuild; role descriptions; unified notifications)
+
+Rebuild both images. **Two migrations, no `.env` change.** The DMZ edge
+carries no changed code and does not need rebuilding.
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+| Migration | Effect | Rollback impact |
+| --------- | ------ | --------------- |
+| `090_role_description.sql` | Adds `roles.description TEXT NOT NULL DEFAULT ''` | Additive; an older backend ignores the column |
+| `092_prune_shipped_roadmap_statuses.sql` | Removes the `workflows-quick-share-outbound` and `protocols-ironrdp-upgrade` keys from `system_settings.roadmap_statuses`; leaves a missing or non-JSON value untouched | Data-only; the removed keys referred to items no longer in the roadmap |
+
+**API additions:** `POST /api/admin/connections/{id}/probe` and a
+`description` field on the role endpoints. Nothing was removed or renamed,
+and no permission check moved. Audit payloads for `connection.deleted`,
+`connection_folder.created` and `connection_folder.deleted` gained fields,
+and `connection_folder.updated` is new — update any SIEM parser that
+matches those events strictly.
+
+**What changes for users:**
+
+| Change | Who notices |
+| ------ | ----------- |
+| New cyan / navy design, redesigned sign-in page, breadcrumbs, admin mega-menu | Everyone |
+| Approval requests and credential-expiry warnings are toasts at the top right; simultaneous expiries arrive as one grouped toast; a lease pill appears in the header when Vault is configured | Approvers; users with credential profiles |
+| **Admin → Connections** is a fleet manager with filters, policy badges, on-demand probes and bulk actions; folders are a tree | Connection administrators |
+| The role editor shows *Manage users* and *Manage all connections*, which the old dialog hid | Role administrators |
+
+**Operator action — review custom roles.** Open each custom role in
+**Admin → Access → Roles** once after upgrading:
+
+1. Check **Manage users** and **Manage all connections**. Both are Critical:
+   the first can change any user's role, including the holder's own; the
+   second opens every connection. The old dialog could not show either.
+2. On **Asset assignments**, look for subfolders marked **Not covered by
+   parent folder**. A folder grant covers only connections filed directly in
+   that folder; this has always been the enforced behaviour, but the old
+   dialog did not show it.
+3. If a role relies on **Create new users**, **Create new roles** or **Create
+   new connections** alone, grant the permission the server actually checks
+   (*Manage users*, *Administer system* or *Manage all connections*), or
+   remove the flag.
+
+**Verify post-upgrade:**
+
+1. The in-app **What's New** modal shows the v2.2.0 card.
+2. `docker compose exec postgres-local psql -U strata -d strata -c "\d roles"` lists
+   a `description` column.
+3. **Admin → Connections** → **Probe** on a reachable connection shows
+   *Reachable* with a latency in milliseconds.
+4. Rename a folder, then open **Audit Logs**: the entry reads
+   *Updated folder …*.
+
 #### v2.1.0 → v2.1.1 (accurate session-end messages; RDP audio, keyboard and display-scale fixes)
 
 A drop-in rebuild of both images. **No migration, no `.env` change, no API

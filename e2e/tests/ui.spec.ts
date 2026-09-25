@@ -19,7 +19,7 @@ test.describe('Login UI', () => {
     await page.getByPlaceholder('••••••••').fill('wrong-password');
     await page.getByRole('button', { name: /sign in/i }).click();
 
-    await expect(page.locator('.bg-danger-dim, [class*="danger"]')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('alert')).toBeVisible({ timeout: 5000 });
   });
 
   test('successful login redirects to dashboard', async ({ page }) => {

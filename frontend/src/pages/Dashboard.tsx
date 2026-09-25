@@ -31,8 +31,21 @@ import {
   ConnectionFolder,
 } from "../api";
 import { useSessionManager } from "../components/SessionManager";
+import ConnectionCard from "../components/connections/ConnectionCard";
+import {
+  deriveHealth,
+  deriveLease,
+  deriveSession,
+  formatDuration,
+  HOST_HEALTH_LABEL,
+  type TargetSessionState,
+} from "../components/connections/connectionState";
+import { useNow } from "../components/leaseStore";
 import Select from "../components/Select";
 import EnterpriseCheckbox from "../components/EnterpriseCheckbox";
+import ConnectionEmptyState from "../components/ConnectionEmptyState";
+import ActiveFilterChips from "../components/ActiveFilterChips";
+import useConnectionFilter from "../hooks/useConnectionFilter";
 import { useSettings } from "../contexts/SettingsContext";
 import { isWebPSupported } from "../utils/browserCapabilities";
 
@@ -187,8 +200,6 @@ interface TiledCredPrompt {
 export default function Dashboard() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [folders, setFolders] = useState<ConnectionFolder[]>([]);
-  const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState("");
   const [page, setPage] = useState(1);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [tiledCredPrompt, setTiledCredPrompt] = useState<TiledCredPrompt | null>(null);
@@ -197,9 +208,6 @@ export default function Dashboard() {
   >({});
   const [vaultConfigured, setVaultConfigured] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
-  const [showFavorites, setShowFavorites] = useState(
-    () => localStorage.getItem(SHOW_FAVORITES_KEY) === "true"
-  );
   const [folderView, setFolderView] = useState(
     () => localStorage.getItem(FOLDER_VIEW_KEY) === "true"
   );
@@ -218,19 +226,19 @@ export default function Dashboard() {
   const [adminTags, setAdminTags] = useState<UserTag[]>([]);
   const [connTagMap, setConnTagMap] = useState<Record<string, string[]>>({});
   const [adminConnTagMap, setAdminConnTagMap] = useState<Record<string, string[]>>({});
-  const [activeTagFilters, setActiveTagFilters] = useState<Set<string>>(() => {
-    try {
-      const saved = localStorage.getItem(TAG_FILTERS_KEY);
-      return saved ? new Set(JSON.parse(saved)) : new Set();
-    } catch {
-      return new Set();
-    }
-  });
   const [allCheckouts, setAllCheckouts] = useState<CheckoutRequest[]>([]);
   const { formatDateTime } = useSettings();
   const navigate = useNavigate();
-  const { createSession, setTiledSessionIds, setFocusedSessionIds, setActiveSessionId } =
-    useSessionManager();
+  const {
+    createSession,
+    setTiledSessionIds,
+    setFocusedSessionIds,
+    setActiveSessionId,
+    sessions,
+    closeSession,
+  } = useSessionManager();
+  // Keeps lease countdowns and live-session durations fresh.
+  const now = useNow(30_000);
 
   const loadProfiles = useCallback(async () => {
     try {
@@ -334,42 +342,59 @@ export default function Dashboard() {
     });
   }, [credProfiles, allCheckouts]);
 
-  const filtered = useMemo(() => {
-    let list = connections;
-    if (showFavorites) {
-      list = list.filter((c) => favorites.has(c.id));
+  const enrichedConnections = useMemo(() => {
+    return connections.map((c) => ({
+      ...c,
+      isFavorite: favorites.has(c.id),
+      tags: allConnTagMap[c.id] || [],
+    }));
+  }, [connections, favorites, allConnTagMap]);
+
+  const {
+    filters,
+    setFilter,
+    resetAllFilters,
+    clearScope,
+    filteredConnections: filtered,
+    globalSearchMatches,
+  } = useConnectionFilter(enrichedConnections, {
+    searchQuery: "",
+    favoritesOnly: localStorage.getItem(SHOW_FAVORITES_KEY) === "true",
+    selectedTag: (() => {
+      try {
+        const saved = localStorage.getItem(TAG_FILTERS_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed[0];
+        }
+      } catch {
+        /* ignore */
+      }
+      return null;
+    })(),
+    selectedProtocol: "ALL",
+  });
+
+  useEffect(() => {
+    localStorage.setItem(SHOW_FAVORITES_KEY, String(filters.favoritesOnly));
+  }, [filters.favoritesOnly]);
+
+  useEffect(() => {
+    if (filters.selectedTag) {
+      localStorage.setItem(TAG_FILTERS_KEY, JSON.stringify([filters.selectedTag]));
+    } else {
+      localStorage.removeItem(TAG_FILTERS_KEY);
     }
-    if (search) {
-      const q = search.toLowerCase();
-      const tagNameById = new Map(allTags.map((t) => [t.id, t.name.toLowerCase()]));
-      list = list.filter(
-        (c) =>
-          c.name.toLowerCase().includes(q) ||
-          c.hostname.toLowerCase().includes(q) ||
-          (c.description || "").toLowerCase().includes(q) ||
-          (allConnTagMap[c.id] || []).some((tid) => (tagNameById.get(tid) || "").includes(q))
-      );
-    }
-    if (typeFilter) {
-      list = list.filter((c) => c.protocol.toLowerCase() === typeFilter.toLowerCase());
-    }
-    if (activeTagFilters.size > 0) {
-      list = list.filter((c) => {
-        const cTags = allConnTagMap[c.id] || [];
-        return [...activeTagFilters].some((tid) => cTags.includes(tid));
-      });
-    }
-    return list;
-  }, [
-    connections,
-    search,
-    typeFilter,
-    showFavorites,
-    favorites,
-    activeTagFilters,
-    allConnTagMap,
-    allTags,
-  ]);
+  }, [filters.selectedTag]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filters]);
+
+  const selectedTagName = useMemo(() => {
+    if (!filters.selectedTag) return null;
+    return allTags.find((t) => t.id === filters.selectedTag)?.name || filters.selectedTag;
+  }, [filters.selectedTag, allTags]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -439,7 +464,7 @@ export default function Dashboard() {
   // When a search filter is active, auto-expand any folder containing
   // matches so users don't see an empty tree.
   const autoExpandedIds = useMemo(() => {
-    if (!folderTree || !search.trim()) return null;
+    if (!folderTree || !filters.searchQuery.trim()) return null;
     const ids = new Set<string>();
     type VisitNode = { id: string; children: VisitNode[]; totalCount: number };
     const visit = (node: VisitNode): boolean => {
@@ -455,7 +480,7 @@ export default function Dashboard() {
     };
     folderTree.roots.forEach((r) => visit(r));
     return ids;
-  }, [folderTree, search]);
+  }, [folderTree, filters.searchQuery]);
 
   const toggleFolderCollapse = useCallback((fid: string) => {
     setExpandedFolders((prev) => {
@@ -505,10 +530,6 @@ export default function Dashboard() {
     }
   }, []);
 
-  useEffect(() => {
-    setPage(1);
-  }, [search, typeFilter, showFavorites, activeTagFilters]);
-
   const handleToggleFavorite = useCallback(async (connectionId: string) => {
     const result = await toggleFavorite(connectionId);
     setFavorites((prev) => {
@@ -539,27 +560,27 @@ export default function Dashboard() {
     return tag;
   }, []);
 
-  const handleDeleteTag = useCallback(async (tagId: string) => {
-    try {
-      await deleteTag(tagId);
-      setTags((prev) => prev.filter((t) => t.id !== tagId));
-      setConnTagMap((prev) => {
-        const next = { ...prev };
-        for (const connId of Object.keys(next)) {
-          next[connId] = next[connId].filter((tid) => tid !== tagId);
+  const handleDeleteTag = useCallback(
+    async (tagId: string) => {
+      try {
+        await deleteTag(tagId);
+        setTags((prev) => prev.filter((t) => t.id !== tagId));
+        setConnTagMap((prev) => {
+          const next = { ...prev };
+          for (const connId of Object.keys(next)) {
+            next[connId] = next[connId].filter((tid) => tid !== tagId);
+          }
+          return next;
+        });
+        if (filters.selectedTag === tagId) {
+          setFilter("selectedTag", null);
         }
-        return next;
-      });
-      setActiveTagFilters((prev) => {
-        const next = new Set(prev);
-        next.delete(tagId);
-        localStorage.setItem(TAG_FILTERS_KEY, JSON.stringify([...next]));
-        return next;
-      });
-    } catch {
-      /* ignore */
-    }
-  }, []);
+      } catch {
+        /* ignore */
+      }
+    },
+    [filters.selectedTag, setFilter]
+  );
 
   const toggleChecked = useCallback((id: string) => {
     setChecked((prev) => {
@@ -725,25 +746,14 @@ export default function Dashboard() {
       .slice(0, 5);
   }, [connections]);
 
-  /** Get credential status for a connection based on its mapped profile */
-  const getCredStatus = useCallback(
-    (connId: string): "active" | "expired" | "none" => {
-      const profileId = connProfileMap[connId];
-      if (!profileId) return "none";
-      const profile = credProfiles.find((p) => p.id === profileId);
-      if (!profile) return "none";
-      if (profile.expired) return "expired";
-
-      // If linked to a checkout, that checkout must be live
-      if (profile.checkout_id) {
-        const checkout = allCheckouts.find((c) => c.id === profile.checkout_id);
-        if (checkout && !isCheckoutLive(checkout)) return "expired";
-      }
-
-      return "active";
-    },
-    [connProfileMap, credProfiles, allCheckouts, isCheckoutLive]
-  );
+  const sessionStates = useMemo(() => {
+    const map: Record<string, TargetSessionState> = {};
+    for (const s of sessions) {
+      const state = deriveSession(s, now);
+      if (state.state !== "DISCONNECTED") map[s.connectionId] = state;
+    }
+    return map;
+  }, [sessions, now]);
 
   return (
     <div className="strata-dashboard">
@@ -754,144 +764,31 @@ export default function Dashboard() {
         <div className="recent-cards-section">
           <div className="recent-cards-grid">
             {recentConnections.map((conn) => {
-              const status = getCredStatus(conn.id);
-              // Bounded {3} repetition, no nested quantifiers — not ReDoS-vulnerable.
-              // eslint-disable-next-line security/detect-unsafe-regex
-              const isIP = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(conn.hostname);
-              const domainLabel =
-                conn.domain || (isIP ? "" : conn.hostname.split(".").slice(1).join("."));
+              const session = sessionStates[conn.id] ?? { state: "DISCONNECTED" as const };
+              const profile = credProfiles.find((p) => p.id === connProfileMap[conn.id]);
               return (
-                <div
+                <ConnectionCard
                   key={conn.id}
-                  className="recent-card"
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => navigate(`/session/${conn.id}`)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      navigate(`/session/${conn.id}`);
-                    }
+                  conn={conn}
+                  icon={<ProtocolIcon protocol={conn.protocol} />}
+                  state={{
+                    health: deriveHealth(conn),
+                    lease: deriveLease(profile, allCheckouts, now),
+                    session,
                   }}
-                >
-                  {/* Status indicator dot */}
-                  <div
-                    className="recent-card-dot"
-                    style={{
-                      background:
-                        status === "active"
-                          ? "#10b981"
-                          : status === "expired"
-                            ? "#ef4444"
-                            : "var(--color-accent)",
-                      boxShadow:
-                        status === "active"
-                          ? "0 0 8px rgba(16, 185, 129, 0.6)"
-                          : status === "expired"
-                            ? "0 0 8px rgba(239, 68, 68, 0.6)"
-                            : "0 0 8px var(--color-accent-glow)",
-                    }}
-                  />
-
-                  {/* Card protocol icon */}
-                  <div className="recent-card-icon-badge">
-                    <ProtocolIcon protocol={conn.protocol} />
-                  </div>
-
-                  {/* Card content */}
-                  <h3 className="recent-card-title">{conn.name}</h3>
-                  <p className="recent-card-detail">
-                    <span
-                      style={{
-                        display: "inline-block",
-                        width: 8,
-                        height: 8,
-                        borderRadius: "50%",
-                        marginRight: 6,
-                        verticalAlign: "middle",
-                        background:
-                          conn.health_status === "online"
-                            ? "#10b981"
-                            : conn.health_status === "offline"
-                              ? "#ef4444"
-                              : "#6b7280",
-                        boxShadow:
-                          conn.health_status === "online"
-                            ? "0 0 6px rgba(16,185,129,0.6)"
-                            : conn.health_status === "offline"
-                              ? "0 0 6px rgba(239,68,68,0.6)"
-                              : "none",
-                      }}
-                    />
-                    {conn.protocol.toUpperCase()} - {conn.hostname}:{conn.port}
-                  </p>
-                  <div className="recent-card-meta">
-                    <p>
-                      Status: {domainLabel ? `${domainLabel} ` : ""}
-                      <span
-                        style={{
-                          color:
-                            status === "active"
-                              ? "#22c55e"
-                              : status === "expired"
-                                ? "#ef4444"
-                                : "var(--color-txt-tertiary)",
-                        }}
-                      >
-                        ({status === "none" ? "no profile" : status})
-                      </span>
-                    </p>
-                    <p>
-                      Last Accessed:{" "}
-                      <span className="recent-card-meta-value">
-                        {formatDateTime(conn.last_accessed!)}
-                      </span>
-                    </p>
-                  </div>
-
-                  {/* Connect button */}
-                  <button
-                    className="btn-connect-glass w-full"
-                    data-status={status}
-                    style={
-                      {
-                        "--btn-border":
-                          status === "active"
-                            ? "rgba(34, 197, 94, 0.4)"
-                            : status === "expired"
-                              ? "rgba(239, 68, 68, 0.4)"
-                              : "var(--color-border-focus)",
-                        "--btn-text":
-                          status === "active"
-                            ? "#22c55e"
-                            : status === "expired"
-                              ? "#ef4444"
-                              : "var(--color-accent)",
-                        "--btn-glow":
-                          status === "active"
-                            ? "rgba(34, 197, 94, 0.15)"
-                            : status === "expired"
-                              ? "rgba(239, 68, 68, 0.15)"
-                              : "var(--color-accent-dim)",
-                      } as React.CSSProperties
-                    }
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigate(`/session/${conn.id}`);
-                    }}
-                  >
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="currentColor"
-                      stroke="none"
-                    >
-                      <polygon points="5,3 19,12 5,21" />
-                    </svg>
-                    Connect
-                  </button>
-                </div>
+                  lastAccessedLabel={formatDateTime(conn.last_accessed!)}
+                  healthCheckedLabel={
+                    conn.health_checked_at ? formatDateTime(conn.health_checked_at) : undefined
+                  }
+                  onConnect={() => navigate(`/session/${conn.id}`)}
+                  // SessionClient opens its renewal prompt for expired profiles.
+                  onRenewAndConnect={() => navigate(`/session/${conn.id}`)}
+                  onResume={() => {
+                    if (session.sessionId) setActiveSessionId(session.sessionId);
+                    navigate(`/session/${conn.id}`);
+                  }}
+                  onDisconnect={() => session.sessionId && closeSession(session.sessionId)}
+                />
               );
             })}
           </div>
@@ -899,8 +796,8 @@ export default function Dashboard() {
       )}
 
       {/* ── Toolbar ── */}
-      <div className="flex items-center gap-4 mb-5 flex-wrap">
-        <div className="dash-search flex items-center gap-2 flex-1 max-w-xs rounded-sm px-3 transition-all duration-200 focus-within:ring-3 focus-within:ring-accent-dim">
+      <div className="flex items-center gap-4 mb-3 flex-wrap">
+        <div className="dash-search flex items-center gap-2 flex-1 max-w-md rounded-sm px-3 transition-all duration-200 focus-within:ring-3 focus-within:ring-accent-dim">
           <svg
             width="16"
             height="16"
@@ -915,13 +812,65 @@ export default function Dashboard() {
             <circle cx="11" cy="11" r="8" />
             <path d="M21 21l-4.35-4.35" />
           </svg>
+
+          {/* Dynamic Inset Scope Badge */}
+          {filters.favoritesOnly && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] bg-[#3ACEEF]/20 border border-[#3ACEEF]/40 text-xs text-[#3ACEEF] whitespace-nowrap shrink-0">
+              ★ Favorites
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFilter("favoritesOnly", false);
+                }}
+                className="hover:text-white cursor-pointer ml-0.5"
+                title="Remove favorites scope"
+                aria-label="Remove favorites scope"
+              >
+                ✕
+              </button>
+            </span>
+          )}
+
+          {filters.selectedTag && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] bg-[#3ACEEF]/20 border border-[#3ACEEF]/40 text-xs text-[#3ACEEF] whitespace-nowrap shrink-0">
+              🏷️ {selectedTagName || filters.selectedTag}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFilter("selectedTag", null);
+                }}
+                className="hover:text-white cursor-pointer ml-0.5"
+                title="Remove tag scope"
+                aria-label="Remove tag scope"
+              >
+                ✕
+              </button>
+            </span>
+          )}
+
           <input
             type="text"
-            placeholder="Search name, host, description or tag"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            placeholder={
+              filters.favoritesOnly || filters.selectedTag
+                ? "Search within filtered scope..."
+                : "Search name, host, description or tag"
+            }
+            value={filters.searchQuery}
+            onChange={(e) => setFilter("searchQuery", e.target.value)}
             className="!border-none !bg-transparent !shadow-none py-2 text-[0.8125rem] w-full focus:!shadow-none"
           />
+          {filters.searchQuery && (
+            <button
+              type="button"
+              onClick={() => setFilter("searchQuery", "")}
+              className="text-txt-tertiary hover:text-txt-primary cursor-pointer text-xs shrink-0"
+              aria-label="Clear search query"
+            >
+              ✕
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -934,8 +883,8 @@ export default function Dashboard() {
           <div className="dash-type-select min-w-[140px]">
             <Select
               id="dashboard-type-filter"
-              value={typeFilter}
-              onChange={setTypeFilter}
+              value={filters.selectedProtocol === "ALL" ? "" : filters.selectedProtocol}
+              onChange={(val) => setFilter("selectedProtocol", val || "ALL")}
               placeholder="Select select"
               options={[
                 { value: "", label: "All" },
@@ -946,28 +895,35 @@ export default function Dashboard() {
         </div>
 
         <button
-          className={`dash-toggle btn-sm inline-flex items-center gap-1.5 ${showFavorites ? "!border-accent !text-accent" : ""}`}
-          aria-pressed={showFavorites}
+          className={`dash-toggle btn-sm inline-flex items-center gap-1.5 ${
+            filters.favoritesOnly ? "!border-accent !text-accent bg-accent/10" : ""
+          }`}
+          aria-pressed={filters.favoritesOnly}
           onClick={() => {
-            const next = !showFavorites;
-            setShowFavorites(next);
-            localStorage.setItem(SHOW_FAVORITES_KEY, String(next));
+            const next = !filters.favoritesOnly;
+            setFilter("favoritesOnly", next);
           }}
-          title={showFavorites ? "Show all connections" : "Show favorites only"}
+          title={filters.favoritesOnly ? "Show all connections" : "Show favorites only"}
         >
           <svg
             width="14"
             height="14"
             viewBox="0 0 24 24"
-            fill={showFavorites ? "var(--color-accent)" : "none"}
-            stroke={showFavorites ? "var(--color-accent)" : "currentColor"}
+            fill={filters.favoritesOnly ? "var(--color-accent)" : "none"}
+            stroke={filters.favoritesOnly ? "var(--color-accent)" : "currentColor"}
             strokeWidth="2"
             strokeLinecap="round"
             strokeLinejoin="round"
           >
             <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
           </svg>
-          Favorites{favorites.size > 0 ? ` (${favorites.size})` : ""}
+          {filters.favoritesOnly ? (
+            <span className="inline-flex items-center gap-1">
+              ★ Favorites{favorites.size > 0 ? ` (${favorites.size})` : ""} ✕
+            </span>
+          ) : (
+            <span>Favorites{favorites.size > 0 ? ` (${favorites.size})` : ""}</span>
+          )}
         </button>
 
         <button
@@ -1045,59 +1001,56 @@ export default function Dashboard() {
             <span className="text-xs uppercase text-txt-tertiary font-semibold tracking-wide">
               Tags
             </span>
-            {allTags.map((tag) => (
-              <button
-                key={tag.id}
-                className="btn-sm inline-flex items-center gap-1 text-xs !py-0.5 !px-2"
-                style={{
-                  borderColor: activeTagFilters.has(tag.id) ? tag.color : undefined,
-                  color: activeTagFilters.has(tag.id) ? tag.color : undefined,
-                  background: activeTagFilters.has(tag.id) ? `${tag.color}15` : undefined,
-                }}
-                onClick={() => {
-                  setActiveTagFilters((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(tag.id)) next.delete(tag.id);
-                    else next.add(tag.id);
-                    localStorage.setItem(TAG_FILTERS_KEY, JSON.stringify([...next]));
-                    return next;
-                  });
-                }}
-              >
-                <span
+            {allTags.map((tag) => {
+              const isSelected = filters.selectedTag === tag.id;
+              return (
+                <button
+                  key={tag.id}
+                  className="btn-sm inline-flex items-center gap-1 text-xs !py-0.5 !px-2 cursor-pointer"
                   style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: "50%",
-                    background: tag.color,
-                    display: "inline-block",
-                    flexShrink: 0,
+                    borderColor: isSelected ? tag.color : undefined,
+                    color: isSelected ? tag.color : undefined,
+                    background: isSelected ? `${tag.color}15` : undefined,
                   }}
-                />
-                {tag.name}
-                {!adminTags.some((at) => at.id === tag.id) && (
+                  onClick={() => {
+                    setFilter("selectedTag", isSelected ? null : tag.id);
+                  }}
+                >
                   <span
-                    className="ml-0.5 opacity-50 hover:opacity-100"
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteTag(tag.id);
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      background: tag.color,
+                      display: "inline-block",
+                      flexShrink: 0,
                     }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
+                  />
+                  {tag.name}
+                  {!adminTags.some((at) => at.id === tag.id) && (
+                    <span
+                      className="ml-0.5 opacity-50 hover:opacity-100"
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => {
                         e.stopPropagation();
                         handleDeleteTag(tag.id);
-                      }
-                    }}
-                    title="Delete tag"
-                  >
-                    ×
-                  </span>
-                )}
-              </button>
-            ))}
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleDeleteTag(tag.id);
+                        }
+                      }}
+                      title="Delete tag"
+                    >
+                      ×
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         )}
 
@@ -1123,6 +1076,15 @@ export default function Dashboard() {
         )}
       </div>
 
+      {/* ── Active Filter Chips ── */}
+      <ActiveFilterChips
+        filters={filters}
+        setFilter={setFilter}
+        resetAllFilters={resetAllFilters}
+        selectedTagName={selectedTagName}
+        className="mb-3"
+      />
+
       {/* ── Table ── */}
       <div className="dash-table-card card !p-0 !overflow-hidden">
         <table>
@@ -1142,14 +1104,15 @@ export default function Dashboard() {
               </th>
               <th>Connection Name</th>
               <th>Type</th>
-              <th>Status</th>
+              <th>Host</th>
+              <th>Session</th>
               <th>Details</th>
               <th>Last Accessed</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {folderView && folderTree ? (
+            {folderView && folderTree && filtered.length > 0 ? (
               <>
                 {folderTree.roots.map((root) => (
                   <ConnectionFolderTree
@@ -1167,6 +1130,7 @@ export default function Dashboard() {
                     credProfiles={filteredProfiles}
                     allCheckouts={allCheckouts}
                     connProfileMap={connProfileMap}
+                    sessionStates={sessionStates}
                     onProfileChange={handleProfileChange}
                     navigate={navigate}
                     tags={allTags}
@@ -1198,6 +1162,7 @@ export default function Dashboard() {
                     credProfiles={filteredProfiles}
                     allCheckouts={allCheckouts}
                     connProfileMap={connProfileMap}
+                    sessionStates={sessionStates}
                     onProfileChange={handleProfileChange}
                     navigate={navigate}
                     tags={allTags}
@@ -1221,6 +1186,7 @@ export default function Dashboard() {
                   credProfiles={filteredProfiles}
                   allCheckouts={allCheckouts}
                   assignedProfileId={connProfileMap[conn.id] || ""}
+                  session={sessionStates[conn.id]}
                   onProfileChange={handleProfileChange}
                   onConnect={() => navigate(`/session/${conn.id}`)}
                   tags={allTags}
@@ -1233,10 +1199,15 @@ export default function Dashboard() {
             )}
             {visibleConnections.length === 0 && (
               <tr>
-                <td colSpan={6} className="text-center py-8 text-txt-secondary">
-                  {connections.length === 0
-                    ? "No connections available. Ask your administrator to assign connections to your role."
-                    : "No connections match your filters."}
+                <td colSpan={8} className="p-0">
+                  <ConnectionEmptyState
+                    filters={filters}
+                    filteredCount={filtered.length}
+                    globalCount={globalSearchMatches.length}
+                    onClearScope={clearScope}
+                    onResetAll={resetAllFilters}
+                    totalConnections={connections.length}
+                  />
                 </td>
               </tr>
             )}
@@ -1468,6 +1439,7 @@ function ConnectionRow({
   credProfiles,
   allCheckouts,
   assignedProfileId,
+  session,
   onProfileChange,
   onConnect,
   tags,
@@ -1486,6 +1458,7 @@ function ConnectionRow({
   credProfiles: CredentialProfile[];
   allCheckouts: CheckoutRequest[];
   assignedProfileId: string;
+  session?: TargetSessionState;
   onProfileChange: (connectionId: string, profileId: string) => void;
   onConnect: () => void;
   tags: UserTag[];
@@ -1525,29 +1498,18 @@ function ConnectionRow({
     return () => document.removeEventListener("mousedown", handler);
   }, [showTagMenu]);
 
-  const status: "active" | "expired" | "none" = useMemo(() => {
-    const profile = credProfiles.find((p) => p.id === assignedProfileId);
-    if (!profile) return "none";
-    if (profile.expired) return "expired";
-
-    if (profile.checkout_id) {
-      const checkout = allCheckouts.find((c) => c.id === profile.checkout_id);
-      if (checkout && !isCheckoutLive(checkout)) return "expired";
-    }
-    return "active";
-  }, [credProfiles, assignedProfileId, allCheckouts, isCheckoutLive]);
+  const leaseStatus = useMemo(
+    () =>
+      deriveLease(
+        credProfiles.find((p) => p.id === assignedProfileId),
+        allCheckouts
+      ).status,
+    [credProfiles, assignedProfileId, allCheckouts]
+  );
 
   const connTags = useMemo(() => tags.filter((t) => connTagIds.includes(t.id)), [tags, connTagIds]);
-
-  const statusColors = {
-    active: { border: "rgba(34, 197, 94, 0.4)", text: "#22c55e", glow: "rgba(34, 197, 94, 0.15)" },
-    expired: { border: "rgba(239, 68, 68, 0.4)", text: "#ef4444", glow: "rgba(239, 68, 68, 0.15)" },
-    none: {
-      border: "var(--color-border-focus)",
-      text: "var(--color-accent)",
-      glow: "var(--color-accent-dim)",
-    },
-  }[status];
+  const health = deriveHealth(conn);
+  const isOffline = health === "OFFLINE";
 
   return (
     <tr
@@ -1625,30 +1587,31 @@ function ConnectionRow({
       </td>
       <td>
         <span
+          className="dash-host-health"
+          data-health={health.toLowerCase()}
           title={
             conn.health_checked_at
               ? `Checked: ${formatDateTime(conn.health_checked_at)}`
               : "Not yet checked"
           }
-          style={{
-            display: "inline-block",
-            width: 10,
-            height: 10,
-            borderRadius: "50%",
-            background:
-              conn.health_status === "online"
-                ? "#10b981"
-                : conn.health_status === "offline"
-                  ? "#ef4444"
-                  : "#6b7280",
-            boxShadow:
-              conn.health_status === "online"
-                ? "0 0 6px rgba(16,185,129,0.6)"
-                : conn.health_status === "offline"
-                  ? "0 0 6px rgba(239,68,68,0.6)"
-                  : "none",
-          }}
-        />
+        >
+          <span className="dash-state-dot" aria-hidden />
+          {HOST_HEALTH_LABEL[health]}
+        </span>
+      </td>
+      <td>
+        {session?.state === "CONNECTED" ? (
+          <span className="dash-session-live">
+            <span className="dash-state-dot animate-pulse" aria-hidden />
+            Live ({formatDuration(session.elapsedSeconds ?? 0)})
+          </span>
+        ) : session?.state === "CONNECTING" ? (
+          <span className="dash-session-idle">Connecting…</span>
+        ) : (
+          <span className="dash-session-idle" aria-label="No active session">
+            —
+          </span>
+        )}
       </td>
       <td className="text-[0.8125rem] text-txt-secondary">
         {conn.protocol.toUpperCase()} — {conn.hostname}:{conn.port}
@@ -1813,20 +1776,21 @@ function ConnectionRow({
             )}
           </div>
           <button
+            type="button"
             className="btn-connect-glass dash-row-connect"
-            data-status={status}
-            style={
-              {
-                "--btn-border": statusColors.border,
-                "--btn-text": statusColors.text,
-                "--btn-glow": statusColors.glow,
-                padding: "0.35rem 0.8rem",
-                fontSize: "0.75rem",
-              } as React.CSSProperties
-            }
+            data-variant={leaseStatus === "EXPIRED" ? "renew" : undefined}
+            style={{ padding: "0.35rem 0.8rem", fontSize: "0.75rem", whiteSpace: "nowrap" }}
             onClick={onConnect}
+            disabled={isOffline}
+            title={
+              isOffline
+                ? "Host is unreachable"
+                : leaseStatus === "EXPIRED"
+                  ? "Renew lease and connect"
+                  : undefined
+            }
           >
-            Connect
+            {leaseStatus === "EXPIRED" ? "Renew & Connect" : "Connect"}
           </button>
           {vaultConfigured && (
             <div className="dash-account-select w-[200px] shrink-0">
@@ -1889,6 +1853,7 @@ interface FolderTreeProps {
   credProfiles: CredentialProfile[];
   allCheckouts: CheckoutRequest[];
   connProfileMap: Record<string, string>;
+  sessionStates: Record<string, TargetSessionState>;
   onProfileChange: (connectionId: string, profileId: string) => void;
   navigate: (path: string) => void;
   tags: UserTag[];
@@ -1915,7 +1880,7 @@ function ConnectionFolderTree(props: FolderTreeProps) {
         style={{ cursor: "pointer", background: "var(--color-surface-secondary)" }}
       >
         <td />
-        <td colSpan={6} className="!py-2">
+        <td colSpan={7} className="!py-2">
           <div
             className="flex items-center gap-2 font-semibold text-[0.8125rem]"
             style={{ paddingLeft: `${indentPx}px` }}
@@ -1975,6 +1940,7 @@ function ConnectionFolderTree(props: FolderTreeProps) {
               credProfiles={props.credProfiles}
               allCheckouts={props.allCheckouts}
               assignedProfileId={props.connProfileMap[conn.id] || ""}
+              session={props.sessionStates[conn.id]}
               onProfileChange={props.onProfileChange}
               onConnect={() => props.navigate(`/session/${conn.id}`)}
               tags={props.tags}

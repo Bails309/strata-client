@@ -12,6 +12,8 @@ use uuid::Uuid;
 pub struct RoleRow {
     pub id: Uuid,
     pub name: String,
+    /// Added in migration 090; empty when never set.
+    pub description: String,
     pub can_manage_system: bool,
     pub can_manage_users: bool,
     pub can_manage_connections: bool,
@@ -34,6 +36,7 @@ pub struct RoleRow {
 #[derive(Deserialize, Debug)]
 pub struct CreateRoleRequest {
     pub name: String,
+    pub description: Option<String>,
     pub can_manage_system: Option<bool>,
     pub can_manage_users: Option<bool>,
     pub can_manage_connections: Option<bool>,
@@ -50,6 +53,7 @@ pub struct CreateRoleRequest {
 #[derive(Deserialize, Debug)]
 pub struct UpdateRoleRequest {
     pub name: Option<String>,
+    pub description: Option<String>,
     pub can_manage_system: Option<bool>,
     pub can_manage_users: Option<bool>,
     pub can_manage_connections: Option<bool>,
@@ -63,8 +67,23 @@ pub struct UpdateRoleRequest {
     pub can_use_quick_share_outbound: Option<bool>,
 }
 
+/// Longest description accepted, in characters.
+pub const MAX_DESCRIPTION_CHARS: usize = 500;
+
+/// Trim a submitted description and reject one that is too long.
+pub fn normalize_description(raw: Option<&str>) -> Result<Option<String>, AppError> {
+    let Some(raw) = raw else { return Ok(None) };
+    let trimmed = raw.trim();
+    if trimmed.chars().count() > MAX_DESCRIPTION_CHARS {
+        return Err(AppError::Validation(format!(
+            "Role description must be {MAX_DESCRIPTION_CHARS} characters or fewer"
+        )));
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
 const SELECT_COLUMNS: &str =
-    "id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, \
+    "id, name, description, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, \
      can_create_users, can_create_user_groups, can_create_connections, \
      can_create_sharing_profiles, can_view_sessions, can_use_quick_share, \
      can_use_quick_share_outbound";
@@ -78,12 +97,13 @@ pub async fn list_all(pool: &Pool<Postgres>) -> Result<Vec<RoleRow>, AppError> {
 }
 
 pub async fn create(pool: &Pool<Postgres>, body: &CreateRoleRequest) -> Result<RoleRow, AppError> {
+    let description = normalize_description(body.description.as_deref())?.unwrap_or_default();
     let row: RoleRow = sqlx::query_as(&format!(
         "INSERT INTO roles (name, can_manage_system, can_manage_users, can_manage_connections, \
          can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, \
          can_create_sharing_profiles, can_view_sessions, can_use_quick_share, \
-         can_use_quick_share_outbound) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+         can_use_quick_share_outbound, description) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
          RETURNING {SELECT_COLUMNS}"
     ))
     .bind(&body.name)
@@ -98,6 +118,7 @@ pub async fn create(pool: &Pool<Postgres>, body: &CreateRoleRequest) -> Result<R
     .bind(body.can_view_sessions.unwrap_or(false))
     .bind(body.can_use_quick_share.unwrap_or(false))
     .bind(body.can_use_quick_share_outbound.unwrap_or(false))
+    .bind(description)
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -108,6 +129,7 @@ pub async fn update(
     id: Uuid,
     body: &UpdateRoleRequest,
 ) -> Result<RoleRow, AppError> {
+    let description = normalize_description(body.description.as_deref())?;
     let row: RoleRow = sqlx::query_as(&format!(
         "UPDATE roles SET
             name = COALESCE($2, name),
@@ -121,7 +143,8 @@ pub async fn update(
             can_create_sharing_profiles = COALESCE($10, can_create_sharing_profiles),
             can_view_sessions = COALESCE($11, can_view_sessions),
             can_use_quick_share = COALESCE($12, can_use_quick_share),
-            can_use_quick_share_outbound = COALESCE($13, can_use_quick_share_outbound)
+            can_use_quick_share_outbound = COALESCE($13, can_use_quick_share_outbound),
+            description = COALESCE($14, description)
          WHERE id = $1
          RETURNING {SELECT_COLUMNS}"
     ))
@@ -138,6 +161,7 @@ pub async fn update(
     .bind(body.can_view_sessions)
     .bind(body.can_use_quick_share)
     .bind(body.can_use_quick_share_outbound)
+    .bind(description)
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -249,6 +273,7 @@ mod tests {
         let row = RoleRow {
             id: Uuid::nil(),
             name: "admin".to_string(),
+            description: "Full access".to_string(),
             can_manage_system: true,
             can_manage_users: true,
             can_manage_connections: true,
@@ -280,6 +305,31 @@ mod tests {
             assert_eq!(v[key], json!(true), "missing or non-bool {key}");
         }
         assert_eq!(v["name"], json!("admin"));
+        assert_eq!(v["description"], json!("Full access"));
+    }
+
+    #[test]
+    fn normalize_description_trims_and_passes_through_none() {
+        assert_eq!(normalize_description(None).unwrap(), None);
+        assert_eq!(
+            normalize_description(Some("  Helpdesk tier 1  ")).unwrap(),
+            Some("Helpdesk tier 1".to_string())
+        );
+        assert_eq!(
+            normalize_description(Some("   ")).unwrap(),
+            Some(String::new())
+        );
+    }
+
+    #[test]
+    fn normalize_description_counts_characters_not_bytes() {
+        let at_limit = "é".repeat(MAX_DESCRIPTION_CHARS);
+        assert!(normalize_description(Some(&at_limit)).is_ok());
+        let over = "a".repeat(MAX_DESCRIPTION_CHARS + 1);
+        assert!(matches!(
+            normalize_description(Some(&over)),
+            Err(AppError::Validation(_))
+        ));
     }
 
     #[test]
@@ -347,6 +397,7 @@ mod tests {
         for col in [
             "id",
             "name",
+            "description",
             "can_manage_system",
             "can_manage_users",
             "can_manage_connections",

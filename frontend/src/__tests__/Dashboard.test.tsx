@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BrowserRouter } from "react-router-dom";
 import React from "react";
@@ -308,7 +308,7 @@ describe("Dashboard", () => {
     await screen.findByText("Server Alpha");
     const searchInput = screen.getByPlaceholderText(/search/i);
     await userEvent.type(searchInput, "NONEXISTENT");
-    expect(screen.getByText("No connections match your filters.")).toBeInTheDocument();
+    expect(screen.getByText("No connections found matching your query.")).toBeInTheDocument();
   });
 
   it("renders connection descriptions", async () => {
@@ -347,6 +347,39 @@ describe("Dashboard", () => {
     await waitFor(() => {
       expect(screen.getByText("Server Alpha")).toBeInTheDocument();
       expect(screen.queryByText("Server Beta")).not.toBeInTheDocument();
+    });
+  });
+
+  it("displays smart empty state when scoped search has 0 matches but global matches exist, and 'Show all results' clears scope", async () => {
+    vi.mocked(getFavorites).mockResolvedValue(["1"]); // Only Server Alpha is favorite
+    renderDashboard();
+    await screen.findByText("Server Alpha");
+
+    // Enable favorites filter
+    await userEvent.click(screen.getByTitle("Show favorites only"));
+    expect(screen.getByText("Server Alpha")).toBeInTheDocument();
+    expect(screen.queryByText("Server Beta")).not.toBeInTheDocument();
+
+    // Now search for "Beta" (which is NOT a favorite)
+    const searchInput = screen.getByPlaceholderText(/Search within filtered scope\.\.\./i);
+    await userEvent.type(searchInput, "Beta");
+
+    // Smart empty state card appears
+    await waitFor(() => {
+      expect(screen.getByText("No matches in current filter")).toBeInTheDocument();
+      expect(screen.getByText(/Found/i)).toBeInTheDocument();
+      expect(screen.getByText(/outside your active scope/i)).toBeInTheDocument();
+    });
+
+    // Click "Show all 1 results" button
+    const showAllBtn = screen.getByRole("button", { name: /Show all 1 results/i });
+    await userEvent.click(showAllBtn);
+
+    // Favorites scope is cleared, query "Beta" is preserved, Server Beta is now visible
+    await waitFor(() => {
+      expect(screen.getByText("Server Beta")).toBeInTheDocument();
+      expect(screen.queryByText("Server Alpha")).not.toBeInTheDocument();
+      expect(searchInput).toHaveValue("Beta");
     });
   });
 
@@ -580,7 +613,7 @@ describe("Dashboard", () => {
       const cards = document.querySelectorAll(".recent-card");
       expect(cards.length).toBeGreaterThanOrEqual(1);
     });
-    expect(document.body.textContent).toContain("RDP - 10.0.0.1:3389");
+    expect(document.body.textContent).toContain("RDP · 10.0.0.1:3389");
   });
 
   it("recent cards show credential status badges", async () => {
@@ -591,7 +624,7 @@ describe("Dashboard", () => {
         label: "Admin",
         created_at: "2024-01-01T00:00:00Z",
         updated_at: "2024-01-01T00:00:00Z",
-        expires_at: "2024-12-31T00:00:00Z",
+        expires_at: new Date(Date.now() + 3_600_000).toISOString(),
         ttl_hours: 12,
         ttl_minutes: 0,
         extended_expiry: false,
@@ -617,13 +650,13 @@ describe("Dashboard", () => {
       const cards = document.querySelectorAll(".recent-card");
       expect(cards.length).toBeGreaterThanOrEqual(1);
     });
-    // Should show "active" status
+    // Lease chip names the account and its remaining TTL
     await waitFor(() => {
-      expect(document.body.textContent).toContain("active");
+      expect(document.body.textContent).toContain("Admin · Valid (59m left)");
     });
   });
 
-  it('recent cards show "no profile" for unmapped connections', async () => {
+  it("recent cards show manual authentication for unmapped connections", async () => {
     vi.mocked(getMyConnections).mockResolvedValue([
       {
         id: "1",
@@ -640,7 +673,8 @@ describe("Dashboard", () => {
       const cards = document.querySelectorAll(".recent-card");
       expect(cards.length).toBeGreaterThanOrEqual(1);
     });
-    expect(document.body.textContent).toContain("no profile");
+    expect(document.body.textContent).toContain("Manual / prompt authentication");
+    expect(document.body.textContent).not.toContain("Status:");
   });
 
   it("shows expired status for expired profile", async () => {
@@ -678,8 +712,13 @@ describe("Dashboard", () => {
       expect(cards.length).toBeGreaterThanOrEqual(1);
     });
     await waitFor(() => {
-      expect(document.body.textContent).toContain("expired");
+      expect(document.body.textContent).toContain("Expired Creds · Expired");
     });
+    expect(screen.getByRole("button", { name: "Renew Lease & Connect" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Renew & Connect" })).toHaveAttribute(
+      "data-variant",
+      "renew"
+    );
   });
 
   it("shows pagination Previous and Next buttons", async () => {
@@ -1015,20 +1054,21 @@ describe("Dashboard", () => {
     expect(localStorage.getItem("strata-folder-view")).toBe("true");
   });
 
-  it("renders recent card for connection with domain explicitly set", async () => {
+  it("splits host health and live session into separate table columns", async () => {
     vi.mocked(getMyConnections).mockResolvedValue([
-      {
-        id: "1",
-        name: "D1",
-        protocol: "rdp",
-        hostname: "1.2.3.4",
-        port: 3389,
-        last_accessed: "2024-01-01T00:00:00Z",
-        domain: "EXTRA",
-      },
+      { ...mockConnections[0], health_status: "online" as const },
+      { ...mockConnections[1], health_status: "offline" as const },
     ]);
     renderDashboard();
-    await waitFor(() => expect(screen.getByText(/EXTRA/)).toBeInTheDocument());
+    await screen.findByText("Server Alpha");
+    expect(screen.getByRole("columnheader", { name: "Host" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Session" })).toBeInTheDocument();
+    expect(screen.getByText("Reachable")).toBeInTheDocument();
+    expect(screen.getByText("Unreachable")).toBeInTheDocument();
+    expect(screen.getAllByLabelText("No active session")).toHaveLength(2);
+    const rows = screen.getAllByRole("row");
+    const betaRow = rows.find((r) => r.textContent?.includes("Server Beta"))!;
+    expect(within(betaRow).getByRole("button", { name: "Connect" })).toBeDisabled();
   });
 
   it("hero cards handle click to navigate", async () => {

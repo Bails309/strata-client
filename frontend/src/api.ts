@@ -1110,6 +1110,8 @@ export const getCertificates = () => request<CertificatesResponse>("/admin/certs
 export interface Role {
   id: string;
   name: string;
+  /** Free-text purpose; absent from servers older than migration 090. */
+  description?: string;
   can_manage_system: boolean;
   can_manage_users: boolean;
   can_manage_connections: boolean;
@@ -1166,6 +1168,18 @@ export const updateConnection = (id: string, data: Omit<Connection, "id">) =>
 
 export const deleteConnection = (id: string) =>
   request<{ status: string }>(`/admin/connections/${id}`, { method: "DELETE" });
+
+export interface ConnectionProbeResult {
+  id: string;
+  health_status: "online" | "offline" | "unknown";
+  /** TCP connect time; only present when the target answered. */
+  latency_ms: number | null;
+  health_checked_at: string;
+}
+
+/** TCP-probe one connection now instead of waiting for the 2-minute sweep. */
+export const probeConnection = (id: string) =>
+  request<ConnectionProbeResult>(`/admin/connections/${id}/probe`, { method: "POST" });
 
 /** A host key read from a server, for an operator to approve or reject. */
 export interface DiscoveredHostKey {

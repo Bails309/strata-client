@@ -243,33 +243,6 @@ export function RdpSections({
         </div>
       </Section>
 
-      <Section title="Basic Settings">
-        <FieldGrid>
-          <Field
-            label="Keyboard Layout"
-            title="The server-side keyboard layout. This is the layout of the RDP server and determines how keystrokes are interpreted."
-          >
-            <Select
-              value={ex("server-layout")}
-              onChange={(v) => setEx("server-layout", v)}
-              placeholder="Default (US English)"
-              options={RDP_KEYBOARD_LAYOUTS}
-            />
-          </Field>
-          <Field
-            label="Client Name"
-            title="The name of the client to present to the RDP server. Typically not required."
-          >
-            <input
-              value={ex("client-name")}
-              onChange={(e) => setEx("client-name", e.target.value)}
-              placeholder="Strata"
-              title="The name of the client to present to the RDP server. Typically not required."
-            />
-          </Field>
-        </FieldGrid>
-      </Section>
-
       <Section title="Display">
         <FieldGrid>
           <Field
@@ -302,10 +275,19 @@ export function RdpSections({
               ]}
             />
           </Field>
+          <Field
+            label="Keyboard Layout"
+            title="The server-side keyboard layout. This is the layout of the RDP server and determines how keystrokes are interpreted."
+          >
+            <Select
+              value={ex("server-layout")}
+              onChange={(v) => setEx("server-layout", v)}
+              placeholder="Default (US English)"
+              options={RDP_KEYBOARD_LAYOUTS}
+            />
+          </Field>
+          <div />
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
             <label
               className="flex items-center gap-2"
               title="Forces lossless image compression for all graphical updates. Increases quality but uses more bandwidth."
@@ -320,9 +302,6 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
             <label
               className="flex items-center gap-2"
               title="Prevents any user input from being sent to the remote desktop. The session is view-only."
@@ -373,28 +352,6 @@ export function RdpSections({
                 className="checkbox"
               />
               Disable paste to remote
-            </label>
-          </div>
-        </FieldGrid>
-      </Section>
-
-      <Section title="Device Redirection">
-        <FieldGrid>
-          <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">
-              &nbsp;
-            </span>
-            <label
-              className="flex items-center gap-2"
-              title="Disables audio playback from the remote desktop. Audio is enabled by default."
-            >
-              <input
-                type="checkbox"
-                checked={ex("disable-audio") === "true"}
-                onChange={(e) => setEx("disable-audio", e.target.checked ? "true" : "")}
-                className="checkbox"
-              />
-              Disable audio playback
             </label>
           </div>
         </FieldGrid>
@@ -576,21 +533,23 @@ export function RdpSections({
               Enable graphics pipeline (GFX)
             </label>
           </div>
-        </FieldGrid>
-      </Section>
-
-      <Section title="Load Balancing">
-        <FieldGrid>
-          <Field
-            label="Load Balance Info"
-            title="The load balancing info or token to send to the RDP server. Used when connecting to a load-balanced RDS farm."
-          >
-            <input
-              value={ex("load-balance-info")}
-              onChange={(e) => setEx("load-balance-info", e.target.value)}
-              title="The load balancing info or token to send to the RDP server. Used when connecting to a load-balanced RDS farm."
-            />
-          </Field>
+          <div className="form-group !mb-0">
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
+            <label
+              className="flex items-center gap-2"
+              title="Disables audio playback from the remote desktop. Audio is enabled by default."
+            >
+              <input
+                type="checkbox"
+                checked={ex("disable-audio") === "true"}
+                onChange={(e) => setEx("disable-audio", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable audio playback
+            </label>
+          </div>
         </FieldGrid>
       </Section>
 

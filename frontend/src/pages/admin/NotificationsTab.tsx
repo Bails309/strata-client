@@ -4,6 +4,7 @@
    eslint.config.js W4-1 commentary. */
 import { useEffect, useState } from "react";
 import Select from "../../components/Select";
+import EnterpriseCheckbox from "../../components/EnterpriseCheckbox";
 import {
   getSmtpConfig,
   updateSmtpConfig,
@@ -268,16 +269,12 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
 
         <div className="space-y-6">
           <div className="form-group">
-            <label
-              className="flex items-center gap-3 cursor-pointer group"
+            <EnterpriseCheckbox
+              className="gap-3 group items-start"
               aria-label="Enable notification emails"
+              checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)}
             >
-              <input
-                type="checkbox"
-                checked={enabled}
-                onChange={(e) => setEnabled(e.target.checked)}
-                className="checkbox"
-              />
               <div>
                 <span className="font-medium group-hover:text-txt-primary transition-colors">
                   Enable notification emails
@@ -287,7 +284,7 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
                   connection is opened.
                 </p>
               </div>
-            </label>
+            </EnterpriseCheckbox>
           </div>
 
           {enabled && (

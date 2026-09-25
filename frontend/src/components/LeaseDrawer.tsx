@@ -270,8 +270,9 @@ export default function LeaseDrawer({
                   setSelected(new Set());
                   setConfirmCheckin(false);
                 }}
+                title="Deselect all"
               >
-                Clear
+                Deselect
               </button>
             </div>
           ) : (

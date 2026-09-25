@@ -4,6 +4,7 @@
    eslint.config.js W4-1 commentary. */
 import { useEffect, useState } from "react";
 import Select from "../../components/Select";
+import EnterpriseCheckbox from "../../components/EnterpriseCheckbox";
 import { updateRecordings } from "../../api";
 
 export default function RecordingsTab({
@@ -35,15 +36,12 @@ export default function RecordingsTab({
     <div className="card">
       <h2>Session Recordings</h2>
       <div className="form-group">
-        <label className="flex items-center gap-2" aria-label="Enable session recording">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-            className="checkbox"
-          />
-          Enable session recording
-        </label>
+        <EnterpriseCheckbox
+          checked={enabled}
+          onChange={(e) => setEnabled(e.target.checked)}
+          label="Enable session recording"
+          aria-label="Enable session recording"
+        />
       </div>
       <div className="form-group">
         <label htmlFor="rec-retention-days">Retention (days)</label>

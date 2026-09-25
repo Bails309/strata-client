@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Select from "../../components/Select";
 import ConfirmModal from "../../components/ConfirmModal";
+import EnterpriseCheckbox from "../../components/EnterpriseCheckbox";
 import { useSettings } from "../../contexts/SettingsContext";
 import {
   AdSyncConfig,
@@ -296,15 +297,11 @@ export default function PasswordsTab({
               />
             </div>
             <div className="mb-3">
-              <label className="flex items-center gap-2 text-sm cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="checkbox"
-                  checked={newRoleAllowBypass}
-                  onChange={(e) => setNewRoleAllowBypass(e.target.checked)}
-                />
-                Allow Break Glass emergency approval bypass
-              </label>
+              <EnterpriseCheckbox
+                checked={newRoleAllowBypass}
+                onChange={(e) => setNewRoleAllowBypass(e.target.checked)}
+                label="Allow Break Glass emergency approval bypass"
+              />
             </div>
             <button className="btn btn-primary btn-sm" onClick={handleCreateRole}>
               Create Role
@@ -364,34 +361,30 @@ export default function PasswordsTab({
                       this toggle to take effect for that account. If an account is covered by
                       multiple roles, bypass is shown only when every covering role has it enabled.
                     </p>
-                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="checkbox"
-                        checked={role.allow_emergency_bypass}
-                        onChange={async (e) => {
-                          const nextVal = e.target.checked;
-                          // Optimistic update
+                    <EnterpriseCheckbox
+                      checked={role.allow_emergency_bypass}
+                      onChange={async (e) => {
+                        const nextVal = e.target.checked;
+                        // Optimistic update
+                        setRoles((prev) =>
+                          prev.map((r) =>
+                            r.id === role.id ? { ...r, allow_emergency_bypass: nextVal } : r
+                          )
+                        );
+                        try {
+                          await updateApprovalRole(role.id, { allow_emergency_bypass: nextVal });
+                          onSave();
+                        } catch {
+                          // Revert
                           setRoles((prev) =>
                             prev.map((r) =>
-                              r.id === role.id ? { ...r, allow_emergency_bypass: nextVal } : r
+                              r.id === role.id ? { ...r, allow_emergency_bypass: !nextVal } : r
                             )
                           );
-                          try {
-                            await updateApprovalRole(role.id, { allow_emergency_bypass: nextVal });
-                            onSave();
-                          } catch {
-                            // Revert
-                            setRoles((prev) =>
-                              prev.map((r) =>
-                                r.id === role.id ? { ...r, allow_emergency_bypass: !nextVal } : r
-                              )
-                            );
-                          }
-                        }}
-                      />
-                      Allow Break Glass emergency approval bypass
-                    </label>
+                        }
+                      }}
+                      label="Allow Break Glass emergency approval bypass"
+                    />
                   </div>
 
                   {/* Section 1: Managed Account Scope — which discovered accounts this role covers */}
@@ -773,17 +766,13 @@ export default function PasswordsTab({
                 </div>
 
                 <div className="flex items-center gap-4 mb-3">
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      className="checkbox"
-                      checked={newMapping.can_self_approve}
-                      onChange={(e) =>
-                        setNewMapping({ ...newMapping, can_self_approve: e.target.checked })
-                      }
-                    />
-                    Can self-approve
-                  </label>
+                  <EnterpriseCheckbox
+                    checked={newMapping.can_self_approve}
+                    onChange={(e) =>
+                      setNewMapping({ ...newMapping, can_self_approve: e.target.checked })
+                    }
+                    label="Can self-approve"
+                  />
                 </div>
 
                 <button

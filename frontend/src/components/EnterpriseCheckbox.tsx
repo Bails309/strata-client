@@ -1,28 +1,36 @@
-import React, { useEffect, useId, useRef } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 
-export interface EnterpriseCheckboxProps extends Omit<
-  React.InputHTMLAttributes<HTMLInputElement>,
-  "type"
-> {
+export interface EnterpriseCheckboxProps
+  extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "type"> {
   checked?: boolean;
   indeterminate?: boolean;
   onCheckedChange?: (checked: boolean) => void;
   label?: string;
+  children?: React.ReactNode;
+  as?: "label" | "span" | "div";
 }
 
 export const EnterpriseCheckbox: React.FC<EnterpriseCheckboxProps> = ({
-  checked = false,
+  checked,
+  defaultChecked,
   indeterminate = false,
   onCheckedChange,
   className = "",
   disabled = false,
   id,
   label,
+  children,
+  title,
+  as: Component = "label",
   ...props
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const generatedId = useId();
   const inputId = id || generatedId;
+
+  const isControlled = checked !== undefined;
+  const [internalChecked, setInternalChecked] = useState(Boolean(defaultChecked));
+  const isChecked = isControlled ? checked : internalChecked;
 
   useEffect(() => {
     if (inputRef.current) {
@@ -31,9 +39,10 @@ export const EnterpriseCheckbox: React.FC<EnterpriseCheckboxProps> = ({
   }, [indeterminate]);
 
   return (
-    <label
-      htmlFor={inputId}
-      className={`relative inline-flex items-center justify-center select-none cursor-pointer ${
+    <Component
+      {...(Component === "label" ? { htmlFor: inputId } : {})}
+      title={title}
+      className={`relative inline-flex items-center select-none cursor-pointer ${
         disabled ? "opacity-40 cursor-not-allowed" : ""
       } ${className}`}
     >
@@ -41,9 +50,14 @@ export const EnterpriseCheckbox: React.FC<EnterpriseCheckboxProps> = ({
         ref={inputRef}
         id={inputId}
         type="checkbox"
-        checked={checked}
+        checked={isControlled ? checked : undefined}
+        defaultChecked={!isControlled ? defaultChecked : undefined}
         disabled={disabled}
+        title={title}
         onChange={(e) => {
+          if (!isControlled) {
+            setInternalChecked(e.target.checked);
+          }
           onCheckedChange?.(e.target.checked);
           props.onChange?.(e);
         }}
@@ -52,6 +66,7 @@ export const EnterpriseCheckbox: React.FC<EnterpriseCheckboxProps> = ({
       />
       <div
         className="
+          enterprise-checkbox-box
           w-4 h-4 rounded-[4px] border flex items-center justify-center transition-colors duration-100 ease-in-out shrink-0
           /* Unchecked State */
           bg-[#0B131F]/70 border-slate-600/40
@@ -69,7 +84,7 @@ export const EnterpriseCheckbox: React.FC<EnterpriseCheckboxProps> = ({
           borderRadius: "var(--cb-radius, 4px)",
         }}
       >
-        {checked && !indeterminate && (
+        {isChecked && !indeterminate && (
           <svg
             className="w-3 h-3 text-white pointer-events-none"
             viewBox="0 0 16 16"
@@ -96,7 +111,10 @@ export const EnterpriseCheckbox: React.FC<EnterpriseCheckboxProps> = ({
         )}
       </div>
       {label && <span className="ml-2 text-sm text-txt-primary">{label}</span>}
-    </label>
+      {children && (
+        <span className="ml-2 inline-flex items-center text-sm text-txt-primary">{children}</span>
+      )}
+    </Component>
   );
 };
 

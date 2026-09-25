@@ -733,7 +733,6 @@ export default function AdminMegaMenu({
           </kbd>{" "}
           to close
         </span>
-        <span>Reclaim 250px+ layout flow</span>
       </div>
     </div>
   );

@@ -33,6 +33,9 @@ import {
 import { useSessionManager } from "../components/SessionManager";
 import Select from "../components/Select";
 import EnterpriseCheckbox from "../components/EnterpriseCheckbox";
+import ConnectionEmptyState from "../components/ConnectionEmptyState";
+import ActiveFilterChips from "../components/ActiveFilterChips";
+import useConnectionFilter from "../hooks/useConnectionFilter";
 import { useSettings } from "../contexts/SettingsContext";
 import { isWebPSupported } from "../utils/browserCapabilities";
 
@@ -187,8 +190,6 @@ interface TiledCredPrompt {
 export default function Dashboard() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [folders, setFolders] = useState<ConnectionFolder[]>([]);
-  const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState("");
   const [page, setPage] = useState(1);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [tiledCredPrompt, setTiledCredPrompt] = useState<TiledCredPrompt | null>(null);
@@ -197,9 +198,6 @@ export default function Dashboard() {
   >({});
   const [vaultConfigured, setVaultConfigured] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
-  const [showFavorites, setShowFavorites] = useState(
-    () => localStorage.getItem(SHOW_FAVORITES_KEY) === "true"
-  );
   const [folderView, setFolderView] = useState(
     () => localStorage.getItem(FOLDER_VIEW_KEY) === "true"
   );
@@ -218,14 +216,6 @@ export default function Dashboard() {
   const [adminTags, setAdminTags] = useState<UserTag[]>([]);
   const [connTagMap, setConnTagMap] = useState<Record<string, string[]>>({});
   const [adminConnTagMap, setAdminConnTagMap] = useState<Record<string, string[]>>({});
-  const [activeTagFilters, setActiveTagFilters] = useState<Set<string>>(() => {
-    try {
-      const saved = localStorage.getItem(TAG_FILTERS_KEY);
-      return saved ? new Set(JSON.parse(saved)) : new Set();
-    } catch {
-      return new Set();
-    }
-  });
   const [allCheckouts, setAllCheckouts] = useState<CheckoutRequest[]>([]);
   const { formatDateTime } = useSettings();
   const navigate = useNavigate();
@@ -334,42 +324,59 @@ export default function Dashboard() {
     });
   }, [credProfiles, allCheckouts]);
 
-  const filtered = useMemo(() => {
-    let list = connections;
-    if (showFavorites) {
-      list = list.filter((c) => favorites.has(c.id));
+  const enrichedConnections = useMemo(() => {
+    return connections.map((c) => ({
+      ...c,
+      isFavorite: favorites.has(c.id),
+      tags: allConnTagMap[c.id] || [],
+    }));
+  }, [connections, favorites, allConnTagMap]);
+
+  const {
+    filters,
+    setFilter,
+    resetAllFilters,
+    clearScope,
+    filteredConnections: filtered,
+    globalSearchMatches,
+  } = useConnectionFilter(enrichedConnections, {
+    searchQuery: "",
+    favoritesOnly: localStorage.getItem(SHOW_FAVORITES_KEY) === "true",
+    selectedTag: (() => {
+      try {
+        const saved = localStorage.getItem(TAG_FILTERS_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed[0];
+        }
+      } catch {
+        /* ignore */
+      }
+      return null;
+    })(),
+    selectedProtocol: "ALL",
+  });
+
+  useEffect(() => {
+    localStorage.setItem(SHOW_FAVORITES_KEY, String(filters.favoritesOnly));
+  }, [filters.favoritesOnly]);
+
+  useEffect(() => {
+    if (filters.selectedTag) {
+      localStorage.setItem(TAG_FILTERS_KEY, JSON.stringify([filters.selectedTag]));
+    } else {
+      localStorage.removeItem(TAG_FILTERS_KEY);
     }
-    if (search) {
-      const q = search.toLowerCase();
-      const tagNameById = new Map(allTags.map((t) => [t.id, t.name.toLowerCase()]));
-      list = list.filter(
-        (c) =>
-          c.name.toLowerCase().includes(q) ||
-          c.hostname.toLowerCase().includes(q) ||
-          (c.description || "").toLowerCase().includes(q) ||
-          (allConnTagMap[c.id] || []).some((tid) => (tagNameById.get(tid) || "").includes(q))
-      );
-    }
-    if (typeFilter) {
-      list = list.filter((c) => c.protocol.toLowerCase() === typeFilter.toLowerCase());
-    }
-    if (activeTagFilters.size > 0) {
-      list = list.filter((c) => {
-        const cTags = allConnTagMap[c.id] || [];
-        return [...activeTagFilters].some((tid) => cTags.includes(tid));
-      });
-    }
-    return list;
-  }, [
-    connections,
-    search,
-    typeFilter,
-    showFavorites,
-    favorites,
-    activeTagFilters,
-    allConnTagMap,
-    allTags,
-  ]);
+  }, [filters.selectedTag]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filters]);
+
+  const selectedTagName = useMemo(() => {
+    if (!filters.selectedTag) return null;
+    return allTags.find((t) => t.id === filters.selectedTag)?.name || filters.selectedTag;
+  }, [filters.selectedTag, allTags]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -439,7 +446,7 @@ export default function Dashboard() {
   // When a search filter is active, auto-expand any folder containing
   // matches so users don't see an empty tree.
   const autoExpandedIds = useMemo(() => {
-    if (!folderTree || !search.trim()) return null;
+    if (!folderTree || !filters.searchQuery.trim()) return null;
     const ids = new Set<string>();
     type VisitNode = { id: string; children: VisitNode[]; totalCount: number };
     const visit = (node: VisitNode): boolean => {
@@ -455,7 +462,7 @@ export default function Dashboard() {
     };
     folderTree.roots.forEach((r) => visit(r));
     return ids;
-  }, [folderTree, search]);
+  }, [folderTree, filters.searchQuery]);
 
   const toggleFolderCollapse = useCallback((fid: string) => {
     setExpandedFolders((prev) => {
@@ -505,10 +512,6 @@ export default function Dashboard() {
     }
   }, []);
 
-  useEffect(() => {
-    setPage(1);
-  }, [search, typeFilter, showFavorites, activeTagFilters]);
-
   const handleToggleFavorite = useCallback(async (connectionId: string) => {
     const result = await toggleFavorite(connectionId);
     setFavorites((prev) => {
@@ -539,27 +542,27 @@ export default function Dashboard() {
     return tag;
   }, []);
 
-  const handleDeleteTag = useCallback(async (tagId: string) => {
-    try {
-      await deleteTag(tagId);
-      setTags((prev) => prev.filter((t) => t.id !== tagId));
-      setConnTagMap((prev) => {
-        const next = { ...prev };
-        for (const connId of Object.keys(next)) {
-          next[connId] = next[connId].filter((tid) => tid !== tagId);
+  const handleDeleteTag = useCallback(
+    async (tagId: string) => {
+      try {
+        await deleteTag(tagId);
+        setTags((prev) => prev.filter((t) => t.id !== tagId));
+        setConnTagMap((prev) => {
+          const next = { ...prev };
+          for (const connId of Object.keys(next)) {
+            next[connId] = next[connId].filter((tid) => tid !== tagId);
+          }
+          return next;
+        });
+        if (filters.selectedTag === tagId) {
+          setFilter("selectedTag", null);
         }
-        return next;
-      });
-      setActiveTagFilters((prev) => {
-        const next = new Set(prev);
-        next.delete(tagId);
-        localStorage.setItem(TAG_FILTERS_KEY, JSON.stringify([...next]));
-        return next;
-      });
-    } catch {
-      /* ignore */
-    }
-  }, []);
+      } catch {
+        /* ignore */
+      }
+    },
+    [filters.selectedTag, setFilter]
+  );
 
   const toggleChecked = useCallback((id: string) => {
     setChecked((prev) => {
@@ -899,8 +902,8 @@ export default function Dashboard() {
       )}
 
       {/* ── Toolbar ── */}
-      <div className="flex items-center gap-4 mb-5 flex-wrap">
-        <div className="dash-search flex items-center gap-2 flex-1 max-w-xs rounded-sm px-3 transition-all duration-200 focus-within:ring-3 focus-within:ring-accent-dim">
+      <div className="flex items-center gap-4 mb-3 flex-wrap">
+        <div className="dash-search flex items-center gap-2 flex-1 max-w-md rounded-sm px-3 transition-all duration-200 focus-within:ring-3 focus-within:ring-accent-dim">
           <svg
             width="16"
             height="16"
@@ -915,13 +918,65 @@ export default function Dashboard() {
             <circle cx="11" cy="11" r="8" />
             <path d="M21 21l-4.35-4.35" />
           </svg>
+
+          {/* Dynamic Inset Scope Badge */}
+          {filters.favoritesOnly && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] bg-[#3ACEEF]/20 border border-[#3ACEEF]/40 text-xs text-[#3ACEEF] whitespace-nowrap shrink-0">
+              ★ Favorites
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFilter("favoritesOnly", false);
+                }}
+                className="hover:text-white cursor-pointer ml-0.5"
+                title="Remove favorites scope"
+                aria-label="Remove favorites scope"
+              >
+                ✕
+              </button>
+            </span>
+          )}
+
+          {filters.selectedTag && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] bg-[#3ACEEF]/20 border border-[#3ACEEF]/40 text-xs text-[#3ACEEF] whitespace-nowrap shrink-0">
+              🏷️ {selectedTagName || filters.selectedTag}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFilter("selectedTag", null);
+                }}
+                className="hover:text-white cursor-pointer ml-0.5"
+                title="Remove tag scope"
+                aria-label="Remove tag scope"
+              >
+                ✕
+              </button>
+            </span>
+          )}
+
           <input
             type="text"
-            placeholder="Search name, host, description or tag"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            placeholder={
+              filters.favoritesOnly || filters.selectedTag
+                ? "Search within filtered scope..."
+                : "Search name, host, description or tag"
+            }
+            value={filters.searchQuery}
+            onChange={(e) => setFilter("searchQuery", e.target.value)}
             className="!border-none !bg-transparent !shadow-none py-2 text-[0.8125rem] w-full focus:!shadow-none"
           />
+          {filters.searchQuery && (
+            <button
+              type="button"
+              onClick={() => setFilter("searchQuery", "")}
+              className="text-txt-tertiary hover:text-txt-primary cursor-pointer text-xs shrink-0"
+              aria-label="Clear search query"
+            >
+              ✕
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -934,8 +989,8 @@ export default function Dashboard() {
           <div className="dash-type-select min-w-[140px]">
             <Select
               id="dashboard-type-filter"
-              value={typeFilter}
-              onChange={setTypeFilter}
+              value={filters.selectedProtocol === "ALL" ? "" : filters.selectedProtocol}
+              onChange={(val) => setFilter("selectedProtocol", val || "ALL")}
               placeholder="Select select"
               options={[
                 { value: "", label: "All" },
@@ -946,28 +1001,35 @@ export default function Dashboard() {
         </div>
 
         <button
-          className={`dash-toggle btn-sm inline-flex items-center gap-1.5 ${showFavorites ? "!border-accent !text-accent" : ""}`}
-          aria-pressed={showFavorites}
+          className={`dash-toggle btn-sm inline-flex items-center gap-1.5 ${
+            filters.favoritesOnly ? "!border-accent !text-accent bg-accent/10" : ""
+          }`}
+          aria-pressed={filters.favoritesOnly}
           onClick={() => {
-            const next = !showFavorites;
-            setShowFavorites(next);
-            localStorage.setItem(SHOW_FAVORITES_KEY, String(next));
+            const next = !filters.favoritesOnly;
+            setFilter("favoritesOnly", next);
           }}
-          title={showFavorites ? "Show all connections" : "Show favorites only"}
+          title={filters.favoritesOnly ? "Show all connections" : "Show favorites only"}
         >
           <svg
             width="14"
             height="14"
             viewBox="0 0 24 24"
-            fill={showFavorites ? "var(--color-accent)" : "none"}
-            stroke={showFavorites ? "var(--color-accent)" : "currentColor"}
+            fill={filters.favoritesOnly ? "var(--color-accent)" : "none"}
+            stroke={filters.favoritesOnly ? "var(--color-accent)" : "currentColor"}
             strokeWidth="2"
             strokeLinecap="round"
             strokeLinejoin="round"
           >
             <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
           </svg>
-          Favorites{favorites.size > 0 ? ` (${favorites.size})` : ""}
+          {filters.favoritesOnly ? (
+            <span className="inline-flex items-center gap-1">
+              ★ Favorites{favorites.size > 0 ? ` (${favorites.size})` : ""} ✕
+            </span>
+          ) : (
+            <span>Favorites{favorites.size > 0 ? ` (${favorites.size})` : ""}</span>
+          )}
         </button>
 
         <button
@@ -1045,59 +1107,56 @@ export default function Dashboard() {
             <span className="text-xs uppercase text-txt-tertiary font-semibold tracking-wide">
               Tags
             </span>
-            {allTags.map((tag) => (
-              <button
-                key={tag.id}
-                className="btn-sm inline-flex items-center gap-1 text-xs !py-0.5 !px-2"
-                style={{
-                  borderColor: activeTagFilters.has(tag.id) ? tag.color : undefined,
-                  color: activeTagFilters.has(tag.id) ? tag.color : undefined,
-                  background: activeTagFilters.has(tag.id) ? `${tag.color}15` : undefined,
-                }}
-                onClick={() => {
-                  setActiveTagFilters((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(tag.id)) next.delete(tag.id);
-                    else next.add(tag.id);
-                    localStorage.setItem(TAG_FILTERS_KEY, JSON.stringify([...next]));
-                    return next;
-                  });
-                }}
-              >
-                <span
+            {allTags.map((tag) => {
+              const isSelected = filters.selectedTag === tag.id;
+              return (
+                <button
+                  key={tag.id}
+                  className="btn-sm inline-flex items-center gap-1 text-xs !py-0.5 !px-2 cursor-pointer"
                   style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: "50%",
-                    background: tag.color,
-                    display: "inline-block",
-                    flexShrink: 0,
+                    borderColor: isSelected ? tag.color : undefined,
+                    color: isSelected ? tag.color : undefined,
+                    background: isSelected ? `${tag.color}15` : undefined,
                   }}
-                />
-                {tag.name}
-                {!adminTags.some((at) => at.id === tag.id) && (
+                  onClick={() => {
+                    setFilter("selectedTag", isSelected ? null : tag.id);
+                  }}
+                >
                   <span
-                    className="ml-0.5 opacity-50 hover:opacity-100"
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteTag(tag.id);
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      background: tag.color,
+                      display: "inline-block",
+                      flexShrink: 0,
                     }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
+                  />
+                  {tag.name}
+                  {!adminTags.some((at) => at.id === tag.id) && (
+                    <span
+                      className="ml-0.5 opacity-50 hover:opacity-100"
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => {
                         e.stopPropagation();
                         handleDeleteTag(tag.id);
-                      }
-                    }}
-                    title="Delete tag"
-                  >
-                    ×
-                  </span>
-                )}
-              </button>
-            ))}
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleDeleteTag(tag.id);
+                        }
+                      }}
+                      title="Delete tag"
+                    >
+                      ×
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         )}
 
@@ -1122,6 +1181,15 @@ export default function Dashboard() {
           </button>
         )}
       </div>
+
+      {/* ── Active Filter Chips ── */}
+      <ActiveFilterChips
+        filters={filters}
+        setFilter={setFilter}
+        resetAllFilters={resetAllFilters}
+        selectedTagName={selectedTagName}
+        className="mb-3"
+      />
 
       {/* ── Table ── */}
       <div className="dash-table-card card !p-0 !overflow-hidden">
@@ -1149,7 +1217,7 @@ export default function Dashboard() {
             </tr>
           </thead>
           <tbody>
-            {folderView && folderTree ? (
+            {folderView && folderTree && filtered.length > 0 ? (
               <>
                 {folderTree.roots.map((root) => (
                   <ConnectionFolderTree
@@ -1233,10 +1301,15 @@ export default function Dashboard() {
             )}
             {visibleConnections.length === 0 && (
               <tr>
-                <td colSpan={6} className="text-center py-8 text-txt-secondary">
-                  {connections.length === 0
-                    ? "No connections available. Ask your administrator to assign connections to your role."
-                    : "No connections match your filters."}
+                <td colSpan={7} className="p-0">
+                  <ConnectionEmptyState
+                    filters={filters}
+                    filteredCount={filtered.length}
+                    globalCount={globalSearchMatches.length}
+                    onClearScope={clearScope}
+                    onResetAll={resetAllFilters}
+                    totalConnections={connections.length}
+                  />
                 </td>
               </tr>
             )}

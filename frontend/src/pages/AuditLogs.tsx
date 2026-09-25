@@ -131,6 +131,12 @@ function formatDetails(log: AuditLog): React.ReactNode {
       );
     case "connection_folder.deleted":
       return <>Deleted folder {shortId(d.id)}</>;
+    case "connection_folder.updated":
+      return (
+        <>
+          Updated folder <strong>{String(d.name)}</strong>
+        </>
+      );
 
     /* ── Roles ────────────────────────────────────── */
     case "role.created":

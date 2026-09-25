@@ -786,6 +786,7 @@ List all roles with their full permission matrix.
   {
     "id": "uuid",
     "name": "admin",
+    "description": "Full platform access",
     "can_manage_system": true,
     "can_manage_users": true,
     "can_manage_connections": true,
@@ -803,6 +804,7 @@ List all roles with their full permission matrix.
 
 | Field                          | Type    | Description                                                                                                                                                                                             |
 | ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `description`                  | string  | Free-text purpose of the role, trimmed, at most 500 characters. Empty string when unset (migration 090).                                                                                               |
 | `can_manage_system`            | boolean | Super-admin: system settings, Vault, SSO, bypass for all other checks                                                                                                                                   |
 | `can_manage_users`             | boolean | User CRUD, role assignment, password resets                                                                                                                                                             |
 | `can_manage_connections`       | boolean | Connection CRUD, folders, sharing profiles, AD sync, Kerberos                                                                                                                                           |
@@ -817,13 +819,14 @@ List all roles with their full permission matrix.
 
 #### `POST /api/admin/roles`
 
-Create a new role. All permission fields are optional and default to `false`.
+Create a new role. All permission fields are optional and default to `false`; `description` defaults to an empty string. `PUT /api/admin/roles/{id}` takes the same fields, and any field left out keeps its current value.
 
 **Request Body**
 
 ```json
 {
   "name": "operators",
+  "description": "Tier 1 desktop support",
   "can_view_sessions": true,
   "can_use_quick_share": true
 }

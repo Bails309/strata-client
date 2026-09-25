@@ -234,6 +234,15 @@ html.light {
   --color-accent-dim: rgba(8, 145, 178, 0.08);
   --color-accent-glow: rgba(8, 145, 178, 0.14);
 
+  /* Enterprise Checkbox Tokens (Light) */
+  --cb-bg-unchecked: rgba(255, 255, 255, 0.9);
+  --cb-border-unchecked: 1px solid rgba(148, 163, 184, 0.5);
+  --cb-border-hover: 1px solid #0891b2;
+  --cb-bg-checked: #0891b2;
+  --cb-border-checked: 1px solid #0891b2;
+  --cb-focus-ring: 0 0 0 2px #ffffff, 0 0 0 4px #0891b2;
+  --row-selected-bg: rgba(8, 145, 178, 0.06);
+
   --color-danger: #dc2626;
   --color-danger-dim: rgba(220, 38, 38, 0.06);
   --color-danger-hover: #ef4444;
@@ -348,7 +357,7 @@ html.light .recent-card-btn:hover {
   }
 
   /* Inputs */
-  input,
+  input:not([type="checkbox"]):not([type="radio"]),
   select,
   textarea {
     @apply w-full rounded-sm text-[0.8125rem] font-sans transition-all duration-200;
@@ -1253,9 +1262,13 @@ html.light .recent-card-btn:hover {
     @apply w-10 h-10 border-4 border-accent/20 border-t-accent rounded-full animate-spin;
   }
 
-  .checkbox {
+  .checkbox,
+  .checkbox-sm {
     @apply relative shrink-0 cursor-pointer;
     -webkit-appearance: none;
+    padding: 0;
+    margin: 0;
+    box-sizing: border-box;
     width: var(--cb-size, 16px);
     height: var(--cb-size, 16px);
     border-radius: var(--cb-radius, 4px);
@@ -1310,6 +1323,16 @@ html.light .recent-card-btn:hover {
   }
   .checkbox:active {
     transform: scale(0.96);
+  }
+
+  html.light .enterprise-checkbox-box {
+    background-color: var(--cb-bg-unchecked);
+    border-color: rgba(148, 163, 184, 0.4);
+  }
+  html.light input:checked + .enterprise-checkbox-box,
+  html.light input:indeterminate + .enterprise-checkbox-box {
+    background-color: var(--cb-bg-checked);
+    border-color: var(--cb-border-checked);
   }
 
   /* ── Radio ── */

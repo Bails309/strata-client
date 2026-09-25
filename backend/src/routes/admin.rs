@@ -1467,6 +1467,21 @@ pub async fn update_connection(
     Ok(Json(row))
 }
 
+/// `POST /api/admin/connections/{id}/probe` — TCP-probe one target now
+/// instead of waiting for the next 2-minute sweep, and store the result.
+pub async fn probe_connection(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<crate::services::health_check::ProbeOutcome>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
+    let db = require_running(&state).await?;
+    let outcome = crate::services::health_check::probe_one(&db.pool, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
+    Ok(Json(outcome))
+}
+
 /// One SSH connection, and how its stored key compares to the live one.
 #[derive(serde::Serialize)]
 pub struct HostKeySurveyRow {
@@ -2312,6 +2327,17 @@ pub async fn update_connection_folder(
     let row = connections::update_folder(&db.pool, id, &body)
         .await?
         .ok_or_else(|| AppError::NotFound("Folder not found".into()))?;
+    audit::log(
+        &db.pool,
+        Some(user.id),
+        "connection_folder.updated",
+        &json!({
+            "id": id.to_string(),
+            "name": row.name,
+            "parent_id": row.parent_id.map(|p| p.to_string()),
+        }),
+    )
+    .await?;
     Ok(Json(row))
 }
 
@@ -4657,6 +4683,7 @@ mod tests {
         let r = RoleRow {
             id: Uuid::nil(),
             name: "admin".into(),
+            description: String::new(),
             can_manage_system: false,
             can_manage_users: false,
             can_manage_connections: false,
@@ -5468,6 +5495,7 @@ mod tests {
         let r = RoleRow {
             id: Uuid::nil(),
             name: "superadmin".into(),
+            description: String::new(),
             can_manage_system: true,
             can_manage_users: true,
             can_manage_connections: true,

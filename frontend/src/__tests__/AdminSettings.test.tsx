@@ -1051,6 +1051,60 @@ describe("AccessTab", () => {
     expect(createRole).toHaveBeenCalledWith(expect.objectContaining({ name: "viewer" }));
   });
 
+  it("filters roles by search query", async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText("Access"));
+    expect(await screen.findByText("admin")).toBeInTheDocument();
+    expect(screen.getByText("user")).toBeInTheDocument();
+
+    const searchInput = screen.getByPlaceholderText(/search roles by name or permission/i);
+    await user.type(searchInput, "adm");
+
+    expect(screen.getByText("admin")).toBeInTheDocument();
+    expect(screen.queryByText("user")).not.toBeInTheDocument();
+
+    await user.clear(searchInput);
+    expect(screen.getByText("user")).toBeInTheDocument();
+  });
+
+  it("paginates roles when more than 5 exist", async () => {
+    const manyRoles = Array.from({ length: 8 }, (_, i) => ({
+      id: `role-${i + 1}`,
+      name: `CustomRole-${i + 1}`,
+      can_manage_system: false,
+      can_manage_users: false,
+      can_manage_connections: false,
+      can_view_audit_logs: false,
+      can_create_users: false,
+      can_create_user_groups: false,
+      can_create_connections: false,
+      can_use_quick_share: false,
+      can_use_quick_share_outbound: false,
+      can_create_sharing_profiles: false,
+      can_view_sessions: false,
+    }));
+    vi.mocked(getRoles).mockResolvedValue(manyRoles);
+
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText("Access"));
+
+    // First page shows 1 to 5
+    expect(await screen.findByText("CustomRole-1")).toBeInTheDocument();
+    expect(screen.getByText("CustomRole-5")).toBeInTheDocument();
+    expect(screen.queryByText("CustomRole-6")).not.toBeInTheDocument();
+
+    // Pagination info
+    expect(screen.getByText(/showing 1–5 of 8 roles/i)).toBeInTheDocument();
+
+    // Click Next
+    await user.click(screen.getByRole("button", { name: /next page/i }));
+    expect(screen.getByText("CustomRole-6")).toBeInTheDocument();
+    expect(screen.getByText("CustomRole-8")).toBeInTheDocument();
+    expect(screen.queryByText("CustomRole-1")).not.toBeInTheDocument();
+  });
+
   it("switches to sessions tab", async () => {
     const user = userEvent.setup();
     renderAdmin();
@@ -1084,7 +1138,7 @@ describe("AccessTab", () => {
     const connectionsCard = screen
       .getByRole("heading", { name: "Connections" })
       .closest(".card") as HTMLElement;
-    const editBtns = within(connectionsCard).getAllByText("Edit");
+    const editBtns = within(connectionsCard).getAllByRole("button", { name: /^Configure / });
     await user.click(editBtns[0]);
     expect(screen.getByText("Edit Connection")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Server A")).toBeInTheDocument();
@@ -1119,9 +1173,9 @@ describe("AccessTab", () => {
     renderAdmin();
     await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
-    await user.type(screen.getByPlaceholderText(/Search connections/), "Server B");
+    await user.type(screen.getByLabelText("Search connections"), "Server B");
+    await waitFor(() => expect(screen.queryByText("Server A")).not.toBeInTheDocument());
     expect(screen.getByText("Server B")).toBeInTheDocument();
-    expect(screen.queryByText("Server A")).not.toBeInTheDocument();
   });
 
   it("creates a connection", async () => {
@@ -1154,8 +1208,8 @@ describe("AccessTab", () => {
     renderAdmin();
     await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
-    const deleteBtns = screen.getAllByText("Delete");
-    await user.click(deleteBtns[0]);
+    await user.click(screen.getAllByRole("button", { name: /^More actions for / })[0]);
+    await user.click(screen.getByRole("menuitem", { name: "Delete connection" }));
     // ConfirmModal appears — click its confirm button (btn-danger)
     const allDeleteBtns = await screen.findAllByRole("button", { name: "Delete" });
     const confirmBtn = allDeleteBtns.find((btn) => btn.classList.contains("btn-danger"))!;
@@ -1168,8 +1222,8 @@ describe("AccessTab", () => {
     renderAdmin();
     await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
-    const deleteBtns = screen.getAllByText("Delete");
-    await user.click(deleteBtns[0]);
+    await user.click(screen.getAllByRole("button", { name: /^More actions for / })[0]);
+    await user.click(screen.getByRole("menuitem", { name: "Delete connection" }));
     // ConfirmModal appears — click Cancel
     const cancelBtn = await screen.findByRole("button", { name: "Cancel" });
     await user.click(cancelBtn);
@@ -1272,8 +1326,8 @@ describe("AccessTab", () => {
     await user.click(within(connectionsCard).getByText("Next →"));
     expect(within(connectionsCard).getByText("Page 2 of 2")).toBeInTheDocument();
     // Search resets to page 1
-    await user.type(screen.getByPlaceholderText(/Search connections/), "Server 1");
-    expect(screen.queryByText("Page 2")).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("Search connections"), "Server 1");
+    await waitFor(() => expect(screen.queryByText("Page 2 of 2")).not.toBeInTheDocument());
   });
 
   it("shows connection count", async () => {
@@ -1312,8 +1366,8 @@ describe("AccessTab", () => {
     renderAdmin();
     await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
-    await user.type(screen.getByPlaceholderText(/Search connections/), "Server A");
-    expect(screen.getByText(/1 of 2/)).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Search connections"), "Server A");
+    expect(await screen.findByText(/1 of 2/)).toBeInTheDocument();
   });
 
   it("updates connection via edit form", async () => {
@@ -1335,7 +1389,7 @@ describe("AccessTab", () => {
     const connectionsCard = screen
       .getByRole("heading", { name: "Connections" })
       .closest(".card") as HTMLElement;
-    const editBtns = within(connectionsCard).getAllByText("Edit");
+    const editBtns = within(connectionsCard).getAllByRole("button", { name: /^Configure / });
     await user.click(editBtns[0]);
     await screen.findByText("Edit Connection");
     await user.click(screen.getByText("Save Changes"));
@@ -1364,7 +1418,7 @@ describe("AccessTab", () => {
     const connectionsCard = screen
       .getByRole("heading", { name: "Connections" })
       .closest(".card") as HTMLElement;
-    await user.click(within(connectionsCard).getAllByText("Edit")[0]);
+    await user.click(within(connectionsCard).getAllByRole("button", { name: /^Configure / })[0]);
     await screen.findByText("Edit Connection");
 
     // Sections are collapsed unless they opt in, so the control does not
@@ -1391,12 +1445,14 @@ describe("AccessTab", () => {
       .getByRole("heading", { name: "Connections" })
       .closest(".card") as HTMLElement;
     // Open edit first
-    const editBtns = within(connectionsCard).getAllByText("Edit");
+    const editBtns = within(connectionsCard).getAllByRole("button", { name: /^Configure / });
     await user.click(editBtns[0]);
     expect(screen.getByText("Edit Connection")).toBeInTheDocument();
     // Delete while form is open
-    const deleteBtns = within(connectionsCard).getAllByText("Delete");
-    await user.click(deleteBtns[0]);
+    await user.click(
+      within(connectionsCard).getAllByRole("button", { name: /^More actions for / })[0]
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Delete connection" }));
     // ConfirmModal appears — click its confirm button (btn-danger)
     const allDeleteBtns = await screen.findAllByRole("button", { name: "Delete" });
     const confirmBtn = allDeleteBtns.find((btn) => btn.classList.contains("btn-danger"))!;
@@ -1489,10 +1545,10 @@ describe("AccessTab", () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("Connections"));
-    expect(await screen.findByText(/No folders created yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No connection folders configured/)).toBeInTheDocument();
   });
 
-  it("renders folders table", async () => {
+  it("renders folders as a tree", async () => {
     vi.mocked(getConnectionFolders).mockResolvedValue([
       { id: "g1", name: "Production", parent_id: undefined },
       { id: "g2", name: "Staging", parent_id: "g1" },
@@ -1500,10 +1556,11 @@ describe("AccessTab", () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("Connections"));
-    const prodEls = await screen.findAllByText("Production");
-    expect(prodEls.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Staging")).toBeInTheDocument();
-    expect(screen.getByText("Root")).toBeInTheDocument();
+    const prod = await screen.findByRole("treeitem", { name: "Production" });
+    expect(prod).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("treeitem", { name: "Staging" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Expand All" }));
+    expect(screen.getByRole("treeitem", { name: "Staging" })).toHaveAttribute("aria-level", "2");
   });
 
   it("creates a folder", async () => {
@@ -1515,15 +1572,16 @@ describe("AccessTab", () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("Connections"));
-    await screen.findByText(/No folders created yet/);
-    await user.type(screen.getByPlaceholderText("Folder name..."), "DevOps");
-    await user.click(screen.getByText("Add Folder"));
+    await screen.findByText(/No connection folders configured/);
+    await user.click(screen.getByRole("button", { name: "+ New Root Folder" }));
+    await user.type(screen.getByPlaceholderText("Root folder name…"), "DevOps");
+    await user.click(screen.getByRole("button", { name: "Create" }));
     expect(createConnectionFolder).toHaveBeenCalledWith(
       expect.objectContaining({ name: "DevOps" })
     );
   });
 
-  it("deletes a folder with confirm", async () => {
+  it("deletes an empty folder with confirm", async () => {
     vi.mocked(getConnectionFolders).mockResolvedValue([
       { id: "g1", name: "ToDelete", parent_id: undefined },
     ]);
@@ -1531,14 +1589,10 @@ describe("AccessTab", () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("Connections"));
-    await screen.findByText("ToDelete");
-    // Find the folder delete button
-    const folderDeleteBtns = screen.getAllByText("Delete");
-    await user.click(folderDeleteBtns[folderDeleteBtns.length - 1]);
-    // ConfirmModal appears — click its confirm button (btn-danger)
-    const allDeleteBtns = await screen.findAllByRole("button", { name: "Delete" });
-    const confirmBtn = allDeleteBtns.find((btn) => btn.classList.contains("btn-danger"))!;
-    await user.click(confirmBtn);
+    await screen.findByRole("treeitem", { name: "ToDelete" });
+    await user.click(screen.getByRole("button", { name: "Delete ToDelete" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(deleteConnectionFolder).toHaveBeenCalledWith("g1");
   });
 
@@ -1550,12 +1604,13 @@ describe("AccessTab", () => {
     expect(screen.getByText("Create New Role")).toBeInTheDocument();
   });
 
-  it("disables Add Folder button when name is empty", async () => {
+  it("disables Create until a folder name is typed", async () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("Connections"));
     await screen.findByText("Connection Folders");
-    expect(screen.getByText("Add Folder")).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "+ New Root Folder" }));
+    expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
   });
 
   it("highlights currently edited connection row", async () => {
@@ -1568,11 +1623,11 @@ describe("AccessTab", () => {
       .find((el) => el.closest("tr"))
       ?.closest("tr");
     if (!row) throw new Error("Row not found");
-    await user.click(within(row).getByText("Edit"));
+    await user.click(within(row).getByRole("button", { name: /^Configure / }));
 
     // The row for the edited connection should have bg-surface-secondary class
     await waitFor(() => {
-      expect(row.className).toContain("bg-surface-secondary");
+      expect(row.className).toContain("fleet-row-editing");
     });
   });
 });
@@ -2452,7 +2507,7 @@ describe("ConnectionForm protocol sections", () => {
     await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const row = screen.getByText("Server A").closest("tr")!;
-    await user.click(within(row).getByText("Edit"));
+    await user.click(within(row).getByRole("button", { name: /^Configure / }));
     // SSH sections should render — section titles have ▸/▾ prefix
     expect(screen.getByText(/Authentication/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /[▸▾]\s*Display/ })).toBeInTheDocument();
@@ -2468,7 +2523,7 @@ describe("ConnectionForm protocol sections", () => {
     await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const row = screen.getByText("Server A").closest("tr")!;
-    await user.click(within(row).getByText("Edit"));
+    await user.click(within(row).getByRole("button", { name: /^Configure / }));
     // Authentication is defaultOpen, so it should show fields
     expect(screen.getByText("Private Key")).toBeInTheDocument();
     // Display is collapsed by default — click to expand
@@ -2691,27 +2746,19 @@ describe("ConnectionForm protocol sections", () => {
     expect(screen.getByText(/Pinned certificate fingerprints/)).toBeInTheDocument();
   });
 
-  it("expands RDP Basic Settings section", async () => {
+  it("expands RDP Display section including Keyboard Layout and no Basic Settings", async () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
-    await user.click(screen.getByRole("button", { name: /▸ Basic Settings/ }));
+    expect(screen.queryByRole("button", { name: /▸ Basic Settings/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /▸ Display/ }));
+    expect(screen.getByText("Color Depth")).toBeInTheDocument();
     expect(screen.getByText("Keyboard Layout")).toBeInTheDocument();
   });
 
-  it("expands RDP Display section", async () => {
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText("Connections"));
-    await screen.findByText("Server A");
-    await user.click(screen.getByText("+ Add Connection"));
-    await user.click(screen.getByRole("button", { name: /▸ Display/ }));
-    expect(screen.getByText("Color Depth")).toBeInTheDocument();
-  });
-
-  it("expands RDP Performance section", async () => {
+  it("expands RDP Performance section including audio playback", async () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("Connections"));
@@ -2719,19 +2766,8 @@ describe("ConnectionForm protocol sections", () => {
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ Performance/ }));
     expect(screen.getByText("Enable wallpaper")).toBeInTheDocument();
-  });
-
-  it("expands RDP Device Redirection section", async () => {
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText("Connections"));
-    await screen.findByText("Server A");
-    await user.click(screen.getByText("+ Add Connection"));
-    await user.click(screen.getByRole("button", { name: /▸ Device Redirection/ }));
-    // Drive and printer redirection were withdrawn with the RDPDR
-    // channel; audio playback is all this section still carries.
     expect(screen.getByText("Disable audio playback")).toBeInTheDocument();
-    expect(screen.queryByText("Disable file download")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /▸ Device Redirection/ })).not.toBeInTheDocument();
   });
 
   it("expands RDP Screen Recording section", async () => {
@@ -2766,14 +2802,14 @@ describe("ConnectionForm protocol sections", () => {
     expect(screen.queryByText("Normalize Clipboard")).not.toBeInTheDocument();
   });
 
-  it("expands RDP Load Balancing section", async () => {
+  it("does not render RDP Load Balancing section", async () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
-    await user.click(screen.getByRole("button", { name: /▸ Load Balancing/ }));
-    expect(screen.getByText("Load Balance Info")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /▸ Load Balancing/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("Load Balance Info")).not.toBeInTheDocument();
   });
 
   it("expands RDP SFTP section", async () => {
@@ -2802,7 +2838,7 @@ describe("ConnectionForm protocol sections", () => {
     await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const row = screen.getByText("Server A").closest("tr")!;
-    await user.click(within(row).getByText("Edit"));
+    await user.click(within(row).getByRole("button", { name: /^Configure / }));
     await user.click(screen.getByRole("button", { name: /▸ Terminal Behavior/ }));
     expect(screen.getByPlaceholderText("Execute on connect")).toBeInTheDocument();
   });
@@ -2813,7 +2849,7 @@ describe("ConnectionForm protocol sections", () => {
     await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const row = screen.getByText("Server A").closest("tr")!;
-    await user.click(within(row).getByText("Edit"));
+    await user.click(within(row).getByRole("button", { name: /^Configure / }));
     await user.click(screen.getByRole("button", { name: /▸ SFTP/ }));
     expect(screen.getByText("Enable SFTP")).toBeInTheDocument();
   });
@@ -2824,7 +2860,7 @@ describe("ConnectionForm protocol sections", () => {
     await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const row = screen.getByText("Server A").closest("tr")!;
-    await user.click(within(row).getByText("Edit"));
+    await user.click(within(row).getByRole("button", { name: /^Configure / }));
     await user.click(screen.getByRole("button", { name: /▸ Screen Recording/ }));
     expect(screen.getByText("Include key events")).toBeInTheDocument();
   });
@@ -2835,7 +2871,7 @@ describe("ConnectionForm protocol sections", () => {
     await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const row = screen.getByText("Server A").closest("tr")!;
-    await user.click(within(row).getByText("Edit"));
+    await user.click(within(row).getByRole("button", { name: /^Configure / }));
     await user.click(screen.getByRole("button", { name: /▸ Wake-on-LAN/ }));
     expect(screen.getByText("Send WoL packet")).toBeInTheDocument();
   });

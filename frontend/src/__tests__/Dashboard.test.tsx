@@ -308,7 +308,7 @@ describe("Dashboard", () => {
     await screen.findByText("Server Alpha");
     const searchInput = screen.getByPlaceholderText(/search/i);
     await userEvent.type(searchInput, "NONEXISTENT");
-    expect(screen.getByText("No connections match your filters.")).toBeInTheDocument();
+    expect(screen.getByText("No connections found matching your query.")).toBeInTheDocument();
   });
 
   it("renders connection descriptions", async () => {
@@ -347,6 +347,39 @@ describe("Dashboard", () => {
     await waitFor(() => {
       expect(screen.getByText("Server Alpha")).toBeInTheDocument();
       expect(screen.queryByText("Server Beta")).not.toBeInTheDocument();
+    });
+  });
+
+  it("displays smart empty state when scoped search has 0 matches but global matches exist, and 'Show all results' clears scope", async () => {
+    vi.mocked(getFavorites).mockResolvedValue(["1"]); // Only Server Alpha is favorite
+    renderDashboard();
+    await screen.findByText("Server Alpha");
+
+    // Enable favorites filter
+    await userEvent.click(screen.getByTitle("Show favorites only"));
+    expect(screen.getByText("Server Alpha")).toBeInTheDocument();
+    expect(screen.queryByText("Server Beta")).not.toBeInTheDocument();
+
+    // Now search for "Beta" (which is NOT a favorite)
+    const searchInput = screen.getByPlaceholderText(/Search within filtered scope\.\.\./i);
+    await userEvent.type(searchInput, "Beta");
+
+    // Smart empty state card appears
+    await waitFor(() => {
+      expect(screen.getByText("No matches in current filter")).toBeInTheDocument();
+      expect(screen.getByText(/Found/i)).toBeInTheDocument();
+      expect(screen.getByText(/outside your active scope/i)).toBeInTheDocument();
+    });
+
+    // Click "Show all 1 results" button
+    const showAllBtn = screen.getByRole("button", { name: /Show all 1 results/i });
+    await userEvent.click(showAllBtn);
+
+    // Favorites scope is cleared, query "Beta" is preserved, Server Beta is now visible
+    await waitFor(() => {
+      expect(screen.getByText("Server Beta")).toBeInTheDocument();
+      expect(screen.queryByText("Server Alpha")).not.toBeInTheDocument();
+      expect(searchInput).toHaveValue("Beta");
     });
   });
 

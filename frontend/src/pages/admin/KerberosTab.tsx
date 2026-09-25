@@ -10,6 +10,7 @@ import {
   KerberosRealm,
   updateKerberosRealm,
 } from "../../api";
+import EnterpriseCheckbox from "../../components/EnterpriseCheckbox";
 
 export default function KerberosTab({ onSave }: { onSave: () => void }) {
   const [realms, setRealms] = useState<KerberosRealm[]>([]);
@@ -234,15 +235,12 @@ export default function KerberosTab({ onSave }: { onSave: () => void }) {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 cursor-pointer !mb-0">
-              <input
-                type="checkbox"
-                className="checkbox"
-                checked={editing.is_default}
-                onChange={(e) => setEditing({ ...editing, is_default: e.target.checked })}
-              />
-              <span className="text-sm">Default realm</span>
-            </label>
+            <EnterpriseCheckbox
+              className="!mb-0"
+              checked={editing.is_default}
+              onChange={(e) => setEditing({ ...editing, is_default: e.target.checked })}
+              label="Default realm"
+            />
           </div>
           <div className="flex items-center gap-3 mt-4">
             <button className="btn-primary" onClick={handleSave} disabled={saving}>

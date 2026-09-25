@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Select from "../../components/Select";
+import EnterpriseCheckbox from "../../components/EnterpriseCheckbox";
 import { orderFoldersByHierarchy, indentedFolderLabel } from "../../utils/folderTree";
 import { useSettings } from "../../contexts/SettingsContext";
 import { getTimezones } from "../../utils/time";
@@ -427,24 +428,20 @@ export default function AdSyncTab({
               }
             />
           </label>
-          <label className="flex items-center gap-2 mt-6">
-            <input
-              type="checkbox"
-              className="checkbox"
+          <div className="mt-6">
+            <EnterpriseCheckbox
               checked={editing.tls_skip_verify ?? false}
               onChange={(e) => setEditing({ ...editing, tls_skip_verify: e.target.checked })}
+              label="Skip TLS verification"
             />
-            <span className="text-sm">Skip TLS verification</span>
-          </label>
-          <label className="flex items-center gap-2 mt-6">
-            <input
-              type="checkbox"
-              className="checkbox"
+          </div>
+          <div className="mt-6">
+            <EnterpriseCheckbox
               checked={editing.enabled ?? true}
               onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })}
+              label="Enabled"
             />
-            <span className="text-sm">Enabled</span>
-          </label>
+          </div>
           {!editing.tls_skip_verify && (
             <div className="block col-span-2">
               <span className="text-sm font-medium">CA Certificate (PEM)</span>
@@ -623,26 +620,25 @@ export default function AdSyncTab({
                   const gfxEnabled = cdMap["disable-gfx"] === "false";
                   const checked = isGfx ? gfxEnabled : cdMap[param] === "true";
                   return (
-                    <label key={param} className="flex items-center gap-2" title={tooltip}>
-                      <input
-                        type="checkbox"
-                        className="checkbox"
-                        checked={checked}
-                        onChange={(e) => {
-                          const cd = { ...(editing.connection_defaults ?? {}) };
-                          if (isGfx) {
-                            cd["disable-gfx"] = e.target.checked ? "false" : "true";
-                          } else if (e.target.checked) {
-                            cd[param] = "true";
-                          } else {
-                            delete cd[param];
-                          }
-                          setEditing({ ...editing, connection_defaults: cd });
-                        }}
-                      />
+                    <EnterpriseCheckbox
+                      key={param}
+                      title={tooltip}
+                      checked={checked}
+                      onChange={(e) => {
+                        const cd = { ...(editing.connection_defaults ?? {}) };
+                        if (isGfx) {
+                          cd["disable-gfx"] = e.target.checked ? "false" : "true";
+                        } else if (e.target.checked) {
+                          cd[param] = "true";
+                        } else {
+                          delete cd[param];
+                        }
+                        setEditing({ ...editing, connection_defaults: cd });
+                      }}
+                    >
                       <span className="text-sm">{label}</span>
                       <svg
-                        className="w-3.5 h-3.5 opacity-40 shrink-0"
+                        className="w-3.5 h-3.5 opacity-40 shrink-0 ml-1"
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"
@@ -650,7 +646,7 @@ export default function AdSyncTab({
                         <circle cx="12" cy="12" r="10" strokeWidth="2" />
                         <path strokeLinecap="round" strokeWidth="2" d="M12 16v-4m0-4h.01" />
                       </svg>
-                    </label>
+                    </EnterpriseCheckbox>
                   );
                 })}
               </div>
@@ -686,24 +682,23 @@ export default function AdSyncTab({
                     ],
                   ] as [string, string, string][]
                 ).map(([param, label, tooltip]) => (
-                  <label key={param} className="flex items-center gap-2" title={tooltip}>
-                    <input
-                      type="checkbox"
-                      className="checkbox"
-                      checked={(editing.connection_defaults ?? {})[param] === "true"}
-                      onChange={(e) => {
-                        const cd = { ...(editing.connection_defaults ?? {}) };
-                        if (e.target.checked) {
-                          cd[param] = "true";
-                        } else {
-                          delete cd[param];
-                        }
-                        setEditing({ ...editing, connection_defaults: cd });
-                      }}
-                    />
+                  <EnterpriseCheckbox
+                    key={param}
+                    title={tooltip}
+                    checked={(editing.connection_defaults ?? {})[param] === "true"}
+                    onChange={(e) => {
+                      const cd = { ...(editing.connection_defaults ?? {}) };
+                      if (e.target.checked) {
+                        cd[param] = "true";
+                      } else {
+                        delete cd[param];
+                      }
+                      setEditing({ ...editing, connection_defaults: cd });
+                    }}
+                  >
                     <span className="text-sm">{label}</span>
                     <svg
-                      className="w-3.5 h-3.5 opacity-40 shrink-0"
+                      className="w-3.5 h-3.5 opacity-40 shrink-0 ml-1"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -711,7 +706,7 @@ export default function AdSyncTab({
                       <circle cx="12" cy="12" r="10" strokeWidth="2" />
                       <path strokeLinecap="round" strokeWidth="2" d="M12 16v-4m0-4h.01" />
                     </svg>
-                  </label>
+                  </EnterpriseCheckbox>
                 ))}
               </div>
             </>
@@ -722,15 +717,11 @@ export default function AdSyncTab({
         <div className="mt-6 border-t border-border/20 pt-4">
           <div className="flex items-center justify-between mb-3">
             <h4 className="text-sm font-semibold uppercase tracking-wider">Password Management</h4>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                className="checkbox"
-                checked={editing.pm_enabled ?? false}
-                onChange={(e) => setEditing({ ...editing, pm_enabled: e.target.checked })}
-              />
-              Enable
-            </label>
+            <EnterpriseCheckbox
+              checked={editing.pm_enabled ?? false}
+              onChange={(e) => setEditing({ ...editing, pm_enabled: e.target.checked })}
+              label="Enable"
+            />
           </div>
 
           {editing.pm_enabled && (
@@ -962,15 +953,12 @@ export default function AdSyncTab({
                       ["pm_pwd_require_symbols", "Require special characters (!@#$...)"],
                     ] as [keyof AdSyncConfig, string][]
                   ).map(([key, label]) => (
-                    <label key={key} className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        className="checkbox"
-                        checked={(editing[key] as boolean) ?? true}
-                        onChange={(e) => setEditing({ ...editing, [key]: e.target.checked })}
-                      />
-                      {label}
-                    </label>
+                    <EnterpriseCheckbox
+                      key={key}
+                      checked={(editing[key] as boolean) ?? true}
+                      onChange={(e) => setEditing({ ...editing, [key]: e.target.checked })}
+                      label={label}
+                    />
                   ))}
                 </div>
               </div>
@@ -984,17 +972,15 @@ export default function AdSyncTab({
                   When enabled, the service account will automatically rotate its own password on a
                   schedule. The new password is sealed in Vault — no human ever sees it.
                 </p>
-                <label className="flex items-center gap-2 text-sm mb-2">
-                  <input
-                    type="checkbox"
-                    className="checkbox"
+                <div className="mb-2">
+                  <EnterpriseCheckbox
                     checked={editing.pm_auto_rotate_enabled ?? false}
                     onChange={(e) =>
                       setEditing({ ...editing, pm_auto_rotate_enabled: e.target.checked })
                     }
+                    label="Enable automatic rotation"
                   />
-                  Enable automatic rotation
-                </label>
+                </div>
                 {editing.pm_auto_rotate_enabled && (
                   <div className="flex items-center gap-4 ml-6 mb-2">
                     <label className="flex items-center gap-2 text-sm">
@@ -1050,17 +1036,13 @@ export default function AdSyncTab({
                   an emergency to receive the password immediately without waiting for an approver.
                   Every use is recorded in the audit log and requires a justification.
                 </p>
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    className="checkbox"
-                    checked={editing.pm_allow_emergency_bypass ?? false}
-                    onChange={(e) =>
-                      setEditing({ ...editing, pm_allow_emergency_bypass: e.target.checked })
-                    }
-                  />
-                  Allow emergency bypass on password checkout requests
-                </label>
+                <EnterpriseCheckbox
+                  checked={editing.pm_allow_emergency_bypass ?? false}
+                  onChange={(e) =>
+                    setEditing({ ...editing, pm_allow_emergency_bypass: e.target.checked })
+                  }
+                  label="Allow emergency bypass on password checkout requests"
+                />
               </div>
             </div>
           )}

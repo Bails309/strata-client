@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 
@@ -120,7 +120,7 @@ describe("ToastProvider", () => {
     await user.click(screen.getByText("fire"));
     await user.click(screen.getByText("Renew now"));
     expect(action).toHaveBeenCalledOnce();
-    expect(screen.queryByText("Action me")).toBeNull();
+    await waitFor(() => expect(screen.queryByText("Action me")).toBeNull());
   });
 
   it("allows manual dismiss via the close button", async () => {
@@ -133,7 +133,59 @@ describe("ToastProvider", () => {
     await user.click(screen.getByText("fire"));
     expect(screen.getByText("Closable")).toBeInTheDocument();
     await user.click(screen.getByLabelText("Dismiss notification"));
-    expect(screen.queryByText("Closable")).toBeNull();
+    await waitFor(() => expect(screen.queryByText("Closable")).toBeNull());
+  });
+
+  it("pauses the auto-dismiss countdown while hovered and resumes with the remaining time", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(
+      <ToastProvider>
+        <Trigger variant="info" title="Hover me" />
+      </ToastProvider>
+    );
+    await user.click(screen.getByText("fire"));
+    const card = screen.getByRole("status");
+    act(() => {
+      vi.advanceTimersByTime(4_000);
+    });
+    await user.hover(card);
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(screen.getByText("Hover me")).toBeInTheDocument();
+    await user.unhover(card);
+    act(() => {
+      vi.advanceTimersByTime(2_500);
+    });
+    expect(screen.queryByText("Hover me")).toBeNull();
+  });
+
+  it("renders detail rows in the monospace box", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    function DetailTrigger() {
+      const toast = useToast();
+      return (
+        <button
+          onClick={() =>
+            toast.error({
+              title: "Blocked",
+              details: [{ label: "High", value: "rule-7", meta: "src/app.ts:12" }],
+            })
+          }
+        >
+          fire-details
+        </button>
+      );
+    }
+    render(
+      <ToastProvider>
+        <DetailTrigger />
+      </ToastProvider>
+    );
+    await user.click(screen.getByText("fire-details"));
+    expect(screen.getByText("High")).toBeInTheDocument();
+    expect(screen.getByText("rule-7")).toBeInTheDocument();
+    expect(screen.getByText(/src\/app\.ts:12/)).toBeInTheDocument();
   });
 });
 

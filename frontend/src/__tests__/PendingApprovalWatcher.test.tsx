@@ -229,7 +229,7 @@ describe("PendingApprovalWatcher", () => {
         expect(screen.getByText(/Credential checkout requested/)).toBeInTheDocument()
       );
       await user_.click(screen.getByRole("button", { name: /Dismiss notification/ }));
-      expect(screen.queryByText(/Credential checkout requested/)).toBeNull();
+      await waitFor(() => expect(screen.queryByText(/Credential checkout requested/)).toBeNull());
       // Force another poll cycle — the same pending row comes back from the
       // server but the de-dup tracker must keep the card hidden.
       await act(async () => {

@@ -32,6 +32,7 @@ import {
 } from "../api";
 import { useSessionManager } from "../components/SessionManager";
 import Select from "../components/Select";
+import EnterpriseCheckbox from "../components/EnterpriseCheckbox";
 import { useSettings } from "../contexts/SettingsContext";
 import { isWebPSupported } from "../utils/browserCapabilities";
 
@@ -230,7 +231,6 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const { createSession, setTiledSessionIds, setFocusedSessionIds, setActiveSessionId } =
     useSessionManager();
-  const selectAllRef = useRef<HTMLInputElement>(null);
 
   const loadProfiles = useCallback(async () => {
     try {
@@ -482,14 +482,6 @@ export default function Dashboard() {
   // The visible connections: folder view shows all filtered, flat view shows paged slice
   const visibleConnections = folderView ? filtered : paged;
 
-  // Drive indeterminate state on the "select all" checkbox
-  useEffect(() => {
-    if (selectAllRef.current) {
-      const some = checked.size > 0 && checked.size < visibleConnections.length;
-      selectAllRef.current.indeterminate = some;
-    }
-  }, [checked, visibleConnections.length]);
-
   const protocols = useMemo(
     () => [...new Set(connections.map((c) => c.protocol.toUpperCase()))].sort(),
     [connections]
@@ -578,13 +570,18 @@ export default function Dashboard() {
     });
   }, []);
 
-  const toggleAllChecked = useCallback(() => {
-    setChecked((prev) =>
-      prev.size === visibleConnections.length
-        ? new Set()
-        : new Set(visibleConnections.map((c) => c.id))
-    );
-  }, [visibleConnections]);
+  const toggleAllChecked = useCallback(
+    (shouldSelectAll?: boolean) => {
+      setChecked((prev) => {
+        const selectAll =
+          typeof shouldSelectAll === "boolean"
+            ? shouldSelectAll
+            : prev.size !== visibleConnections.length;
+        return selectAll ? new Set(visibleConnections.map((c) => c.id)) : new Set();
+      });
+    },
+    [visibleConnections]
+  );
 
   const openTiled = useCallback(async () => {
     if (checked.size < 2) return;
@@ -749,7 +746,7 @@ export default function Dashboard() {
   );
 
   return (
-    <div>
+    <div className="strata-dashboard">
       <h1>My Connections</h1>
 
       {/* ── Recent Connections — Premium Glass Cards ── */}
@@ -783,16 +780,16 @@ export default function Dashboard() {
                     style={{
                       background:
                         status === "active"
-                          ? "#22c55e"
+                          ? "#10b981"
                           : status === "expired"
                             ? "#ef4444"
-                            : "#8b5cf6",
+                            : "var(--color-accent)",
                       boxShadow:
                         status === "active"
-                          ? "0 0 8px rgba(34, 197, 94, 0.6)"
+                          ? "0 0 8px rgba(16, 185, 129, 0.6)"
                           : status === "expired"
                             ? "0 0 8px rgba(239, 68, 68, 0.6)"
-                            : "0 0 8px rgba(139, 92, 246, 0.6)",
+                            : "0 0 8px var(--color-accent-glow)",
                     }}
                   />
 
@@ -814,13 +811,13 @@ export default function Dashboard() {
                         verticalAlign: "middle",
                         background:
                           conn.health_status === "online"
-                            ? "#22c55e"
+                            ? "#10b981"
                             : conn.health_status === "offline"
                               ? "#ef4444"
                               : "#6b7280",
                         boxShadow:
                           conn.health_status === "online"
-                            ? "0 0 6px rgba(34,197,94,0.6)"
+                            ? "0 0 6px rgba(16,185,129,0.6)"
                             : conn.health_status === "offline"
                               ? "0 0 6px rgba(239,68,68,0.6)"
                               : "none",
@@ -844,12 +841,18 @@ export default function Dashboard() {
                         ({status === "none" ? "no profile" : status})
                       </span>
                     </p>
-                    <p>Last Accessed: {formatDateTime(conn.last_accessed!)}</p>
+                    <p>
+                      Last Accessed:{" "}
+                      <span className="recent-card-meta-value">
+                        {formatDateTime(conn.last_accessed!)}
+                      </span>
+                    </p>
                   </div>
 
                   {/* Connect button */}
                   <button
                     className="btn-connect-glass w-full"
+                    data-status={status}
                     style={
                       {
                         "--btn-border":
@@ -857,19 +860,19 @@ export default function Dashboard() {
                             ? "rgba(34, 197, 94, 0.4)"
                             : status === "expired"
                               ? "rgba(239, 68, 68, 0.4)"
-                              : "rgba(139, 92, 246, 0.4)",
+                              : "var(--color-border-focus)",
                         "--btn-text":
                           status === "active"
                             ? "#22c55e"
                             : status === "expired"
                               ? "#ef4444"
-                              : "#a78bfa",
+                              : "var(--color-accent)",
                         "--btn-glow":
                           status === "active"
                             ? "rgba(34, 197, 94, 0.15)"
                             : status === "expired"
                               ? "rgba(239, 68, 68, 0.15)"
-                              : "rgba(139, 92, 246, 0.15)",
+                              : "var(--color-accent-dim)",
                       } as React.CSSProperties
                     }
                     onClick={(e) => {
@@ -897,10 +900,7 @@ export default function Dashboard() {
 
       {/* ── Toolbar ── */}
       <div className="flex items-center gap-4 mb-5 flex-wrap">
-        <div
-          className="flex items-center gap-2 flex-1 max-w-xs rounded-sm px-3 transition-all duration-200 focus-within:ring-3 focus-within:ring-accent-dim"
-          style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)" }}
-        >
+        <div className="dash-search flex items-center gap-2 flex-1 max-w-xs rounded-sm px-3 transition-all duration-200 focus-within:ring-3 focus-within:ring-accent-dim">
           <svg
             width="16"
             height="16"
@@ -931,7 +931,7 @@ export default function Dashboard() {
           >
             Type
           </label>
-          <div className="min-w-[140px]">
+          <div className="dash-type-select min-w-[140px]">
             <Select
               id="dashboard-type-filter"
               value={typeFilter}
@@ -946,7 +946,8 @@ export default function Dashboard() {
         </div>
 
         <button
-          className={`btn-sm inline-flex items-center gap-1.5 ${showFavorites ? "!border-accent !text-accent" : ""}`}
+          className={`dash-toggle btn-sm inline-flex items-center gap-1.5 ${showFavorites ? "!border-accent !text-accent" : ""}`}
+          aria-pressed={showFavorites}
           onClick={() => {
             const next = !showFavorites;
             setShowFavorites(next);
@@ -970,7 +971,8 @@ export default function Dashboard() {
         </button>
 
         <button
-          className={`btn-sm inline-flex items-center gap-1.5 ${folderView ? "!border-accent !text-accent" : ""}`}
+          className={`dash-toggle btn-sm inline-flex items-center gap-1.5 ${folderView ? "!border-accent !text-accent" : ""}`}
+          aria-pressed={folderView}
           onClick={() => {
             const next = !folderView;
             setFolderView(next);
@@ -1122,19 +1124,18 @@ export default function Dashboard() {
       </div>
 
       {/* ── Table ── */}
-      <div className="card !p-0 !overflow-hidden">
+      <div className="dash-table-card card !p-0 !overflow-hidden">
         <table>
           <thead>
             <tr>
-              <th style={{ width: 40 }}>
-                <input
-                  ref={selectAllRef}
-                  type="checkbox"
+              <th className="py-3 px-4 w-10 text-left">
+                <EnterpriseCheckbox
+                  id="select-all-connections"
                   checked={
                     visibleConnections.length > 0 && checked.size === visibleConnections.length
                   }
-                  onChange={toggleAllChecked}
-                  className="checkbox"
+                  indeterminate={checked.size > 0 && checked.size < visibleConnections.length}
+                  onCheckedChange={toggleAllChecked}
                   title="Select all"
                   aria-label="Select all connections"
                 />
@@ -1541,18 +1542,31 @@ function ConnectionRow({
   const statusColors = {
     active: { border: "rgba(34, 197, 94, 0.4)", text: "#22c55e", glow: "rgba(34, 197, 94, 0.15)" },
     expired: { border: "rgba(239, 68, 68, 0.4)", text: "#ef4444", glow: "rgba(239, 68, 68, 0.15)" },
-    none: { border: "rgba(139, 92, 246, 0.4)", text: "#a78bfa", glow: "rgba(139, 92, 246, 0.15)" },
+    none: {
+      border: "var(--color-border-focus)",
+      text: "var(--color-accent)",
+      glow: "var(--color-accent-dim)",
+    },
   }[status];
 
   return (
-    <tr>
-      <td>
-        <input
-          type="checkbox"
+    <tr
+      key={conn.id}
+      className={`
+        border-b border-white/[0.07] transition-colors duration-150
+        ${
+          checked
+            ? "bg-[#3ACEEF]/[0.06] border-l-2 border-l-[#3ACEEF]"
+            : "border-l-2 border-l-transparent hover:bg-[#3ACEEF]/[0.03]"
+        }
+      `}
+    >
+      <td className="py-3 px-4 w-10">
+        <EnterpriseCheckbox
+          id={`select-${conn.id}`}
           checked={checked}
-          onChange={onToggleChecked}
-          className="checkbox"
-          aria-label={`Select connection ${conn.name}`}
+          onCheckedChange={onToggleChecked}
+          aria-label={`Select ${conn.name}`}
         />
       </td>
       <td>
@@ -1604,7 +1618,9 @@ function ConnectionRow({
       <td>
         <div className="flex items-center gap-2.5 text-accent-light">
           <ProtocolIcon protocol={conn.protocol} />
-          <span className="badge badge-accent">{conn.protocol.toUpperCase()}</span>
+          <span className="badge badge-accent" data-protocol={conn.protocol.toLowerCase()}>
+            {conn.protocol.toUpperCase()}
+          </span>
         </div>
       </td>
       <td>
@@ -1621,13 +1637,13 @@ function ConnectionRow({
             borderRadius: "50%",
             background:
               conn.health_status === "online"
-                ? "#22c55e"
+                ? "#10b981"
                 : conn.health_status === "offline"
                   ? "#ef4444"
                   : "#6b7280",
             boxShadow:
               conn.health_status === "online"
-                ? "0 0 6px rgba(34,197,94,0.6)"
+                ? "0 0 6px rgba(16,185,129,0.6)"
                 : conn.health_status === "offline"
                   ? "0 0 6px rgba(239,68,68,0.6)"
                   : "none",
@@ -1643,7 +1659,7 @@ function ConnectionRow({
       <td>
         <div className="flex gap-2">
           <button
-            className="btn-sm !px-2"
+            className="dash-action-icon dash-action-fav btn-sm !px-2"
             onClick={onToggleFavorite}
             title={isFavorite ? "Remove from favorites" : "Add to favorites"}
           >
@@ -1662,7 +1678,7 @@ function ConnectionRow({
           </button>
           <div ref={tagMenuRef} style={{ position: "relative" }}>
             <button
-              className={`btn-sm !px-2 ${connTagIds.length > 0 ? "!border-accent !text-accent" : ""}`}
+              className={`dash-action-icon btn-sm !px-2 ${connTagIds.length > 0 ? "!border-accent !text-accent" : ""}`}
               onClick={() => {
                 if (!showTagMenu && tagMenuRef.current) {
                   const rect = tagMenuRef.current.getBoundingClientRect();
@@ -1797,7 +1813,8 @@ function ConnectionRow({
             )}
           </div>
           <button
-            className="btn-connect-glass"
+            className="btn-connect-glass dash-row-connect"
+            data-status={status}
             style={
               {
                 "--btn-border": statusColors.border,
@@ -1812,7 +1829,7 @@ function ConnectionRow({
             Connect
           </button>
           {vaultConfigured && (
-            <div className="w-[200px] shrink-0">
+            <div className="dash-account-select w-[200px] shrink-0">
               <Select
                 value={assignedProfileId}
                 onChange={(v) => onProfileChange(conn.id, v)}

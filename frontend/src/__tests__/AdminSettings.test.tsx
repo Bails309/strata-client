@@ -1061,7 +1061,7 @@ describe("AccessTab", () => {
   it("renders connections table", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     expect(await screen.findByText("Server A")).toBeInTheDocument();
     expect(screen.getByText("RDP")).toBeInTheDocument();
   });
@@ -1069,7 +1069,7 @@ describe("AccessTab", () => {
   it("opens add connection form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     expect(screen.getByText("Add Connection")).toBeInTheDocument();
@@ -1078,7 +1078,7 @@ describe("AccessTab", () => {
   it("opens edit connection form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     // Target the Edit button specifically in the connections table
     const connectionsCard = screen
@@ -1117,7 +1117,7 @@ describe("AccessTab", () => {
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.type(screen.getByPlaceholderText(/Search connections/), "Server B");
     expect(screen.getByText("Server B")).toBeInTheDocument();
@@ -1138,7 +1138,7 @@ describe("AccessTab", () => {
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     await user.type(screen.getByPlaceholderText("My Server"), "New");
@@ -1152,7 +1152,7 @@ describe("AccessTab", () => {
     vi.mocked(deleteConnection).mockResolvedValue({ status: "success" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const deleteBtns = screen.getAllByText("Delete");
     await user.click(deleteBtns[0]);
@@ -1166,7 +1166,7 @@ describe("AccessTab", () => {
   it("does not delete when confirm is cancelled", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const deleteBtns = screen.getAllByText("Delete");
     await user.click(deleteBtns[0]);
@@ -1179,7 +1179,7 @@ describe("AccessTab", () => {
   it("shows connection description", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     expect(await screen.findByText("RDP server")).toBeInTheDocument();
   });
 
@@ -1202,7 +1202,7 @@ describe("AccessTab", () => {
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     const connectionsCard = screen
       .getByRole("heading", { name: "Connections" })
       .closest(".card") as HTMLElement;
@@ -1214,7 +1214,7 @@ describe("AccessTab", () => {
   it("shows dash for unfoldered connections", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const dashes = screen.getAllByText("—");
     expect(dashes.length).toBeGreaterThanOrEqual(1);
@@ -1235,7 +1235,7 @@ describe("AccessTab", () => {
     vi.mocked(getConnections).mockResolvedValue(manyConns);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server 0");
     const connectionsCard = screen
       .getByRole("heading", { name: "Connections" })
@@ -1264,7 +1264,7 @@ describe("AccessTab", () => {
     vi.mocked(getConnections).mockResolvedValue(manyConns);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server 0");
     const connectionsCard = screen
       .getByRole("heading", { name: "Connections" })
@@ -1279,7 +1279,7 @@ describe("AccessTab", () => {
   it("shows connection count", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     expect(await screen.findByText(/1 connection/)).toBeInTheDocument();
   });
 
@@ -1310,7 +1310,7 @@ describe("AccessTab", () => {
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.type(screen.getByPlaceholderText(/Search connections/), "Server A");
     expect(screen.getByText(/1 of 2/)).toBeInTheDocument();
@@ -1330,7 +1330,7 @@ describe("AccessTab", () => {
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const connectionsCard = screen
       .getByRole("heading", { name: "Connections" })
@@ -1359,7 +1359,7 @@ describe("AccessTab", () => {
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const connectionsCard = screen
       .getByRole("heading", { name: "Connections" })
@@ -1385,7 +1385,7 @@ describe("AccessTab", () => {
     vi.mocked(deleteConnection).mockResolvedValue({ status: "success" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const connectionsCard = screen
       .getByRole("heading", { name: "Connections" })
@@ -1408,7 +1408,7 @@ describe("AccessTab", () => {
   it("cancel closes the add form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     expect(screen.getByText("Add Connection")).toBeInTheDocument();
@@ -1488,7 +1488,7 @@ describe("AccessTab", () => {
   it("shows no folders empty state", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     expect(await screen.findByText(/No folders created yet/)).toBeInTheDocument();
   });
 
@@ -1499,7 +1499,7 @@ describe("AccessTab", () => {
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     const prodEls = await screen.findAllByText("Production");
     expect(prodEls.length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Staging")).toBeInTheDocument();
@@ -1514,7 +1514,7 @@ describe("AccessTab", () => {
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText(/No folders created yet/);
     await user.type(screen.getByPlaceholderText("Folder name..."), "DevOps");
     await user.click(screen.getByText("Add Folder"));
@@ -1530,7 +1530,7 @@ describe("AccessTab", () => {
     vi.mocked(deleteConnectionFolder).mockResolvedValue({ status: "success" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("ToDelete");
     // Find the folder delete button
     const folderDeleteBtns = screen.getAllByText("Delete");
@@ -1553,7 +1553,7 @@ describe("AccessTab", () => {
   it("disables Add Folder button when name is empty", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Connection Folders");
     expect(screen.getByText("Add Folder")).toBeDisabled();
   });
@@ -1561,7 +1561,7 @@ describe("AccessTab", () => {
   it("highlights currently edited connection row", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const row = screen
       .getAllByText("Server A")
@@ -2449,7 +2449,7 @@ describe("ConnectionForm protocol sections", () => {
   it("shows SSH protocol sections when editing SSH connection", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const row = screen.getByText("Server A").closest("tr")!;
     await user.click(within(row).getByText("Edit"));
@@ -2465,7 +2465,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands and collapses SSH section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const row = screen.getByText("Server A").closest("tr")!;
     await user.click(within(row).getByText("Edit"));
@@ -2486,7 +2486,7 @@ describe("ConnectionForm protocol sections", () => {
   it("shows VNC protocol sections when protocol changed to VNC", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     // Default is RDP — switch to VNC via the protocol dropdown
@@ -2502,7 +2502,7 @@ describe("ConnectionForm protocol sections", () => {
   it("hides Hostname/Port/Domain fields when protocol is Web Browser", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     // RDP is the default — confirm the network fields are visible first.
@@ -2524,7 +2524,7 @@ describe("ConnectionForm protocol sections", () => {
   it("hides Hostname/Port/Domain fields when protocol is VDI Desktop", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     const protocolTrigger = screen
@@ -2541,7 +2541,7 @@ describe("ConnectionForm protocol sections", () => {
   it("shows Kubernetes protocol sections when protocol changed to Kubernetes Pod", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     const protocolTrigger = screen
@@ -2564,7 +2564,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands Kubernetes TLS section and shows certificate textareas", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     const protocolTrigger = screen
@@ -2582,7 +2582,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands Kubernetes Clipboard section to show disable copy/paste", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     const protocolTrigger = screen
@@ -2607,7 +2607,7 @@ describe("ConnectionForm protocol sections", () => {
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     const protocolTrigger = screen
@@ -2644,7 +2644,7 @@ describe("ConnectionForm protocol sections", () => {
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     await user.type(screen.getByPlaceholderText("My Server"), "New SSH");
@@ -2661,7 +2661,7 @@ describe("ConnectionForm protocol sections", () => {
   it("closes form with Cancel button", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     expect(screen.getByText("Add Connection")).toBeInTheDocument();
@@ -2673,7 +2673,7 @@ describe("ConnectionForm protocol sections", () => {
   it("shows RDP Authentication section open by default in Add Connection form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     expect(screen.getByText("Ignore server certificate")).toBeInTheDocument();
@@ -2683,7 +2683,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands RDP Certificate Trust section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ Certificate Trust/ }));
@@ -2694,7 +2694,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands RDP Basic Settings section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ Basic Settings/ }));
@@ -2704,7 +2704,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands RDP Display section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ Display/ }));
@@ -2714,7 +2714,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands RDP Performance section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ Performance/ }));
@@ -2724,7 +2724,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands RDP Device Redirection section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ Device Redirection/ }));
@@ -2737,7 +2737,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands RDP Screen Recording section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ Screen Recording/ }));
@@ -2747,7 +2747,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands RDP Wake-on-LAN section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ Wake-on-LAN/ }));
@@ -2757,7 +2757,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands RDP Clipboard section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ Clipboard/ }));
@@ -2769,7 +2769,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands RDP Load Balancing section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ Load Balancing/ }));
@@ -2779,7 +2779,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands RDP SFTP section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ SFTP/ }));
@@ -2789,7 +2789,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands RDP Kerberos / NLA section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     await user.click(screen.getByText("+ Add Connection"));
     await user.click(screen.getByRole("button", { name: /▸ Kerberos/ }));
@@ -2799,7 +2799,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands SSH Terminal Behavior section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const row = screen.getByText("Server A").closest("tr")!;
     await user.click(within(row).getByText("Edit"));
@@ -2810,7 +2810,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands SSH SFTP section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const row = screen.getByText("Server A").closest("tr")!;
     await user.click(within(row).getByText("Edit"));
@@ -2821,7 +2821,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands SSH Screen Recording section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const row = screen.getByText("Server A").closest("tr")!;
     await user.click(within(row).getByText("Edit"));
@@ -2832,7 +2832,7 @@ describe("ConnectionForm protocol sections", () => {
   it("expands SSH Wake-on-LAN section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText("Access"));
+    await user.click(screen.getByText("Connections"));
     await screen.findByText("Server A");
     const row = screen.getByText("Server A").closest("tr")!;
     await user.click(within(row).getByText("Edit"));

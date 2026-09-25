@@ -4,8 +4,10 @@ import userEvent from "@testing-library/user-event";
 import { BrowserRouter } from "react-router-dom";
 
 // Mock the ThemeProvider
+const setPreference = vi.fn();
+const cycle = vi.fn();
 vi.mock("../components/ThemeProvider", () => ({
-  useTheme: () => ({ theme: "dark", setTheme: vi.fn() }),
+  useTheme: () => ({ theme: "dark", preference: "system", setPreference, cycle }),
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
@@ -197,5 +199,64 @@ describe("Login page", () => {
     await user.click(screen.getByRole("button", { name: /sign in/i }));
 
     expect(await screen.findByText("Sign-in failed. Please try again.")).toBeInTheDocument();
+  });
+
+  it("styles the first provider as primary and Capita with its brand variant", async () => {
+    vi.mocked(getStatus).mockResolvedValue({
+      phase: "running",
+      sso_enabled: true,
+      local_auth_enabled: false,
+      vault_configured: false,
+      sso_providers: [
+        { id: "idp", name: "IDP" },
+        { id: "cap", name: "Capita" },
+        { id: "ext", name: "External" },
+      ],
+      version: "2.1.1",
+    });
+
+    renderLogin();
+    const idp = await screen.findByRole("link", { name: /sign in with IDP/i });
+    expect(idp).toHaveClass("sl-btn-primary");
+    expect(idp).toHaveAttribute("href", "/api/auth/sso/login?provider=idp");
+    expect(screen.getByRole("link", { name: /sign in with Capita/i })).toHaveClass("sl-btn-capita");
+    expect(screen.getByRole("link", { name: /sign in with External/i })).toHaveClass(
+      "sl-btn-external"
+    );
+    expect(screen.getByText(/Secure enterprise login via OIDC/i)).toBeInTheDocument();
+  });
+
+  it("shows a redirecting state on the provider that was clicked", async () => {
+    vi.mocked(getStatus).mockResolvedValue({
+      phase: "running",
+      sso_enabled: true,
+      local_auth_enabled: false,
+      vault_configured: false,
+      sso_providers: [{ id: "1", name: "Okta" }],
+      version: "2.1.1",
+    });
+    renderLogin();
+    const link = await screen.findByRole("link", { name: /sign in with Okta/i });
+    // jsdom does not navigate; the click only drives the busy state.
+    link.addEventListener("click", (e) => e.preventDefault());
+    await userEvent.click(link);
+    expect(link).toHaveAttribute("aria-busy", "true");
+    expect(link).toHaveTextContent(/Redirecting/);
+  });
+
+  it("reports an unreachable authentication service instead of spinning forever", async () => {
+    vi.mocked(getStatus).mockRejectedValue(new Error("down"));
+    renderLogin();
+    expect(
+      await screen.findByText(/authentication service could not be reached/i)
+    ).toBeInTheDocument();
+  });
+
+  it("cycles theme when the theme toggle button is clicked", async () => {
+    const user = userEvent.setup();
+    renderLogin();
+    const trigger = await screen.findByRole("button", { name: /theme: system/i });
+    await user.click(trigger);
+    expect(cycle).toHaveBeenCalledTimes(1);
   });
 });

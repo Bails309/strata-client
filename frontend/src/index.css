@@ -5,60 +5,60 @@
   /* Font */
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 
-  /* Surfaces — layered charcoal */
-  --color-surface: #111114;
-  --color-surface-secondary: #1a1a1f;
-  --color-surface-tertiary: rgba(50, 50, 56, 0.55);
-  --color-surface-elevated: #222228;
+  /* Surfaces — layered navy */
+  --color-surface: #070b12;
+  --color-surface-secondary: #0e1726;
+  --color-surface-tertiary: rgba(30, 45, 66, 0.55);
+  --color-surface-elevated: #121e31;
 
   /* Accent */
-  --color-accent: #8b5cf6;
-  --color-accent-light: #a78bfa;
-  --color-accent-dim: rgba(139, 92, 246, 0.12);
-  --color-accent-glow: rgba(139, 92, 246, 0.22);
+  --color-accent: #3aceef;
+  --color-accent-light: #67e8f9;
+  --color-accent-dim: rgba(58, 206, 239, 0.12);
+  --color-accent-glow: rgba(58, 206, 239, 0.22);
 
-  /* Text — zinc neutrals */
-  --color-txt-primary: #f4f4f5;
-  --color-txt-secondary: #a1a1aa;
-  --color-txt-tertiary: #63636b;
+  /* Text — slate neutrals */
+  --color-txt-primary: #e2e8f0;
+  --color-txt-secondary: #94a3b8;
+  --color-txt-tertiary: #64748b;
 
   /* Semantic */
   --color-danger: #ef4444;
   --color-danger-dim: rgba(239, 68, 68, 0.12);
   --color-danger-hover: #f87171;
-  --color-success: #22c55e;
-  --color-success-dim: rgba(34, 197, 94, 0.12);
+  --color-success: #10b981;
+  --color-success-dim: rgba(16, 185, 129, 0.12);
   --color-warning: #eab308;
   --color-warning-dim: rgba(234, 179, 8, 0.12);
 
   /* Borders & Glass */
-  --color-glass-border: rgba(255, 255, 255, 0.09);
-  --color-glass-highlight: rgba(255, 255, 255, 0.04);
-  --color-glass-highlight-strong: rgba(255, 255, 255, 0.07);
-  --color-border: rgba(255, 255, 255, 0.09);
-  --color-border-focus: rgba(139, 92, 246, 0.5);
+  --color-glass-border: rgba(58, 206, 239, 0.18);
+  --color-glass-highlight: rgba(255, 255, 255, 0.03);
+  --color-glass-highlight-strong: rgba(255, 255, 255, 0.05);
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-focus: rgba(58, 206, 239, 0.6);
 
   /* Inputs & Interactive */
-  --color-input-bg: rgba(10, 10, 14, 0.5);
-  --color-input-bg-focus: rgba(10, 10, 14, 0.8);
-  --color-input-hover-border: rgba(255, 255, 255, 0.16);
-  --color-btn-hover-bg: rgba(50, 50, 56, 0.6);
-  --color-btn-hover-border: rgba(255, 255, 255, 0.16);
-  --color-row-hover: rgba(139, 92, 246, 0.06);
-  --color-tabs-bg: rgba(16, 16, 20, 0.7);
-  --color-tab-hover-bg: rgba(255, 255, 255, 0.06);
-  --color-nav-bg: #16161a;
+  --color-input-bg: rgba(11, 19, 31, 0.75);
+  --color-input-bg-focus: rgba(11, 19, 31, 0.9);
+  --color-input-hover-border: rgba(58, 206, 239, 0.35);
+  --color-btn-hover-bg: rgba(58, 206, 239, 0.08);
+  --color-btn-hover-border: rgba(58, 206, 239, 0.45);
+  --color-row-hover: rgba(58, 206, 239, 0.08);
+  --color-tabs-bg: rgba(11, 19, 31, 0.7);
+  --color-tab-hover-bg: rgba(58, 206, 239, 0.06);
+  --color-nav-bg: #0b131f;
   --color-nav-border: rgba(255, 255, 255, 0.07);
-  --color-nav-link-hover: rgba(255, 255, 255, 0.06);
-  --color-card-hover-border: rgba(255, 255, 255, 0.14);
-  --color-scrollbar-thumb: rgba(255, 255, 255, 0.12);
-  --color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
-  --color-selection-bg: rgba(139, 92, 246, 0.25);
+  --color-nav-link-hover: rgba(58, 206, 239, 0.05);
+  --color-card-hover-border: rgba(58, 206, 239, 0.4);
+  --color-scrollbar-thumb: rgba(148, 163, 184, 0.18);
+  --color-scrollbar-thumb-hover: rgba(148, 163, 184, 0.32);
+  --color-selection-bg: rgba(58, 206, 239, 0.25);
 
   /* Ambient background */
-  --color-ambient-1: rgba(139, 92, 246, 0.06);
-  --color-ambient-2: rgba(139, 92, 246, 0.04);
-  --color-ambient-3: rgba(167, 139, 250, 0.03);
+  --color-ambient-1: rgba(58, 206, 239, 0.05);
+  --color-ambient-2: rgba(69, 246, 206, 0.03);
+  --color-ambient-3: rgba(58, 206, 239, 0.03);
 
   /* Border Radius — rounder for modern feel */
   --radius-sm: 0.5rem;
@@ -70,7 +70,7 @@
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.24);
   --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.16), 0 4px 16px rgba(0, 0, 0, 0.16);
   --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.2), 0 8px 32px rgba(0, 0, 0, 0.22);
-  --shadow-accent: 0 1px 3px rgba(139, 92, 246, 0.15), 0 4px 16px rgba(139, 92, 246, 0.12);
+  --shadow-accent: 0 1px 3px rgba(58, 206, 239, 0.15), 0 4px 16px rgba(58, 206, 239, 0.12);
 
   /* Easing */
   --ease-out: cubic-bezier(0.4, 0, 0.2, 1);
@@ -79,6 +79,26 @@
   /* Animations */
   --animate-fade-in: fadeIn 0.3s var(--ease-out) both;
   --animate-select-in: selectSlideIn 0.15s var(--ease-out);
+}
+
+/* Primary action fill — matches the login page's primary button */
+:root {
+  --primary-gradient: linear-gradient(135deg, #4aa3b8 0%, #2f7a90 55%, #2a6a80 100%);
+  --primary-gradient-hover: linear-gradient(135deg, #5bb6cb 0%, #3a8ba2 55%, #2f7a90 100%);
+  --primary-shadow: 0 1px 2px rgba(47, 122, 144, 0.3), 0 3px 10px rgba(58, 206, 239, 0.18);
+  --primary-shadow-hover: 0 2px 4px rgba(47, 122, 144, 0.35), 0 6px 20px rgba(58, 206, 239, 0.28);
+
+  /* ── Enterprise Geometric Checkbox Tokens ──────────────────── */
+  --cb-size: 16px;
+  --cb-radius: 4px;
+  --cb-bg-unchecked: rgba(11, 19, 31, 0.65);
+  --cb-border-unchecked: 1px solid rgba(148, 163, 184, 0.28);
+  --cb-border-hover: 1px solid #3aceef;
+  --cb-bg-checked: #3aceef;
+  --cb-border-checked: 1px solid #3aceef;
+  --cb-icon-color: #ffffff;
+  --cb-focus-ring: 0 0 0 2px #070b12, 0 0 0 4px #3aceef;
+  --row-selected-bg: rgba(58, 206, 239, 0.05);
 }
 
 /* ── Utility Classes ────────────────────────────────────────── */
@@ -206,12 +226,13 @@ html.light {
   --color-glass-highlight: rgba(255, 255, 255, 0.8);
   --color-glass-highlight-strong: rgba(255, 255, 255, 1);
 
-  --color-txt-primary: #09090b;
-  --color-txt-secondary: #71717a;
-  --color-txt-tertiary: #a1a1aa;
+  --color-txt-primary: #0f172a;
+  --color-txt-secondary: #475569;
+  --color-txt-tertiary: #94a3b8;
 
-  --color-accent-dim: rgba(139, 92, 246, 0.06);
-  --color-accent-glow: rgba(139, 92, 246, 0.1);
+  --color-accent: #0891b2;
+  --color-accent-dim: rgba(8, 145, 178, 0.08);
+  --color-accent-glow: rgba(8, 145, 178, 0.14);
 
   --color-danger: #dc2626;
   --color-danger-dim: rgba(220, 38, 38, 0.06);
@@ -222,33 +243,34 @@ html.light {
   --color-warning-dim: rgba(202, 138, 4, 0.06);
 
   --color-border: rgba(0, 0, 0, 0.08);
-  --color-border-focus: rgba(139, 92, 246, 0.4);
+  --color-border-focus: rgba(8, 145, 178, 0.5);
+  --color-glass-border: rgba(8, 145, 178, 0.16);
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.03);
   --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.03);
   --shadow-lg: 0 2px 4px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
-  --shadow-accent: 0 1px 2px rgba(139, 92, 246, 0.08), 0 4px 12px rgba(139, 92, 246, 0.06);
+  --shadow-accent: 0 1px 2px rgba(8, 145, 178, 0.1), 0 4px 12px rgba(8, 145, 178, 0.08);
 
   --color-input-bg: #ffffff;
   --color-input-bg-focus: #ffffff;
-  --color-input-hover-border: rgba(0, 0, 0, 0.16);
-  --color-btn-hover-bg: #f4f4f5;
-  --color-btn-hover-border: rgba(0, 0, 0, 0.14);
-  --color-row-hover: rgba(139, 92, 246, 0.03);
-  --color-tabs-bg: #f4f4f5;
-  --color-tab-hover-bg: rgba(0, 0, 0, 0.04);
+  --color-input-hover-border: rgba(8, 145, 178, 0.35);
+  --color-btn-hover-bg: rgba(8, 145, 178, 0.06);
+  --color-btn-hover-border: rgba(8, 145, 178, 0.4);
+  --color-row-hover: rgba(8, 145, 178, 0.06);
+  --color-tabs-bg: rgba(241, 245, 249, 0.85);
+  --color-tab-hover-bg: rgba(8, 145, 178, 0.06);
   --color-nav-bg: rgba(255, 255, 255, 0.9);
-  --color-nav-border: rgba(0, 0, 0, 0.06);
-  --color-nav-link-hover: rgba(0, 0, 0, 0.04);
-  --color-card-hover-border: rgba(0, 0, 0, 0.14);
+  --color-nav-border: rgba(15, 23, 42, 0.08);
+  --color-nav-link-hover: rgba(8, 145, 178, 0.06);
+  --color-card-hover-border: rgba(8, 145, 178, 0.4);
   --color-scrollbar-thumb: rgba(0, 0, 0, 0.12);
   --color-scrollbar-thumb-hover: rgba(0, 0, 0, 0.22);
-  --color-selection-bg: rgba(139, 92, 246, 0.15);
+  --color-selection-bg: rgba(8, 145, 178, 0.18);
 
-  --color-ambient-1: rgba(139, 92, 246, 0.02);
-  --color-ambient-2: rgba(139, 92, 246, 0.015);
-  --color-ambient-3: rgba(167, 139, 250, 0.01);
-  --color-accent-light: #7c3aed;
+  --color-ambient-1: rgba(8, 145, 178, 0.03);
+  --color-ambient-2: rgba(13, 148, 136, 0.02);
+  --color-ambient-3: rgba(8, 145, 178, 0.015);
+  --color-accent-light: #0e7490;
 }
 
 /* ── Light Theme: Session Bar Overrides ── */
@@ -269,25 +291,6 @@ html.light .session-bar-toggle:hover {
 }
 
 /* ── Light Theme: Recent Card Overrides ── */
-html.light .recent-card {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(244, 244, 245, 0.9) 100%);
-  border-color: rgba(0, 0, 0, 0.08);
-  box-shadow:
-    0 4px 24px rgba(0, 0, 0, 0.07),
-    0 1px 0 rgba(255, 255, 255, 0.9) inset;
-}
-
-html.light .recent-card::before {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.6) 0%, transparent 50%);
-}
-
-html.light .recent-card:hover {
-  border-color: rgba(0, 0, 0, 0.14);
-  box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.1),
-    0 1px 0 rgba(255, 255, 255, 1) inset;
-}
-
 html.light .recent-card-btn {
   background: rgba(0, 0, 0, 0.03);
   border-color: rgba(0, 0, 0, 0.1);
@@ -538,13 +541,13 @@ html.light .recent-card-btn:hover {
     padding: 0.55rem 1.15rem;
     font-family: inherit;
     letter-spacing: -0.005em;
-    background: var(--color-accent);
-    border: 1px solid transparent;
-    box-shadow: var(--shadow-accent);
+    background: var(--primary-gradient);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    box-shadow: var(--primary-shadow);
   }
   .btn-primary:hover {
-    background: var(--color-accent-light);
-    box-shadow: var(--shadow-accent);
+    background: var(--primary-gradient-hover);
+    box-shadow: var(--primary-shadow-hover);
   }
   .btn-primary:active {
     opacity: 0.85;
@@ -635,11 +638,10 @@ html.light .recent-card-btn:hover {
     font-family: inherit;
     letter-spacing: 0.01em;
     border-radius: var(--radius-sm);
-    background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 45%, #7c3aed 100%);
+    background: var(--primary-gradient);
     border: 1px solid rgba(255, 255, 255, 0.15);
     box-shadow:
-      0 1px 2px rgba(139, 92, 246, 0.25),
-      0 3px 10px rgba(139, 92, 246, 0.3),
+      var(--primary-shadow),
       inset 0 1px 0 rgba(255, 255, 255, 0.18);
     transition:
       transform 0.15s var(--ease-out),
@@ -661,18 +663,16 @@ html.light .recent-card-btn:hover {
     pointer-events: none;
   }
   .btn-sm-primary:hover {
-    background: linear-gradient(135deg, #b79cfb 0%, #9d71f8 45%, #8b4ef0 100%);
+    background: var(--primary-gradient-hover);
     box-shadow:
-      0 2px 4px rgba(139, 92, 246, 0.3),
-      0 6px 20px rgba(139, 92, 246, 0.4),
+      var(--primary-shadow-hover),
       inset 0 1px 0 rgba(255, 255, 255, 0.22);
     transform: translateY(-1px);
   }
   .btn-sm-primary:active {
     transform: translateY(0);
     box-shadow:
-      0 1px 2px rgba(139, 92, 246, 0.2),
-      0 2px 8px rgba(139, 92, 246, 0.25),
+      var(--primary-shadow),
       inset 0 1px 0 rgba(255, 255, 255, 0.12);
   }
   .btn-sm-primary:disabled {
@@ -971,18 +971,18 @@ html.light .recent-card-btn:hover {
     padding: 0.375rem 0.75rem;
     font-size: 0.75rem;
     background: rgba(255, 255, 255, 0.03);
-    border: 1px solid var(--btn-border, rgba(139, 92, 246, 0.3));
+    border: 1px solid var(--btn-border, rgba(58, 206, 239, 0.3));
     color: var(--btn-text, var(--color-accent-light));
     backdrop-filter: blur(8px);
-    box-shadow: 0 0 15px var(--btn-glow, rgba(139, 92, 246, 0.1));
+    box-shadow: 0 0 15px var(--btn-glow, rgba(58, 206, 239, 0.1));
   }
 
   .btn-connect-glass:hover {
     background: rgba(255, 255, 255, 0.08);
     transform: translateY(-1px);
     box-shadow:
-      0 0 25px var(--btn-glow, rgba(139, 92, 246, 0.2)),
-      inset 0 0 10px var(--btn-glow, rgba(139, 92, 246, 0.1));
+      0 0 25px var(--btn-glow, rgba(58, 206, 239, 0.2)),
+      inset 0 0 10px var(--btn-glow, rgba(58, 206, 239, 0.1));
     border-color: var(--btn-text);
   }
 
@@ -992,7 +992,7 @@ html.light .recent-card-btn:hover {
   }
 
   .btn-connect-glass svg {
-    filter: drop-shadow(0 0 4px var(--btn-glow, rgba(139, 92, 246, 0.2)));
+    filter: drop-shadow(0 0 4px var(--btn-glow, rgba(58, 206, 239, 0.2)));
   }
 
   /* Form Group */
@@ -1042,11 +1042,11 @@ html.light .recent-card-btn:hover {
   }
   .tab-active {
     @apply text-white;
-    background: var(--color-accent);
-    box-shadow: var(--shadow-accent);
+    background: var(--primary-gradient);
+    box-shadow: var(--primary-shadow);
   }
   .tab-active:hover {
-    background: var(--color-accent);
+    background: var(--primary-gradient-hover);
   }
 
   /* Custom Select (portal dropdown — must be in CSS) */
@@ -1256,71 +1256,60 @@ html.light .recent-card-btn:hover {
   .checkbox {
     @apply relative shrink-0 cursor-pointer;
     -webkit-appearance: none;
-    width: 18px;
-    height: 18px;
-    border-radius: 5px;
-    border: 1px solid var(--color-border);
-    background: var(--color-input-bg);
-    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
-    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    width: var(--cb-size, 16px);
+    height: var(--cb-size, 16px);
+    border-radius: var(--cb-radius, 4px);
+    border: var(--cb-border-unchecked, 1px solid rgba(148, 163, 184, 0.28));
+    background: var(--cb-bg-unchecked, rgba(11, 19, 31, 0.65));
+    transition: all 0.15s ease-in-out;
     outline: none;
   }
   .checkbox:hover {
-    border-color: var(--color-border-focus);
-    background: var(--color-row-hover);
+    border: var(--cb-border-hover, 1px solid #3aceef);
+    background: rgba(58, 206, 239, 0.1);
   }
   .checkbox:focus-visible {
-    border-color: var(--color-accent);
-    box-shadow:
-      0 0 0 3px var(--color-accent-dim),
-      inset 0 1px 2px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--cb-focus-ring, 0 0 0 2px #070b12, 0 0 0 4px #3aceef);
   }
   .checkbox:checked {
-    border-color: transparent;
-    background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 45%, #7c3aed 100%);
-    box-shadow:
-      0 2px 5px rgba(139, 92, 246, 0.3),
-      inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    border: var(--cb-border-checked, 1px solid #3aceef);
+    background: var(--cb-bg-checked, #3aceef);
+    box-shadow: none;
   }
   .checkbox:checked:hover {
-    background: linear-gradient(135deg, #b79cfb 0%, #9d71f8 45%, #8b4ef0 100%);
-    box-shadow:
-      0 3px 8px rgba(139, 92, 246, 0.4),
-      inset 0 1px 0 rgba(255, 255, 255, 0.3);
+    border: var(--cb-border-checked, 1px solid #3aceef);
+    background: #33b8d6;
+    box-shadow: none;
   }
   .checkbox:checked::after {
     content: "";
     position: absolute;
-    top: 2.5px;
-    left: 5.5px;
+    top: 1.5px;
+    left: 4.5px;
     width: 5px;
     height: 9px;
     border: solid #fff;
     border-width: 0 2px 2px 0;
     border-radius: 1px;
     transform: rotate(45deg);
-    animation: checkPop 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) both;
   }
   .checkbox:indeterminate {
-    border-color: transparent;
-    background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 45%, #7c3aed 100%);
-    box-shadow:
-      0 2px 5px rgba(139, 92, 246, 0.3),
-      inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    border: var(--cb-border-checked, 1px solid #3aceef);
+    background: var(--cb-bg-checked, #3aceef);
+    box-shadow: none;
   }
   .checkbox:indeterminate::after {
     content: "";
     position: absolute;
-    top: 8px;
-    left: 4px;
-    width: 10px;
+    top: 7px;
+    left: 3px;
+    width: 8px;
     height: 0;
-    border-bottom: 2px solid #fff;
+    border-bottom: 2.2px solid #fff;
     border-radius: 1px;
-    animation: fadeIn 0.2s ease-out both;
   }
   .checkbox:active {
-    transform: scale(0.92);
+    transform: scale(0.96);
   }
 
   /* ── Radio ── */
@@ -1348,15 +1337,15 @@ html.light .recent-card-btn:hover {
   }
   .radio:checked {
     border-color: transparent;
-    background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 45%, #7c3aed 100%);
+    background: var(--primary-gradient);
     box-shadow:
-      0 2px 5px rgba(139, 92, 246, 0.3),
+      var(--primary-shadow),
       inset 0 1px 0 rgba(255, 255, 255, 0.2);
   }
   .radio:checked:hover {
-    background: linear-gradient(135deg, #b79cfb 0%, #9d71f8 45%, #8b4ef0 100%);
+    background: var(--primary-gradient-hover);
     box-shadow:
-      0 3px 8px rgba(139, 92, 246, 0.4),
+      var(--primary-shadow-hover),
       inset 0 1px 0 rgba(255, 255, 255, 0.3);
   }
   .radio:checked::after {

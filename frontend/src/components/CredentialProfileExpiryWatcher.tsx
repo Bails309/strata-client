@@ -1,8 +1,18 @@
 /* Polls credential profiles and toasts on threshold crossings + expiry. */
 import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { getCredentialProfiles, type CredentialProfile } from "../api";
+import { bulkSafeguardCheckout, getCredentialProfiles, type CredentialProfile } from "../api";
 import { useToast } from "./ToastProvider";
+import LeaseBatchBody, { type LeaseItem } from "./LeaseBatchBody";
+import {
+  canRenewInPlace,
+  EXPIRED_TOAST,
+  formatRemaining,
+  isLeaseExpired,
+  publishLeases,
+  registerLeaseRefresher,
+  WARNING_TOAST,
+} from "./leaseStore";
 
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Tunables                                                                  */
@@ -25,16 +35,22 @@ const STANDARD_THRESHOLDS = [
   { secs: 24 * 3600, label: "1 day" },
   { secs: 3600, label: "1 hour" },
   { secs: 600, label: "10 minutes" },
+  { secs: 300, label: "5 minutes" },
 ];
 const EXTENDED_THRESHOLDS = [
   { secs: 7 * 24 * 3600, label: "7 days" },
   { secs: 24 * 3600, label: "1 day" },
   { secs: 3600, label: "1 hour" },
+  { secs: 300, label: "5 minutes" },
 ];
 
 /** Sentinel threshold key recorded once a profile has expired so the
  *  "expired" toast fires exactly once per profile per browser. */
 const EXPIRED_KEY = "expired";
+
+/** Every expiry lands in one toast and every pre-expiry warning in another;
+ *  a second item arriving while the toast is unread turns it into a batch. */
+const BATCH_WARNING_MS = 20_000;
 
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Storage helpers                                                            */
@@ -102,12 +118,133 @@ export default function CredentialProfileExpiryWatcher({
   const renewRef = useRef<(p: CredentialProfile) => void>(
     onRenew ?? (() => navigate("/credentials"))
   );
+  const navigateRef = useRef(navigate);
   useEffect(() => {
     renewRef.current = onRenew ?? (() => navigate("/credentials"));
+    navigateRef.current = navigate;
   }, [onRenew, navigate]);
+
+  // Unread items per toast, keyed by profile id. Cleared when the toast is
+  // dismissed; pruned when a lease is renewed or deleted.
+  const unreadExpiredRef = useRef(new Map<string, LeaseItem>());
+  const unreadWarningRef = useRef(new Map<string, LeaseItem & { secs: number }>());
 
   useEffect(() => {
     let cancelled = false;
+
+    const extendAll = async (items: LeaseItem[]) => {
+      const ids = items.filter((i) => canRenewInPlace(i.profile)).map((i) => i.profile.id);
+      if (ids.length === 0) return;
+      try {
+        const results = await bulkSafeguardCheckout(ids, "Extended from lease notification");
+        const ok = results.filter((r) => r.ok).length;
+        const pending = results.filter((r) => r.state === "pending").length;
+        if (ok > 0) toast.success({ title: `${ok} JIT ${ok === 1 ? "lease" : "leases"} extended` });
+        if (pending > 0)
+          toast.info({
+            title: `${pending} JIT ${pending === 1 ? "request is" : "requests are"} awaiting approval`,
+          });
+        if (ok + pending < results.length)
+          toast.error({
+            title: "Some leases could not be extended",
+            description: results
+              .filter((r) => !r.ok && r.state !== "pending")
+              .map((r) => `${r.label}: ${r.error ?? "failed"}`)
+              .join("; "),
+          });
+      } catch (e) {
+        toast.error({
+          title: "Extend failed",
+          description: e instanceof Error ? e.message : "Unable to extend leases",
+        });
+      }
+      await evaluate();
+    };
+
+    const publishExpired = () => {
+      const items = [...unreadExpiredRef.current.values()];
+      const clear = () => unreadExpiredRef.current.clear();
+      if (items.length === 0) {
+        toast.dismiss(EXPIRED_TOAST);
+        return;
+      }
+      if (items.length === 1) {
+        const { profile, atMs } = items[0];
+        toast.error({
+          key: EXPIRED_TOAST,
+          title: `${profile.label} has expired`,
+          description:
+            "The stored credential will not be used until you renew it. " +
+            "Renew now to keep this profile available for connections.",
+          details: [{ label: "Expired", value: new Date(atMs).toLocaleString() }],
+          action: { label: "Renew now", onClick: () => renewRef.current(profile) },
+          onDismiss: clear,
+        });
+        return;
+      }
+      toast.error({
+        key: EXPIRED_TOAST,
+        title: `${items.length} Privileged Credentials Expired`,
+        description:
+          "These credential leases have ended. Connections that use them will fail until they are renewed.",
+        content: (
+          <LeaseBatchBody
+            mode="expired"
+            items={items}
+            onDismissAll={() => toast.dismiss(EXPIRED_TOAST)}
+            onExtendAll={() => extendAll(items)}
+            onViewVault={() => {
+              toast.dismiss(EXPIRED_TOAST);
+              navigateRef.current("/credentials");
+            }}
+          />
+        ),
+        onDismiss: clear,
+      });
+    };
+
+    const publishWarnings = () => {
+      const items = [...unreadWarningRef.current.values()];
+      const clear = () => unreadWarningRef.current.clear();
+      if (items.length === 0) {
+        toast.dismiss(WARNING_TOAST);
+        return;
+      }
+      const soonest = Math.min(...items.map((i) => i.atMs));
+      if (items.length === 1) {
+        const { profile, atMs } = items[0];
+        toast.warning({
+          key: WARNING_TOAST,
+          title: `${profile.label} expires in ${formatRemaining(atMs)}`,
+          description:
+            "Renew the stored credential before it expires to avoid " +
+            "interrupting connections that depend on this profile.",
+          details: [{ label: "Expires", value: new Date(atMs).toLocaleString() }],
+          action: { label: "Renew now", onClick: () => renewRef.current(profile) },
+          onDismiss: clear,
+        });
+        return;
+      }
+      toast.warning({
+        key: WARNING_TOAST,
+        title: `${items.length} credential leases expiring, the first in ${formatRemaining(soonest)}`,
+        description: "Extend or renew them now to avoid interrupting connections.",
+        duration: BATCH_WARNING_MS,
+        content: (
+          <LeaseBatchBody
+            mode="warning"
+            items={items}
+            onDismissAll={() => toast.dismiss(WARNING_TOAST)}
+            onExtendAll={() => extendAll(items)}
+            onViewVault={() => {
+              toast.dismiss(WARNING_TOAST);
+              navigateRef.current("/credentials");
+            }}
+          />
+        ),
+        onDismiss: clear,
+      });
+    };
 
     async function evaluate(): Promise<void> {
       let profiles: CredentialProfile[];
@@ -119,11 +256,14 @@ export default function CredentialProfileExpiryWatcher({
         return;
       }
       if (cancelled) return;
+      publishLeases(profiles);
 
       const now = Date.now();
       const liveIds = new Set(profiles.map((p) => p.id));
       const fired = pruneFired(loadFired(), liveIds);
       let dirty = Object.keys(fired).length !== Object.keys(loadFired()).length;
+      const newExpired: LeaseItem[] = [];
+      const newWarnings: (LeaseItem & { secs: number })[] = [];
 
       for (const profile of profiles) {
         // A checkout-bound profile has its expiry already capped on the
@@ -163,17 +303,7 @@ export default function CredentialProfileExpiryWatcher({
           if (!(k in fired)) {
             fired[k] = expiresAtMs;
             dirty = true;
-            toast.error({
-              title: `${profile.label} has expired`,
-              description:
-                "The stored credential will not be used until you renew it. " +
-                "Renew now to keep this profile available for connections.",
-              key: `cred-expiry:${profile.id}`,
-              action: {
-                label: "Renew now",
-                onClick: () => renewRef.current(profile),
-              },
-            });
+            newExpired.push({ profile, atMs: expiresAtMs });
           }
           continue;
         }
@@ -197,22 +327,45 @@ export default function CredentialProfileExpiryWatcher({
           dirty = true;
         }
         if (toFire) {
-          toast.warning({
-            title: `${profile.label} expires in ${toFire.label}`,
-            description:
-              "Renew the stored credential before it expires to avoid " +
-              "interrupting connections that depend on this profile.",
-            key: `cred-expiry:${profile.id}`,
-            action: {
-              label: "Renew now",
-              onClick: () => renewRef.current(profile),
-            },
+          newWarnings.push({
+            profile,
+            atMs: expiresAtMs,
+            label: toFire.label,
+            secs: toFire.secs,
           });
         }
       }
 
       if (dirty) saveFired(fired);
+
+      // Drop unread items whose lease was renewed, re-issued or deleted.
+      const byId = new Map(profiles.map((p) => [p.id, p]));
+      let expiredChanged = newExpired.length > 0;
+      for (const [id, item] of unreadExpiredRef.current) {
+        const p = byId.get(id);
+        if (!p || !isLeaseExpired(p, now)) {
+          unreadExpiredRef.current.delete(id);
+          expiredChanged = true;
+        } else item.profile = p;
+      }
+      let warningsChanged = newWarnings.length > 0;
+      for (const [id] of unreadWarningRef.current) {
+        const p = byId.get(id);
+        const shifted =
+          !p || Math.abs(Date.parse(p.expires_at) - unreadWarningRef.current.get(id)!.atMs) > 2000;
+        if (!p || shifted || isLeaseExpired(p, now)) {
+          unreadWarningRef.current.delete(id);
+          warningsChanged = true;
+        }
+      }
+      for (const item of newExpired) unreadExpiredRef.current.set(item.profile.id, item);
+      for (const item of newWarnings) unreadWarningRef.current.set(item.profile.id, item);
+
+      if (expiredChanged) publishExpired();
+      if (warningsChanged) publishWarnings();
     }
+
+    const unregister = registerLeaseRefresher(evaluate);
 
     // Run once on mount, then on a steady cadence. The initial call lets a
     // freshly-opened tab discover an already-expired profile right away.
@@ -238,6 +391,7 @@ export default function CredentialProfileExpiryWatcher({
 
     return () => {
       cancelled = true;
+      unregister();
       clearInterval(id);
       window.removeEventListener("focus", onWake);
       document.removeEventListener("visibilitychange", onWake);

@@ -1009,6 +1009,21 @@ pub async fn ws_tunnel(
             }
         };
 
+        let allowed_networks = crate::services::settings::get(
+            &db.pool,
+            crate::services::web_session::SETTING_WEB_ALLOWED_NETWORKS,
+        )
+        .await?
+        .unwrap_or_default();
+        if let Err(reason) =
+            crate::services::web_session::check_initial_url(&cfg.url, &allowed_networks).await
+        {
+            tracing::warn!(connection_id = %connection_id, %reason, "web session refused");
+            return Err(AppError::Validation(format!(
+                "Web session refused: {reason}"
+            )));
+        }
+
         // Resolve operator-overridable settings with sensible defaults.
         // The defaults match Debian's package layout (`Xvnc` and
         // `chromium` on $PATH); operators on the Alpine image, NixOS,
@@ -1072,12 +1087,17 @@ pub async fn ws_tunnel(
             // (8K), and once Xvnc is running we never resize it.
             width: u16::try_from(effective_width).unwrap_or(u16::MAX),
             height: u16::try_from(effective_height).unwrap_or(u16::MAX),
-            // Default Strata compose stack runs the backend as root
-            // (uid 0), matching rustguac's reference deployment. When
-            // operators harden by running unprivileged, they MUST
-            // expose chromium-sandbox SUID-root in the image; once
-            // that's in place this can be flipped to `false`.
-            running_as_root: true,
+            // Sandbox stays on unless the operator explicitly disabled it.
+            running_as_root: {
+                let disabled = crate::services::web_session::chromium_sandbox_disabled();
+                if disabled {
+                    tracing::warn!(
+                        connection_id = %connection_id,
+                        "STRATA_WEB_CHROMIUM_SANDBOX=disabled: launching Chromium without its sandbox"
+                    );
+                }
+                disabled
+            },
             trusted_ca_pem,
             trusted_ca_label,
         };
@@ -1106,7 +1126,10 @@ pub async fn ws_tunnel(
                         AppError::Internal(format!("xvnc spawn failed: {e}"))
                     }
                     WE::ChromiumSpawn(_) | WE::ChromiumImmediateExit(_) => {
-                        AppError::Internal(format!("chromium spawn failed: {e}"))
+                        AppError::Internal(format!(
+                            "chromium spawn failed: {e} (if its sandbox could not start, run the \
+                         backend with backend/seccomp-chromium.json; see docs/web-sessions.md)"
+                        ))
                     }
                     WE::LoginScript(_) => AppError::Internal(format!("login script failed: {e}")),
                     WE::Profile(_) | WE::Autofill(_) => {

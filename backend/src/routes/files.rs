@@ -24,7 +24,7 @@ use std::net::SocketAddr;
 
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
-use crate::services::file_store::StoredFile;
+use crate::services::file_store::{StoredFile, TempUpload};
 use crate::services::middleware::AuthUser;
 
 /// Per-IP rate limiter for public file downloads.
@@ -69,9 +69,10 @@ impl From<&StoredFile> for FileListEntry {
 
 /// `POST /api/files/upload` — Upload a file via multipart form data.
 ///
-/// Required form fields:
-/// - `session_id` (text) — the active session ID to associate the file with.
-/// - `file` (file) — the binary file payload.
+/// Required form fields, in this order:
+/// - `session_id` (text) — the connection id of one of the caller's live
+///   sessions; checked before any file bytes are accepted.
+/// - `file` (file) — the binary file payload. Exactly one.
 pub async fn upload(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
@@ -80,7 +81,7 @@ pub async fn upload(
     // RBAC: Quick Share must be explicitly enabled on the user's role.
     crate::services::middleware::check_quick_share_permission(&user)?;
 
-    let (file_store, av_scanner, av_fail_mode, db_pool) = {
+    let (file_store, av_scanner, av_fail_mode, db_pool, registry) = {
         let s = state.read().await;
         if s.phase != BootPhase::Running {
             return Err(AppError::SetupRequired);
@@ -90,13 +91,18 @@ pub async fn upload(
             s.av_scanner.clone(),
             s.av_fail_mode,
             s.db.as_ref().map(|d| d.pool.clone()),
+            s.session_registry.clone(),
         )
     };
 
     let mut session_id: Option<String> = None;
-    let mut file_data: Option<(String, String, std::path::PathBuf, u64)> = None;
+    let mut file_data: Option<(String, String, TempUpload, u64)> = None;
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::Validation(format!("Malformed upload: {e}")))?
+    {
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
             "session_id" => {
@@ -104,9 +110,27 @@ pub async fn upload(
                     .text()
                     .await
                     .map_err(|e| AppError::Validation(format!("Invalid session_id: {e}")))?;
+                let connection_id: uuid::Uuid = text
+                    .parse()
+                    .map_err(|_| AppError::Validation("Invalid session_id".into()))?;
+                if registry
+                    .find_by_connection_and_user(connection_id, user.id)
+                    .await
+                    .is_none()
+                {
+                    return Err(AppError::Forbidden);
+                }
                 session_id = Some(text);
             }
             "file" => {
+                if session_id.is_none() {
+                    return Err(AppError::Validation(
+                        "session_id must precede the file".into(),
+                    ));
+                }
+                if file_data.is_some() {
+                    return Err(AppError::Validation("Only one file per upload".into()));
+                }
                 let filename = field.file_name().unwrap_or("upload").to_string();
                 let content_type = field
                     .content_type()
@@ -116,36 +140,33 @@ pub async fn upload(
                 // to avoid loading large uploads entirely into memory.
                 use futures_util::TryStreamExt;
                 use tokio::io::AsyncWriteExt;
-                let temp_path =
-                    std::env::temp_dir().join(format!("strata-upload-{}", uuid::Uuid::new_v4()));
-                let mut temp_file = tokio::fs::File::create(&temp_path)
+                let temp = TempUpload::new();
+                let mut temp_file = tokio::fs::File::create(&temp.0)
                     .await
                     .map_err(|e| AppError::Internal(format!("Failed to create temp file: {e}")))?;
                 let mut written: u64 = 0;
                 let mut stream = field;
-                while let Some(chunk) = stream.try_next().await.map_err(|e| {
-                    // Clean up temp file on read error
-                    let _ = std::fs::remove_file(&temp_path);
-                    AppError::Validation(format!("Failed to read file: {e}"))
-                })? {
+                while let Some(chunk) = stream
+                    .try_next()
+                    .await
+                    .map_err(|e| AppError::Validation(format!("Failed to read file: {e}")))?
+                {
                     written += chunk.len() as u64;
                     if written > crate::services::file_store::MAX_FILE_SIZE {
-                        let _ = std::fs::remove_file(&temp_path);
                         return Err(AppError::Validation(
                             "File exceeds maximum allowed size".into(),
                         ));
                     }
                     temp_file.write_all(&chunk).await.map_err(|e| {
-                        let _ = std::fs::remove_file(&temp_path);
                         AppError::Internal(format!("Failed to write temp file: {e}"))
                     })?;
                 }
-                temp_file.flush().await.map_err(|e| {
-                    let _ = std::fs::remove_file(&temp_path);
-                    AppError::Internal(format!("Failed to flush temp file: {e}"))
-                })?;
+                temp_file
+                    .flush()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("Failed to flush temp file: {e}")))?;
                 drop(temp_file);
-                file_data = Some((filename, content_type, temp_path, written));
+                file_data = Some((filename, content_type, temp, written));
             }
             _ => { /* ignore unknown fields */ }
         }
@@ -153,8 +174,9 @@ pub async fn upload(
 
     let session_id =
         session_id.ok_or_else(|| AppError::Validation("Missing session_id field".into()))?;
-    let (filename, claimed_content_type, temp_path, size) =
+    let (filename, claimed_content_type, temp, size) =
         file_data.ok_or_else(|| AppError::Validation("Missing file field".into()))?;
+    let temp_path = temp.0.clone();
 
     // ── W3-6 — magic-number / MIME sniffing ────────────────────────────
     //
@@ -166,11 +188,7 @@ pub async fn upload(
     // "image/png") we require the detected type to match; unknown claimed
     // types ("application/octet-stream" or empty) fall through to the
     // detected value so generic downloads still work.
-    let content_type = sniff_mime(&temp_path, &claimed_content_type)
-        .await
-        .inspect_err(|_e| {
-            let _ = std::fs::remove_file(&temp_path);
-        })?;
+    let content_type = sniff_mime(&temp_path, &claimed_content_type).await?;
 
     // ── AV scan (W7-1) ────────────────────────────────────────────────
     //
@@ -183,7 +201,6 @@ pub async fn upload(
     //                proceed and rely on the audit row for forensics.
     let verdict = av_scanner.scan(&temp_path).await;
     if verdict.blocks(av_fail_mode) {
-        let _ = std::fs::remove_file(&temp_path);
         // Map the raw engine output to an actionable user-facing
         // message — see `Verdict::user_facing_block_message` for the
         // exact mapping (timeout/transport/infected/generic).
@@ -229,10 +246,8 @@ pub async fn upload(
             size,
         )
         .await
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&temp_path);
-            AppError::Validation(e.to_string())
-        })?;
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    drop(temp);
 
     tracing::info!(
         user = %user.username,

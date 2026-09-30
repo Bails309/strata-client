@@ -82,28 +82,29 @@ Key properties:
 - **Kiosk mode** — `--kiosk`, `--no-first-run`, no address bar.
   Fullscreen the kiosk; users cannot navigate away from the
   operator-supplied target.
-- **Sandbox + infobar suppression (v1.3.0)** — the kiosk runs as root
-  inside the backend container, so the spawner has always had to pass
-  `--no-sandbox`. As of v1.3.0 the argv builder also adds `--test-type`
-  whenever it adds `--no-sandbox`. `--test-type` does **not** disable
-  the sandbox; it suppresses the yellow *"You are using an unsupported
-  command-line flag: --no-sandbox. Stability and security will
-  suffer."* infobar (which otherwise occupies ~28 px across the top of
-  every kiosk tab) and a handful of other end-user prompts that have
-  no meaning inside a single-tab kiosk: default-browser prompt,
-  session-restore prompt, certificate-error interstitial test mode.
-  Rendering, network stack, mojo IPC, JIT, and origin isolation are
-  unchanged. Two unit tests in
-  [`backend/src/services/web_session.rs`](../backend/src/services/web_session.rs)
-  pin the pairing: `--test-type` only appears when `--no-sandbox`
-  does, and never on its own.
+- **Chromium sandbox is required.** The backend runs as the unprivileged
+  `strata` user, and Chromium starts **with** its sandbox. Docker's
+  default seccomp profile blocks the user namespaces the sandbox needs,
+  so the bundled compose file runs the backend with
+  [`backend/seccomp-chromium.json`](../backend/seccomp-chromium.json):
+  Docker's default profile plus `clone`, `unshare` and `chroot`. Without
+  it Chromium exits at launch and the session is refused — it is never
+  silently started unsandboxed. Kubernetes and other deployments must
+  apply the same profile (for example as a `Localhost` seccomp profile).
+  `STRATA_WEB_CHROMIUM_SANDBOX=disabled` restores the old
+  `--no-sandbox --test-type` launch and logs a warning for every kiosk;
+  use it only as a temporary workaround.
 - **Domain allow-list** — Chromium `--host-rules="MAP * ~NOTFOUND, MAP
   <allowed> <allowed>"` drops every host the operator did not approve.
-- **Egress allow-list** — the backend resolves the requested host and
-  refuses to connect unless **every** resolved IP falls inside the
-  CIDR allow-list configured under
-  `system_settings.web_allowed_networks`. This defeats DNS rebinding
-  via mixed A records.
+- **Egress allow-list** — before launching a kiosk the backend checks
+  the initial URL: only `http`/`https`, no embedded credentials, and
+  **every** address the host resolves to must fall inside
+  `system_settings.web_allowed_networks`. An empty list refuses the
+  launch. Loopback, link-local (including cloud metadata at
+  `169.254.169.254`) and unspecified addresses are refused even under
+  `0.0.0.0/0`, because the kiosk shares the backend's network namespace.
+  This check covers the initial URL only: pages the kiosk loads later
+  are limited by `allowed_domains`, not by the CIDR list.
 - **CDP localhost-only** — the remote debugging socket binds to
   `127.0.0.1` so the login-script runner can drive the session without
   ever exposing CDP to the network.

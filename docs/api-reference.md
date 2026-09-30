@@ -2756,8 +2756,10 @@ Upload a file via multipart form data. Requires authentication **and** the `can_
 
 | Field        | Type | Required | Description                                  |
 | ------------ | ---- | -------- | -------------------------------------------- |
-| `session_id` | text | Yes      | Active session ID to associate the file with |
-| `file`       | file | Yes      | Binary file payload                          |
+| `session_id` | text | Yes      | Connection id of one of the caller's **live** sessions. Must come before `file`; checked before any file bytes are accepted (`403` otherwise). |
+| `file`       | file | Yes      | Binary file payload. Exactly one per request. |
+
+A malformed multipart body, a second `file` part, or `file` before `session_id` returns `400`. Stored files expire after 24 hours even if their session never closes cleanly, the store holds at most 10 GiB across all sessions (`400` when full), and anything left on disk by a previous process is removed at startup.
 
 **Response** `200 OK`
 

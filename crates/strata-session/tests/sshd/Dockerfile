@@ -19,5 +19,11 @@ RUN printf 'PS1="strata$ "\n' >> /home/strata/.bashrc \
     && touch /home/strata/.hushlogin \
     && chown strata:strata /home/strata/.hushlogin
 
+# A symlink inside the SFTP tests' root (/tmp) pointing at a writable file
+# outside it: an upload to the link must not reach the target.
+RUN echo original > /home/strata/outside.txt \
+    && chown strata:strata /home/strata/outside.txt \
+    && ln -s /home/strata/outside.txt /tmp/strata-link.txt
+
 EXPOSE 22
 CMD ["/usr/sbin/sshd", "-D", "-e"]

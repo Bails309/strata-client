@@ -175,9 +175,14 @@ async fn parse_outbound_multipart(
     let mut session_id: Option<String> = None;
     let mut connection_id: Option<Uuid> = None;
     let mut justification: Option<String> = None;
-    let mut file_meta: Option<(String, String, PathBuf, u64)> = None;
+    let mut file_meta: Option<(String, String, crate::services::file_store::TempUpload, u64)> =
+        None;
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::Validation(format!("Malformed upload: {e}")))?
+    {
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
             "session_id" => {
@@ -215,47 +220,49 @@ async fn parse_outbound_multipart(
                 }
             }
             "file" => {
+                if file_meta.is_some() {
+                    return Err(AppError::Validation("Only one file per upload".into()));
+                }
                 let filename = field.file_name().unwrap_or("upload").to_string();
                 let content_type = field
                     .content_type()
                     .unwrap_or("application/octet-stream")
                     .to_string();
-                let temp_path =
-                    std::env::temp_dir().join(format!("strata-outbound-{}", Uuid::new_v4()));
-                let mut temp_file = tokio::fs::File::create(&temp_path)
+                let temp = crate::services::file_store::TempUpload::new();
+                let mut temp_file = tokio::fs::File::create(&temp.0)
                     .await
                     .map_err(|e| AppError::Internal(format!("Failed to create temp file: {e}")))?;
                 let mut written: u64 = 0;
                 let mut stream = field;
-                while let Some(chunk) = stream.try_next().await.map_err(|e| {
-                    let _ = std::fs::remove_file(&temp_path);
-                    AppError::Validation(format!("Failed to read file: {e}"))
-                })? {
+                while let Some(chunk) = stream
+                    .try_next()
+                    .await
+                    .map_err(|e| AppError::Validation(format!("Failed to read file: {e}")))?
+                {
                     written += chunk.len() as u64;
                     if written > outbound_shares::MAX_FILE_SIZE {
-                        let _ = std::fs::remove_file(&temp_path);
                         return Err(AppError::Validation(
                             "File exceeds maximum allowed size".into(),
                         ));
                     }
                     temp_file.write_all(&chunk).await.map_err(|e| {
-                        let _ = std::fs::remove_file(&temp_path);
                         AppError::Internal(format!("Failed to write temp file: {e}"))
                     })?;
                 }
-                temp_file.flush().await.map_err(|e| {
-                    let _ = std::fs::remove_file(&temp_path);
-                    AppError::Internal(format!("Failed to flush temp file: {e}"))
-                })?;
+                temp_file
+                    .flush()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("Failed to flush temp file: {e}")))?;
                 drop(temp_file);
-                file_meta = Some((filename, content_type, temp_path, written));
+                file_meta = Some((filename, content_type, temp, written));
             }
             _ => {}
         }
     }
 
-    let (filename, content_type, temp_path, _size) =
+    let (filename, content_type, temp, size) =
         file_meta.ok_or_else(|| AppError::Validation("Missing file field".into()))?;
+    let temp_path = temp.0.clone();
 
     // ── AV scan (W7-1) ────────────────────────────────────────────────
     //
@@ -271,7 +278,6 @@ async fn parse_outbound_multipart(
     let av_verdict = av_scanner.scan(&temp_path).await;
     let av_backend = av_scanner.backend_tag();
     if av_verdict.blocks(av_fail_mode) {
-        let _ = tokio::fs::remove_file(&temp_path).await;
         // Map the raw engine output to an actionable user-facing
         // message — see `Verdict::user_facing_block_message` for the
         // exact mapping (timeout/transport/infected/generic).
@@ -286,10 +292,7 @@ async fn parse_outbound_multipart(
             &serde_json::json!({
                 "source": source,
                 "filename": filename,
-                "size": temp_path
-                    .metadata()
-                    .map(|m| m.len())
-                    .unwrap_or(0),
+                "size": size,
                 "av_status": av_verdict.as_str(),
                 "av_signature": av_verdict.signature(),
                 "av_message": av_verdict.message(),
@@ -314,7 +317,7 @@ async fn parse_outbound_multipart(
     let plaintext = tokio::fs::read(&temp_path)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to read upload temp: {e}")))?;
-    let _ = tokio::fs::remove_file(&temp_path).await;
+    drop(temp);
 
     Ok(ParsedOutboundUpload {
         filename,

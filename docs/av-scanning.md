@@ -303,7 +303,7 @@ esac
 | -------------------------- | --------- | ------------------------ | ------------------------------------------------------------------------------ |
 | `STRATA_AV_BACKEND`        | enum      | `off`                    | `off` \| `clamav` \| `command`                                                 |
 | `STRATA_AV_FAIL_MODE`      | enum      | `block`                  | `block` (reject on scanner error) \| `allow` (degrade open on scanner error)   |
-| `STRATA_AV_MAX_SCAN_SIZE`  | bytes     | `524288000` (500 MiB)    | Files larger than this are `Skipped { reason: "oversize" }`. Matches the 500 MiB upload cap so every accepted upload is scanned. |
+| `STRATA_AV_MAX_SCAN_SIZE`  | bytes     | `524288000` (500 MiB)    | Files larger than this are `Skipped { reason: "oversize" }`, which is **blocked** under `fail_mode=block`. Matches the 500 MiB upload cap so every accepted upload is scanned. |
 | `STRATA_AV_TIMEOUT_MS`     | ms        | `120000` (2 min)         | Per-scan wall-clock deadline. Timeout → `Verdict::Error`. 500 MiB nested archives can comfortably exceed 30 s. |
 | `STRATA_AV_CLAMD_HOST`     | hostname  | `clamav`                 | Matches the compose service name; override for external clamd                  |
 | `STRATA_AV_CLAMD_PORT`     | u16       | `3310`                   | Plain TCP. Wrap in stunnel for untrusted-network hops                          |
@@ -316,27 +316,25 @@ under the **Antivirus scanning** section.
 
 Two-axis truth table. `FailMode` × `Verdict` → block / pass.
 
-|             | `Clean` | `Infected` | `Skipped` | `Error` |
-| ----------- | ------- | ---------- | --------- | ------- |
-| **`Block`** | pass    | **BLOCK**  | pass      | **BLOCK** |
-| **`Allow`** | pass    | **BLOCK**  | pass      | pass    |
+|             | `Clean` | `Infected` | `Skipped` (disabled) | `Skipped` (oversize) | `Error` |
+| ----------- | ------- | ---------- | -------------------- | -------------------- | ------- |
+| **`Block`** | pass    | **BLOCK**  | pass                 | **BLOCK**            | **BLOCK** |
+| **`Allow`** | pass    | **BLOCK**  | pass                 | pass                 | pass    |
 
-Read it as: *infected is always a block, skipped is always a
-pass, error follows the fail-mode knob, clean is always a pass.*
+Read it as: *infected is always a block, a file an enabled scanner
+could not inspect (oversize or error) follows the fail-mode knob,
+clean and scanning-disabled always pass.*
 
-The `Skipped → pass` row is by design — it covers two scenarios
-that should not block users:
+The two `Skipped` reasons are treated differently:
 
 1. `backend=off`: scanning is disabled. The handler still calls
    `scan()` so the audit trail is consistent, but the verdict
    carries `reason="scanning disabled"` and the upload proceeds.
 2. `backend=clamav` / `command` with an oversize file:
-   `reason="oversize"`. Operators tune
-   `STRATA_AV_MAX_SCAN_SIZE` to govern when this happens. In
-   highly-regulated environments where no-skip is required, set
-   the cap to a very large number; in pragmatic deployments
-   100 MiB is a good ceiling that excludes ISOs and disk images
-   while covering 99% of document workflows.
+   `reason="oversize"`. This is **blocked** under
+   `fail_mode=block` — previously it passed, so any file above the
+   scan cap bypassed a scanner the operator had made mandatory.
+   Keep `STRATA_AV_MAX_SCAN_SIZE` at or above the 500 MiB upload cap.
 
 ## Audit trail
 
@@ -564,7 +562,7 @@ rm /tmp/eicar.com
 | `403 {"code":"FORBIDDEN","error":"Forbidden"}`                               | Cookie is valid but the user's role lacks **Use Quick Share** (and isn't super-admin).                                                                 | Enable the role flag in Admin → Roles, then log out and back in.                                                                                       |
 | `400 {"error":"validation","message":"Missing session_id field"}` (or file)  | The multi-line command got split — only the URL/headers reached curl.                                                                                  | Keep the `\` line-continuations intact or run it all on one line.                                                                                      |
 | `400 {"error":"validation","message":"Antivirus scan failed: INSTREAM size limit exceeded. ERROR"}` | clamd's `StreamMaxLength` (default 25 MB upstream) tripped on the upload size. The bundled sidecar raises it to 512 MB; this surfaces when running against an external clamd you control. | Mount [clamav/clamd.conf](../clamav/clamd.conf) into your clamd, or raise `StreamMaxLength`, `MaxFileSize`, and `MaxScanSize` directly. Keep them all ≥ `STRATA_AV_MAX_SCAN_SIZE`. |
-| `400 {"error":"validation","message":"Antivirus scan failed: clamd scan exceeded ... ms"}` | Scan didn't finish before `STRATA_AV_TIMEOUT_MS` (default 120000). Common on huge nested archives or undersized clamd.                                | Either raise `STRATA_AV_TIMEOUT_MS`, give clamd more CPU/RAM, or lower `STRATA_AV_MAX_SCAN_SIZE` so the biggest files are oversize-skipped instead.    |
+| `400 {"error":"validation","message":"Antivirus scan failed: clamd scan exceeded ... ms"}` | Scan didn't finish before `STRATA_AV_TIMEOUT_MS` (default 120000). Common on huge nested archives or undersized clamd.                                | Either raise `STRATA_AV_TIMEOUT_MS` or give clamd more CPU/RAM. Lowering `STRATA_AV_MAX_SCAN_SIZE` refuses the biggest files instead (in block mode).    |
 
 ## Operational considerations
 
@@ -597,9 +595,9 @@ resident DB, 2 vCPU):
 
 These add to upload latency. For Quick Share workloads (typically
 <1 upload/sec/node) the overhead is unobservable. If your site
-runs high-volume bulk uploads, consider raising
-`STRATA_AV_MAX_SCAN_SIZE` to a smaller value (so oversize files
-skip the scan) or running multiple clamd replicas.
+runs high-volume bulk uploads, consider running multiple clamd
+replicas. Lowering `STRATA_AV_MAX_SCAN_SIZE` no longer skips large
+files: under `fail_mode=block` they are refused instead.
 
 ### Signature DB size + memory
 

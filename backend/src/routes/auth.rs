@@ -125,6 +125,9 @@ pub fn validate_password(password: &str) -> Result<(), AppError> {
 /// Check a sliding-window rate limit. Prunes expired entries and rejects if
 /// the number of recent attempts for `key` meets or exceeds `max_attempts`.
 /// Returns `true` if the request should be **rejected** (over limit).
+///
+/// When the map is full of live entries, new keys are refused rather than
+/// the map being cleared — clearing would reset an attacker's own limits.
 pub fn check_rate_limit(
     map: &mut HashMap<String, Vec<Instant>>,
     key: &str,
@@ -133,21 +136,35 @@ pub fn check_rate_limit(
     max_entries: usize,
 ) -> bool {
     let now = Instant::now();
-    // OOM protection: prune entire map if it exceeds max entries
-    if map.len() > max_entries {
+    let cutoff = now - std::time::Duration::from_secs(window_secs);
+    if map.len() >= max_entries && !map.contains_key(key) {
         map.retain(|_, attempts| {
-            let cutoff = now - std::time::Duration::from_secs(window_secs);
             attempts.retain(|t| *t > cutoff);
             !attempts.is_empty()
         });
-        if map.len() > max_entries {
-            map.clear();
+        if map.len() >= max_entries {
+            return true;
         }
     }
-    let cutoff = now - std::time::Duration::from_secs(window_secs);
     let attempts = map.entry(key.to_string()).or_default();
     attempts.retain(|t| *t > cutoff);
     attempts.len() >= max_attempts
+}
+
+/// [`check_rate_limit`], and on admission record the attempt immediately so
+/// concurrent requests cannot all pass before any failure is counted.
+fn reserve_attempt(
+    map: &mut HashMap<String, Vec<Instant>>,
+    key: &str,
+    max_attempts: usize,
+    window_secs: u64,
+    max_entries: usize,
+) -> bool {
+    if check_rate_limit(map, key, max_attempts, window_secs, max_entries) {
+        return false;
+    }
+    map.entry(key.to_string()).or_default().push(Instant::now());
+    true
 }
 
 /// Extract the client IP from X-Forwarded-For (rightmost non-empty entry)
@@ -269,7 +286,7 @@ pub async fn login(
     // ── Per-IP rate limiting ──
     {
         let mut map = IP_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-        if check_rate_limit(
+        if !reserve_attempt(
             &mut map,
             &client_ip,
             MAX_IP_ATTEMPTS,
@@ -285,7 +302,7 @@ pub async fn login(
     // ── Per-username rate limiting ──
     {
         let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-        if check_rate_limit(
+        if !reserve_attempt(
             &mut map,
             &rate_limit_key,
             MAX_ATTEMPTS,
@@ -331,19 +348,6 @@ pub async fn login(
         if let Ok(parsed) = PasswordHash::new(&DUMMY_HASH) {
             let _ = Argon2::default().verify_password(body.password.as_bytes(), &parsed);
         }
-
-        // Record failed attempt even when user is not found, to make
-        // rate-limit behaviour identical for existing vs non-existing users.
-        let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-        map.entry(rate_limit_key.clone())
-            .or_default()
-            .push(Instant::now());
-        drop(map);
-        let mut ip_map = IP_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-        ip_map
-            .entry(client_ip.clone())
-            .or_default()
-            .push(Instant::now());
         AppError::Auth("Invalid username or password".into())
     })?;
 
@@ -358,25 +362,17 @@ pub async fn login(
         .map_err(|_| AppError::Auth("Invalid username or password".into()))?;
     Argon2::default()
         .verify_password(body.password.as_bytes(), &parsed_hash)
-        .map_err(|_| {
-            // Record failed attempt for both username and IP
-            let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-            map.entry(rate_limit_key.clone())
-                .or_default()
-                .push(Instant::now());
-            drop(map);
-            let mut ip_map = IP_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-            ip_map
-                .entry(client_ip.clone())
-                .or_default()
-                .push(Instant::now());
-            AppError::Auth("Invalid username or password".into())
-        })?;
+        .map_err(|_| AppError::Auth("Invalid username or password".into()))?;
 
-    // Successful login — clear rate limit for this user
+    // Successful login — release this request's reservations.
     {
         let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
         map.remove(&rate_limit_key);
+        drop(map);
+        let mut ip_map = IP_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(attempts) = ip_map.get_mut(&client_ip) {
+            attempts.pop();
+        }
     }
 
     // Generate access token (short-lived) and refresh token (longer-lived)
@@ -873,7 +869,7 @@ pub async fn change_password(
     {
         let key = format!("change_password:{}", user.id);
         let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-        if check_rate_limit(&mut map, &key, 5, 3600, MAX_RATE_LIMIT_ENTRIES) {
+        if !reserve_attempt(&mut map, &key, 5, 3600, MAX_RATE_LIMIT_ENTRIES) {
             return Err(AppError::Auth(
                 "Too many password change attempts. Please wait before trying again.".into(),
             ));
@@ -2294,16 +2290,27 @@ mod tests {
     }
 
     #[test]
-    fn rate_limit_oom_hard_clear_when_all_active() {
+    fn rate_limit_full_map_refuses_new_keys_instead_of_clearing() {
         let mut map = HashMap::new();
         let now = Instant::now();
         for i in 0..15 {
             map.insert(format!("user{i}"), vec![now]);
         }
-        // max_entries = 10, but all entries are active → hard clear
-        assert!(!check_rate_limit(&mut map, "new_user", 3, 60, 10));
-        // Hard clear leaves only the new entry
-        assert!(map.len() <= 1);
+        assert!(check_rate_limit(&mut map, "new_user", 3, 60, 10));
+        assert_eq!(map.len(), 15, "live limits must survive map pressure");
+        assert!(!map.contains_key("new_user"));
+        // Existing keys are still evaluated normally.
+        assert!(!check_rate_limit(&mut map, "user0", 3, 60, 10));
+    }
+
+    #[test]
+    fn reserve_attempt_counts_admitted_requests() {
+        let mut map = HashMap::new();
+        for _ in 0..3 {
+            assert!(reserve_attempt(&mut map, "k", 3, 60, 1000));
+        }
+        assert!(!reserve_attempt(&mut map, "k", 3, 60, 1000));
+        assert_eq!(map["k"].len(), 3);
     }
 
     // ── extract_cookie tests ──────────────────────────────────────

@@ -17,10 +17,10 @@
 //!   deletes the temp file, writes an audit event, and returns a
 //!   `Validation` error to the user with the signature name in the
 //!   message so the SPA / approver UI can surface it verbatim.
-//! - [`Verdict::Skipped`]  — engine deliberately did not scan
-//!   (oversize, type filter). Treated as **allowed**: scanning is
-//!   defence-in-depth and we don't want a 5 GB file to silently fail
-//!   uploads when the operator explicitly capped `max_scan_size`.
+//! - [`Verdict::Skipped`]  — engine deliberately did not scan.
+//!   `"scanning disabled"` is allowed. `"oversize"` is treated like
+//!   [`Verdict::Error`]: a file an enabled scanner could not inspect is
+//!   unverified, so [`Config::fail_mode`] decides.
 //! - [`Verdict::Error`]    — engine non-deterministic failure
 //!   (daemon unreachable, transport error, malformed response).
 //!   The caller consults [`Config::fail_mode`] to decide whether to
@@ -142,6 +142,7 @@ impl Verdict {
         match self {
             Verdict::Infected { .. } => true,
             Verdict::Error { .. } => fail_mode == FailMode::Block,
+            Verdict::Skipped { reason } if reason == "oversize" => fail_mode == FailMode::Block,
             Verdict::Clean | Verdict::Skipped { .. } => false,
         }
     }
@@ -202,6 +203,11 @@ impl Verdict {
                 } else {
                     format!("Antivirus scan failed: {message}")
                 }
+            }
+            Verdict::Skipped { reason } if reason == "oversize" => {
+                "File is larger than the antivirus scan limit and cannot be \
+                 accepted unscanned. Please upload a smaller file."
+                    .into()
             }
             Verdict::Clean | Verdict::Skipped { .. } => {
                 // Defensive: blocks() returns false for these variants so
@@ -713,7 +719,13 @@ mod tests {
         let skipped = Verdict::Skipped {
             reason: "oversize".into(),
         };
-        assert!(!skipped.blocks(FailMode::Block));
+        assert!(skipped.blocks(FailMode::Block));
+        assert!(!skipped.blocks(FailMode::Allow));
+
+        let disabled = Verdict::Skipped {
+            reason: "scanning disabled".into(),
+        };
+        assert!(!disabled.blocks(FailMode::Block));
     }
 
     #[test]

@@ -31,6 +31,12 @@ ironrdp-connector = { path = "crates/vendor/ironrdp-connector" }
 ironrdp-egfx = { path = "crates/vendor/ironrdp-egfx" }
 sspi = { path = "crates/vendor/sspi" }
 
+# Cargo only honours profiles in the workspace root manifest.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
 [workspace.package]
 version = "2.2.0"
 

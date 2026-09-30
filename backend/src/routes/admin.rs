@@ -1937,6 +1937,40 @@ pub async fn update_role_mappings(
 use crate::services::users as users_svc;
 pub use crate::services::users::{CreateUserRequest, UpdateUserRequest, UserListQuery, UserRow};
 
+/// Delegated user managers may only assign roles that grant nothing they lack.
+async fn authorise_role_grant(
+    pool: &sqlx::PgPool,
+    actor: &AuthUser,
+    role_id: Uuid,
+) -> Result<(), AppError> {
+    let role = roles::find_by_id(pool, role_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Role not found".into()))?;
+    if !role.is_within(actor) {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
+}
+
+/// Delegated user managers may not act on themselves or on anyone whose role
+/// carries a permission they lack.
+async fn authorise_user_target(
+    pool: &sqlx::PgPool,
+    actor: &AuthUser,
+    target: Uuid,
+) -> Result<(), AppError> {
+    if actor.can_manage_system {
+        return Ok(());
+    }
+    if target == actor.id {
+        return Err(AppError::Forbidden);
+    }
+    let role_id = users_svc::role_id_of(pool, target)
+        .await?
+        .ok_or_else(|| AppError::NotFound("User not found".into()))?;
+    authorise_role_grant(pool, actor, role_id).await
+}
+
 pub async fn list_users(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
@@ -1956,6 +1990,7 @@ pub async fn restore_user(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_user_management_permission(&user)?;
     let db = require_running(&state).await?;
+    authorise_user_target(&db.pool, &user, id).await?;
 
     if !users_svc::restore(&db.pool, id).await? {
         return Err(AppError::NotFound("Deleted user not found".into()));
@@ -1979,6 +2014,7 @@ pub async fn delete_user(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_user_management_permission(&user)?;
     let db = require_running(&state).await?;
+    authorise_user_target(&db.pool, &user, id).await?;
 
     if !users_svc::soft_delete(&db.pool, id).await? {
         return Err(AppError::NotFound("User not found".into()));
@@ -2011,10 +2047,14 @@ pub async fn update_user(
         return Err(AppError::Validation("No updatable fields supplied".into()));
     }
 
+    authorise_user_target(&db.pool, &user, id).await?;
+    // Exempting a user from outbound approval is a policy bypass.
+    if body.outbound_share_requires_approval == Some(Some(false)) && !user.can_manage_system {
+        return Err(AppError::Forbidden);
+    }
+
     if let Some(role_id) = body.role_id {
-        if !users_svc::role_exists(&db.pool, role_id).await? {
-            return Err(AppError::NotFound("Role not found".into()));
-        }
+        authorise_role_grant(&db.pool, &user, role_id).await?;
 
         if !users_svc::set_role(&db.pool, id, role_id).await? {
             return Err(AppError::NotFound("User not found".into()));
@@ -2068,6 +2108,7 @@ pub async fn create_user(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_user_management_permission(&user)?;
     let db = require_running(&state).await?;
+    authorise_role_grant(&db.pool, &user, body.role_id).await?;
 
     // Normalize email and username to lowercase for case-insensitive matching
     let email = body.email.to_lowercase();
@@ -2151,6 +2192,7 @@ pub async fn reset_user_password(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_user_management_permission(&admin)?;
     let db = require_running(&state).await?;
+    authorise_user_target(&db.pool, &admin, id).await?;
 
     // Rate-limit before touching the DB so enumeration of non-existent
     // user ids is equally throttled.

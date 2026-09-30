@@ -1420,20 +1420,35 @@ pub async fn list_connections(
 ) -> Result<Json<Vec<ConnectionRow>>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
-    let rows = connections::list_all(&db.pool).await?;
+    let mut rows = connections::list_all(&db.pool).await?;
+    for row in &mut rows {
+        connections::redact_secret_extras(&mut row.extra);
+    }
     Ok(Json(rows))
+}
+
+async fn vault_config(state: &SharedState) -> Option<crate::config::VaultConfig> {
+    state
+        .read()
+        .await
+        .config
+        .as_ref()
+        .and_then(|c| c.vault.clone())
 }
 
 pub async fn create_connection(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
-    Json(body): Json<CreateConnectionRequest>,
+    Json(mut body): Json<CreateConnectionRequest>,
 ) -> Result<Json<ConnectionRow>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     validate_vdi_image(&db.pool, user.id, &body, None).await?;
+    let vault = vault_config(&state).await;
+    connections::seal_secret_extras(vault.as_ref(), &mut body.extra, None).await?;
     let name = body.name.clone();
-    let row = connections::create(&db.pool, &body).await?;
+    let mut row = connections::create(&db.pool, &body).await?;
+    connections::redact_secret_extras(&mut row.extra);
     audit::log(
         &db.pool,
         Some(user.id),
@@ -1448,15 +1463,19 @@ pub async fn update_connection(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
-    Json(body): Json<CreateConnectionRequest>,
+    Json(mut body): Json<CreateConnectionRequest>,
 ) -> Result<Json<ConnectionRow>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     validate_vdi_image(&db.pool, user.id, &body, Some(id)).await?;
+    let existing = connections::get_extra(&db.pool, id).await?;
+    let vault = vault_config(&state).await;
+    connections::seal_secret_extras(vault.as_ref(), &mut body.extra, existing.as_ref()).await?;
     let name = body.name.clone();
-    let row = connections::update(&db.pool, id, &body)
+    let mut row = connections::update(&db.pool, id, &body)
         .await?
         .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
+    connections::redact_secret_extras(&mut row.extra);
     audit::log(
         &db.pool,
         Some(user.id),

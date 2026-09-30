@@ -64,10 +64,10 @@ services:
       # Set to 1 to permit parsing XFF; pair with STRATA_TRUSTED_PROXIES
       # to restrict which immediate peers are allowed to supply XFF.
       - STRATA_TRUST_XFF=${STRATA_TRUST_XFF:-1}
-      # Comma-separated CIDRs or IPs for upstream proxies to trust.
-      # In most local docker-compose setups the bridge network uses
-      # 172.18.0.0/16; adjust to your environment's subnet as needed.
-      - STRATA_TRUSTED_PROXIES=${STRATA_TRUSTED_PROXIES:-172.18.0.0/16}
+      # Comma-separated CIDRs or IPs of proxies whose XFF is believed. The
+      # socket peer must be in this list, otherwise XFF is ignored. The
+      # default covers Docker's bridge address pools; narrow it in production.
+      - STRATA_TRUSTED_PROXIES=${STRATA_TRUSTED_PROXIES:-172.16.0.0/12,192.168.0.0/16}
       # Public base URL for SSO redirect_uri construction when the
       # backend sits behind a reverse proxy / DMZ relay that doesn't
       # forward Host/X-Forwarded-* headers. Optional — when unset,

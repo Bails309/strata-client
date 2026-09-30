@@ -35,6 +35,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   password work, so concurrent guesses cannot all pass the limit; password
   change counts its own attempts; a full limiter map refuses new keys instead
   of clearing every live limit.
+- **`STRATA_TRUSTED_PROXIES` is enforced (SEC-20).** One middleware resolves
+  the client IP: verified DMZ edge IP, else `X-Forwarded-For` only when the
+  socket peer is a trusted proxy (walking the chain past trusted hops), else
+  the socket peer. A forged header from a direct caller is ignored, and
+  requests without a proxy now get their real peer IP instead of `unknown`.
+  An invalid entry stops the backend from starting. The Compose default is
+  now Docker's bridge pools (`172.16.0.0/12,192.168.0.0/16`).
+- **SSO logins are bound to the browser that started them (SEC-05).** The
+  login sets a short-lived `sso_binding` cookie (`SameSite=Lax`, path
+  `/api/auth/sso`) whose hash must match at the callback, and the flow now
+  uses PKCE (`S256`) and an OIDC `nonce`. `state` is 256 random bits.
+- **SSO identities are scoped to their issuer (SEC-06).** Migration 093 adds
+  `users.sso_issuer`; an account linked through one provider cannot be
+  signed in through another with the same subject. Links made before the
+  migration are bound to the issuer of their next login. A first SSO login
+  no longer attaches to an account that has a local password, or when the
+  provider reports `email_verified: false`; linking is compare-and-set.
+- **Password changes and resets sign out every session (SEC-08).** Migration
+  094 adds `users.sessions_valid_after`, set on password change, admin reset
+  and deletion; access and refresh tokens issued earlier are refused, and
+  native sessions are closed within 30 s. Refresh can no longer extend a
+  sign-in past 12 hours. Restoring a deleted user does not restore old
+  sessions.
+- **Connection credentials in `extra` are encrypted and never returned
+  (SEC-12).** `password`, `private-key`, `passphrase` and the three `sftp-*`
+  equivalents are sealed with Vault on save and returned as `********`;
+  sending the placeholder back keeps the stored value. Existing plaintext
+  values are sealed at boot. Saving a new credential now requires Vault.
+
+### Build
+
+- **`strata-dmz` image builds again.** Its Dockerfile did not copy
+  `strata-session` or the vendored forks that the workspace needs.
 
 ### Performance / build
 

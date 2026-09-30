@@ -39,6 +39,7 @@ async fn main() -> anyhow::Result<()> {
     // refuse boot (a dev `docker compose up` should still work) but they
     // emit `error!`-level lines so operators see them in production logs.
     log_security_config_warnings();
+    services::client_ip::init_from_env().map_err(anyhow::Error::msg)?;
 
     // ── Resolve configuration from environment + persisted config ──
     let config_path = AppConfig::config_path();
@@ -331,6 +332,18 @@ async fn main() -> anyhow::Result<()> {
     // process exit is fine.
     routes::auth::spawn_sso_state_pruner();
 
+    // ── One-shot: seal connection credentials stored before SEC-12 ──
+    if let Some(v) = vault.clone() {
+        let pool = db_pool.clone();
+        tokio::spawn(async move {
+            match services::connections::seal_legacy_secret_extras(&pool, &v).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("Sealed plaintext credentials in {n} connection(s)"),
+                Err(e) => tracing::warn!("Sealing legacy connection credentials failed: {e}"),
+            }
+        });
+    }
+
     let addr: std::net::SocketAddr = "0.0.0.0:8080".parse()?;
     let app = routes::build_router(state.clone());
 
@@ -521,17 +534,6 @@ fn log_security_config_warnings() {
             "Neither STRATA_ALLOWED_ORIGINS nor STRATA_DOMAIN is set. \
              Browser cross-origin requests will be rejected by CORS."
         );
-    }
-    if std::env::var("STRATA_TRUST_XFF").as_deref() == Ok("1") {
-        let trusted = std::env::var("STRATA_TRUSTED_PROXIES").unwrap_or_default();
-        if trusted.trim().is_empty() {
-            tracing::error!(
-                "STRATA_TRUST_XFF=1 is set but STRATA_TRUSTED_PROXIES is empty. \
-                 Any client can spoof X-Forwarded-For and evade rate limits or \
-                 forge audit-log source IPs. Either unset STRATA_TRUST_XFF or \
-                 populate STRATA_TRUSTED_PROXIES with your load-balancer CIDRs."
-            );
-        }
     }
 
     // JWT secret strength.

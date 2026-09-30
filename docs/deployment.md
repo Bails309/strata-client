@@ -363,12 +363,12 @@ If you must use a different reverse proxy (e.g., Traefik, HAProxy, Caddy, or a c
 - Route everything else to `frontend:80`
 - Set `proxy_read_timeout` / `proxy_send_timeout` to at least 3600s for tunnel connections
 - Forward `X-Forwarded-For`, `X-Forwarded-Proto`, and `Host` headers
-- **Set `STRATA_TRUST_XFF=1` on the backend container** (v1.10.6+),
-  otherwise `X-Forwarded-For` is ignored and audit-log attribution
-  and per-IP rate-limit buckets will see every request as
-  originating from the load-balancer IP. Optionally pair with
-  `STRATA_TRUSTED_PROXIES` (comma-separated CIDRs) to scope which
-  peers' XFF headers are trusted.
+- **Set `STRATA_TRUST_XFF=1` on the backend container** (v1.10.6+)
+  **and list the proxy in `STRATA_TRUSTED_PROXIES`** (comma-separated
+  CIDRs or IPs). `X-Forwarded-For` is honoured only when the socket peer
+  is in that list; otherwise audit-log attribution and per-IP rate-limit
+  buckets see every request as originating from the load-balancer IP.
+  An invalid entry stops the backend from starting.
 
 ### 3. External Database
 

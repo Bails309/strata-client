@@ -8,6 +8,7 @@ pub mod auth;
 pub mod av;
 pub mod checkouts;
 pub mod circuit_breaker;
+pub mod client_ip;
 pub mod co_pilot;
 pub mod connections;
 pub mod credential_profiles;

@@ -15,15 +15,19 @@ FROM rust:1.95-bookworm@sha256:adab7941580c74513aa3347f2d2a1f975498280743d29ec62
 WORKDIR /src
 
 # Workspace context — copy the bits the DMZ crate actually needs.
-COPY Cargo.toml ./
+COPY Cargo.toml Cargo.lock ./
 COPY crates/strata-protocol ./crates/strata-protocol
 COPY crates/strata-dmz ./crates/strata-dmz
-# `backend/` is a workspace member but has no impact on the DMZ binary;
-# we still need its manifest present for the workspace to resolve.
+# The other workspace members and the [patch.crates-io] forks must exist for
+# the workspace to resolve; none of them enter the DMZ binary.
 COPY backend/Cargo.toml ./backend/Cargo.toml
-RUN mkdir -p backend/src && echo "fn main(){}" > backend/src/main.rs
+COPY crates/strata-session/Cargo.toml ./crates/strata-session/Cargo.toml
+COPY crates/vendor ./crates/vendor
+RUN mkdir -p backend/src crates/strata-session/src \
+ && echo "fn main(){}" > backend/src/main.rs \
+ && : > crates/strata-session/src/lib.rs
 
-RUN cargo build --release -p strata-dmz \
+RUN cargo build --release --locked -p strata-dmz \
  && strip target/release/strata-dmz
 
 # -- runtime ---------------------------------------------------------------

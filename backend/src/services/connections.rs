@@ -57,6 +57,151 @@ pub fn normalize_extra(extra: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+// ── Credential-bearing extras (SEC-12) ─────────────────────────────────
+
+/// `extra` keys that carry credentials. Stored as `vault:` envelopes and
+/// never returned by the API.
+pub const SECRET_EXTRA_KEYS: [&str; 6] = [
+    "password",
+    "private-key",
+    "passphrase",
+    "sftp-password",
+    "sftp-private-key",
+    "sftp-passphrase",
+];
+
+/// Returned in place of a stored secret. Sent back unchanged, it keeps the
+/// stored value; an empty string clears it.
+pub const SECRET_PLACEHOLDER: &str = "********";
+
+/// Replace every stored secret in `extra` with [`SECRET_PLACEHOLDER`].
+pub fn redact_secret_extras(extra: &mut serde_json::Value) {
+    let Some(map) = extra.as_object_mut() else {
+        return;
+    };
+    for key in SECRET_EXTRA_KEYS {
+        if let Some(v) = map.get_mut(key) {
+            if v.as_str().is_some_and(|s| !s.is_empty()) {
+                *v = serde_json::Value::String(SECRET_PLACEHOLDER.into());
+            }
+        }
+    }
+}
+
+/// Prepare submitted `extra` for storage: placeholders keep the value in
+/// `existing`, new values are sealed. Requires Vault for any new secret.
+pub async fn seal_secret_extras(
+    vault: Option<&crate::config::VaultConfig>,
+    extra: &mut serde_json::Value,
+    existing: Option<&serde_json::Value>,
+) -> Result<(), AppError> {
+    let Some(map) = extra.as_object_mut() else {
+        return Ok(());
+    };
+    for key in SECRET_EXTRA_KEYS {
+        let Some(value) = map.get(key).and_then(|v| v.as_str()).map(str::to_owned) else {
+            continue;
+        };
+        if value.is_empty() {
+            continue;
+        }
+        if value == SECRET_PLACEHOLDER {
+            match existing.and_then(|e| e.get(key)).cloned() {
+                Some(stored) => map.insert(key.to_owned(), stored),
+                None => map.remove(key),
+            };
+            continue;
+        }
+        if value.starts_with("vault:") {
+            return Err(AppError::Validation(format!(
+                "`{key}` must be supplied as plaintext"
+            )));
+        }
+        let vault = vault.ok_or_else(|| {
+            AppError::Validation(
+                "Vault must be configured before storing connection credentials.".into(),
+            )
+        })?;
+        let sealed = crate::services::vault::seal_setting(vault, &value).await?;
+        map.insert(key.to_owned(), serde_json::Value::String(sealed));
+    }
+    Ok(())
+}
+
+/// Decrypt sealed secrets in a tunnel's parameter map in place. Legacy
+/// plaintext values pass through unchanged.
+pub async fn unseal_secret_extras(
+    vault: Option<&crate::config::VaultConfig>,
+    extra: &mut std::collections::HashMap<String, String>,
+) -> Result<(), AppError> {
+    for key in SECRET_EXTRA_KEYS {
+        let Some(value) = extra.get(key).filter(|v| v.starts_with("vault:")) else {
+            continue;
+        };
+        let vault = vault.ok_or_else(|| {
+            AppError::Vault("Connection credentials are encrypted but Vault is unavailable".into())
+        })?;
+        let plain = crate::services::vault::unseal_setting(vault, value).await?;
+        extra.insert(key.to_owned(), plain);
+    }
+    Ok(())
+}
+
+/// Seal credential extras written before SEC-12. Runs once at boot; a
+/// failure leaves the row as it was and is retried on the next boot.
+pub async fn seal_legacy_secret_extras(
+    pool: &Pool<Postgres>,
+    vault: &crate::config::VaultConfig,
+) -> Result<usize, AppError> {
+    let keys: Vec<String> = SECRET_EXTRA_KEYS.iter().map(|k| k.to_string()).collect();
+    let rows: Vec<(Uuid, serde_json::Value)> =
+        sqlx::query_as("SELECT id, extra FROM connections WHERE extra ?| $1")
+            .bind(&keys)
+            .fetch_all(pool)
+            .await?;
+    let mut sealed = 0;
+    for (id, mut extra) in rows {
+        let Some(map) = extra.as_object_mut() else {
+            continue;
+        };
+        let mut changed = false;
+        for key in SECRET_EXTRA_KEYS {
+            let Some(value) = map.get(key).and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if value.is_empty() || value.starts_with("vault:") {
+                continue;
+            }
+            let envelope = crate::services::vault::seal_setting(vault, value).await?;
+            map.insert(key.to_owned(), serde_json::Value::String(envelope));
+            changed = true;
+        }
+        if changed {
+            sqlx::query("UPDATE connections SET extra = $1 WHERE id = $2")
+                .bind(&extra)
+                .bind(id)
+                .execute(pool)
+                .await?;
+            sealed += 1;
+        }
+    }
+    Ok(sealed)
+}
+
+/// Stored `extra` for a live connection.
+pub async fn get_extra(
+    pool: &Pool<Postgres>,
+    id: Uuid,
+) -> Result<Option<serde_json::Value>, AppError> {
+    let extra: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT extra FROM connections WHERE id = $1 AND soft_deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(extra)
+}
+
 pub async fn list_all(pool: &Pool<Postgres>) -> Result<Vec<ConnectionRow>, AppError> {
     let sql = format!(
         "SELECT {SELECT_COLUMNS} FROM connections WHERE soft_deleted_at IS NULL ORDER BY name"
@@ -397,6 +542,49 @@ pub async fn touch_user_access(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn redact_hides_every_secret_but_keeps_other_extras() {
+        let mut extra = json!({
+            "sftp-password": "vault:{}",
+            "private-key": "-----BEGIN",
+            "passphrase": "",
+            "color-depth": "24",
+        });
+        redact_secret_extras(&mut extra);
+        assert_eq!(extra["sftp-password"], SECRET_PLACEHOLDER);
+        assert_eq!(extra["private-key"], SECRET_PLACEHOLDER);
+        assert_eq!(extra["passphrase"], "");
+        assert_eq!(extra["color-depth"], "24");
+    }
+
+    #[tokio::test]
+    async fn placeholder_keeps_stored_secret_or_drops_it() {
+        let existing = json!({ "sftp-password": "vault:stored" });
+        let mut extra =
+            json!({ "sftp-password": SECRET_PLACEHOLDER, "passphrase": SECRET_PLACEHOLDER });
+        seal_secret_extras(None, &mut extra, Some(&existing))
+            .await
+            .unwrap();
+        assert_eq!(extra["sftp-password"], "vault:stored");
+        assert!(extra.get("passphrase").is_none());
+    }
+
+    #[tokio::test]
+    async fn new_secret_requires_vault_and_plaintext() {
+        let mut extra = json!({ "password": "hunter2" });
+        assert!(seal_secret_extras(None, &mut extra, None).await.is_err());
+        let mut forged = json!({ "password": "vault:{\"ct\":\"\"}" });
+        assert!(seal_secret_extras(None, &mut forged, None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn plaintext_legacy_values_pass_through_unseal() {
+        let mut extra =
+            std::collections::HashMap::from([("sftp-password".to_string(), "legacy".to_string())]);
+        unseal_secret_extras(None, &mut extra).await.unwrap();
+        assert_eq!(extra["sftp-password"], "legacy");
+    }
 
     #[test]
     fn normalize_extra_null_becomes_empty_object() {

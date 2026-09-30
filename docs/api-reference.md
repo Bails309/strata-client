@@ -147,7 +147,8 @@ Initiates the OIDC Single Sign-On flow. Redirects the user to the target OIDC is
 
 **Response headers** (since v1.6.1):
 
-- `Cache-Control: no-store` — set explicitly so browsers (notably Chromium's BFCache) do not retain the redirect, preventing replay of the single-use `state` UUID across forward/back navigation.
+- `Cache-Control: no-store` — set explicitly so browsers (notably Chromium's BFCache) do not retain the redirect, preventing replay of the single-use `state` across forward/back navigation.
+- `Set-Cookie: sso_binding=…; HttpOnly; Secure; SameSite=Lax; Path=/api/auth/sso; Max-Age=300` — ties the callback to this browser. The authorization URL carries `code_challenge` (`S256`) and `nonce`.
 
 ### `GET /api/auth/sso/callback`
 
@@ -157,6 +158,8 @@ The handler for the OIDC provider's callback. Exchanges the authorization code f
 
 - `code`: The authorization code from the issuer.
 - `state`: The CSRF state token.
+
+Refused with `401` if the `sso_binding` cookie is missing or does not match the state, the ID token's `nonce` differs, or the identity is not allowed to sign in to the account found by email (different issuer or subject; first link to an account with a local password; `email_verified: false`).
 
 **Success**: `303 See Other` redirect back to the frontend dashboard, with the same `Set-Cookie` (refresh token, CSRF, and expiry) and global `Cache-Control: no-store` semantics.
 
@@ -900,6 +903,8 @@ List all remote connections.
 ```
 
 `health_status` is one of `"online"`, `"offline"`, or `"unknown"` (not yet checked). Updated automatically every 2 minutes by the background health check worker.
+
+**Credential extras.** `password`, `private-key`, `passphrase`, `sftp-password`, `sftp-private-key` and `sftp-passphrase` are sealed with Vault on save and returned as `"********"` by list, create and update. Sending `"********"` back keeps the stored value, an empty string clears it, and a new value requires Vault to be configured (`400` otherwise).
 
 #### `POST /api/admin/connections`
 

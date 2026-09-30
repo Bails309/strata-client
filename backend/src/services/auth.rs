@@ -15,6 +15,11 @@ pub struct Claims {
     pub name: Option<String>,
     pub exp: usize,
     pub iat: usize,
+    /// Echo of the authorisation request's `nonce` (ID tokens only).
+    #[serde(default)]
+    pub nonce: Option<String>,
+    #[serde(default)]
+    pub email_verified: Option<bool>,
 }
 
 /// OIDC discovery document (subset).
@@ -260,6 +265,8 @@ mod tests {
             name: None,
             exp: 9999999999,
             iat: 1000000000,
+            nonce: None,
+            email_verified: None,
         };
         let debug = format!("{:?}", claims);
         assert!(debug.contains("user123"));
@@ -274,6 +281,8 @@ mod tests {
             name: None,
             exp: 123,
             iat: 100,
+            nonce: None,
+            email_verified: None,
         };
         let json = serde_json::to_value(&claims).unwrap();
         assert_eq!(json["sub"], "sub-id");
@@ -334,6 +343,8 @@ mod tests {
             name: Some("Alice".into()),
             exp: 9999999999,
             iat: 1000000000,
+            nonce: None,
+            email_verified: None,
         };
         let cloned = claims.clone();
         assert_eq!(cloned.sub, "user1");

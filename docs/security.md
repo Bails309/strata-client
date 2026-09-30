@@ -141,17 +141,17 @@ An in-memory cache/state tracking system is introduced to hold discovery clients
 **Flow:**
 
 1. Frontend queries `/api/auth/sso/providers` to fetch the active list of providers and renders custom sign-in buttons.
-2. When the user clicks a button, a request is sent to `/api/auth/sso/login?provider=<id>` which generates a unique authorization URL for that specific provider.
+2. When the user clicks a button, a request is sent to `/api/auth/sso/login?provider=<id>` which generates a unique authorization URL for that specific provider, with a random `state`, a PKCE `S256` challenge and an OIDC `nonce`. The response sets an `HttpOnly; Secure; SameSite=Lax` `sso_binding` cookie (path `/api/auth/sso`, 5 minutes) whose hash is stored with the state.
 3. The user is redirected to the target IdP's authorization endpoint.
 4. User authenticates with the IdP (e.g., Keycloak, Entra ID).
-5. IdP redirects back to the backend callback (`GET /api/auth/sso/callback`) with an authorization code and a state UUID.
-6. The backend retrieves the matching provider UUID from its state cache, decrypts the provider's `client_secret` via Vault, and exchanges the authorization code for an ID/access token.
+5. IdP redirects back to the backend callback (`GET /api/auth/sso/callback`) with an authorization code and the state.
+6. The backend consumes the state (single use), requires the presented `sso_binding` cookie to match (so a callback URL completed in another browser is refused), decrypts the provider's `client_secret` via Vault, and exchanges the code together with the PKCE verifier.
 7. Backend validates the token:
    - Fetches the IdP's `/.well-known/openid-configuration`
    - Downloads the JWKS (JSON Web Key Set)
    - Verifies the token signature (RS256) using the matching `kid`
-   - Validates `iss` (issuer), `aud` (audience/client_id), and `exp` (expiry)
-   - Extracts the `sub` (subject) claim to resolve or provision the local user profile.
+   - Validates `iss` (issuer), `aud` (audience/client_id), `exp` (expiry) and `nonce`
+   - Resolves the local account by email, then checks the identity: an account already linked must match both `sub` and the provider's issuer (`users.sso_issuer`); a first link is refused if the account has a local password or the IdP reports `email_verified: false`, and is written compare-and-set.
 
 ### Local Authentication
 
@@ -2294,6 +2294,13 @@ side already uses. Pair the variable with `STRATA_TRUSTED_PROXIES`
 (comma-separated CIDRs) to scope which peers' XFF headers are
 trusted. `try_extract_client_ip` was refactored to extract a pure
 `parse_xff_rightmost` helper for race-free unit testing.
+
+> **Superseded.** `STRATA_TRUSTED_PROXIES` was not actually enforced until
+> the SEC-20 fix: now one middleware (`services/client_ip.rs`) resolves the
+> client IP from the verified DMZ edge IP, else `X-Forwarded-For` *only if
+> the socket peer is a trusted proxy* (walking the chain past trusted hops),
+> else the socket peer, and stamps it into an internal header every caller
+> reads.
 
 **Operator impact**: deployments behind a reverse proxy must set
 `STRATA_TRUST_XFF=1` on the backend container on upgrade, otherwise

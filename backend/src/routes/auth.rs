@@ -22,13 +22,31 @@ static RATE_LIMIT: std::sync::LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
 static IP_RATE_LIMIT: std::sync::LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// In-memory store for SSO CSRF state parameters.
-/// Each entry has a creation time; entries older than SSO_STATE_TTL are pruned.
-static SSO_STATE_STORE: std::sync::LazyLock<Mutex<HashMap<String, (uuid::Uuid, Instant)>>> =
+/// A pending SSO authorisation, keyed by its `state` value.
+struct PendingSso {
+    provider: Uuid,
+    created: Instant,
+    /// SHA-256 of the `sso_binding` cookie set on the browser that started it.
+    browser_binding: String,
+    pkce_verifier: String,
+    nonce: String,
+}
+
+/// In-memory store for pending SSO authorisations.
+/// Entries older than SSO_STATE_TTL are pruned.
+static SSO_STATE_STORE: std::sync::LazyLock<Mutex<HashMap<String, PendingSso>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 const SSO_STATE_TTL_SECS: u64 = 300; // 5 minutes
 /// Hard cap on SSO state entries to prevent OOM from unauthenticated floods.
 const MAX_SSO_STATE_ENTRIES: usize = 10_000;
+/// Cookie tying an SSO callback to the browser that initiated the login.
+const SSO_BINDING_COOKIE: &str = "sso_binding";
+
+fn sha256_b64url(input: &str) -> String {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(input.as_bytes()))
+}
 
 /// Spawn a background task that periodically prunes expired entries
 /// from `SSO_STATE_STORE`. The login/callback fast paths only prune
@@ -51,7 +69,7 @@ pub fn spawn_sso_state_pruner() {
                 let cutoff = Instant::now() - std::time::Duration::from_secs(SSO_STATE_TTL_SECS);
                 let mut store = SSO_STATE_STORE.lock().unwrap_or_else(|e| e.into_inner());
                 let before = store.len();
-                store.retain(|_, (_, ts)| *ts >= cutoff);
+                store.retain(|_, p| p.created >= cutoff);
                 let removed = before - store.len();
                 if removed > 0 {
                     tracing::debug!(
@@ -167,45 +185,23 @@ fn reserve_attempt(
     true
 }
 
-/// Extract the client IP from X-Forwarded-For (rightmost non-empty entry)
-/// or fall back to "unknown".
+/// The resolved client IP, or "unknown" when none was resolved.
 ///
 /// This is `pub(crate)` so other route modules (files, tunnel, share) can
 /// reuse the same extraction logic instead of duplicating it.
-/// Use `try_extract_client_ip` when a ConnectInfo fallback is preferred.
 pub(crate) fn extract_client_ip(headers: &HeaderMap) -> String {
     try_extract_client_ip(headers).unwrap_or_else(|| "unknown".into())
 }
 
-/// Parse XFF without consulting the trust env var. Kept as a pure helper so
-/// unit tests can exercise the parsing logic without racing on env state.
-fn parse_xff_rightmost(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| {
-            v.rsplit(',')
-                .map(|s| s.trim())
-                .find(|s| !s.is_empty())
-                .map(|s| s.to_string())
-        })
-}
-
-/// Extract the client IP from X-Forwarded-For (rightmost non-empty entry).
-/// Returns `None` when no valid header is present — callers should fall back
-/// to `ConnectInfo` or "unknown".
-///
-/// **Security note**: XFF is only honoured when `STRATA_TRUST_XFF=1` is set.
-/// Without it, any client could spoof the header to evade per-IP rate limits
-/// or forge audit-log source IPs. Operators terminating TLS at a reverse
-/// proxy / load balancer should set `STRATA_TRUST_XFF=1` *and* populate
-/// `STRATA_TRUSTED_PROXIES` (a future-strict mode will additionally verify
-/// the socket peer is in that list).
+/// The client IP resolved by [`crate::services::client_ip::resolve_client_ip`]
+/// (verified DMZ edge IP, trusted-proxy `X-Forwarded-For`, or socket peer).
+/// Any client-supplied value is overwritten by that middleware.
 pub(crate) fn try_extract_client_ip(headers: &HeaderMap) -> Option<String> {
-    if std::env::var("STRATA_TRUST_XFF").as_deref() != Ok("1") {
-        return None;
-    }
-    parse_xff_rightmost(headers)
+    headers
+        .get(crate::services::client_ip::CLIENT_IP_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// Helper to get the base URL for redirect URIs.
@@ -520,6 +516,8 @@ pub async fn login(
 const ACCESS_TOKEN_TTL: usize = 1200;
 /// Refresh token TTL (8 hours).
 const REFRESH_TOKEN_TTL: usize = 28800;
+/// Refresh can never extend a sign-in beyond this (12 hours).
+const ABSOLUTE_SESSION_TTL: usize = 43200;
 
 /// Generate a fresh CSRF token. 32 random bytes encoded as URL-safe base64
 /// (no padding) — gives 256 bits of entropy and is safe to place in cookies
@@ -542,6 +540,19 @@ fn create_local_jwt(
     token_type: &str,
     ttl_secs: usize,
 ) -> Result<(String, Uuid), AppError> {
+    mint_local_jwt(user_id, username, role, token_type, ttl_secs, None)
+}
+
+/// [`create_local_jwt`] for a session that began at `auth_time` (Unix
+/// seconds); `None` means it begins now. Refresh carries it forward.
+fn mint_local_jwt(
+    user_id: Uuid,
+    username: &str,
+    role: &str,
+    token_type: &str,
+    ttl_secs: usize,
+    auth_time: Option<usize>,
+) -> Result<(String, Uuid), AppError> {
     use jsonwebtoken::{encode, EncodingKey, Header};
     use serde::Serialize;
 
@@ -553,6 +564,7 @@ fn create_local_jwt(
         iss: String,
         exp: usize,
         iat: usize,
+        auth_time: usize,
         jti: String,
         token_type: String,
     }
@@ -575,6 +587,7 @@ fn create_local_jwt(
         iss: "strata-local".into(),
         exp: now + ttl_secs,
         iat: now,
+        auth_time: auth_time.unwrap_or(now),
         jti: jti.to_string(),
         token_type: token_type.to_string(),
     };
@@ -1171,6 +1184,10 @@ pub async fn refresh(
     struct RefreshClaims {
         sub: String,
         token_type: String,
+        iat: usize,
+        /// Absent on tokens minted before absolute expiry existed.
+        #[serde(default)]
+        auth_time: Option<usize>,
     }
 
     let secret = crate::config::JWT_SECRET
@@ -1218,6 +1235,22 @@ pub async fn refresh(
     let (username, role) =
         user_row.ok_or_else(|| AppError::Auth("User no longer exists".into()))?;
 
+    if let Some(cutoff) = crate::services::users::sessions_valid_after(&db.pool, user_id).await? {
+        if (claims.iat as i64) < cutoff {
+            return Err(AppError::Auth("Session has been signed out".into()));
+        }
+    }
+    let auth_time = claims.auth_time.unwrap_or(claims.iat);
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as usize;
+    if now_secs.saturating_sub(auth_time) >= ABSOLUTE_SESSION_TTL {
+        return Err(AppError::Auth(
+            "Session has reached its maximum lifetime; please sign in again".into(),
+        ));
+    }
+
     // Rotate the refresh token: revoke the bearer we just consumed and
     // mint a fresh one. Without rotation, a single stolen refresh cookie
     // could be replayed for the full refresh-token lifetime. The old
@@ -1252,12 +1285,22 @@ pub async fn refresh(
     }
 
     // Issue a new access token with the latest username/role
-    let (access_token, _jti) =
-        create_local_jwt(user_id, &username, &role, "access", ACCESS_TOKEN_TTL)?;
-    // Issue a rotated refresh token \u2014 short-circuits stolen-cookie replay
-    // and lets us also bind the new refresh to the current username/role.
-    let (new_refresh_token, _new_refresh_jti) =
-        create_local_jwt(user_id, &username, &role, "refresh", REFRESH_TOKEN_TTL)?;
+    let (access_token, _jti) = mint_local_jwt(
+        user_id,
+        &username,
+        &role,
+        "access",
+        ACCESS_TOKEN_TTL,
+        Some(auth_time),
+    )?;
+    let (new_refresh_token, _new_refresh_jti) = mint_local_jwt(
+        user_id,
+        &username,
+        &role,
+        "refresh",
+        REFRESH_TOKEN_TTL,
+        Some(auth_time),
+    )?;
 
     // Record the new access-token jti so the admin "active sessions" panel
     // and per-user revocation reflect refresh-rotated tokens. Without this
@@ -1390,12 +1433,16 @@ pub async fn sso_login(
     let base_url = get_base_url(&headers);
     let redirect_uri = format!("{}/api/auth/sso/callback", base_url);
 
-    let state = Uuid::new_v4().to_string();
+    let state = generate_csrf_token();
+    let binding = generate_csrf_token();
+    let pkce_verifier = generate_csrf_token();
+    let pkce_challenge = sha256_b64url(&pkce_verifier);
+    let nonce = generate_csrf_token();
     {
         let mut store = SSO_STATE_STORE.lock().unwrap_or_else(|e| e.into_inner());
         // Prune expired entries
         let cutoff = Instant::now() - std::time::Duration::from_secs(SSO_STATE_TTL_SECS);
-        store.retain(|_, (_, created)| *created > cutoff);
+        store.retain(|_, p| p.created > cutoff);
         // Hard cap to prevent OOM from unauthenticated floods
         if store.len() >= MAX_SSO_STATE_ENTRIES {
             tracing::warn!("SSO state store at capacity ({MAX_SSO_STATE_ENTRIES}) — rejecting");
@@ -1403,15 +1450,27 @@ pub async fn sso_login(
                 "Too many pending SSO requests. Please try again later.".into(),
             ));
         }
-        store.insert(state.clone(), (params.provider, Instant::now()));
+        store.insert(
+            state.clone(),
+            PendingSso {
+                provider: params.provider,
+                created: Instant::now(),
+                browser_binding: sha256_b64url(&binding),
+                pkce_verifier,
+                nonce: nonce.clone(),
+            },
+        );
     }
 
     let auth_url = format!(
-        "{}?response_type=code&client_id={}&redirect_uri={}&scope=openid+profile+email&state={}",
+        "{}?response_type=code&client_id={}&redirect_uri={}&scope=openid+profile+email&state={}\
+         &code_challenge={}&code_challenge_method=S256&nonce={}",
         discovery.authorization_endpoint,
         urlencoding::encode(&client_id),
         urlencoding::encode(&redirect_uri),
         urlencoding::encode(&state),
+        urlencoding::encode(&pkce_challenge),
+        urlencoding::encode(&nonce),
     );
 
     // Build the redirect manually so we can attach `Cache-Control: no-store`.
@@ -1425,6 +1484,13 @@ pub async fn sso_login(
         .header("Location", &auth_url)
         .header("Cache-Control", "no-store")
         .header("Pragma", "no-cache")
+        // Lax, not Strict: the IdP returns the browser with a cross-site top-level GET.
+        .header(
+            "Set-Cookie",
+            format!(
+                "{SSO_BINDING_COOKIE}={binding}; HttpOnly; Secure; SameSite=Lax; Path=/api/auth/sso; Max-Age={SSO_STATE_TTL_SECS}"
+            ),
+        )
         .body(axum::body::Body::empty())
         .map_err(|e| AppError::Internal(format!("Response build error: {e}")))?;
     Ok(response)
@@ -1434,6 +1500,36 @@ pub async fn sso_login(
 pub struct SsoCallbackParams {
     pub code: String,
     pub state: String,
+}
+
+#[derive(Debug, PartialEq)]
+enum SsoLink {
+    /// Already linked to exactly this issuer + subject.
+    Existing,
+    /// Link now (first login) or bind a pre-093 link to its issuer.
+    Bind,
+}
+
+/// Decide whether an OIDC identity may sign in to the local account found
+/// by email. Identities are scoped to their issuer, and an email match alone
+/// never attaches SSO to an account that has a local password.
+fn sso_link_decision(
+    row_sub: Option<&str>,
+    row_issuer: Option<&str>,
+    has_password: bool,
+    sub: &str,
+    issuer: &str,
+    email_verified: Option<bool>,
+) -> Result<SsoLink, &'static str> {
+    match (row_sub, row_issuer) {
+        (Some(s), _) if s != sub => Err("subject mismatch"),
+        (Some(_), Some(i)) if i == issuer => Ok(SsoLink::Existing),
+        (Some(_), Some(_)) => Err("issuer mismatch"),
+        (Some(_), None) => Ok(SsoLink::Bind),
+        (None, _) if email_verified == Some(false) => Err("email not verified by the provider"),
+        (None, _) if has_password => Err("account has a local password"),
+        (None, _) => Ok(SsoLink::Bind),
+    }
 }
 
 /// GET /api/auth/sso/callback – handle the OIDC callback.
@@ -1448,21 +1544,29 @@ pub async fn sso_callback(
     // ~5s is worth investigating; over ~10s and users will start clicking
     // refresh / closing the tab.
     let callback_started = Instant::now();
-    // Validate CSRF state parameter
+    // Validate CSRF state parameter, and that this browser started the login.
     let state_value = &params.state;
-    let provider_id = {
+    let pending = {
         let mut store = SSO_STATE_STORE.lock().unwrap_or_else(|e| e.into_inner());
         let cutoff = Instant::now() - std::time::Duration::from_secs(SSO_STATE_TTL_SECS);
-        store.retain(|_, (_, created)| *created > cutoff);
-        match store.remove(state_value.as_str()) {
-            Some((pid, _)) => pid,
-            None => {
-                return Err(AppError::Auth(
-                    "Invalid or expired SSO state parameter".into(),
-                ))
-            }
-        }
+        store.retain(|_, p| p.created > cutoff);
+        store
+            .remove(state_value.as_str())
+            .ok_or_else(|| AppError::Auth("Invalid or expired SSO state parameter".into()))?
     };
+    let presented_binding = extract_cookie(&headers, SSO_BINDING_COOKIE)
+        .map(sha256_b64url)
+        .unwrap_or_default();
+    if !crate::services::middleware::constant_time_eq(
+        presented_binding.as_bytes(),
+        pending.browser_binding.as_bytes(),
+    ) {
+        tracing::warn!("SSO callback presented by a browser that did not start the login");
+        return Err(AppError::Auth(
+            "Invalid or expired SSO state parameter".into(),
+        ));
+    }
+    let provider_id = pending.provider;
 
     let (db, vault) = {
         let s = state.read().await;
@@ -1520,6 +1624,7 @@ pub async fn sso_callback(
             ("redirect_uri", &redirect_uri),
             ("client_id", &client_id),
             ("client_secret", &client_secret),
+            ("code_verifier", &pending.pkce_verifier),
         ])
         .send()
         .await
@@ -1537,6 +1642,9 @@ pub async fn sso_callback(
     let t_validate = Instant::now();
     let claims = crate::services::auth::validate_token(&issuer_url, &client_id, id_token).await?;
     let elapsed_validate = t_validate.elapsed();
+    if claims.nonce.as_deref() != Some(pending.nonce.as_str()) {
+        return Err(AppError::Auth("SSO nonce mismatch".into()));
+    }
 
     // Single info-level breakdown of where the callback spent its time.
     // If users keep reporting "hangs on Keycloak", this is the first
@@ -1576,22 +1684,35 @@ pub async fn sso_callback(
         )
     })?;
 
-    if let Some(sub) = &row.sub {
-        if sub != &claims.sub {
-            return Err(AppError::Auth(format!(
-                "SSO subject mismatch for user {}. Please contact your administrator.",
-                row.username
-            )));
-        }
-    } else {
-        // Link this user to the OIDC subject on first login
-        crate::services::users::link_sso_subject(
+    let issuer = issuer_url.trim_end_matches('/');
+    let decision = sso_link_decision(
+        row.sub.as_deref(),
+        row.sso_issuer.as_deref(),
+        row.has_password,
+        &claims.sub,
+        issuer,
+        claims.email_verified,
+    )
+    .map_err(|reason| {
+        tracing::warn!(user = %row.username, reason, "SSO login refused");
+        AppError::Auth(
+            "This SSO identity cannot sign in to this account. Please contact your administrator."
+                .into(),
+        )
+    })?;
+    if decision == SsoLink::Bind
+        && !crate::services::users::link_sso_subject(
             &db.pool,
             row.id,
             &claims.sub,
+            issuer,
             claims.name.as_deref(),
         )
-        .await?;
+        .await?
+    {
+        return Err(AppError::Auth(
+            "This account was linked to another SSO identity. Please try again.".into(),
+        ));
     }
 
     // Success — generate access + refresh tokens
@@ -1639,6 +1760,10 @@ pub async fn sso_callback(
     let response = axum::response::Response::builder()
         .status(303)
         .header("Location", "/")
+        .header(
+            "Set-Cookie",
+            format!("{SSO_BINDING_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/api/auth/sso; Max-Age=0"),
+        )
         .header(
             "Set-Cookie",
             format!(
@@ -1692,39 +1817,48 @@ mod tests {
     use axum::http::header::HeaderMap;
 
     #[test]
-    fn parse_xff_rightmost_picks_closest_proxy() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", "203.0.113.50, 10.0.0.1".parse().unwrap());
-        assert_eq!(parse_xff_rightmost(&headers).as_deref(), Some("10.0.0.1"));
+    fn sso_link_is_scoped_to_issuer() {
+        let a = "https://idp-a";
+        let b = "https://idp-b";
+        assert_eq!(
+            sso_link_decision(Some("s1"), Some(a), false, "s1", a, None),
+            Ok(SsoLink::Existing)
+        );
+        assert!(sso_link_decision(Some("s1"), Some(a), false, "s1", b, None).is_err());
+        assert!(sso_link_decision(Some("s1"), Some(a), false, "s2", a, None).is_err());
+        assert_eq!(
+            sso_link_decision(Some("s1"), None, false, "s1", a, None),
+            Ok(SsoLink::Bind)
+        );
     }
 
     #[test]
-    fn parse_xff_rightmost_single_entry() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", "198.51.100.42".parse().unwrap());
+    fn sso_first_link_rules() {
+        let i = "https://idp";
         assert_eq!(
-            parse_xff_rightmost(&headers).as_deref(),
-            Some("198.51.100.42")
+            sso_link_decision(None, None, false, "s", i, Some(true)),
+            Ok(SsoLink::Bind)
         );
+        assert!(sso_link_decision(None, None, false, "s", i, Some(false)).is_err());
+        assert!(sso_link_decision(None, None, true, "s", i, Some(true)).is_err());
+    }
+
+    #[test]
+    fn client_ip_reads_only_the_resolved_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.50".parse().unwrap());
+        assert_eq!(extract_client_ip(&headers), "unknown");
+        headers.insert(
+            crate::services::client_ip::CLIENT_IP_HEADER,
+            "198.51.100.42".parse().unwrap(),
+        );
+        assert_eq!(extract_client_ip(&headers), "198.51.100.42");
     }
 
     #[test]
     fn extract_client_ip_missing_header() {
         let headers = HeaderMap::new();
         assert_eq!(extract_client_ip(&headers), "unknown");
-    }
-
-    #[test]
-    fn parse_xff_rightmost_trims_whitespace() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-forwarded-for",
-            " 10.0.0.1 , 192.168.1.1 ".parse().unwrap(),
-        );
-        assert_eq!(
-            parse_xff_rightmost(&headers).as_deref(),
-            Some("192.168.1.1")
-        );
     }
 
     #[test]
@@ -1794,30 +1928,6 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "".parse().unwrap());
         assert_eq!(extract_client_ip(&headers), "unknown");
-    }
-
-    #[test]
-    fn extract_client_ip_ipv6() {
-        // XFF parsing is now gated on STRATA_TRUST_XFF; exercise the pure
-        // parser to keep coverage without racing on env state.
-        let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", "::1".parse().unwrap());
-        assert_eq!(parse_xff_rightmost(&headers).as_deref(), Some("::1"));
-    }
-
-    #[test]
-    fn extract_client_ip_many_entries() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-forwarded-for",
-            "10.0.0.1, 172.16.0.1, 192.168.0.1, 203.0.113.50"
-                .parse()
-                .unwrap(),
-        );
-        assert_eq!(
-            parse_xff_rightmost(&headers).as_deref(),
-            Some("203.0.113.50"),
-        );
     }
 
     #[test]
@@ -2134,15 +2244,6 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "   ".parse().unwrap());
         assert_eq!(extract_client_ip(&headers), "unknown");
-    }
-
-    #[test]
-    fn extract_client_ip_trailing_comma() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", "10.0.0.1,".parse().unwrap());
-        // Rightmost non-empty entry (XFF parsing gated on STRATA_TRUST_XFF;
-        // exercise the pure parser to avoid env-var races).
-        assert_eq!(parse_xff_rightmost(&headers).as_deref(), Some("10.0.0.1"));
     }
 
     // ── LoginRequest additional cases ──────────────────────────────

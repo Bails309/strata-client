@@ -63,6 +63,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   equivalents are sealed with Vault on save and returned as `********`;
   sending the placeholder back keeps the stored value. Existing plaintext
   values are sealed at boot. Saving a new credential now requires Vault.
+- **Chromium runs with its sandbox (SEC-03).** The hard-coded `--no-sandbox`
+  is gone. The bundled compose file runs the backend with
+  `backend/seccomp-chromium.json` (Docker's default profile plus `clone`,
+  `unshare` and `chroot`), which lets the namespace sandbox start as the
+  unprivileged `strata` user under `no-new-privileges`. If the sandbox
+  cannot start, the kiosk launch fails instead of falling back.
+  `STRATA_WEB_CHROMIUM_SANDBOX=disabled` is an explicit, logged opt-out.
+- **Web session egress is checked at launch (SEC-02).** The initial URL
+  must be `http`/`https` without embedded credentials, and every address
+  its host resolves to must be inside `web_allowed_networks`; an empty
+  list refuses the launch, as the docs always said. Loopback and
+  link-local addresses (including `169.254.169.254`) are refused even
+  under `0.0.0.0/0`.
+- **SFTP uploads never follow a symlink (SEC-11).** An existing symlink at
+  the target name is refused; an existing file is removed and the upload
+  is created with `O_EXCL`, so a link planted mid-upload makes the create
+  fail instead of writing outside the root. A session may hold at most 8
+  open transfers.
+- **Quick Share upload lifecycle (SEC-14).** `session_id` must name one of
+  the caller's live sessions and arrive before the file, so no body is
+  accepted for a fabricated or foreign session. Multipart errors are no
+  longer swallowed, a second file part is refused, and temp files are
+  removed on every exit path including a dropped request. Per-session
+  counts are reserved atomically, the store is capped at 10 GiB, files
+  expire after 24 hours, and orphans are removed at startup. Outbound
+  Quick Share parsing gets the same multipart fixes.
 
 ### Build
 

@@ -21,6 +21,9 @@ services:
       - guac-internal
     security_opt:
       - no-new-privileges:true
+      # Docker's default profile plus clone/unshare/chroot, which
+      # Chromium's namespace sandbox needs without CAP_SYS_ADMIN.
+      - seccomp=./backend/seccomp-chromium.json
     cap_drop:
       - ALL
     cap_add:

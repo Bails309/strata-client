@@ -19,6 +19,7 @@ use russh::client;
 use russh::keys::PrivateKeyWithHashAlg;
 use russh_sftp::client::fs::File;
 use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::OpenFlags;
 use secrecy::{ExposeSecret, SecretString};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -32,6 +33,9 @@ const STREAM_INDEX: &str = "application/vnd.glyptodon.guacamole.stream-index+jso
 /// Bytes read per `blob`. The client acknowledges each one, so this
 /// trades round trips against memory rather than against correctness.
 const CHUNK_BYTES: usize = 4096;
+
+/// Uploads plus downloads a single session may hold open at once.
+const MAX_OPEN_TRANSFERS: usize = 8;
 
 /// The single filesystem this engine announces.
 const OBJECT: i32 = 1;
@@ -259,6 +263,10 @@ impl SftpEngine {
             self.fail(stream, "downloads are disabled", STATUS_FORBIDDEN);
             return Ok(());
         }
+        if self.downloads.len() + self.uploads.len() >= MAX_OPEN_TRANSFERS {
+            self.fail(stream, "too many transfers in progress", STATUS_FORBIDDEN);
+            return Ok(());
+        }
         let Ok(file) = self.sftp.open(path.to_owned()).await else {
             self.fail(stream, "cannot open file", STATUS_FORBIDDEN);
             return Ok(());
@@ -310,6 +318,10 @@ impl SftpEngine {
             self.fail(stream, "uploads are disabled", STATUS_FORBIDDEN);
             return Ok(());
         }
+        if self.downloads.len() + self.uploads.len() >= MAX_OPEN_TRANSFERS {
+            self.fail(stream, "too many transfers in progress", STATUS_FORBIDDEN);
+            return Ok(());
+        }
         // The parent must resolve inside the root; the file itself does
         // not exist yet, so canonicalising it would fail.
         let parent = name.rsplit_once('/').map_or("/", |(head, _)| head);
@@ -325,7 +337,33 @@ impl SftpEngine {
         }
 
         let path = format!("{}/{leaf}", directory.trim_end_matches('/'));
-        let Ok(file) = self.sftp.create(path).await else {
+        // SFTP has no O_NOFOLLOW. Instead the existing entry is removed (which
+        // never follows a link) and the file is created exclusively, so a
+        // symlink planted at any point makes the create fail rather than
+        // redirect the write outside the root.
+        match self.sftp.symlink_metadata(path.clone()).await {
+            Ok(meta) if meta.is_symlink() => {
+                self.fail(
+                    stream,
+                    "refusing to overwrite a symbolic link",
+                    STATUS_FORBIDDEN,
+                );
+                return Ok(());
+            }
+            Ok(meta) if meta.is_dir() => {
+                self.fail(stream, "a directory has that name", STATUS_FORBIDDEN);
+                return Ok(());
+            }
+            Ok(_) => {
+                if self.sftp.remove_file(path.clone()).await.is_err() {
+                    self.fail(stream, "cannot replace file", STATUS_FORBIDDEN);
+                    return Ok(());
+                }
+            }
+            Err(_) => {}
+        }
+        let flags = OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE;
+        let Ok(file) = self.sftp.open_with_flags(path, flags).await else {
             self.fail(stream, "cannot create file", STATUS_FORBIDDEN);
             return Ok(());
         };

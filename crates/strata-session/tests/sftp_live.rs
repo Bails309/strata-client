@@ -317,3 +317,62 @@ async fn uploads_can_be_turned_off() {
         "upload was not refused: {events:?}"
     );
 }
+
+async fn put(engine: &mut SftpEngine, stream: i32, name: &str) -> Vec<FileEvent> {
+    send(
+        engine,
+        FileRequest::Put {
+            object: 1,
+            stream,
+            mimetype: "application/octet-stream".to_owned(),
+            name: name.to_owned(),
+        },
+    )
+    .await;
+    drain(engine).await
+}
+
+/// The fixture plants `/tmp/strata-link.txt -> /home/strata/outside.txt`.
+/// Following it would write outside the configured root.
+#[tokio::test]
+#[ignore = "needs a live sshd"]
+async fn an_upload_over_a_symlink_is_refused() {
+    let mut engine = connect().await;
+    drain(&mut engine).await;
+
+    let events = put(&mut engine, 5, "/strata-link.txt").await;
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, FileEvent::Ack { status, .. } if *status != 0)),
+        "upload through a symlink was not refused: {events:?}"
+    );
+}
+
+/// Replacing an existing regular file still works after the no-follow change.
+#[tokio::test]
+#[ignore = "needs a live sshd"]
+async fn an_existing_file_can_be_replaced() {
+    let mut engine = connect().await;
+    drain(&mut engine).await;
+
+    for stream in [11, 12] {
+        let events = put(&mut engine, stream, "/strata-replace.bin").await;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, FileEvent::Ack { status: 0, .. })),
+            "upload {stream} was refused: {events:?}"
+        );
+        send(
+            &mut engine,
+            FileRequest::Data {
+                stream,
+                data: Bytes::from_static(b"x"),
+            },
+        )
+        .await;
+        send(&mut engine, FileRequest::End { stream }).await;
+        drain(&mut engine).await;
+    }
+}

@@ -333,6 +333,10 @@ async fn main() -> anyhow::Result<()> {
     routes::auth::spawn_sso_state_pruner();
 
     // ── One-shot: seal connection credentials stored before SEC-12 ──
+    let orphans = services::file_store::remove_orphaned_upload_temps().await;
+    if orphans > 0 {
+        tracing::info!("Removed {orphans} orphaned upload temp file(s)");
+    }
     if let Some(v) = vault.clone() {
         let pool = db_pool.clone();
         tokio::spawn(async move {

@@ -85,7 +85,6 @@ pub const AUDIT_WEB_AUTOFILL_WRITE: &str = "web.autofill.write";
 
 /// Newline-/comma-separated CIDR allow-list controlling which IPs the
 /// kiosk Chromium is permitted to connect to. Empty ⇒ deny all.
-#[allow(dead_code)]
 pub const SETTING_WEB_ALLOWED_NETWORKS: &str = "web_allowed_networks";
 
 /// Per-replica concurrency cap on simultaneous web sessions. Capped by
@@ -322,9 +321,22 @@ pub fn parse_allowed_networks(raw: &str) -> Vec<IpNet> {
 /// fail-closed semantics. Operators must explicitly opt in to the
 /// public internet (`0.0.0.0/0` and `::/0`) — this is by design so
 /// SSRF-style misconfiguration is loud rather than silent.
-#[allow(dead_code)]
+///
+/// Loopback, link-local (cloud metadata) and unspecified addresses are
+/// refused even under `0.0.0.0/0`: the kiosk shares the backend's network
+/// namespace, so loopback reaches the backend API, CDP and other kiosks.
 pub fn is_ip_allowed_by_cidr(ip: IpAddr, networks: &[IpNet]) -> bool {
-    networks.iter().any(|n| n.contains(&ip))
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+        v4 => v4,
+    };
+    let always_denied = match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_link_local() || v4.is_unspecified(),
+        IpAddr::V6(v6) => {
+            v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    };
+    !always_denied && networks.iter().any(|n| n.contains(&ip))
 }
 
 /// Hostname-level allow-list check. `host` may be a literal IP or a
@@ -349,9 +361,57 @@ pub fn extract_host(url: &str) -> Option<String> {
     url::Url::parse(url).ok()?.host_str().map(str::to_owned)
 }
 
+/// Launch-time egress check for a kiosk's initial URL: scheme, embedded
+/// credentials, and every address the host resolves to must pass
+/// `web_allowed_networks`. Returns a reason suitable for the operator.
+pub async fn check_initial_url(url: &str, networks_raw: &str) -> Result<(), String> {
+    let networks = parse_allowed_networks(networks_raw);
+    if networks.is_empty() {
+        return Err(format!(
+            "web sessions are disabled until `{SETTING_WEB_ALLOWED_NETWORKS}` is configured"
+        ));
+    }
+    let parsed = url::Url::parse(url).map_err(|_| "invalid URL".to_owned())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("only http and https URLs are allowed".into());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("URLs must not embed credentials".into());
+    }
+    let host = match parsed.host() {
+        Some(url::Host::Domain(d)) => d.to_owned(),
+        Some(url::Host::Ipv4(ip)) => ip.to_string(),
+        Some(url::Host::Ipv6(ip)) => ip.to_string(),
+        None => return Err("URL has no host".into()),
+    };
+    let port = parsed.port_or_known_default().unwrap_or(443);
+    let resolved: Vec<IpAddr> = if host.parse::<IpAddr>().is_ok() {
+        Vec::new()
+    } else {
+        tokio::net::lookup_host((host.as_str(), port))
+            .await
+            .map(|addrs| addrs.map(|a| a.ip()).collect())
+            .unwrap_or_default()
+    };
+    if host_lookup_passes(&host, &resolved, &networks) {
+        Ok(())
+    } else {
+        Err(format!("{host} is outside the allowed networks"))
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Chromium command-line construction
 // ─────────────────────────────────────────────────────────────────────
+
+/// Whether the operator set `STRATA_WEB_CHROMIUM_SANDBOX=disabled`.
+/// Otherwise the sandbox is required: a kiosk whose sandbox cannot start
+/// exits immediately and the session is refused, rather than silently
+/// running unsandboxed. The bundled compose file grants the sandbox what
+/// it needs via `backend/seccomp-chromium.json`.
+pub fn chromium_sandbox_disabled() -> bool {
+    std::env::var("STRATA_WEB_CHROMIUM_SANDBOX").is_ok_and(|v| v.eq_ignore_ascii_case("disabled"))
+}
 
 /// Inputs to [`chromium_command_args`]. Kept as a struct so callers can
 /// extend without breaking signature.
@@ -365,12 +425,10 @@ pub struct ChromiumLaunchSpec<'a> {
     /// Range typically `9222`–9321`, picked per-session by
     /// [`CdpPortAllocator`].
     pub remote_debugging_port: u16,
-    /// True when the backend is running as `root` inside its container.
-    /// Mirrors rustguac's `geteuid() == 0` check — Chromium refuses to
-    /// run as root without `--no-sandbox`. The default compose stack
-    /// runs the backend as root, so this is `true` in production. Set
-    /// `false` for hardened deployments running under an unprivileged
-    /// uid.
+    /// Emit `--no-sandbox`. Only when the operator has set
+    /// `STRATA_WEB_CHROMIUM_SANDBOX=disabled` (see
+    /// [`chromium_sandbox_disabled`]); the backend itself runs as the
+    /// unprivileged `strata` user.
     pub running_as_root: bool,
     /// Initial window width in pixels. Should match the Xvnc
     /// framebuffer width so the kiosk fills the display end-to-end.
@@ -402,8 +460,8 @@ pub struct ChromiumLaunchSpec<'a> {
 ///   — `VizDisplayCompositor` is the one that matters for Xvnc
 ///   stability; `AutofillServerCommunication` keeps the kiosk from
 ///   uploading form fingerprints to Google.
-/// - `--no-sandbox` (conditional on `running_as_root`) — required when
-///   the backend container runs as root.
+/// - `--no-sandbox` (conditional on `running_as_root`) — only when the
+///   operator explicitly disabled the sandbox.
 /// - `--host-rules="MAP * ~NOTFOUND, MAP <allowed> <allowed>"` — when
 ///   `allowed_domains` is non-empty, forces every other hostname to
 ///   resolve to NOTFOUND inside Chromium's resolver. This is rustguac's
@@ -790,6 +848,43 @@ mod tests {
         );
         assert_eq!(extract_host("not a url"), None);
         assert_eq!(extract_host("file:///etc/passwd"), None);
+    }
+
+    #[test]
+    fn loopback_and_link_local_are_denied_even_when_everything_is_allowed() {
+        let nets = parse_allowed_networks("0.0.0.0/0, ::/0");
+        for ip in [
+            "127.0.0.1",
+            "169.254.169.254",
+            "::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+            "0.0.0.0",
+        ] {
+            assert!(!is_ip_allowed_by_cidr(ip.parse().unwrap(), &nets), "{ip}");
+        }
+        assert!(is_ip_allowed_by_cidr("8.8.8.8".parse().unwrap(), &nets));
+    }
+
+    #[tokio::test]
+    async fn initial_url_check_fails_closed() {
+        assert!(check_initial_url("https://10.1.2.3/", "").await.is_err());
+        assert!(check_initial_url("https://10.1.2.3/", "10.0.0.0/8")
+            .await
+            .is_ok());
+        assert!(check_initial_url("https://11.1.2.3/", "10.0.0.0/8")
+            .await
+            .is_err());
+        assert!(check_initial_url("file:///etc/passwd", "0.0.0.0/0")
+            .await
+            .is_err());
+        assert!(check_initial_url("https://u:p@10.1.2.3/", "10.0.0.0/8")
+            .await
+            .is_err());
+        assert!(check_initial_url("http://127.0.0.1:8080/", "0.0.0.0/0")
+            .await
+            .is_err());
+        assert!(check_initial_url("http://[::1]/", "::/0").await.is_err());
     }
 
     // ── Chromium argv ────────────────────────────────────────────

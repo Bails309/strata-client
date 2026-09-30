@@ -46,6 +46,10 @@ struct FileStoreInner {
     files: HashMap<String, StoredFile>,
     /// session_id → list of tokens
     sessions: HashMap<String, Vec<String>>,
+    /// session_id → uploads admitted but not yet indexed
+    pending: HashMap<String, usize>,
+    /// Bytes held by indexed files plus admitted uploads.
+    reserved_bytes: u64,
     /// Root directory for stored files.
     root: PathBuf,
 }
@@ -56,14 +60,72 @@ pub const MAX_FILE_SIZE: u64 = 500 * 1024 * 1024;
 /// Maximum files per session.
 pub const MAX_FILES_PER_SESSION: usize = 20;
 
+/// Ceiling on everything the store holds at once, across all sessions.
+pub const MAX_STORE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+
+/// Files older than this are gone even if their session never closed cleanly.
+pub const MAX_FILE_AGE: chrono::Duration = chrono::Duration::hours(24);
+
+/// Prefix of the temp files multipart uploads stream into.
+pub const UPLOAD_TEMP_PREFIX: &str = "strata-upload-";
+
+/// An upload's temp file, deleted on every exit path including a dropped
+/// request future. Harmless once the file has been moved elsewhere.
+pub struct TempUpload(pub PathBuf);
+
+impl TempUpload {
+    pub fn new() -> Self {
+        Self(std::env::temp_dir().join(format!("{UPLOAD_TEMP_PREFIX}{}", Uuid::new_v4())))
+    }
+}
+
+impl Drop for TempUpload {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Remove upload temp files left behind by a previous process.
+pub async fn remove_orphaned_upload_temps() -> usize {
+    let Ok(mut dir) = tokio::fs::read_dir(std::env::temp_dir()).await else {
+        return 0;
+    };
+    let mut removed = 0;
+    while let Ok(Some(entry)) = dir.next_entry().await {
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.starts_with(UPLOAD_TEMP_PREFIX))
+            && tokio::fs::remove_file(entry.path()).await.is_ok()
+        {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+async fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    tokio::fs::create_dir_all(dir).await?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).await?;
+    }
+    Ok(())
+}
+
 impl FileStore {
-    /// Create a new file store.  `root` is created if it does not exist.
+    /// Create a new file store. `root` is emptied: the index is in memory, so
+    /// anything already on disk is an orphan from a previous process.
     pub async fn new(root: PathBuf) -> Self {
-        tokio::fs::create_dir_all(&root).await.ok();
+        tokio::fs::remove_dir_all(&root).await.ok();
+        create_private_dir(&root).await.ok();
         Self {
             inner: Arc::new(RwLock::new(FileStoreInner {
                 files: HashMap::new(),
                 sessions: HashMap::new(),
+                pending: HashMap::new(),
+                reserved_bytes: 0,
                 root,
             })),
         }
@@ -92,29 +154,49 @@ impl FileStore {
 
         let token = Uuid::new_v4().to_string();
 
-        let inner = self.inner.write().await;
+        self.remove_expired().await;
+        let mut inner = self.inner.write().await;
 
-        let count = inner.sessions.get(session_id).map(|v| v.len()).unwrap_or(0);
+        let count = inner.sessions.get(session_id).map(|v| v.len()).unwrap_or(0)
+            + inner.pending.get(session_id).copied().unwrap_or(0);
         if count >= MAX_FILES_PER_SESSION {
             return Err(FileStoreError::TooManyFiles);
         }
+        if inner.reserved_bytes + size > MAX_STORE_BYTES {
+            return Err(FileStoreError::StoreFull);
+        }
+        *inner.pending.entry(session_id.to_string()).or_default() += 1;
+        inner.reserved_bytes += size;
 
         let dir = inner.root.join(&token);
         let file_path = dir.join(&safe_name);
 
         // Release the lock before doing I/O, then re-acquire to update index.
         drop(inner);
-        tokio::fs::create_dir_all(&dir)
-            .await
-            .map_err(FileStoreError::Io)?;
+        let moved = async {
+            create_private_dir(&dir).await?;
+            // Move (rename) the temp file into the store; fall back to
+            // copy+delete if rename fails (e.g. cross-filesystem).
+            if tokio::fs::rename(temp_path, &file_path).await.is_err() {
+                tokio::fs::copy(temp_path, &file_path).await?;
+                let _ = tokio::fs::remove_file(temp_path).await;
+            }
+            Ok::<(), std::io::Error>(())
+        }
+        .await;
 
-        // Move (rename) the temp file into the store; fall back to copy+delete
-        // if rename fails (e.g. cross-filesystem).
-        if tokio::fs::rename(temp_path, &file_path).await.is_err() {
-            tokio::fs::copy(temp_path, &file_path)
-                .await
-                .map_err(FileStoreError::Io)?;
-            let _ = tokio::fs::remove_file(temp_path).await;
+        let mut inner = self.inner.write().await;
+        if let Some(n) = inner.pending.get_mut(session_id) {
+            *n -= 1;
+            if *n == 0 {
+                inner.pending.remove(session_id);
+            }
+        }
+        if let Err(e) = moved {
+            inner.reserved_bytes -= size;
+            drop(inner);
+            tokio::fs::remove_dir_all(&dir).await.ok();
+            return Err(FileStoreError::Io(e));
         }
 
         let meta = StoredFile {
@@ -128,7 +210,6 @@ impl FileStore {
             created_at: chrono::Utc::now(),
         };
 
-        let mut inner = self.inner.write().await;
         inner.files.insert(token.clone(), meta.clone());
         inner
             .sessions
@@ -139,13 +220,40 @@ impl FileStore {
         Ok(meta)
     }
 
-    /// Look up a file by its download token.
+    /// Delete every file older than [`MAX_FILE_AGE`].
+    pub async fn remove_expired(&self) -> usize {
+        let cutoff = chrono::Utc::now() - MAX_FILE_AGE;
+        let expired: Vec<String> = self
+            .inner
+            .read()
+            .await
+            .files
+            .values()
+            .filter(|f| f.created_at < cutoff)
+            .map(|f| f.token.clone())
+            .collect();
+        let mut removed = 0;
+        for token in expired {
+            if self.delete(&token).await {
+                removed += 1;
+            }
+        }
+        removed
+    }
+
+    /// Look up a file by its download token. Expired files are not returned.
     pub async fn get(&self, token: &str) -> Option<StoredFile> {
-        self.inner.read().await.files.get(token).cloned()
+        let file = self.inner.read().await.files.get(token).cloned()?;
+        if file.created_at < chrono::Utc::now() - MAX_FILE_AGE {
+            self.delete(token).await;
+            return None;
+        }
+        Some(file)
     }
 
     /// List all files for a session.
     pub async fn list_session(&self, session_id: &str) -> Vec<StoredFile> {
+        let cutoff = chrono::Utc::now() - MAX_FILE_AGE;
         let inner = self.inner.read().await;
         inner
             .sessions
@@ -154,6 +262,7 @@ impl FileStore {
                 tokens
                     .iter()
                     .filter_map(|t| inner.files.get(t).cloned())
+                    .filter(|f| f.created_at >= cutoff)
                     .collect()
             })
             .unwrap_or_default()
@@ -163,6 +272,7 @@ impl FileStore {
     pub async fn delete(&self, token: &str) -> bool {
         let mut inner = self.inner.write().await;
         if let Some(meta) = inner.files.remove(token) {
+            inner.reserved_bytes = inner.reserved_bytes.saturating_sub(meta.size);
             // Remove from session index.
             if let Some(tokens) = inner.sessions.get_mut(&meta.session_id) {
                 tokens.retain(|t| t != token);
@@ -189,6 +299,7 @@ impl FileStore {
             let mut dirs_to_remove = Vec::new();
             for token in tokens {
                 if let Some(meta) = inner.files.remove(&token) {
+                    inner.reserved_bytes = inner.reserved_bytes.saturating_sub(meta.size);
                     let dir = meta.path.parent().unwrap_or(Path::new("")).to_path_buf();
                     dirs_to_remove.push(dir);
                 }
@@ -216,6 +327,8 @@ pub enum FileStoreError {
     TooLarge,
     #[error("Maximum of {MAX_FILES_PER_SESSION} files per session")]
     TooManyFiles,
+    #[error("Quick Share storage is full; try again later")]
+    StoreFull,
     #[error("I/O error: {0}")]
     Io(std::io::Error),
 }
@@ -415,5 +528,64 @@ mod tests {
         let (store, _tmp) = make_store().await;
         assert!(store.get("not-a-real-token").await.is_none());
         assert!(!store.delete("not-a-real-token").await);
+    }
+
+    #[tokio::test]
+    async fn aggregate_quota_spans_sessions() {
+        let (store, tmp) = make_store().await;
+        let user = Uuid::new_v4();
+        let fits = (MAX_STORE_BYTES / MAX_FILE_SIZE) as usize;
+        for i in 0..fits {
+            let src = make_temp_file(tmp.path(), b"x").await;
+            store
+                .store_from_path(
+                    &format!("s{i}"),
+                    user,
+                    "f",
+                    "text/plain",
+                    &src,
+                    MAX_FILE_SIZE,
+                )
+                .await
+                .unwrap();
+        }
+        let src = make_temp_file(tmp.path(), b"x").await;
+        let err = store
+            .store_from_path("another", user, "f", "text/plain", &src, MAX_FILE_SIZE)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FileStoreError::StoreFull));
+    }
+
+    #[tokio::test]
+    async fn expired_files_are_not_served_and_are_removed() {
+        let (store, tmp) = make_store().await;
+        let src = make_temp_file(tmp.path(), b"old").await;
+        let meta = store
+            .store_from_path("sess", Uuid::new_v4(), "old.txt", "text/plain", &src, 3)
+            .await
+            .unwrap();
+        store
+            .inner
+            .write()
+            .await
+            .files
+            .get_mut(&meta.token)
+            .unwrap()
+            .created_at -= MAX_FILE_AGE + chrono::Duration::seconds(1);
+
+        assert!(store.list_session("sess").await.is_empty());
+        assert!(store.get(&meta.token).await.is_none());
+        assert!(!meta.path.parent().unwrap().exists());
+    }
+
+    #[tokio::test]
+    async fn new_store_discards_orphans_from_a_previous_process() {
+        let tmp = TempDir::new().unwrap();
+        let orphan = tmp.path().join("old-token");
+        tokio::fs::create_dir_all(&orphan).await.unwrap();
+        let _store = FileStore::new(tmp.path().to_path_buf()).await;
+        assert!(!orphan.exists());
+        assert!(tmp.path().exists());
     }
 }

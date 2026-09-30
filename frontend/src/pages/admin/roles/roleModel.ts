@@ -51,7 +51,7 @@ export const PERMISSION_CATEGORIES: PermissionCategory[] = [
         flag: "can_manage_users",
         name: "Manage users",
         description:
-          "Create, edit, delete and restore users, including changing any user's role — so a holder can move themselves into a more powerful role.",
+          "Create, edit, delete and restore users and reset their passwords. Without Full system access, a holder can only assign roles and manage users whose permissions they already hold, and cannot act on their own account.",
         risk: "critical",
       },
       {

@@ -31,7 +31,7 @@ use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::middleware::{
     check_quick_share_outbound_permission, check_system_permission, AuthUser,
 };
-use crate::services::{outbound_shares, vault};
+use crate::services::outbound_shares;
 
 /// Configurable staging directory for sealed outbound blobs. Falls back
 /// to `/tmp/strata-outbound-shares` (Linux containers) or the platform
@@ -692,14 +692,15 @@ pub async fn download(
         (pool, vault_cfg)
     };
 
-    let mat = outbound_shares::consume_download_token(&pool, &token).await?;
-
-    // Only the requester (or a system admin) can fetch their own bytes.
-    if mat.share.requester_user_id != user.id && !user.can_manage_system {
-        return Err(AppError::Forbidden);
-    }
-
-    let plaintext = vault::unseal(&vault_cfg, &mat.sealed_dek, &mat.ciphertext, &mat.nonce).await?;
+    let mat = outbound_shares::consume_download_token(
+        &pool,
+        &vault_cfg,
+        &token,
+        user.id,
+        user.can_manage_system,
+    )
+    .await?;
+    let plaintext = mat.plaintext;
 
     let filename = mat.share.filename.clone();
     let content_type = mat.share.content_type.clone();

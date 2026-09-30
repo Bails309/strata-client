@@ -491,7 +491,7 @@ pub const WEB_DEFAULT_HEIGHT: u16 = 1080;
 ///
 /// ```text
 /// Xvnc :101 -geometry 1920x1080 -depth 24 -SecurityTypes None \
-///      -AlwaysShared
+///      -AlwaysShared -localhost -nolisten tcp
 /// ```
 ///
 /// Flag rationale:
@@ -501,18 +501,11 @@ pub const WEB_DEFAULT_HEIGHT: u16 = 1080;
 ///   it; operator's RFB client scales.
 /// - `-depth 24` — 24-bit colour. 16-bit halves bandwidth but makes
 ///   anti-aliased text fuzzy.
-/// - `-SecurityTypes None` — VNC auth is **off**. The threat model
-///   relies on docker network isolation: the kiosk listens on the
-///   backend container's interface inside the `guac-internal` bridge
-///   network, which is not exposed to the host or the public
-///   internet. Only sibling containers on the same compose network
-///   (guacd, frontend, vault, postgres) can reach it, and only guacd
-///   ever does. Layering VNC password auth on top buys nothing and
-///   adds a credential to rotate.
-/// - **No `-localhost` flag.** guacd runs in a sibling container, so
-///   binding the listener to `127.0.0.1` makes it unreachable. Xvnc's
-///   default behaviour (listen on all interfaces) is what we want
-///   here — the docker network *is* the security boundary.
+/// - `-SecurityTypes None` — VNC auth is **off**, so the listener must
+///   not be reachable from anything but the in-process session engine.
+/// - `-localhost` — RFB listens on loopback only. Sibling containers on
+///   the compose network must not be able to watch or drive a kiosk.
+/// - `-nolisten tcp` — no X11 TCP listener either.
 /// - `-AlwaysShared` — multiple RFB clients may attach. The Strata
 ///   reaper sometimes opens a second RFB connection during graceful
 ///   shutdown to read the final frame for the recording pipeline.
@@ -531,6 +524,9 @@ pub fn xvnc_command_args(xvnc_path: &str, display: u16, width: u16, height: u16)
         "-SecurityTypes".into(),
         "None".into(),
         "-AlwaysShared".into(),
+        "-localhost".into(),
+        "-nolisten".into(),
+        "tcp".into(),
     ]
 }
 
@@ -1014,6 +1010,9 @@ mod tests {
                 "-SecurityTypes",
                 "None",
                 "-AlwaysShared",
+                "-localhost",
+                "-nolisten",
+                "tcp",
             ]
         );
     }
@@ -1027,14 +1026,10 @@ mod tests {
     }
 
     #[test]
-    fn xvnc_argv_does_not_bind_localhost() {
-        // Critical: guacd runs in a sibling container, so binding
-        // Xvnc to `127.0.0.1` would make the kiosk unreachable.
-        // The docker network's bridge isolation is the security
-        // boundary instead. The test guards against an accidental
-        // refactor that re-introduces `-localhost`.
+    fn xvnc_argv_binds_loopback_only() {
+        // `-SecurityTypes None` is only safe while nothing off-host can connect.
         let args = xvnc_command_args("Xvnc", 100, 800, 600);
-        assert!(!args.contains(&"-localhost".to_string()));
+        assert!(args.contains(&"-localhost".to_string()));
     }
 
     #[test]

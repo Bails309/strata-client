@@ -1295,8 +1295,8 @@ converge in seconds.
 cat >> .env <<'EOF'
 STRATA_AV_BACKEND=clamav
 STRATA_AV_FAIL_MODE=block         # default; reject on scanner error
-STRATA_AV_MAX_SCAN_SIZE=104857600 # 100 MiB
-STRATA_AV_TIMEOUT_MS=30000        # 30s
+STRATA_AV_MAX_SCAN_SIZE=524288000 # 500 MiB - keep >= upload cap; larger files are refused
+STRATA_AV_TIMEOUT_MS=120000       # 2 min
 STRATA_AV_CLAMD_HOST=clamav
 STRATA_AV_CLAMD_PORT=3310
 EOF
@@ -1378,7 +1378,7 @@ re-base the backend image with the scanner installed.
 ```bash
 # 1. Backend reports the scanner came up
 docker compose logs backend | grep 'av scanner ready'
-# Expected: "av scanner ready: backend=clamav fail_mode=block max_scan_size=104857600"
+# Expected: "av scanner ready: backend=clamav fail_mode=block max_scan_size=524288000"
 
 # 2. EICAR upload is blocked
 curl -sS -X POST .../api/files/upload -F file=@eicar.com -F session_id=...

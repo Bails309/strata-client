@@ -58,27 +58,34 @@ WORKDIR /app
 # Cargo.toml stubs first so the dependency graph can be fetched and
 # compiled before the real sources land — that's what gives us the
 # layer-cache win on incremental rebuilds.
-COPY Cargo.toml Cargo.lock* ./
+COPY Cargo.toml Cargo.lock ./
 COPY VERSION ./
 COPY backend/Cargo.toml backend/Cargo.toml
 COPY backend/build.rs backend/build.rs
 COPY crates/strata-protocol/Cargo.toml crates/strata-protocol/Cargo.toml
 COPY crates/strata-dmz/Cargo.toml crates/strata-dmz/Cargo.toml
+COPY crates/strata-session/Cargo.toml crates/strata-session/Cargo.toml
+# The [patch.crates-io] forks are third-party code, so they belong in the
+# dependency layer; without them the stub build cannot resolve at all.
+COPY crates/vendor/ crates/vendor/
 # Dependency-cache layer: stub each crate so cargo fetches+builds the
-# dependency graph before we COPY in the real source.
-RUN mkdir -p backend/src crates/strata-protocol/src crates/strata-dmz/src \
+# dependency graph before we COPY in the real source. Must not mask
+# errors, or a broken stub silently turns every build into a cold one.
+RUN mkdir -p backend/src crates/strata-protocol/src crates/strata-dmz/src crates/strata-session/src \
     && echo "fn main() {}" > backend/src/main.rs \
     && : > crates/strata-protocol/src/lib.rs \
     && echo "fn main() {}" > crates/strata-dmz/src/main.rs \
-    && cargo build --release -p strata-backend 2>/dev/null || true
-RUN rm -rf backend/src crates/strata-protocol/src crates/strata-dmz/src
+    && : > crates/strata-session/src/lib.rs \
+    && cargo build --release --locked -p strata-backend
+RUN rm -rf backend/src crates/strata-protocol/src crates/strata-dmz/src crates/strata-session/src
 
 COPY backend/ backend/
 COPY crates/ crates/
 # Touching the entrypoint files forces cargo to re-evaluate them
 # rather than re-using the stubbed compile artefacts.
 RUN touch backend/src/main.rs crates/strata-protocol/src/lib.rs crates/strata-dmz/src/main.rs \
-    && cargo build --release -p strata-backend
+        crates/strata-session/src/lib.rs \
+    && cargo build --release --locked -p strata-backend
 
 # ── guacenc builder stage ─────────────────────────────────────────────
 # Compiles Apache Guacamole's `guacenc` utility from source, pinned to

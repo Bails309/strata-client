@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [Unreleased]
+
+### Security — fixes from the external security and performance review
+
+- **Delegated user managers can no longer escalate (SEC-01, Critical).**
+  Without `can_manage_system`, a `can_manage_users` holder may only assign
+  roles, and act on users, whose permissions they already hold; may not act
+  on their own account; and may not exempt a user from outbound Quick Share
+  approval. Role changes and deletions are serialised and refuse to remove
+  the last active system administrator.
+- **Capability tokens are no longer logged (SEC-18).** The request span logs a
+  path with download / share / ingest tokens redacted and no query string;
+  Quick Share log lines carry a non-reversible `token_ref` instead of the
+  token; the WebSocket auth path no longer logs its query string.
+- **Outbound download links are not burned by the wrong caller (SEC-21).** The
+  owner check runs before the token is consumed, and the file is decrypted
+  before the token is cleared, so a `403` or a Vault failure leaves the link
+  usable. The audit event records the actual caller.
+- **Files too large to scan are refused in block mode (SEC-13).**
+  `Skipped { reason: "oversize" }` now follows `STRATA_AV_FAIL_MODE` like an
+  engine error. The Compose default `STRATA_AV_MAX_SCAN_SIZE` was 100 MiB
+  against a 500 MiB upload cap; it is now 500 MiB, and the scan timeout
+  default matches the code (120 s).
+- **Browser-session VNC listens on loopback only (SEC-04).** Xvnc runs with
+  `-localhost -nolisten tcp`; the in-process session engine is its only
+  client. `STRATA_WEB_VNC_HOST` is removed.
+- **Login limiter gaps closed (SEC-19).** Attempts are reserved before any
+  password work, so concurrent guesses cannot all pass the limit; password
+  change counts its own attempts; a full limiter map refuses new keys instead
+  of clearing every live limit.
+
+### Performance / build
+
+- **Release profile now applies (PERF-17).** `lto`, `codegen-units = 1` and
+  `strip` moved to the workspace root — Cargo ignored them in
+  `backend/Cargo.toml`. Expect longer release builds.
+- **Docker dependency cache works again (PERF-17).** The stub stage now
+  includes `strata-session` and the vendored forks, uses `--locked`, and no
+  longer hides its errors with `|| true`.
+- **Vault provisioning uses the shared, timeout-bounded HTTP client
+  (PERF-19).**
+
 ## [2.2.0] — 2026-09-25
 
 ### Minor release — the admin console is rebuilt for estate-scale privileged access: a fleet manager for connections, a folder tree, a risk-aware role editor, and one notification system with a credential-lease manager

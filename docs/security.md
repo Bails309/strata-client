@@ -346,7 +346,7 @@ All admin API endpoints enforce fine-grained permission checks beyond the `requi
 | ---------- | ----------- | -------------- | ------------------ |
 | `can_manage_system` | `check_system_permission`, and accepted by every other `check_*` helper | System settings, Vault, SSO/OIDC, roles **and role mappings** (create, update, delete, assign connections and folders), health, metrics, certificates, Safeguard, DMZ links. Super-admin: passes every other admin check. | Critical |
 | `can_manage_connections` | `check_connection_management_permission`; `can_access_all_connections()` | Connection and folder CRUD, host-key and certificate discovery, on-demand probe, admin tags, AD sync, Kerberos realms — **and opening every connection** regardless of role mappings. | Critical |
-| `can_manage_users` | `check_user_management_permission` | User create, update, delete, restore and password reset — **including `role_id`**, so a holder can move any user, themselves included, into any role. See *Known limitation* below. | Critical |
+| `can_manage_users` | `check_user_management_permission`, then `authorise_user_target` / `authorise_role_grant` | User create, update, delete, restore and password reset. Without `can_manage_system` the holder may only assign roles, and act on users whose roles, grant nothing the holder lacks; may not act on their own account; and may not exempt a user from outbound Quick Share approval. The last active system administrator cannot be demoted or deleted. | Critical |
 | `can_view_audit_logs` | `check_audit_permission` | Audit log listing and export. | Elevated |
 | `can_view_sessions` | `check_session_permission` | Lists, observes (NVR, with rewind) and terminates **every** active session; lists, streams and downloads every recording. Not limited to the holder's own sessions — the pre-v2.2.0 dialog label *"View own sessions"* was wrong. | Elevated |
 | `can_create_sharing_profiles` | inline check in [`routes/share.rs`](../backend/src/routes/share.rs) | Generating live-session share links. | Elevated |
@@ -383,12 +383,9 @@ it was.
 
 **Known limitations, recorded rather than changed in v2.2.0:**
 
-- **`can_manage_users` is equivalent to super-admin.** `PUT
-  /api/admin/users/{id}` accepts `role_id` under
-  `check_user_management_permission` alone, with no check that the actor
-  holds every permission of the target role or that the target is not the
-  actor. A holder can therefore promote themselves to `admin`. Treat the flag
-  as Critical until role assignment is constrained.
+- ~~**`can_manage_users` is equivalent to super-admin.**~~ Fixed after
+  v2.2.0: delegated user managers are bounded by their own permissions (see
+  the table above).
 - **`can_view_sessions` is broader in the API than in the UI.** It was
   introduced as *own-session* access, and the SPA's Sessions page still shows
   a holder only their own sessions, but `check_session_permission` gates the

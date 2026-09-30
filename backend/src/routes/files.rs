@@ -237,7 +237,7 @@ pub async fn upload(
     tracing::info!(
         user = %user.username,
         session = %session_id,
-        token = %meta.token,
+        token_ref = %token_ref(&meta.token),
         filename = %meta.filename,
         size = meta.size,
         "File uploaded to temp CDN"
@@ -472,7 +472,7 @@ pub async fn delete_file(
             requester = %user.username,
             requester_id = %user.id,
             owner_id = %meta.user_id,
-            token = %token,
+            token_ref = %token_ref(&token),
             "Quick Share delete refused — caller is not the file owner and has no admin permission"
         );
         return Err(AppError::Forbidden);
@@ -482,12 +482,22 @@ pub async fn delete_file(
 
     tracing::info!(
         user = %user.username,
-        token = %token,
+        token_ref = %token_ref(&token),
         filename = %meta.filename,
         "File deleted from temp CDN"
     );
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Non-reversible handle for correlating a download token across log lines.
+fn token_ref(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(token.as_bytes())
+        .iter()
+        .take(6)
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[cfg(test)]

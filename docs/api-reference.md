@@ -808,7 +808,7 @@ All role endpoints require `can_manage_system`. The permission column below stat
 | ----- | ---- | --------------- |
 | `description` | string | Free-text purpose of the role, trimmed, at most 500 characters. Empty string when unset. **(v2.2.0, migration 090)** |
 | `can_manage_system` | boolean | Super-admin: settings, Vault, SSO, roles and role mappings; accepted by every other permission check |
-| `can_manage_users` | boolean | User create / update / delete / restore / password reset, **including changing any user's `role_id`** |
+| `can_manage_users` | boolean | User create / update / delete / restore / password reset. Without `can_manage_system`: only roles, and users, that grant nothing the caller lacks (`403` otherwise); never the caller's own account; cannot set `outbound_share_requires_approval: false`. Demoting or deleting the last active system administrator returns `400`. |
 | `can_manage_connections` | boolean | Connection and folder CRUD, discovery, probe, tags, AD sync, Kerberos — and opening **every** connection regardless of mappings |
 | `can_view_audit_logs` | boolean | Audit log listing and export |
 | `can_view_sessions` | boolean | List, observe (NVR) and terminate **every** active session; list, stream and download every recording |

@@ -3,10 +3,10 @@
 //! Handles first-time initialization (operator init), unseal,
 //! enabling the Transit secrets engine, and creating the encryption key.
 
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
+use crate::services::http_client::default_client;
 
 /// Result of `vault operator init` with a single unseal key.
 #[derive(Debug, Clone)]
@@ -54,7 +54,7 @@ pub async fn health(address: &str) -> Result<(bool, bool), AppError> {
         "{}/v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200",
         address.trim_end_matches('/')
     );
-    let resp: HealthResponse = Client::new()
+    let resp: HealthResponse = default_client()
         .get(&url)
         .send()
         .await
@@ -69,7 +69,7 @@ pub async fn health(address: &str) -> Result<(bool, bool), AppError> {
 /// Initialize a fresh Vault instance with 1 unseal key / threshold 1.
 pub async fn init(address: &str) -> Result<VaultInitResult, AppError> {
     let url = format!("{}/v1/sys/init", address.trim_end_matches('/'));
-    let client = Client::new();
+    let client = default_client();
 
     let resp = client
         .put(&url)
@@ -101,7 +101,7 @@ pub async fn init(address: &str) -> Result<VaultInitResult, AppError> {
 pub async fn unseal(address: &str, key: &str) -> Result<(), AppError> {
     let url = format!("{}/v1/sys/unseal", address.trim_end_matches('/'));
 
-    let resp = Client::new()
+    let resp = default_client()
         .put(&url)
         .json(&UnsealRequest {
             key: key.to_string(),
@@ -131,7 +131,7 @@ pub async fn unseal(address: &str, key: &str) -> Result<(), AppError> {
 
 /// Enable the Transit secrets engine (idempotent — ignores "already mounted" errors).
 pub async fn enable_transit(address: &str, token: &str) -> Result<(), AppError> {
-    let client = Client::new();
+    let client = default_client();
 
     // Check if transit is already mounted
     let mounts_url = format!("{}/v1/sys/mounts", address.trim_end_matches('/'));
@@ -188,7 +188,7 @@ pub async fn create_transit_key(
         key_name
     );
 
-    let resp = Client::new()
+    let resp = default_client()
         .post(&url)
         .header("X-Vault-Token", token)
         .send()

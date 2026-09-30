@@ -33,6 +33,36 @@ pub struct RoleRow {
     pub can_use_quick_share_outbound: bool,
 }
 
+impl RoleRow {
+    /// True when `actor` already holds every permission this role grants,
+    /// i.e. a delegated administrator could not gain authority through it.
+    pub fn is_within(&self, actor: &crate::services::middleware::AuthUser) -> bool {
+        if actor.can_manage_system {
+            return true;
+        }
+        let grants = [
+            (self.can_manage_system, actor.can_manage_system),
+            (self.can_manage_users, actor.can_manage_users),
+            (self.can_manage_connections, actor.can_manage_connections),
+            (self.can_view_audit_logs, actor.can_view_audit_logs),
+            (self.can_create_users, actor.can_create_users),
+            (self.can_create_user_groups, actor.can_create_user_groups),
+            (self.can_create_connections, actor.can_create_connections),
+            (
+                self.can_create_sharing_profiles,
+                actor.can_create_sharing_profiles,
+            ),
+            (self.can_view_sessions, actor.can_view_sessions),
+            (self.can_use_quick_share, actor.can_use_quick_share),
+            (
+                self.can_use_quick_share_outbound,
+                actor.can_use_quick_share_outbound,
+            ),
+        ];
+        grants.iter().all(|(role, held)| !role || *held)
+    }
+}
+
 #[derive(Deserialize, Debug)]
 pub struct CreateRoleRequest {
     pub name: String,
@@ -164,6 +194,15 @@ pub async fn update(
     .bind(description)
     .fetch_one(pool)
     .await?;
+    Ok(row)
+}
+
+pub async fn find_by_id(pool: &Pool<Postgres>, id: Uuid) -> Result<Option<RoleRow>, AppError> {
+    let row: Option<RoleRow> =
+        sqlx::query_as(&format!("SELECT {SELECT_COLUMNS} FROM roles WHERE id = $1"))
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
     Ok(row)
 }
 
@@ -306,6 +345,68 @@ mod tests {
         }
         assert_eq!(v["name"], json!("admin"));
         assert_eq!(v["description"], json!("Full access"));
+    }
+
+    fn role(system: bool, users: bool, audit: bool) -> RoleRow {
+        RoleRow {
+            id: Uuid::nil(),
+            name: "r".into(),
+            description: String::new(),
+            can_manage_system: system,
+            can_manage_users: users,
+            can_manage_connections: false,
+            can_view_audit_logs: audit,
+            can_create_users: false,
+            can_create_user_groups: false,
+            can_create_connections: false,
+            can_create_sharing_profiles: false,
+            can_view_sessions: false,
+            can_use_quick_share: false,
+            can_use_quick_share_outbound: false,
+        }
+    }
+
+    fn actor(system: bool, users: bool, audit: bool) -> crate::services::middleware::AuthUser {
+        crate::services::middleware::AuthUser {
+            id: Uuid::nil(),
+            sub: "s".into(),
+            username: "u".into(),
+            full_name: None,
+            role: "r".into(),
+            can_manage_system: system,
+            can_manage_users: users,
+            can_manage_connections: false,
+            can_view_audit_logs: audit,
+            can_create_users: false,
+            can_create_user_groups: false,
+            can_create_connections: false,
+            can_create_sharing_profiles: false,
+            can_view_sessions: false,
+            can_use_quick_share: false,
+            can_use_quick_share_outbound: false,
+        }
+    }
+
+    #[test]
+    fn delegated_manager_cannot_assign_system_role() {
+        assert!(!role(true, false, false).is_within(&actor(false, true, false)));
+    }
+
+    #[test]
+    fn delegated_manager_cannot_assign_permission_it_lacks() {
+        assert!(!role(false, false, true).is_within(&actor(false, true, false)));
+    }
+
+    #[test]
+    fn delegated_manager_can_assign_equal_or_lesser_role() {
+        let manager = actor(false, true, true);
+        assert!(role(false, false, false).is_within(&manager));
+        assert!(role(false, true, true).is_within(&manager));
+    }
+
+    #[test]
+    fn system_admin_can_assign_any_role() {
+        assert!(role(true, true, true).is_within(&actor(true, false, false)));
     }
 
     #[test]

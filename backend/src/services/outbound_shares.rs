@@ -23,8 +23,8 @@
 //!    `outbound_share_approvers`) can flip a `Pending` row to `Approved` or
 //!    `Denied`. Denial purges the blob and clears the sealed key columns;
 //!    approval mints a one-shot `download_token`.
-//! 3. `consume_download_token()` — atomic; row is locked, sealed key is
-//!    returned for the caller to `vault::unseal`, then status flips to
+//! 3. `consume_download_token()` — atomic; row is locked, the caller is
+//!    authorised and the blob unsealed, then status flips to
 //!    `Downloaded` and the token is cleared so the link is genuinely
 //!    one-shot.
 //! 4. `purge_expired()` — periodic worker (hourly). Two-phase sweep:
@@ -471,21 +471,21 @@ pub async fn decide(
 
 // ── Download ─────────────────────────────────────────────────────────
 
-/// Material returned by [`consume_download_token`]. Caller is responsible
-/// for `vault::unseal` and streaming the plaintext to the client.
+/// Result of [`consume_download_token`]: the share row plus decrypted bytes.
 pub struct DownloadMaterial {
     pub share: OutboundShare,
-    pub ciphertext: Vec<u8>,
-    pub sealed_dek: Vec<u8>,
-    pub nonce: Vec<u8>,
+    pub plaintext: Vec<u8>,
 }
 
 /// Atomically consume a one-shot download token. The row is locked, the
-/// sealed material is returned, and the token is cleared so a second
-/// request for the same URL is rejected.
+/// caller is authorised, the file is decrypted, and only then is the token
+/// cleared — a refused caller or a decryption failure leaves it usable.
 pub async fn consume_download_token(
     pool: &Pool<Postgres>,
+    vault_cfg: &VaultConfig,
     token: &str,
+    caller_id: Uuid,
+    caller_is_admin: bool,
 ) -> Result<DownloadMaterial, AppError> {
     let mut tx = pool.begin().await?;
 
@@ -506,6 +506,9 @@ pub async fn consume_download_token(
 
     let row = row.ok_or_else(|| AppError::NotFound("Invalid or expired token".into()))?;
 
+    if row.requester_user_id != caller_id && !caller_is_admin {
+        return Err(AppError::Forbidden);
+    }
     if row.status != OutboundShareStatus::Approved.as_str() {
         return Err(AppError::Forbidden);
     }
@@ -532,6 +535,7 @@ pub async fn consume_download_token(
     let ciphertext = tokio::fs::read(&storage_path)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to read staged blob: {e}")))?;
+    let plaintext = vault::unseal(vault_cfg, &sealed_dek, &ciphertext, &nonce).await?;
 
     sqlx::query(
         "UPDATE outbound_shares
@@ -549,10 +553,11 @@ pub async fn consume_download_token(
 
     let _ = audit::log(
         pool,
-        Some(row.requester_user_id),
+        Some(caller_id),
         "outbound_share.downloaded",
         &serde_json::json!({
             "share_id": row.id,
+            "requester_user_id": row.requester_user_id,
             "filename": row.filename,
             "size": row.size,
         }),
@@ -561,9 +566,7 @@ pub async fn consume_download_token(
 
     Ok(DownloadMaterial {
         share: row,
-        ciphertext,
-        sealed_dek,
-        nonce,
+        plaintext,
     })
 }
 

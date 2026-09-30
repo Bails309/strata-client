@@ -84,10 +84,6 @@ services:
       - STRATA_WEB_XVNC_PATH=/usr/bin/Xvnc
       - STRATA_WEB_CHROMIUM_PATH=/usr/bin/chromium
       - STRATA_WEB_LOGIN_SCRIPTS_DIR=/var/lib/strata/web-login-scripts
-      # Hostname the session engine uses to reach the spawned Xvnc
-      # listener. Must be the backend's service name on the docker
-      # network.
-      - STRATA_WEB_VNC_HOST=${STRATA_WEB_VNC_HOST:-backend}
       # VDI (docker-spawned desktops) — DISABLED at this layer; flip
       # to true via docker-compose.vdi.yml which also mounts docker.sock.
       - STRATA_VDI_ENABLED=${STRATA_VDI_ENABLED:-false}
@@ -104,8 +100,10 @@ services:
       - STRATA_AV_BACKEND=${STRATA_AV_BACKEND:-off}
       - STRATA_AV_FAIL_MODE=${STRATA_AV_FAIL_MODE:-block}
       - STRATA_AV_CLAMD_ADDR=${STRATA_AV_CLAMD_ADDR:-clamav:3310}
-      - STRATA_AV_MAX_SCAN_SIZE=${STRATA_AV_MAX_SCAN_SIZE:-104857600}
-      - STRATA_AV_TIMEOUT_MS=${STRATA_AV_TIMEOUT_MS:-60000}
+      # Must cover the 500 MB upload cap: oversize files are refused
+      # in block mode rather than accepted unscanned.
+      - STRATA_AV_MAX_SCAN_SIZE=${STRATA_AV_MAX_SCAN_SIZE:-524288000}
+      - STRATA_AV_TIMEOUT_MS=${STRATA_AV_TIMEOUT_MS:-120000}
       - STRATA_AV_COMMAND=${STRATA_AV_COMMAND:-}
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/api/health || exit 1"]

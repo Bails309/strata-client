@@ -397,7 +397,7 @@ pub async fn require_auth(
         if let Err(e) = check_ws_origin(req.headers()) {
             tracing::warn!(
                 "Rejecting WS upgrade {} due to Origin check: {}",
-                req.uri().path(),
+                crate::routes::loggable_path(req.uri().path()),
                 e
             );
             return Err(AppError::Forbidden);
@@ -425,13 +425,12 @@ pub async fn require_auth(
                 return None;
             }
             let query = req.uri().query().unwrap_or_default();
-            tracing::debug!("Searching for token in query: {}", query);
             extract_token_from_query(query)
         })
         .ok_or_else(|| {
             tracing::warn!(
                 "Auth failed: Missing token. Path: {}, WS: {}",
-                req.uri().path(),
+                crate::routes::loggable_path(req.uri().path()),
                 is_ws_upgrade
             );
             AppError::Auth("Missing or invalid Authorization header".into())

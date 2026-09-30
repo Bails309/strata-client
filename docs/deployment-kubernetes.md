@@ -420,8 +420,8 @@ Add the AV variables to the backend Deployment's `env:`:
 - { name: STRATA_AV_FAIL_MODE,      value: block }      # default; reject on scanner error
 - { name: STRATA_AV_CLAMD_HOST,     value: strata-clamav }     # the Service DNS name above
 - { name: STRATA_AV_CLAMD_PORT,     value: "3310" }
-- { name: STRATA_AV_MAX_SCAN_SIZE,  value: "104857600" }  # 100 MiB
-- { name: STRATA_AV_TIMEOUT_MS,     value: "30000" }
+- { name: STRATA_AV_MAX_SCAN_SIZE,  value: "524288000" }  # 500 MiB; keep >= upload cap
+- { name: STRATA_AV_TIMEOUT_MS,     value: "120000" }
 ```
 
 ### NetworkPolicy — restrict clamd access to backend pods only

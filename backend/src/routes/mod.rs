@@ -20,7 +20,7 @@ use axum::{
 use axum_prometheus::PrometheusMetricLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
-use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
+use tower_http::trace::{DefaultOnRequest, DefaultOnResponse, TraceLayer};
 
 use crate::services::app_state::SharedState;
 use crate::services::middleware::{require_admin, require_auth, require_csrf};
@@ -601,15 +601,50 @@ pub fn build_router(state: SharedState) -> Router {
         ))
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(
-                    DefaultMakeSpan::new()
-                        .level(tracing::Level::INFO)
-                        .include_headers(false),
-                )
+                .make_span_with(|req: &axum::http::Request<axum::body::Body>| {
+                    tracing::info_span!(
+                        "request",
+                        method = %req.method(),
+                        path = %loggable_path(req.uri().path()),
+                        version = ?req.version(),
+                    )
+                })
                 .on_request(DefaultOnRequest::new().level(tracing::Level::INFO))
                 .on_response(DefaultOnResponse::new().level(tracing::Level::INFO)),
         )
         .with_state(state)
+}
+
+/// Request path safe to log: capability tokens embedded in the path are
+/// redacted. Query strings are never passed in.
+pub(crate) fn loggable_path(path: &str) -> String {
+    // Longer prefixes first: `/api/files/delete/` must win over `/api/files/`.
+    const CAPABILITY_PREFIXES: [&str; 7] = [
+        "/api/outbound-shares/ingest/",
+        "/api/user/outbound-shares/download/",
+        "/api/user/shared/copilot/",
+        "/api/shared/tunnel/",
+        "/api/shared/copilot/",
+        "/api/files/delete/",
+        "/api/files/",
+    ];
+    for prefix in CAPABILITY_PREFIXES {
+        let Some(rest) = path.strip_prefix(prefix) else {
+            continue;
+        };
+        let (segment, tail) = match rest.split_once('/') {
+            Some((s, t)) => (s, Some(t)),
+            None => (rest, None),
+        };
+        if segment.is_empty() || matches!(segment, "upload" | "session") {
+            return path.to_string();
+        }
+        return match tail {
+            Some(t) => format!("{prefix}:redacted/{t}"),
+            None => format!("{prefix}:redacted"),
+        };
+    }
+    path.to_string()
 }
 
 /// Build CORS layer from STRATA_ALLOWED_ORIGINS env var.
@@ -684,6 +719,33 @@ fn build_cors_layer() -> CorsLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loggable_path_redacts_capability_tokens() {
+        assert_eq!(loggable_path("/api/files/abc123"), "/api/files/:redacted");
+        assert_eq!(
+            loggable_path("/api/files/delete/abc123"),
+            "/api/files/delete/:redacted"
+        );
+        assert_eq!(
+            loggable_path("/api/user/shared/copilot/tok/grant/42"),
+            "/api/user/shared/copilot/:redacted/grant/42"
+        );
+        assert_eq!(
+            loggable_path("/api/outbound-shares/ingest/tok"),
+            "/api/outbound-shares/ingest/:redacted"
+        );
+    }
+
+    #[test]
+    fn loggable_path_keeps_non_capability_paths() {
+        assert_eq!(loggable_path("/api/files/upload"), "/api/files/upload");
+        assert_eq!(
+            loggable_path("/api/files/session/s1"),
+            "/api/files/session/s1"
+        );
+        assert_eq!(loggable_path("/api/admin/users"), "/api/admin/users");
+    }
 
     /// The CORS layer builder must not panic regardless of env var state.
     /// We cannot inspect the internal origin list, but we can verify

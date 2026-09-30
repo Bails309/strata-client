@@ -214,10 +214,5 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # settles on a successor we'll migrate then.
 serde_yaml = "0.9"
 
-[profile.release]
-lto = true
-codegen-units = 1
-strip = true
-
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

@@ -65,13 +65,8 @@ use super::web_session::{
 // Public types
 // ─────────────────────────────────────────────────────────────────────
 
-/// Where guacd should connect to reach the spawned kiosk's RFB
-/// listener. Host is the backend container's service name on the
-/// docker network (default `backend`, override via
-/// `STRATA_WEB_VNC_HOST`); port is `5900 + display`. guacd runs in
-/// a sibling container on the same `guac-internal` bridge network,
-/// so it cannot reach the backend's `127.0.0.1` — we must give it a
-/// hostname that resolves on the docker DNS plane.
+/// Where the in-process session engine connects to reach the spawned
+/// kiosk's RFB listener: always loopback, since Xvnc binds nowhere else.
 #[derive(Debug, Clone)]
 pub struct WebEndpoint {
     pub host: String,
@@ -457,8 +452,7 @@ impl WebRuntimeRegistry {
             display,
             cdp_port,
             endpoint: WebEndpoint {
-                host: std::env::var("STRATA_WEB_VNC_HOST")
-                    .unwrap_or_else(|_| "backend".to_string()),
+                host: "127.0.0.1".to_string(),
                 port: vnc_port_for_display(display),
             },
             started_at: chrono::Utc::now(),

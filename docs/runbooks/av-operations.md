@@ -301,9 +301,10 @@ docker compose exec postgres-local \
 If the distribution skews toward the upper buckets (>2 s),
 consider:
 
-1. Raising `STRATA_AV_MAX_SCAN_SIZE` *downward* so oversize files
-   skip the scan (note: this leaves large files unscanned — only
-   do this if your threat model accepts it).
+1. Lowering `STRATA_AV_MAX_SCAN_SIZE` so oversize files are not
+   scanned (note: under `STRATA_AV_FAIL_MODE=block` they are then
+   refused; under `allow` they are accepted unscanned — only do
+   this if your threat model accepts it).
 2. Running a second ClamAV replica (see
    [deployment-kubernetes.md → high-availability note](../deployment-kubernetes.md#antivirus-scanning-sidecar-v1120)).
 3. Switching to a commercial engine via `command` (typically

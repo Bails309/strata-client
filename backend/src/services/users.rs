@@ -104,21 +104,64 @@ pub async fn restore(pool: &Pool<Postgres>, id: Uuid) -> Result<bool, AppError> 
 
 /// Soft-delete a user. Returns `true` if a row was updated.
 pub async fn soft_delete(pool: &Pool<Postgres>, id: Uuid) -> Result<bool, AppError> {
+    let mut tx = begin_admin_change(pool).await?;
+    let before = count_system_admins(&mut tx).await?;
     let result =
         sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL")
             .bind(id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
-    Ok(result.rows_affected() > 0)
+    if result.rows_affected() == 0 {
+        return Ok(false);
+    }
+    ensure_system_admin_remains(&mut tx, before).await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
-/// Check whether a role with the given id exists.
-pub async fn role_exists(pool: &Pool<Postgres>, role_id: Uuid) -> Result<bool, AppError> {
-    let found: Option<Uuid> = sqlx::query_scalar("SELECT id FROM roles WHERE id = $1")
-        .bind(role_id)
+/// Role of a user, including soft-deleted ones.
+pub async fn role_id_of(pool: &Pool<Postgres>, id: Uuid) -> Result<Option<Uuid>, AppError> {
+    let role: Option<Uuid> = sqlx::query_scalar("SELECT role_id FROM users WHERE id = $1")
+        .bind(id)
         .fetch_optional(pool)
         .await?;
-    Ok(found.is_some())
+    Ok(role)
+}
+
+// Serialises role changes and deletions so concurrent requests cannot
+// jointly remove the last active system administrator.
+async fn begin_admin_change(
+    pool: &Pool<Postgres>,
+) -> Result<sqlx::Transaction<'static, Postgres>, AppError> {
+    const USER_ADMIN_LOCK_KEY: i64 = 0x5354_5241_5553_5231; // "STRAUSR1"
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(USER_ADMIN_LOCK_KEY)
+        .execute(&mut *tx)
+        .await?;
+    Ok(tx)
+}
+
+async fn count_system_admins(tx: &mut sqlx::Transaction<'_, Postgres>) -> Result<i64, AppError> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM users u JOIN roles r ON u.role_id = r.id
+         WHERE u.deleted_at IS NULL AND r.can_manage_system",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(n)
+}
+
+async fn ensure_system_admin_remains(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    before: i64,
+) -> Result<(), AppError> {
+    if before > 0 && count_system_admins(tx).await? == 0 {
+        return Err(AppError::Validation(
+            "At least one active system administrator must remain".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Stamp `users.last_login_at` with the current timestamp.
@@ -137,12 +180,19 @@ pub async fn update_last_login(pool: &Pool<Postgres>, id: Uuid) -> Result<(), Ap
 
 /// Update the role assignment for a live user. Returns `true` if updated.
 pub async fn set_role(pool: &Pool<Postgres>, id: Uuid, role_id: Uuid) -> Result<bool, AppError> {
+    let mut tx = begin_admin_change(pool).await?;
+    let before = count_system_admins(&mut tx).await?;
     let result = sqlx::query("UPDATE users SET role_id = $1 WHERE id = $2 AND deleted_at IS NULL")
         .bind(role_id)
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
-    Ok(result.rows_affected() > 0)
+    if result.rows_affected() == 0 {
+        return Ok(false);
+    }
+    ensure_system_admin_remains(&mut tx, before).await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// Toggle the per-user Safeguard JIT opt-in flag. Returns `true` when a

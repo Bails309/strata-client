@@ -578,6 +578,10 @@ pub fn build_router(state: SharedState) -> Router {
     public
         .merge(admin)
         .merge(user_routes)
+        // Inner to `verify_edge_headers` so a verified DMZ client IP wins.
+        .layer(middleware::from_fn(
+            crate::services::client_ip::resolve_client_ip,
+        ))
         // W3-11 — inject/propagate `x-request-id` into a task-local so
         // outbound HTTP calls can stamp the same id on downstream
         // requests. `inject_request_id` runs *before* TraceLayer so the

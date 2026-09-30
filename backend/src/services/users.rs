@@ -106,11 +106,13 @@ pub async fn restore(pool: &Pool<Postgres>, id: Uuid) -> Result<bool, AppError> 
 pub async fn soft_delete(pool: &Pool<Postgres>, id: Uuid) -> Result<bool, AppError> {
     let mut tx = begin_admin_change(pool).await?;
     let before = count_system_admins(&mut tx).await?;
-    let result =
-        sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+    let result = sqlx::query(
+        "UPDATE users SET deleted_at = now(), sessions_valid_after = now()
+         WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
     if result.rows_affected() == 0 {
         return Ok(false);
     }
@@ -303,18 +305,51 @@ pub async fn auth_type_of(pool: &Pool<Postgres>, id: Uuid) -> Result<Option<Stri
     Ok(auth_type)
 }
 
-/// Persist a new password hash for the given user.
+/// Persist a new password hash for the given user and sign out every
+/// existing session.
 pub async fn set_password_hash(
     pool: &Pool<Postgres>,
     id: Uuid,
     hash: &str,
 ) -> Result<(), AppError> {
-    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+    sqlx::query("UPDATE users SET password_hash = $1, sessions_valid_after = now() WHERE id = $2")
         .bind(hash)
         .bind(id)
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Unix second before which the user's tokens are invalid, if any.
+pub async fn sessions_valid_after(
+    pool: &Pool<Postgres>,
+    id: Uuid,
+) -> Result<Option<i64>, AppError> {
+    let cutoff: Option<Option<i64>> = sqlx::query_scalar(
+        "SELECT FLOOR(EXTRACT(EPOCH FROM sessions_valid_after))::BIGINT FROM users WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(cutoff.flatten())
+}
+
+/// Whether a session opened at `opened_at` may continue: the user still
+/// exists and has not been signed out since.
+pub async fn session_still_valid(
+    pool: &Pool<Postgres>,
+    id: Uuid,
+    opened_at: chrono::DateTime<chrono::Utc>,
+) -> Result<bool, AppError> {
+    let ok: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL
+           AND (sessions_valid_after IS NULL OR sessions_valid_after <= $2))",
+    )
+    .bind(id)
+    .bind(opened_at)
+    .fetch_one(pool)
+    .await?;
+    Ok(ok)
 }
 
 /// Return `(terms_accepted_at, terms_accepted_version)` for the user.
@@ -477,6 +512,10 @@ pub struct SsoUserRow {
     pub username: String,
     pub role_name: String,
     pub sub: Option<String>,
+    /// Issuer that asserted `sub`; NULL for links made before migration 093.
+    pub sso_issuer: Option<String>,
+    /// A local password is set, so the account is not SSO-only.
+    pub has_password: bool,
     #[allow(dead_code)]
     pub full_name: Option<String>,
 }
@@ -487,7 +526,8 @@ pub async fn find_sso_by_email(
     email: &str,
 ) -> Result<Option<SsoUserRow>, AppError> {
     let row = sqlx::query_as(
-        "SELECT u.id, u.username, r.name as role_name, u.sub, u.full_name
+        "SELECT u.id, u.username, r.name as role_name, u.sub, u.sso_issuer,
+                (u.password_hash IS NOT NULL) AS has_password, u.full_name
          FROM users u JOIN roles r ON u.role_id = r.id
          WHERE LOWER(u.email) = LOWER($1) AND u.deleted_at IS NULL",
     )
@@ -497,21 +537,29 @@ pub async fn find_sso_by_email(
     Ok(row)
 }
 
-/// Link the user to an OIDC subject on first SSO login. `full_name` is
-/// only written if currently NULL.
+/// Link the user to an OIDC subject on first SSO login, or bind a legacy
+/// link to its issuer. Compare-and-set: returns `false` if the row was
+/// linked to a different identity concurrently. `full_name` is only written
+/// if currently NULL.
 pub async fn link_sso_subject(
     pool: &Pool<Postgres>,
     id: Uuid,
     sub: &str,
+    issuer: &str,
     full_name: Option<&str>,
-) -> Result<(), AppError> {
-    sqlx::query("UPDATE users SET sub = $1, full_name = COALESCE(full_name, $2) WHERE id = $3")
-        .bind(sub)
-        .bind(full_name)
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(())
+) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "UPDATE users SET sub = $1, sso_issuer = $2, full_name = COALESCE(full_name, $3)
+         WHERE id = $4 AND deleted_at IS NULL
+           AND (sub IS NULL OR (sub = $1 AND sso_issuer IS NULL))",
+    )
+    .bind(sub)
+    .bind(issuer)
+    .bind(full_name)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 #[cfg(test)]

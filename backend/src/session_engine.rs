@@ -892,6 +892,7 @@ pub async fn run_native(
     let mut watchdog = tokio::time::interval(WATCHDOG_INTERVAL);
     watchdog.tick().await; // consume the immediate first tick
     let started_at = tokio::time::Instant::now();
+    let opened_at = chrono::Utc::now();
     let shutdown = shutdown_token();
 
     let reason = loop {
@@ -917,10 +918,26 @@ pub async fn run_native(
             }
 
             _ = watchdog.tick() => {
-                if let Some(reason) = watchdog_verdict(
-                    watchdog_token.as_deref(),
-                    started_at,
-                ) {
+                let mut verdict = watchdog_verdict(watchdog_token.as_deref(), started_at);
+                if verdict.is_none() {
+                    if let Some(ctx) = nvr.as_ref() {
+                        // A database hiccup must not drop a live session.
+                        let valid = crate::services::users::session_still_valid(
+                            &ctx.db_pool,
+                            user_id,
+                            opened_at,
+                        )
+                        .await
+                        .unwrap_or(true);
+                        if !valid {
+                            verdict = Some(WatchdogVerdict {
+                                client: "This session was closed because your account was signed out.",
+                                audit: "account_signed_out",
+                            });
+                        }
+                    }
+                }
+                if let Some(reason) = verdict {
                     if let Some(ctx) = nvr.as_ref() {
                         let _ = crate::services::audit::log(
                             &ctx.db_pool,

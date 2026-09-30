@@ -52,6 +52,14 @@ struct UserPermissionsRow {
     pub can_view_sessions: bool,
     pub can_use_quick_share: bool,
     pub can_use_quick_share_outbound: bool,
+    /// Unix second before which this user's tokens are invalid.
+    pub sessions_valid_after: Option<i64>,
+}
+
+impl UserPermissionsRow {
+    fn token_still_valid(&self, iat: i64) -> bool {
+        self.sessions_valid_after.is_none_or(|cutoff| iat >= cutoff)
+    }
 }
 
 impl AuthUser {
@@ -470,6 +478,7 @@ async fn try_local_jwt(
         #[allow(dead_code)]
         role: String,
         iss: String,
+        iat: i64,
         /// Token type: "access" or "refresh". Only access tokens are accepted
         /// for API authentication. Defaults to "access" for backward
         /// compatibility with tokens issued before the refresh-token feature.
@@ -521,7 +530,8 @@ async fn try_local_jwt(
         "SELECT u.id, u.username, u.full_name, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
-                r.can_use_quick_share, r.can_use_quick_share_outbound, r.can_create_sharing_profiles, r.can_view_sessions
+                r.can_use_quick_share, r.can_use_quick_share_outbound, r.can_create_sharing_profiles, r.can_view_sessions,
+                FLOOR(EXTRACT(EPOCH FROM u.sessions_valid_after))::BIGINT AS sessions_valid_after
          FROM users u JOIN roles r ON u.role_id = r.id
          WHERE u.id = $1 AND u.deleted_at IS NULL",
     )
@@ -532,6 +542,9 @@ async fn try_local_jwt(
 
     let user =
         row.ok_or_else(|| AppError::Auth("User no longer exists or has been deleted".into()))?;
+    if !user.token_still_valid(claims.iat) {
+        return Err(AppError::Auth("Session has been signed out".into()));
+    }
 
     Ok(Some(AuthUser {
         id: user.id,
@@ -574,11 +587,14 @@ async fn validate_oidc_token(token: &str, db: &crate::db::Database) -> Result<Au
         "SELECT u.id, u.username, u.full_name, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
-                r.can_use_quick_share, r.can_use_quick_share_outbound, r.can_create_sharing_profiles, r.can_view_sessions
+                r.can_use_quick_share, r.can_use_quick_share_outbound, r.can_create_sharing_profiles, r.can_view_sessions,
+                FLOOR(EXTRACT(EPOCH FROM u.sessions_valid_after))::BIGINT AS sessions_valid_after
          FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE u.sub = $1 AND u.deleted_at IS NULL",
+         WHERE u.sub = $1 AND u.deleted_at IS NULL
+           AND (u.sso_issuer IS NULL OR u.sso_issuer = $2)",
     )
     .bind(&claims.sub)
+    .bind(issuer_url.trim_end_matches('/'))
     .fetch_optional(&db.pool)
     .await
     .map_err(AppError::Database)?;
@@ -591,6 +607,9 @@ async fn validate_oidc_token(token: &str, db: &crate::db::Database) -> Result<Au
         tracing::debug!(sub = %claims.sub, "OIDC token validated but no active Strata user is mapped");
         AppError::Auth("Invalid or expired token".into())
     })?;
+    if !user.token_still_valid(claims.iat as i64) {
+        return Err(AppError::Auth("Session has been signed out".into()));
+    }
 
     Ok(AuthUser {
         id: user.id,

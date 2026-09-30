@@ -304,6 +304,7 @@ pub async fn ws_tunnel(
 
     // Parse extra JSONB into a HashMap of connection parameters
     let mut extra = crate::tunnel::json_to_string_map(&extra_json);
+    crate::services::connections::unseal_secret_extras(config.vault.as_ref(), &mut extra).await?;
 
     // ── Safeguard JIT branch ────────────────────────────────────────
     // When the connection is mapped to a `kind='safeguard'` credential
@@ -1157,14 +1158,9 @@ pub async fn ws_tunnel(
 
     // Resolve the originating client IP. Preference order:
     //   1. Trusted-edge-signed `x-strata-edge-client-ip` (DMZ deployments).
-    //      Verified via HMAC by the edge_header middleware and surfaced
-    //      through a task-local; this is the only attribution we can
-    //      trust end-to-end when a DMZ node fronts the backend.
-    //   2. Shared XFF / X-Real-IP helper (`try_extract_client_ip`),
-    //      gated by `STRATA_TRUST_XFF` + `STRATA_TRUSTED_PROXIES`.
-    //   3. ConnectInfo peer address — which for DMZ-originated traffic
-    //      is the docker bridge / loopback (127.0.0.1) and is therefore
-    //      the wrong value to surface to admins.
+    //   2. The IP resolved by `services::client_ip` (trusted-proxy XFF or
+    //      socket peer).
+    //   3. ConnectInfo peer address.
     let edge_ip = crate::services::edge_header::current_edge_context().map(|c| c.client_ip);
     let resolved = edge_ip
         .clone()

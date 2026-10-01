@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   owner check runs before the token is consumed, and the file is decrypted
   before the token is cleared, so a `403` or a Vault failure leaves the link
   usable. The audit event records the actual caller.
+- **Session streams are bounded per client (SEC-15).** A client may hold at
+  most 4 clipboard streams open at once, 16 MiB of clipboard data across
+  them, and a stream idle for 30 seconds is dropped. At most 16 uploads may
+  be open at once. A stream id already in use cannot be reopened, and an
+  upload the target refuses frees its id. Clipboard size is checked before
+  a blob is decoded.
 - **Files too large to scan are refused in block mode (SEC-13).**
   `Skipped { reason: "oversize" }` now follows `STRATA_AV_FAIL_MODE` like an
   engine error. The Compose default `STRATA_AV_MAX_SCAN_SIZE` was 100 MiB
@@ -217,6 +223,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds the browser open, and it stops when the last tab closes. The
   `max_web_sessions` setting is now enforced: once reached, new web
   sessions are refused with 429 before anything is launched.
+- **Session replay buffers share one memory budget (PERF-04).** Every
+  session kept up to 70 MiB of replay history regardless of how many were
+  open. All sessions now share 1 GiB by default
+  (`STRATA_NVR_MEMORY_BUDGET_MB`); each holds up to an equal share of it,
+  never more than the previous per-session limits. With many sessions open
+  each keeps less history for observers to replay.
 
 ## [2.2.0] — 2026-09-25
 

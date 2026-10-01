@@ -6,8 +6,8 @@
 //! observe them by replaying the buffer + subscribing to the live broadcast.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -36,6 +36,60 @@ const BROADCAST_CAPACITY: usize = 8192;
 
 /// Maximum number of concurrent sessions allowed.
 const MAX_SESSIONS: usize = 500;
+
+/// Default for `STRATA_NVR_MEMORY_BUDGET_MB`.
+const DEFAULT_NVR_BUDGET_MB: usize = 1024;
+
+// ── Process-wide memory budget (PERF-04) ───────────────────────────
+
+/// Bytes all session buffers together may hold. Each buffer is held to an
+/// equal share of it, below its own caps, so the total stays bounded however
+/// many sessions are open; with few sessions the per-session caps apply.
+pub struct NvrBudget {
+    limit: usize,
+    used: AtomicUsize,
+    buffers: AtomicUsize,
+}
+
+impl NvrBudget {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            used: AtomicUsize::new(0),
+            buffers: AtomicUsize::new(0),
+        }
+    }
+
+    #[cfg(test)]
+    fn used(&self) -> usize {
+        self.used.load(Ordering::Relaxed)
+    }
+
+    fn share(&self) -> usize {
+        self.limit / self.buffers.load(Ordering::Relaxed).max(1)
+    }
+
+    /// Ring and persistent-state caps for one buffer right now.
+    fn caps(&self) -> (usize, usize) {
+        let share = self.share();
+        let total = MAX_BUFFER_BYTES + MAX_PERSISTENT_STATE_BYTES;
+        (
+            MAX_BUFFER_BYTES.min(share.saturating_mul(MAX_BUFFER_BYTES) / total),
+            MAX_PERSISTENT_STATE_BYTES
+                .min(share.saturating_mul(MAX_PERSISTENT_STATE_BYTES) / total),
+        )
+    }
+}
+
+#[cfg_attr(test, allow(dead_code))]
+static NVR_BUDGET: LazyLock<Arc<NvrBudget>> = LazyLock::new(|| {
+    let mb = std::env::var("STRATA_NVR_MEMORY_BUDGET_MB")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|mb: &usize| *mb > 0)
+        .unwrap_or(DEFAULT_NVR_BUDGET_MB);
+    Arc::new(NvrBudget::new(mb.saturating_mul(1024 * 1024)))
+});
 
 // ── Timestamped frame ──────────────────────────────────────────────
 
@@ -107,17 +161,57 @@ pub struct SessionBuffer {
     /// screen content drawn early in the session is not lost.
     persistent_state: VecDeque<String>,
     persistent_state_bytes: usize,
+    budget: Arc<NvrBudget>,
+    /// What this buffer last reported to `budget`.
+    accounted: usize,
+}
+
+impl Drop for SessionBuffer {
+    fn drop(&mut self) {
+        self.budget
+            .used
+            .fetch_sub(self.accounted, Ordering::Relaxed);
+        self.budget.buffers.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 impl SessionBuffer {
     fn new() -> Self {
+        // Tests run in parallel; a shared budget would make each test's
+        // caps depend on how many others are running.
+        #[cfg(test)]
+        let budget = Arc::new(NvrBudget::new(DEFAULT_NVR_BUDGET_MB * 1024 * 1024));
+        #[cfg(not(test))]
+        let budget = Arc::clone(&NVR_BUDGET);
+        Self::with_budget(budget)
+    }
+
+    fn with_budget(budget: Arc<NvrBudget>) -> Self {
+        budget.buffers.fetch_add(1, Ordering::Relaxed);
         Self {
             frames: VecDeque::new(),
             total_bytes: 0,
             last_size_instruction: None,
             persistent_state: VecDeque::new(),
             persistent_state_bytes: 0,
+            budget,
+            accounted: 0,
         }
+    }
+
+    /// Bring the shared budget's tally in line with this buffer.
+    fn account(&mut self) {
+        let now = self.total_bytes + self.persistent_state_bytes;
+        if now > self.accounted {
+            self.budget
+                .used
+                .fetch_add(now - self.accounted, Ordering::Relaxed);
+        } else {
+            self.budget
+                .used
+                .fetch_sub(self.accounted - now, Ordering::Relaxed);
+        }
+        self.accounted = now;
     }
 
     /// Append a chunk of Guacamole instructions to the buffer.
@@ -165,7 +259,8 @@ impl SessionBuffer {
         }
 
         // Evict oldest frames if total size exceeds the cap
-        while self.total_bytes > MAX_BUFFER_BYTES {
+        let (ring_cap, _) = self.budget.caps();
+        while self.total_bytes > ring_cap {
             if let Some(front) = self.frames.pop_front() {
                 self.total_bytes -= front.byte_size;
                 self.salvage_persistent_state(&front.data);
@@ -173,6 +268,7 @@ impl SessionBuffer {
                 break;
             }
         }
+        self.account();
     }
 
     /// Return buffered frames with relative timing (milliseconds since first
@@ -256,7 +352,8 @@ impl SessionBuffer {
         // (e.g. a draw to a layer whose creation was evicted), but the
         // remaining instructions still produce a far better approximation
         // of the current screen than a black canvas.
-        while self.persistent_state_bytes > MAX_PERSISTENT_STATE_BYTES {
+        let (_, persistent_cap) = self.budget.caps();
+        while self.persistent_state_bytes > persistent_cap {
             if let Some(old) = self.persistent_state.pop_front() {
                 self.persistent_state_bytes -= old.len();
             } else {
@@ -568,6 +665,41 @@ mod tests {
         }
         // Total should be capped around MAX_BUFFER_BYTES
         assert!(buf.total_bytes <= MAX_BUFFER_BYTES + large_chunk.len());
+    }
+
+    #[test]
+    fn buffers_share_the_memory_budget() {
+        const MIB: usize = 1024 * 1024;
+        let budget = Arc::new(NvrBudget::new(14 * MIB));
+        let chunk = "x".repeat(MIB);
+
+        let mut alone = SessionBuffer::with_budget(Arc::clone(&budget));
+        for _ in 0..20 {
+            alone.push(chunk.clone());
+        }
+        // A sole buffer gets the whole budget: 14 MiB * 5/7 for frames.
+        assert!(alone.total_bytes <= 10 * MIB);
+        assert!(alone.total_bytes > 5 * MIB);
+
+        let mut second = SessionBuffer::with_budget(Arc::clone(&budget));
+        for _ in 0..20 {
+            alone.push(chunk.clone());
+            second.push(chunk.clone());
+        }
+        // Two buffers split it: 7 MiB each, 5 MiB for frames and 2 MiB for
+        // the persistent state salvaged from evicted frames.
+        assert!(alone.total_bytes <= 5 * MIB);
+        assert!(second.total_bytes <= 5 * MIB);
+        assert!(alone.persistent_state_bytes <= 2 * MIB);
+        assert!(second.persistent_state_bytes <= 2 * MIB);
+        let held = |b: &SessionBuffer| b.total_bytes + b.persistent_state_bytes;
+        assert!(budget.used() <= 14 * MIB);
+        assert_eq!(budget.used(), held(&alone) + held(&second));
+
+        let left = held(&second);
+        drop(alone);
+        assert_eq!(budget.used(), left, "a dropped buffer still counted");
+        assert_eq!(budget.buffers.load(Ordering::Relaxed), 1);
     }
 
     #[test]

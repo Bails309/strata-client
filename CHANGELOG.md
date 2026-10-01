@@ -265,6 +265,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copying a string, and no longer corrupts a character split across two
   reads. Instructions go out in batches of up to 64 KiB instead of one
   WebSocket message each, which matters most when seeking.
+- **Admin tables and the dashboard page on the server (PERF-08).** The
+  admin connections and users tables fetch one page at a time, with
+  search, filters and counts done in the database
+  (`/api/admin/connections/page`, `/api/admin/users/page`). Fleet
+  telemetry comes from one summary query, and moving a selection to a
+  folder is one request instead of one per connection. Admin Settings no
+  longer loads every connection and user when it opens; tabs that need
+  them load small references on demand. The dashboard loads folder
+  contents when a folder is opened, 200 rows at a time, and searches on
+  the server (`/api/user/connections/page` and `/facets`).
+- **Session statistics are cached for 60 seconds (PERF-10).** Concurrent
+  requests share one computation, and the Sessions tab shows when the
+  figures were computed (`generated_at`). Active sessions and the
+  recording setting stay live. No rollup tables were added: the window
+  is a fixed 30 days and `recordings.started_at` is already indexed.
 
 ## [2.2.0] — 2026-09-25
 

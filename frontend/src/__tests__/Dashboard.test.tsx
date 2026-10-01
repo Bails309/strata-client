@@ -37,6 +37,8 @@ vi.mock("../components/ThemeProvider", () => ({
 vi.mock("../api", () => ({
   readCookie: vi.fn(),
   getMyConnections: vi.fn(),
+  getMyConnectionsPage: vi.fn(),
+  getMyConnectionFacets: vi.fn(),
   getConnectionInfo: vi.fn(),
   getFavorites: vi.fn(),
   toggleFavorite: vi.fn(),
@@ -76,8 +78,11 @@ vi.mock("../contexts/SettingsContext", () => ({
 }));
 
 import Dashboard from "../pages/Dashboard";
+import { myConnectionFacets, myConnectionsPage, type MyConnectionScope } from "./fakeListServer";
 import {
   getMyConnections,
+  getMyConnectionsPage,
+  getMyConnectionFacets,
   getFavorites,
   getCredentialProfiles,
   getStatus,
@@ -174,6 +179,25 @@ const mockGroupedConnections = [
 describe("Dashboard", () => {
   beforeEach(() => {
     vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
+    // The paged endpoints answer from whatever full list, favourites and
+    // tags the test mocked.
+    const scope = async (): Promise<MyConnectionScope> => {
+      const [favorites, userTags, adminTags] = await Promise.all([
+        getFavorites(),
+        getConnectionTags(),
+        getAdminConnectionTags(),
+      ]);
+      const tags: Record<string, string[]> = {};
+      for (const map of [userTags ?? {}, adminTags ?? {}])
+        for (const [id, ids] of Object.entries(map)) (tags[id] ??= []).push(...ids);
+      return { favorites, tags };
+    };
+    vi.mocked(getMyConnectionsPage).mockImplementation(async (page, perPage, f) =>
+      myConnectionsPage(await getMyConnections(), page, perPage, f, await scope())
+    );
+    vi.mocked(getMyConnectionFacets).mockImplementation(async (f) =>
+      myConnectionFacets(await getMyConnections(), f, await scope())
+    );
     vi.mocked(getFavorites).mockResolvedValue([]);
     vi.mocked(getCredentialProfiles).mockResolvedValue([]);
     vi.mocked(getMyCredentialMappings).mockResolvedValue([]);
@@ -225,8 +249,8 @@ describe("Dashboard", () => {
     const searchInput = screen.getByPlaceholderText(/search/i);
     await userEvent.type(searchInput, "Beta");
 
+    await waitFor(() => expect(screen.queryByText("Server Alpha")).not.toBeInTheDocument());
     expect(screen.getByText("Server Beta")).toBeInTheDocument();
-    expect(screen.queryByText("Server Alpha")).not.toBeInTheDocument();
     expect(screen.queryByText("DB Server")).not.toBeInTheDocument();
   });
 
@@ -237,8 +261,8 @@ describe("Dashboard", () => {
     const searchInput = screen.getByPlaceholderText(/search/i);
     await userEvent.type(searchInput, "PostgreSQL");
 
+    await waitFor(() => expect(screen.queryByText("Server Alpha")).not.toBeInTheDocument());
     expect(screen.getByText("DB Server")).toBeInTheDocument();
-    expect(screen.queryByText("Server Alpha")).not.toBeInTheDocument();
   });
 
   it("shows empty state when no connections", async () => {
@@ -309,7 +333,9 @@ describe("Dashboard", () => {
     await screen.findByText("Server Alpha");
     const searchInput = screen.getByPlaceholderText(/search/i);
     await userEvent.type(searchInput, "NONEXISTENT");
-    expect(screen.getByText("No connections found matching your query.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("No connections found matching your query.")
+    ).toBeInTheDocument();
   });
 
   it("renders connection descriptions", async () => {
@@ -325,7 +351,8 @@ describe("Dashboard", () => {
     await screen.findByText("Server Alpha");
     const favButtons = screen.getAllByTitle("Add to favorites");
     await userEvent.click(favButtons[0]);
-    expect(toggleFavorite).toHaveBeenCalledWith("1");
+    // The server orders rows by name, so "DB Server" comes first.
+    expect(toggleFavorite).toHaveBeenCalledWith("3");
   });
 
   it("loads initial favorites from API", async () => {
@@ -456,7 +483,7 @@ describe("Dashboard", () => {
     // Create more than 50 connections to trigger pagination
     const manyConnections = Array.from({ length: 55 }, (_, i) => ({
       id: `c${i}`,
-      name: `Conn ${i}`,
+      name: `Conn ${String(i).padStart(2, "0")}`,
       protocol: "rdp",
       hostname: `10.0.0.${i}`,
       port: 3389,
@@ -464,15 +491,16 @@ describe("Dashboard", () => {
     }));
     vi.mocked(getMyConnections).mockResolvedValue(manyConnections);
     renderDashboard();
-    await screen.findByText("Conn 0");
+    await screen.findByText("Conn 00");
     // Pagination should be shown
     expect(screen.getByText(/Showing/)).toBeInTheDocument();
     // Filter down
     await userEvent.type(screen.getByPlaceholderText(/search/i), "Conn 5");
     // Page should reset to 1 showing filtered results
     await waitFor(() => {
-      expect(screen.getByText("Conn 5")).toBeInTheDocument();
+      expect(screen.getByText("Conn 50")).toBeInTheDocument();
     });
+    expect(screen.queryByText("Conn 00")).not.toBeInTheDocument();
   });
 
   it("handles profile change for a connection", async () => {
@@ -725,7 +753,7 @@ describe("Dashboard", () => {
   it("shows pagination Previous and Next buttons", async () => {
     const many = Array.from({ length: 55 }, (_, i) => ({
       id: `c${i}`,
-      name: `Conn ${i}`,
+      name: `Conn ${String(i).padStart(2, "0")}`,
       protocol: "rdp",
       hostname: `10.0.${i}.1`,
       port: 3389,
@@ -733,7 +761,7 @@ describe("Dashboard", () => {
     }));
     vi.mocked(getMyConnections).mockResolvedValue(many);
     renderDashboard();
-    await screen.findByText("Conn 0");
+    await screen.findByText("Conn 00");
     expect(screen.getByText("Previous")).toBeInTheDocument();
     expect(screen.getByText("Next")).toBeInTheDocument();
   });
@@ -741,7 +769,7 @@ describe("Dashboard", () => {
   it("navigates to next page", async () => {
     const many = Array.from({ length: 55 }, (_, i) => ({
       id: `c${i}`,
-      name: `Conn ${i}`,
+      name: `Conn ${String(i).padStart(2, "0")}`,
       protocol: "rdp",
       hostname: `10.0.${i}.1`,
       port: 3389,
@@ -749,7 +777,7 @@ describe("Dashboard", () => {
     }));
     vi.mocked(getMyConnections).mockResolvedValue(many);
     renderDashboard();
-    await screen.findByText("Conn 0");
+    await screen.findByText("Conn 00");
     await userEvent.click(screen.getByText("Next"));
     await waitFor(() => {
       expect(screen.getByText("Conn 50")).toBeInTheDocument();
@@ -759,7 +787,7 @@ describe("Dashboard", () => {
   it("navigates back to previous page", async () => {
     const many = Array.from({ length: 55 }, (_, i) => ({
       id: `c${i}`,
-      name: `Conn ${i}`,
+      name: `Conn ${String(i).padStart(2, "0")}`,
       protocol: "rdp",
       hostname: `10.0.${i}.1`,
       port: 3389,
@@ -767,14 +795,14 @@ describe("Dashboard", () => {
     }));
     vi.mocked(getMyConnections).mockResolvedValue(many);
     renderDashboard();
-    await screen.findByText("Conn 0");
+    await screen.findByText("Conn 00");
     await userEvent.click(screen.getByText("Next"));
     await waitFor(() => {
       expect(screen.getByText("Conn 50")).toBeInTheDocument();
     });
     await userEvent.click(screen.getByText("Previous"));
     await waitFor(() => {
-      expect(screen.getByText("Conn 0")).toBeInTheDocument();
+      expect(screen.getByText("Conn 00")).toBeInTheDocument();
     });
   });
 

@@ -14,7 +14,7 @@ use crate::services::app_state::{BootPhase, SharedState};
 
 // ── Session Statistics ──────────────────────────────────────────────
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct SessionStats {
     pub total_sessions: i64,
     pub total_hours: f64,
@@ -26,6 +26,9 @@ pub struct SessionStats {
     /// Every figure above bar `active_now` is derived from the recordings
     /// table, so with recording off they read zero however busy the gateway is.
     pub recording_enabled: bool,
+    /// When the historical figures were computed (they are cached for
+    /// [`STATS_TTL`]); `active_now` is always live.
+    pub generated_at: String,
     pub top_connections: Vec<TopConnection>,
     pub top_users: Vec<TopUser>,
     pub daily_trend: Vec<DailyTrend>,
@@ -33,7 +36,7 @@ pub struct SessionStats {
     pub peak_hours: Vec<PeakHour>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct TopConnection {
     pub name: String,
     pub protocol: String,
@@ -41,7 +44,7 @@ pub struct TopConnection {
     pub total_hours: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct TopUser {
     pub username: String,
     pub sessions: i64,
@@ -49,7 +52,7 @@ pub struct TopUser {
     pub last_session: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct DailyTrend {
     pub date: String,
     pub sessions: i64,
@@ -57,18 +60,26 @@ pub struct DailyTrend {
     pub unique_users: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct ProtocolDistribution {
     pub protocol: String,
     pub sessions: i64,
     pub total_hours: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct PeakHour {
     pub hour: i32,
     pub sessions: i64,
 }
+
+/// How long the 30-day figures are served before being recomputed.
+const STATS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Holding the lock while recomputing makes concurrent requests wait for
+/// one refresh instead of each running the queries.
+static STATS_CACHE: tokio::sync::Mutex<Option<(std::time::Instant, SessionStats)>> =
+    tokio::sync::Mutex::const_new(None);
 
 /// GET /api/admin/session-stats – aggregate session statistics for the dashboard.
 pub async fn session_stats(
@@ -83,8 +94,33 @@ pub async fn session_stats(
         let active = s.session_registry.list().await.len() as u32;
         (db, active)
     };
+    let recording_enabled = crate::services::recordings::get_config(&db.pool)
+        .await
+        .map(|c| c.enabled)
+        .unwrap_or(false);
 
-    // Combine scalar aggregates into a single query using a CTE
+    let mut cache = STATS_CACHE.lock().await;
+    let fresh = cache
+        .as_ref()
+        .filter(|(at, _)| at.elapsed() < STATS_TTL)
+        .map(|(_, stats)| stats.clone());
+    let mut stats = match fresh {
+        Some(stats) => stats,
+        None => {
+            let stats = compute_session_stats(&db.pool).await?;
+            *cache = Some((std::time::Instant::now(), stats.clone()));
+            stats
+        }
+    };
+    drop(cache);
+    stats.active_now = active_now;
+    stats.recording_enabled = recording_enabled;
+    Ok(Json(stats))
+}
+
+/// The 30-day figures, all from the recordings table.
+async fn compute_session_stats(pool: &sqlx::PgPool) -> Result<SessionStats, AppError> {
+    use crate::services::recordings as rec;
     let (
         total_sessions,
         total_hours,
@@ -92,36 +128,23 @@ pub async fn session_stats(
         avg_duration_mins,
         median_duration_mins,
         total_bandwidth_bytes,
-    ) = crate::services::recordings::fetch_session_stats_scalars(&db.pool).await?;
+    ) = rec::fetch_session_stats_scalars(pool).await?;
+    let daily_trend = rec::fetch_daily_trend(pool).await?;
+    let protocol_distribution = rec::fetch_protocol_distribution(pool).await?;
+    let peak_hours = rec::fetch_peak_hours(pool).await?;
+    let top_connections = rec::fetch_top_connections(pool).await?;
+    let top_users = rec::fetch_top_users(pool).await?;
 
-    // Daily trend (last 30 days)
-    let daily_trend = crate::services::recordings::fetch_daily_trend(&db.pool).await?;
-
-    // Protocol distribution
-    let protocol_distribution =
-        crate::services::recordings::fetch_protocol_distribution(&db.pool).await?;
-
-    // Peak hours (0-23)
-    let peak_hours = crate::services::recordings::fetch_peak_hours(&db.pool).await?;
-
-    let top_connections = crate::services::recordings::fetch_top_connections(&db.pool).await?;
-
-    let top_users = crate::services::recordings::fetch_top_users(&db.pool).await?;
-
-    let recording_enabled = crate::services::recordings::get_config(&db.pool)
-        .await
-        .map(|c| c.enabled)
-        .unwrap_or(false);
-
-    Ok(Json(SessionStats {
+    Ok(SessionStats {
         total_sessions,
         total_hours: (total_hours * 10.0).round() / 10.0,
         unique_users,
-        active_now,
+        active_now: 0,
         avg_duration_mins: (avg_duration_mins * 10.0).round() / 10.0,
         median_duration_mins: (median_duration_mins * 10.0).round() / 10.0,
         total_bandwidth_bytes,
-        recording_enabled,
+        recording_enabled: false,
+        generated_at: chrono::Utc::now().to_rfc3339(),
         top_connections: top_connections
             .into_iter()
             .map(|r| TopConnection {
@@ -164,7 +187,7 @@ pub async fn session_stats(
                 sessions: r.sessions,
             })
             .collect(),
-    }))
+    })
 }
 
 #[derive(Deserialize)]

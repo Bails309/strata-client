@@ -8,13 +8,13 @@ import {
   getSettings,
   getRoles,
   getConnectionFolders,
-  getConnections,
+  getConnectionRefs,
   getUsers,
   getAdSyncConfigs,
   AdSyncConfig,
   Role,
-  Connection,
   ConnectionFolder,
+  ConnectionRef,
   User,
   MeResponse,
 } from "../api";
@@ -142,9 +142,10 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [roles, setRoles] = useState<Role[]>([]);
-  const [connections, setConnections] = useState<Connection[]>([]);
   const [folders, setFolders] = useState<ConnectionFolder[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
+  // Loaded only by the tabs that list every connection or user.
+  const [connectionRefs, setConnectionRefs] = useState<ConnectionRef[] | null>(null);
+  const [users, setUsers] = useState<User[] | null>(null);
   const [adSyncConfigs, setAdSyncConfigs] = useState<AdSyncConfig[]>([]);
   const [msg, setMsg] = useState("");
   const [loadError, setLoadError] = useState("");
@@ -161,14 +162,25 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
     Promise.all([
       getSettings().then(setSettings),
       getRoles().then(setRoles),
-      getConnections().then(setConnections),
       getConnectionFolders().then(setFolders),
-      getUsers().then(setUsers),
       getAdSyncConfigs()
         .then(setAdSyncConfigs)
         .catch(() => {}),
     ]).catch(() => setLoadError("Failed to load settings"));
   }, []);
+
+  useEffect(() => {
+    if (tab === "tags" && connectionRefs === null) {
+      getConnectionRefs()
+        .then(setConnectionRefs)
+        .catch(() => setConnectionRefs([]));
+    }
+    if ((tab === "passwords" || tab === "outbound-shares") && users === null) {
+      getUsers()
+        .then(setUsers)
+        .catch(() => setUsers([]));
+    }
+  }, [tab, connectionRefs, users]);
 
   function flash(text: string) {
     setMsg(text);
@@ -269,35 +281,17 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
 
         {/* ── Access Control (Roles, Permissions, Session Policies) ── */}
         {tab === "access" && (
-          <AccessTab
-            user={user}
-            roles={roles}
-            connections={connections}
-            folders={folders}
-            users={users}
-            onRolesChanged={setRoles}
-            onUsersChanged={(u) => setUsers(u)}
-          />
+          <AccessTab user={user} roles={roles} folders={folders} onRolesChanged={setRoles} />
         )}
 
         {/* ── Connections (Dedicated admin connectivity manager) ── */}
         {tab === "connections" && (
-          <ConnectionsTab
-            user={user}
-            connections={connections}
-            folders={folders}
-            onConnectionCreated={(c) => setConnections([...connections, c])}
-            onConnectionUpdated={(c) =>
-              setConnections(connections.map((x) => (x.id === c.id ? c : x)))
-            }
-            onConnectionDeleted={(id) => setConnections(connections.filter((x) => x.id !== id))}
-            onFoldersChanged={(f) => setFolders(f)}
-          />
+          <ConnectionsTab user={user} folders={folders} onFoldersChanged={(f) => setFolders(f)} />
         )}
 
         {/* ── Tags ── */}
         {tab === "tags" && (
-          <TagsTab connections={connections} onSave={() => flash("Tags updated")} />
+          <TagsTab connections={connectionRefs ?? []} onSave={() => flash("Tags updated")} />
         )}
 
         {/* ── AD Sync ── */}
@@ -308,7 +302,7 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
         {/* ── Password Management ── */}
         {tab === "passwords" && (
           <PasswordsTab
-            users={users}
+            users={users ?? []}
             adSyncConfigs={adSyncConfigs}
             onSave={() => flash("Password management updated")}
           />
@@ -344,7 +338,7 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
         {/* ── Outbound Share Policy ── */}
         {tab === "outbound-shares" && (
           <OutboundSharesTab
-            users={users}
+            users={users ?? []}
             isSuperAdmin={!!user.can_manage_system}
             onSave={() => flash("Outbound share policy updated")}
             variant="policy-only"

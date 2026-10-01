@@ -963,6 +963,61 @@ TCP-probe one connection now, instead of waiting for the next 2-minute sweep, an
 | `403` | Caller lacks `can_manage_connections` |
 | `404` | No such connection, or it is soft-deleted |
 
+#### `GET /api/admin/connections/page` (Unreleased)
+
+One page of connections, filtered and counted on the server, for the fleet table. Requires `can_manage_connections`. Secret `extra` values are redacted as in `GET /api/admin/connections`. Rows are ordered by name, then id.
+
+| Query | Meaning |
+| ----- | ------- |
+| `page` | 1-based page number (default `1`) |
+| `per_page` | Rows per page, `1`–`200` (default `50`) |
+| `search` | Case-insensitive substring of name, hostname, port, description, folder name or protocol. `%`, `_` and `\` match literally |
+| `protocol` | Exact protocol, for example `rdp` |
+| `folder` | A folder id (that folder and every subfolder), or `unfiled` |
+| `health` | `online`, `offline` or `unknown` |
+
+**Response** `200 OK`
+
+```json
+{ "items": [ { "id": "uuid", "name": "DC01", "protocol": "rdp", "...": "..." } ], "total": 1234 }
+```
+
+`total` counts every row that matches the filters, not just this page.
+
+#### `GET /api/admin/connections/refs` (Unreleased)
+
+Every connection matching the same filters as `/page`, without paging, as small references: `id`, `name`, `protocol`, `hostname`, `port`, `folder_id` and `url` (from `extra.url`, `null` if unset). The console uses it for select-all across pages, role grants and tag assignment. Requires `can_manage_connections`.
+
+#### `GET /api/admin/connections/summary` (Unreleased)
+
+Whole-fleet counts for the telemetry strip. Requires `can_manage_connections`.
+
+```json
+{
+  "total": 1234,
+  "online": 1100,
+  "offline": 30,
+  "alert_count": 12,
+  "legacy_sec": 3,
+  "unpinned": 8,
+  "cert_ignored": 2,
+  "last_sweep": "2026-09-25T10:02:00Z",
+  "protocols": [{ "protocol": "rdp", "count": 900 }]
+}
+```
+
+`alert_count` counts connections with at least one alert, so it can be less than the sum of `legacy_sec`, `unpinned` and `cert_ignored`.
+
+#### `POST /api/admin/connections/move` (Unreleased)
+
+File many connections in one folder in a single request. Requires `can_manage_connections`. Each moved connection is audited as `connection.updated`.
+
+```json
+{ "ids": ["uuid", "uuid"], "folder_id": "uuid" }
+```
+
+`folder_id: null` moves them to the root. **Response** `200 OK` `{ "moved": 2 }`; ids that do not exist or are soft-deleted are skipped. More than 5000 ids is a `400`.
+
 > **Removed:** `PUT /api/admin/role-connections` is no longer routed. Use [`PUT /api/admin/roles/{id}/mappings`](#put-apiadminrolesidmappings).
 
 ### Connection Folders
@@ -1023,6 +1078,17 @@ List all users.
 ```
 
 The `last_login_at` field (added in v1.9.5, migration 064) is the most recent successful local-login or SSO-callback timestamp. It is `null` for users who have been provisioned (e.g. via AD sync) but have never authenticated; the stale-account auto-cleanup sweep (`user_stale_days`, see [security.md](./security.md#user-lifecycle-retention)) explicitly excludes `null` rows so freshly-provisioned accounts are never aged out solely on creation time.
+
+#### `GET /api/admin/users/page` (Unreleased)
+
+One page of users, filtered and counted on the server. Requires `can_manage_users`. Returns `{ "items": [...], "total": n }` with the same rows as `GET /api/admin/users`.
+
+| Query | Meaning |
+| ----- | ------- |
+| `page`, `per_page` | As for `GET /api/admin/connections/page` (max `200`) |
+| `search` | Case-insensitive substring of username, email, full name, role name or subject |
+| `deleted` | `true` lists soft-deleted users, newest deletion first; otherwise active users, ordered by email |
+| `role_id` | Only users holding this role |
 
 #### `POST /api/admin/users/:id/reset-password`
 
@@ -1658,6 +1724,36 @@ Connections accessible to the authenticated user. Holders of `can_manage_system`
 ```
 
 `health_status` is one of `"online"`, `"offline"`, or `"unknown"` (not yet checked). `health_checked_at` is the timestamp of the last TCP probe (null if never checked).
+
+### `GET /api/user/connections/page` (Unreleased)
+
+One page of the connections the caller may open, with the same access rules and row shape as `GET /api/user/connections`. Returns `{ "items": [...], "total": n }`, ordered by name.
+
+| Query | Meaning |
+| ----- | ------- |
+| `page`, `per_page` | As for `GET /api/admin/connections/page` (max `200`) |
+| `search` | Case-insensitive substring of name, hostname or description |
+| `protocol` | Protocol, case-insensitive |
+| `favorites` | `true` keeps only the caller's favourites |
+| `tag` | A user tag or admin tag id |
+| `folder` | A folder id (that folder only, not subfolders), or `none` |
+| `sort` | `recent`: opened connections only, most recent first. Any other value is a `400` |
+
+### `GET /api/user/connections/facets` (Unreleased)
+
+Counts for the dashboard's folder tree and empty states. Takes the same filters as `/page` except `page`, `per_page`, `folder` and `sort`.
+
+```json
+{
+  "total": 42,
+  "search_total": 50,
+  "all_total": 300,
+  "protocols": ["rdp", "ssh"],
+  "folders": [{ "folder_id": "uuid", "count": 40 }, { "folder_id": null, "count": 2 }]
+}
+```
+
+`total` matches every filter; `search_total` matches the search alone; `all_total` is every connection the caller may open. `protocols` covers every connection the caller may open. `folders` counts matches by the folder they are filed in directly.
 
 ### `GET /api/user/connections/:id/info`
 

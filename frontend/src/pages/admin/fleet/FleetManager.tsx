@@ -5,14 +5,21 @@ import {
   deleteConnection,
   getActiveSessions,
   getAdSyncConfigs,
+  getConnectionRefs,
+  getConnectionsPage,
+  getFleetSummary,
+  moveConnections,
   probeConnection,
   triggerAdSync,
   updateConnection,
   type ActiveSession,
   type AdSyncConfig,
+  type AdminConnectionFilters,
   type Connection,
   type ConnectionFolder,
   type ConnectionProbeResult,
+  type ConnectionRef,
+  type FleetSummary,
   type MeResponse,
 } from "../../../api";
 import { useOptionalToast } from "../../../components/ToastProvider";
@@ -20,7 +27,7 @@ import FleetTelemetryStrip from "./FleetTelemetryStrip";
 import FleetToolbar, { UNFILED, type FleetFilters } from "./FleetToolbar";
 import FleetTable from "./FleetTable";
 import FleetBulkDock from "./FleetBulkDock";
-import { buildFleet, computeTelemetry, connectionPayload, folderSubtree } from "./fleetModel";
+import { buildFleet, computeTelemetry, connectionPayload } from "./fleetModel";
 import "./Fleet.css";
 
 const PAGE_SIZE = 20;
@@ -45,10 +52,29 @@ async function runPool<T>(items: T[], limit: number, fn: (item: T) => Promise<vo
 
 const errorText = (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback);
 
+const toRef = (c: Connection): ConnectionRef => ({
+  id: c.id,
+  name: c.name,
+  protocol: c.protocol,
+  hostname: c.hostname,
+  port: c.port,
+  folder_id: c.folder_id ?? null,
+  url: c.extra?.url ?? null,
+});
+
+function serverFilters(f: FleetFilters): AdminConnectionFilters {
+  return {
+    search: f.search.trim(),
+    protocol: f.protocol,
+    folder: f.folder === UNFILED ? "unfiled" : f.folder,
+    health: f.health as AdminConnectionFilters["health"],
+  };
+}
+
 export default function FleetManager({
   user,
-  connections,
   folders,
+  reloadKey,
   activeFormId,
   hostKeyPanel,
   verifyingHostKeys,
@@ -57,13 +83,12 @@ export default function FleetManager({
   onEdit,
   onDuplicate,
   onDelete,
-  onConnectionUpdated,
-  onConnectionDeleted,
   requestConfirm,
 }: {
   user: MeResponse;
-  connections: Connection[];
   folders: ConnectionFolder[];
+  /** Changed by the parent after it creates, edits or deletes a connection. */
+  reloadKey: number;
   activeFormId: string | null;
   hostKeyPanel: ReactNode;
   verifyingHostKeys: boolean;
@@ -72,8 +97,6 @@ export default function FleetManager({
   onEdit: (c: Connection) => void;
   onDuplicate: (c: Connection) => void;
   onDelete: (id: string) => void;
-  onConnectionUpdated: (c: Connection) => void;
-  onConnectionDeleted: (id: string) => void;
   requestConfirm: (req: ConfirmRequest | null) => void;
 }) {
   const toast = useOptionalToast();
@@ -84,7 +107,16 @@ export default function FleetManager({
     health: "",
   });
   const [page, setPage] = useState(1);
-  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [rows, setRows] = useState<Connection[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const [summary, setSummary] = useState<FleetSummary | null>(null);
+  /** Bumped after a bulk action so the page and summary are refetched. */
+  const [refresh, setRefresh] = useState(0);
+  // Keyed by id so a selection can span pages.
+  const [selected, setSelected] = useState<Map<string, ConnectionRef>>(() => new Map());
+  /** Every connection matching `key`, once select-all has fetched them. */
+  const [matching, setMatching] = useState<{ key: string; refs: ConnectionRef[] } | null>(null);
   const [probing, setProbing] = useState<Set<string>>(() => new Set());
   const [probeResults, setProbeResults] = useState<Map<string, ConnectionProbeResult>>(
     () => new Map()
@@ -94,6 +126,38 @@ export default function FleetManager({
   const [busy, setBusy] = useState(false);
 
   const canSeeSessions = !!(user.can_manage_system || user.can_view_sessions);
+  const query = useMemo(() => serverFilters(filters), [filters]);
+  const filterKey = `${JSON.stringify(query)}|${reloadKey}|${refresh}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    getConnectionsPage(page, PAGE_SIZE, query)
+      .then((p) => {
+        if (cancelled) return;
+        setRows(p.items);
+        setTotal(p.total);
+        setLoaded(true);
+        // The page emptied under us (deletes elsewhere): go to the last one.
+        if (p.items.length === 0 && p.total > 0) setPage(Math.ceil(p.total / PAGE_SIZE));
+      })
+      .catch((e) => {
+        if (!cancelled)
+          toast?.error({ title: "Could not load connections", description: errorText(e, "") });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [page, query, reloadKey, refresh, toast]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getFleetSummary()
+      .then((s) => !cancelled && setSummary(s))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey, refresh]);
 
   useEffect(() => {
     if (!canSeeSessions) return;
@@ -128,87 +192,90 @@ export default function FleetManager({
     };
   }, [user.can_manage_system]);
 
-  const fleet = useMemo(
-    () => buildFleet(connections, folders, sessions),
-    [connections, folders, sessions]
-  );
-  const telemetry = useMemo(() => computeTelemetry(fleet, sessions), [fleet, sessions]);
+  const fleet = useMemo(() => buildFleet(rows, folders, sessions), [rows, folders, sessions]);
+  const telemetry = useMemo(() => computeTelemetry(summary, sessions), [summary, sessions]);
   const protocols = useMemo(
-    () => [...new Set(connections.map((c) => c.protocol))].sort(),
-    [connections]
+    () => (summary?.protocols ?? []).map((p) => p.protocol).sort(),
+    [summary]
   );
+  const sessionsPer = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of sessions ?? []) m.set(s.connection_id, (m.get(s.connection_id) ?? 0) + 1);
+    return m;
+  }, [sessions]);
 
-  const filtered = useMemo(() => {
-    const q = filters.search.trim().toLowerCase();
-    const inFolder =
-      filters.folder && filters.folder !== UNFILED ? folderSubtree(folders, filters.folder) : null;
-    return fleet.filter((r) => {
-      const c = r.conn;
-      if (filters.protocol && c.protocol !== filters.protocol) return false;
-      if (filters.health && r.health !== filters.health) return false;
-      if (filters.folder === UNFILED && c.folder_id) return false;
-      if (inFolder && !(c.folder_id && inFolder.has(c.folder_id))) return false;
-      if (!q) return true;
-      return [
-        c.name,
-        c.hostname,
-        String(c.port),
-        c.description ?? "",
-        r.folderName ?? "",
-        c.protocol,
-      ]
-        .join("\n")
-        .toLowerCase()
-        .includes(q);
-    });
-  }, [fleet, filters, folders]);
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
-  const paged = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
-  // Drop ids that no longer exist (deleted elsewhere).
-  const liveSelected = useMemo(() => {
-    const ids = new Set(connections.map((c) => c.id));
-    return new Set([...selected].filter((id) => ids.has(id)));
-  }, [selected, connections]);
-  const selectedConns = connections.filter((c) => liveSelected.has(c.id));
-  const allSelected = filtered.length > 0 && filtered.every((r) => liveSelected.has(r.conn.id));
-  const someSelected = filtered.some((r) => liveSelected.has(r.conn.id));
+  const selectedIds = useMemo(() => new Set(selected.keys()), [selected]);
+  const selectedRefs = [...selected.values()];
+  const matchingRefs = matching?.key === filterKey ? matching.refs : null;
+  const pageSelected = rows.length > 0 && rows.every((c) => selected.has(c.id));
+  const allSelected =
+    total > 0 &&
+    (matchingRefs
+      ? matchingRefs.every((r) => selected.has(r.id))
+      : total === rows.length && pageSelected);
+  const someSelected =
+    rows.some((c) => selected.has(c.id)) || !!matchingRefs?.some((r) => selected.has(r.id));
 
   const changeFilters = useCallback((f: FleetFilters) => {
     setFilters(f);
     setPage(1);
   }, []);
 
-  const toggle = (id: string) =>
+  const reloadAll = () => setRefresh((n) => n + 1);
+
+  /** Replace a row on the current page with its updated copy. */
+  const patchRow = (c: Connection) => setRows((prev) => prev.map((x) => (x.id === c.id ? c : x)));
+
+  const toggle = (id: string) => {
+    const row = rows.find((c) => c.id === id);
     setSelected((prev) => {
-      const next = new Set(prev);
+      const next = new Map(prev);
       if (next.has(id)) next.delete(id);
-      else next.add(id);
+      else if (row) next.set(id, toRef(row));
       return next;
     });
+  };
 
-  const toggleAll = (checked: boolean) =>
+  /** Select or clear every connection matching the filters, on every page. */
+  const toggleAll = async (checked: boolean) => {
+    let refs = matchingRefs;
+    if (!refs) {
+      try {
+        refs = await getConnectionRefs(query);
+      } catch (e) {
+        toast?.error({ title: "Could not select connections", description: errorText(e, "") });
+        return;
+      }
+      setMatching({ key: filterKey, refs });
+    }
+    const all = refs;
     setSelected((prev) => {
-      const next = new Set(prev);
-      for (const r of filtered) {
-        if (checked) next.add(r.conn.id);
-        else next.delete(r.conn.id);
+      const next = new Map(prev);
+      for (const r of all) {
+        if (checked) next.set(r.id, r);
+        else next.delete(r.id);
       }
       return next;
     });
+  };
 
-  const probeOne = async (c: Connection): Promise<ConnectionProbeResult | null> => {
+  const probeOne = async (
+    c: Pick<Connection, "id" | "name">
+  ): Promise<ConnectionProbeResult | null> => {
     setProbing((p) => new Set(p).add(c.id));
     try {
       const res = await probeConnection(c.id);
       setProbeResults((m) => new Map(m).set(c.id, res));
-      onConnectionUpdated({
-        ...c,
-        health_status: res.health_status,
-        health_checked_at: res.health_checked_at,
-      });
+      setRows((prev) =>
+        prev.map((x) =>
+          x.id === c.id
+            ? { ...x, health_status: res.health_status, health_checked_at: res.health_checked_at }
+            : x
+        )
+      );
       return res;
     } catch (e) {
       toast?.error({ title: `Probe failed for ${c.name}`, description: errorText(e, "") });
@@ -226,41 +293,41 @@ export default function FleetManager({
     setBusy(true);
     let online = 0;
     let done = 0;
-    await runPool(selectedConns, PROBE_CONCURRENCY, async (c) => {
+    await runPool(selectedRefs, PROBE_CONCURRENCY, async (c) => {
       const res = await probeOne(c);
       if (res) done += 1;
       if (res?.health_status === "online") online += 1;
     });
     setBusy(false);
+    getFleetSummary()
+      .then(setSummary)
+      .catch(() => {});
     if (done > 0)
       toast?.info({ title: `Probed ${done}: ${online} reachable, ${done - online} not` });
   };
 
   const moveSelected = async (folderId: string | null) => {
     setBusy(true);
-    const failures: string[] = [];
-    await runPool(selectedConns, PROBE_CONCURRENCY, async (c) => {
-      try {
-        const updated = await updateConnection(
-          c.id,
-          connectionPayload(c, { folder_id: folderId ?? undefined })
-        );
-        onConnectionUpdated(updated);
-      } catch (e) {
-        failures.push(`${c.name}: ${errorText(e, "failed")}`);
-      }
-    });
-    setBusy(false);
     const target = folderId ? (folders.find((f) => f.id === folderId)?.name ?? "folder") : "Root";
-    const moved = selectedConns.length - failures.length;
-    if (moved > 0) toast?.success({ title: `Moved ${moved} to ${target}` });
-    if (failures.length > 0)
-      toast?.error({ title: "Some connections were not moved", description: failures.join("; ") });
+    try {
+      const { moved } = await moveConnections(
+        selectedRefs.map((c) => c.id),
+        folderId
+      );
+      if (moved > 0) toast?.success({ title: `Moved ${moved} to ${target}` });
+      if (moved < selectedRefs.length)
+        toast?.error({ title: `${selectedRefs.length - moved} connections were not moved` });
+    } catch (e) {
+      toast?.error({ title: "The connections were not moved", description: errorText(e, "") });
+    } finally {
+      setBusy(false);
+      reloadAll();
+    }
   };
 
   const deleteSelected = () => {
-    const targets = selectedConns;
-    const live = fleet.filter((r) => liveSelected.has(r.conn.id) && r.sessions > 0);
+    const targets = selectedRefs;
+    const live = targets.filter((c) => (sessionsPer.get(c.id) ?? 0) > 0);
     requestConfirm({
       title: `Delete ${targets.length} ${targets.length === 1 ? "connection" : "connections"}`,
       message:
@@ -275,14 +342,14 @@ export default function FleetManager({
         await runPool(targets, PROBE_CONCURRENCY, async (c) => {
           try {
             await deleteConnection(c.id);
-            onConnectionDeleted(c.id);
           } catch (e) {
             failures.push(`${c.name}: ${errorText(e, "failed")}`);
           }
         });
         setBusy(false);
-        setSelected(new Set());
+        setSelected(new Map());
         requestConfirm(null);
+        reloadAll();
         if (failures.length > 0)
           toast?.error({
             title: "Some connections were not deleted",
@@ -302,7 +369,10 @@ export default function FleetManager({
         try {
           const extra = { ...(c.extra ?? {}) };
           delete extra["host-key"];
-          onConnectionUpdated(await updateConnection(c.id, connectionPayload(c, { extra })));
+          patchRow(await updateConnection(c.id, connectionPayload(c, { extra })));
+          getFleetSummary()
+            .then(setSummary)
+            .catch(() => {});
         } catch (e) {
           toast?.error({ title: "Could not clear the host key", description: errorText(e, "") });
         } finally {
@@ -323,7 +393,8 @@ export default function FleetManager({
     }
   };
 
-  const sshSelected = selectedConns.filter((c) => c.protocol === "ssh");
+  const sshSelected = selectedRefs.filter((c) => c.protocol === "ssh");
+  const fleetTotal = summary?.total ?? total;
 
   return (
     <div className="card fleet-card">
@@ -346,7 +417,7 @@ export default function FleetManager({
         folders={folders}
         adSyncConfigs={adSyncConfigs}
         onSyncDirectory={syncDirectory}
-        canVerifyHostKeys={connections.some((c) => c.protocol === "ssh")}
+        canVerifyHostKeys={protocols.includes("ssh")}
         verifyingHostKeys={verifyingHostKeys}
         onVerifyHostKeys={() => onVerifyHostKeys()}
         onAdd={onAdd}
@@ -354,28 +425,27 @@ export default function FleetManager({
 
       {hostKeyPanel}
 
-      <p className="fleet-count">
-        Showing{" "}
-        {filtered.length === connections.length
-          ? connections.length
-          : `${filtered.length} of ${connections.length}`}{" "}
-        connection{connections.length !== 1 ? "s" : ""}
-      </p>
+      {loaded && (
+        <p className="fleet-count">
+          Showing {total === fleetTotal ? total : `${total} of ${fleetTotal}`} connection
+          {fleetTotal !== 1 ? "s" : ""}
+        </p>
+      )}
 
-      {filtered.length === 0 ? (
+      {!loaded ? null : total === 0 ? (
         <div className="fleet-empty">
-          {connections.length === 0
+          {fleetTotal === 0
             ? "No connections yet. Add one to start building your fleet."
             : "No connections match these filters."}
         </div>
       ) : (
         <FleetTable
-          records={paged}
-          selected={liveSelected}
+          records={fleet}
+          selected={selectedIds}
           allSelected={allSelected}
           someSelected={someSelected}
           onToggle={toggle}
-          onToggleAll={toggleAll}
+          onToggleAll={(checked) => void toggleAll(checked)}
           probing={probing}
           probeResults={probeResults}
           activeFormId={activeFormId}
@@ -416,9 +486,9 @@ export default function FleetManager({
         </div>
       )}
 
-      {liveSelected.size > 0 && (
+      {selected.size > 0 && (
         <FleetBulkDock
-          count={liveSelected.size}
+          count={selected.size}
           sshCount={sshSelected.length}
           folders={folders}
           busy={busy}
@@ -426,7 +496,7 @@ export default function FleetManager({
           onProbe={() => void probeSelected()}
           onPinHostKeys={() => onVerifyHostKeys(sshSelected.map((c) => c.id))}
           onDelete={deleteSelected}
-          onClear={() => setSelected(new Set())}
+          onClear={() => setSelected(new Map())}
         />
       )}
     </div>

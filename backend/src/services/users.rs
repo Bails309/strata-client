@@ -8,7 +8,7 @@
 
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, Pool, Postgres};
+use sqlx::{FromRow, Pool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 const SELECT_COLUMNS: &str =
@@ -90,6 +90,59 @@ pub async fn list_all(
     };
     let rows: Vec<UserRow> = sqlx::query_as(&sql).fetch_all(pool).await?;
     Ok(rows)
+}
+
+/// Filters for the admin user table.
+#[derive(Deserialize, Debug, Default)]
+pub struct UserPageQuery {
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+    /// Substring of username, email, full name, role or OIDC subject.
+    pub search: Option<String>,
+    /// Soft-deleted users instead of live ones.
+    pub deleted: Option<bool>,
+    pub role_id: Option<Uuid>,
+}
+
+/// One page of the admin user table.
+pub async fn page(
+    pool: &Pool<Postgres>,
+    f: &UserPageQuery,
+    limit: i64,
+    offset: i64,
+) -> Result<crate::services::connections::Page<UserRow>, AppError> {
+    let deleted = f.deleted.unwrap_or(false);
+    let push_where = |q: &mut QueryBuilder<'_, Postgres>| {
+        q.push(" FROM users u JOIN roles r ON u.role_id = r.id WHERE u.deleted_at IS ");
+        q.push(if deleted { "NOT NULL" } else { "NULL" });
+        if let Some(search) = f.search.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            q.push(
+                " AND concat_ws(E'\\n', u.username, u.email, u.full_name, r.name, u.sub) ILIKE ",
+            )
+            .push_bind(crate::services::connections::contains_pattern(search));
+        }
+        if let Some(role_id) = f.role_id {
+            q.push(" AND u.role_id = ").push_bind(role_id);
+        }
+    };
+
+    let mut count = QueryBuilder::new("SELECT COUNT(*)");
+    push_where(&mut count);
+    let total: i64 = count.build_query_scalar().fetch_one(pool).await?;
+
+    let mut q = QueryBuilder::new(format!("SELECT {SELECT_COLUMNS}"));
+    push_where(&mut q);
+    q.push(if deleted {
+        " ORDER BY u.deleted_at DESC, u.id"
+    } else {
+        " ORDER BY u.email, u.id"
+    });
+    q.push(" LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+    let items = q.build_query_as().fetch_all(pool).await?;
+    Ok(crate::services::connections::Page { items, total })
 }
 
 /// Clear a soft-delete tombstone. Returns `true` if a row was restored.

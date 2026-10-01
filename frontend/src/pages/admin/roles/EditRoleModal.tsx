@@ -2,11 +2,13 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   createRole,
+  getConnectionRefs,
   getRoleMappings,
+  getUsersPage,
   updateRole,
   updateRoleMappings,
-  type Connection,
   type ConnectionFolder,
+  type ConnectionRef,
   type Role,
   type User,
 } from "../../../api";
@@ -31,11 +33,12 @@ interface Props {
   role: Role | null;
   roles: Role[];
   folders: ConnectionFolder[];
-  connections: Connection[];
-  users: User[];
   onClose: () => void;
   onSaved: (role: Role, created: boolean) => void;
 }
+
+/** Members listed in the editor; the Users table pages through the rest. */
+const MEMBER_LIMIT = 200;
 
 const errorText = (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback);
 
@@ -103,8 +106,6 @@ function RoleEditor({
   role,
   roles,
   folders,
-  connections,
-  users,
   onClose,
   onSaved,
   initial,
@@ -114,6 +115,26 @@ function RoleEditor({
   const nameRef = useRef<HTMLInputElement>(null);
   // Set once a create succeeds, so a retry after a failed mapping save updates it.
   const [created, setCreated] = useState<Role | null>(null);
+  const [connections, setConnections] = useState<ConnectionRef[]>([]);
+  const [members, setMembers] = useState<User[]>([]);
+  const [memberTotal, setMemberTotal] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    getConnectionRefs()
+      .then((refs) => !cancelled && setConnections(refs))
+      .catch(() => {});
+    if (role)
+      getUsersPage(1, MEMBER_LIMIT, { role_id: role.id })
+        .then((page) => {
+          if (cancelled) return;
+          setMembers(page.items);
+          setMemberTotal(page.total);
+        })
+        .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [role]);
   const editor = useRoleEditor(initial, connections);
   const { draft, changeCount } = editor;
 
@@ -123,7 +144,6 @@ function RoleEditor({
   const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   const system = isSystemRole(role);
-  const members = role ? users.filter((u) => u.role_name === role.name) : [];
   const trimmedName = draft.name.trim();
   const existing = role ?? created;
   const duplicate = roles.some(
@@ -282,7 +302,7 @@ function RoleEditor({
                 onToggleConnection={editor.toggleConnection}
               />
             )}
-            {tab === "members" && <RoleMembersTab members={members} />}
+            {tab === "members" && <RoleMembersTab members={members} total={memberTotal} />}
           </div>
         </div>
 

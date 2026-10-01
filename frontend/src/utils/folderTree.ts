@@ -70,7 +70,7 @@ export interface FolderNode {
  */
 export function buildFolderTree(
   folders: ConnectionFolder[],
-  connections: { folder_id?: string }[] = []
+  connections: { folder_id?: string | null }[] = []
 ): FolderNode[] {
   const direct = new Map<string, number>();
   for (const c of connections) {

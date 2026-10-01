@@ -1170,6 +1170,109 @@ export const getConnections = () => request<Connection[]>("/admin/connections");
 
 export const getMyConnections = () => request<Connection[]>("/user/connections");
 
+/** One page of a server-side listing. */
+export interface Page<T> {
+  items: T[];
+  /** Rows matching the filters across every page. */
+  total: number;
+}
+
+/** Query string from the set values; `false` and empty strings are left out. */
+function listQuery(params: Record<string, string | number | boolean | undefined | null>) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "" || v === false) continue;
+    q.set(k, String(v));
+  }
+  return q.toString();
+}
+
+export interface AdminConnectionFilters {
+  search?: string;
+  protocol?: string;
+  /** A folder id (and its subfolders) or `unfiled`. */
+  folder?: string;
+  health?: "online" | "offline" | "unknown" | "";
+}
+
+export const getConnectionsPage = (
+  page: number,
+  perPage: number,
+  filters: AdminConnectionFilters = {}
+) =>
+  request<Page<Connection>>(
+    `/admin/connections/page?${listQuery({ page, per_page: perPage, ...filters })}`
+  );
+
+/** Enough of a connection to name it in a picker or a bulk action. */
+export interface ConnectionRef {
+  id: string;
+  name: string;
+  protocol: string;
+  hostname: string;
+  port: number;
+  folder_id: string | null;
+  /** The target of a `web` connection. */
+  url: string | null;
+}
+
+export const getConnectionRefs = (filters: AdminConnectionFilters = {}) =>
+  request<ConnectionRef[]>(`/admin/connections/refs?${listQuery({ ...filters })}`);
+
+export interface FleetSummary {
+  total: number;
+  online: number;
+  offline: number;
+  alert_count: number;
+  legacy_sec: number;
+  unpinned: number;
+  cert_ignored: number;
+  last_sweep: string | null;
+  protocols: { protocol: string; count: number }[];
+}
+
+export const getFleetSummary = () => request<FleetSummary>("/admin/connections/summary");
+
+export const moveConnections = (ids: string[], folderId: string | null) =>
+  request<{ moved: number }>("/admin/connections/move", {
+    method: "POST",
+    body: JSON.stringify({ ids, folder_id: folderId }),
+  });
+
+export interface MyConnectionFilters {
+  search?: string;
+  protocol?: string;
+  favorites?: boolean;
+  tag?: string | null;
+  /** A folder id (that folder only) or `none`. */
+  folder?: string;
+  sort?: "recent";
+}
+
+export const getMyConnectionsPage = (
+  page: number,
+  perPage: number,
+  filters: MyConnectionFilters = {}
+) =>
+  request<Page<Connection>>(
+    `/user/connections/page?${listQuery({ page, per_page: perPage, ...filters })}`
+  );
+
+export interface ConnectionFacets {
+  /** Matching every filter. */
+  total: number;
+  /** Matching the search alone. */
+  search_total: number;
+  /** Every connection the user may open. */
+  all_total: number;
+  protocols: string[];
+  /** Matches by the folder they are filed in directly; `null` is no folder. */
+  folders: { folder_id: string | null; count: number }[];
+}
+
+export const getMyConnectionFacets = (filters: MyConnectionFilters = {}) =>
+  request<ConnectionFacets>(`/user/connections/facets?${listQuery({ ...filters })}`);
+
 export const createConnection = (data: Omit<Connection, "id">) =>
   request<Connection>("/admin/connections", { method: "POST", body: JSON.stringify(data) });
 
@@ -1360,6 +1463,16 @@ export interface CreateUserResponse {
 
 export const getUsers = (includeDeleted = false) =>
   request<User[]>(`/admin/users${includeDeleted ? "?include_deleted=true" : ""}`);
+
+export interface UserPageFilters {
+  search?: string;
+  /** Soft-deleted users instead of live ones. */
+  deleted?: boolean;
+  role_id?: string;
+}
+
+export const getUsersPage = (page: number, perPage: number, filters: UserPageFilters = {}) =>
+  request<Page<User>>(`/admin/users/page?${listQuery({ page, per_page: perPage, ...filters })}`);
 
 export const createUser = (data: CreateUserRequest) =>
   request<CreateUserResponse>("/admin/users", { method: "POST", body: JSON.stringify(data) });
@@ -2033,6 +2146,8 @@ export interface SessionStats {
   total_bandwidth_bytes: number;
   /** Everything but `active_now` comes from recordings, so this says whether they can be non-zero. */
   recording_enabled: boolean;
+  /** When the 30-day figures were computed; they are cached for a minute. */
+  generated_at?: string;
   top_connections: TopConnection[];
   top_users: TopUser[];
   daily_trend: DailyTrend[];

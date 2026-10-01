@@ -212,6 +212,49 @@ pub async fn my_connections(
     Ok(Json(rows))
 }
 
+/// `GET /api/user/connections/page` — one filtered page of the caller's
+/// connections.
+pub async fn my_connections_page(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    axum::extract::Query(query): axum::extract::Query<
+        crate::services::connections::UserConnectionQuery,
+    >,
+) -> Result<Json<crate::services::connections::Page<UserConnectionRow>>, AppError> {
+    let db = require_running(&state).await?;
+    let (limit, offset) = crate::routes::admin::paginate(query.page, query.per_page, 200);
+    let page = crate::services::connections::user_page(
+        &db.pool,
+        user.id,
+        user.can_access_all_connections(),
+        &query,
+        limit,
+        offset,
+    )
+    .await?;
+    Ok(Json(page))
+}
+
+/// `GET /api/user/connections/facets` — counts by folder and filter for
+/// the caller's connections.
+pub async fn my_connection_facets(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    axum::extract::Query(query): axum::extract::Query<
+        crate::services::connections::UserConnectionQuery,
+    >,
+) -> Result<Json<crate::services::connections::UserConnectionFacets>, AppError> {
+    let db = require_running(&state).await?;
+    let facets = crate::services::connections::user_facets(
+        &db.pool,
+        user.id,
+        user.can_access_all_connections(),
+        &query,
+    )
+    .await?;
+    Ok(Json(facets))
+}
+
 /// Flat list of all connection folders (id, name, parent_id) so the
 /// frontend can render the nested folder tree on Dashboard. Folder names
 /// are not sensitive — admin-only mutations stay on `/api/admin/...`.

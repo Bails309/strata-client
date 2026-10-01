@@ -4,9 +4,11 @@ import { useSettings } from "../../../contexts/SettingsContext";
 
 interface Props {
   members: User[];
+  /** Members in all, when more exist than were loaded. */
+  total?: number;
 }
 
-export default function RoleMembersTab({ members }: Props) {
+export default function RoleMembersTab({ members, total = members.length }: Props) {
   const { formatDateTime } = useSettings();
   const [search, setSearch] = useState("");
   const q = search.trim().toLowerCase();
@@ -39,7 +41,12 @@ export default function RoleMembersTab({ members }: Props) {
 
       <div className="role-tree-card">
         <div className="role-tree-caption">
-          Assigned users ({members.length})<span>Each user holds exactly one role.</span>
+          Assigned users ({total})
+          <span>
+            {total > members.length
+              ? `Showing the first ${members.length}; search the Users table for the rest.`
+              : "Each user holds exactly one role."}
+          </span>
         </div>
         {members.length === 0 ? (
           <p className="role-empty">No users hold this role.</p>

@@ -4,7 +4,9 @@ import userEvent from "@testing-library/user-event";
 
 vi.mock("../api", () => ({
   createRole: vi.fn(),
+  getConnectionRefs: vi.fn(),
   getRoleMappings: vi.fn(),
+  getUsersPage: vi.fn(),
   updateRole: vi.fn(),
   updateRoleMappings: vi.fn(),
 }));
@@ -14,7 +16,9 @@ vi.mock("../contexts/SettingsContext", () => ({
 
 import {
   createRole,
+  getConnectionRefs,
   getRoleMappings,
+  getUsersPage,
   updateRole,
   updateRoleMappings,
   type Connection,
@@ -24,6 +28,7 @@ import {
 } from "../api";
 import EditRoleModal from "../pages/admin/roles/EditRoleModal";
 import { draftFromRole, inheritedConnectionIds } from "../pages/admin/roles/roleModel";
+import { toRefs } from "./fakeListServer";
 
 const baseRole = (over: Partial<Role> & { id: string; name: string }): Role => ({
   can_manage_system: false,
@@ -83,8 +88,6 @@ function open(role: Role | null, over: Partial<Parameters<typeof EditRoleModal>[
     role,
     roles: [ADMIN, HELPDESK],
     folders: FOLDERS,
-    connections: CONNS,
-    users: USERS,
     onClose: vi.fn(),
     onSaved: vi.fn(),
     ...over,
@@ -94,6 +97,14 @@ function open(role: Role | null, over: Partial<Parameters<typeof EditRoleModal>[
 }
 
 beforeEach(() => {
+  vi.mocked(getConnectionRefs).mockReset().mockResolvedValue(toRefs(CONNS));
+  vi.mocked(getUsersPage)
+    .mockReset()
+    .mockImplementation(async (_page, _perPage, f) => {
+      const name = [ADMIN, HELPDESK].find((r) => r.id === f?.role_id)?.name;
+      const items = USERS.filter((u) => u.role_name === name);
+      return { items, total: items.length };
+    });
   vi.mocked(getRoleMappings).mockReset().mockResolvedValue({ connection_ids: [], folder_ids: [] });
   vi.mocked(updateRole)
     .mockReset()

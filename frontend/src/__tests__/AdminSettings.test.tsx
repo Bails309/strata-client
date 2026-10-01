@@ -36,6 +36,10 @@ vi.mock("../api", () => ({
   getRoleMappings: vi.fn().mockResolvedValue({ connection_ids: [], folder_ids: [] }),
   updateRoleMappings: vi.fn(),
   getConnections: vi.fn(),
+  getConnectionsPage: vi.fn(),
+  getConnectionRefs: vi.fn(),
+  getFleetSummary: vi.fn(),
+  moveConnections: vi.fn(),
   createConnection: vi.fn(),
   updateConnection: vi.fn(),
   deleteConnection: vi.fn(),
@@ -44,6 +48,7 @@ vi.mock("../api", () => ({
   updateConnectionFolder: vi.fn(),
   deleteConnectionFolder: vi.fn(),
   getUsers: vi.fn(),
+  getUsersPage: vi.fn(),
   updateUser: vi.fn(),
   getActiveSessions: vi.fn(),
   killSessions: vi.fn(),
@@ -103,12 +108,17 @@ vi.mock("../contexts/SettingsContext", () => ({
 }));
 
 import AdminSettings from "../pages/AdminSettings";
+import { adminMatches, adminPage, fleetSummary, toRefs, usersPage } from "./fakeListServer";
 import {
   getSettings,
   getRoles,
   getConnections,
+  getConnectionsPage,
+  getConnectionRefs,
+  getFleetSummary,
   getConnectionFolders,
   getUsers,
+  getUsersPage,
   getServiceHealth,
   getMetrics,
   testSsoConnection,
@@ -236,6 +246,17 @@ function setupDefaults() {
   vi.mocked(getConnections).mockResolvedValue([]);
   vi.mocked(getConnectionFolders).mockResolvedValue([]);
   vi.mocked(getUsers).mockResolvedValue([]);
+  // The paged endpoints answer from whatever full lists the test mocked.
+  vi.mocked(getConnectionsPage).mockImplementation(async (page, perPage, f) =>
+    adminPage(await getConnections(), await getConnectionFolders(), page, perPage, f)
+  );
+  vi.mocked(getConnectionRefs).mockImplementation(async (f) =>
+    toRefs(adminMatches(await getConnections(), await getConnectionFolders(), f))
+  );
+  vi.mocked(getFleetSummary).mockImplementation(async () => fleetSummary(await getConnections()));
+  vi.mocked(getUsersPage).mockImplementation(async (page, perPage, f) =>
+    usersPage(await getUsers(true), page, perPage, f)
+  );
   vi.mocked(getServiceHealth).mockResolvedValue(healthOk);
   vi.mocked(getMetrics).mockResolvedValue(metricsOk);
   vi.mocked(getActiveSessions).mockResolvedValue([]);

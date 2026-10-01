@@ -1,4 +1,4 @@
-import type { Connection, Role } from "../../../api";
+import type { Role } from "../../../api";
 
 export type RoleFlag =
   | "can_manage_system"
@@ -165,7 +165,7 @@ export const grantsAllConnections = (draft: RoleDraft) =>
  */
 export function inheritedConnectionIds(
   folderIds: ReadonlySet<string>,
-  connections: Pick<Connection, "id" | "folder_id">[]
+  connections: { id: string; folder_id?: string | null }[]
 ): Set<string> {
   const out = new Set<string>();
   for (const c of connections) {

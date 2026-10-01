@@ -127,7 +127,9 @@ mod tests {
     #[tokio::test]
     async fn a_hash_verifies_its_own_password_only() {
         let stored = hash("correct horse".into()).await.unwrap();
-        assert!(verify("correct horse".into(), stored.clone()).await.unwrap());
+        assert!(verify("correct horse".into(), stored.clone())
+            .await
+            .unwrap());
         assert!(!verify("wrong".into(), stored).await.unwrap());
     }
 
@@ -141,10 +143,7 @@ mod tests {
         let parsed = PasswordHash::new(&DUMMY_HASH).unwrap();
         let real = pinned_argon2();
         assert_eq!(parsed.algorithm, argon2::Algorithm::Argon2id.ident());
-        assert_eq!(
-            parsed.params.get_decimal("m"),
-            Some(real.params().m_cost())
-        );
+        assert_eq!(parsed.params.get_decimal("m"), Some(real.params().m_cost()));
         assert_eq!(parsed.params.get_decimal("t"), Some(real.params().t_cost()));
         assert_eq!(parsed.params.get_decimal("p"), Some(real.params().p_cost()));
     }

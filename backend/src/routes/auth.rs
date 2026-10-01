@@ -1278,8 +1278,7 @@ pub async fn refresh(
         chrono::DateTime::from_timestamp(claims.exp, 0).unwrap_or_else(chrono::Utc::now),
         &crate::services::refresh_tokens::Successor {
             jti: new_refresh_jti,
-            expires_at: chrono::Utc::now()
-                + chrono::Duration::seconds(REFRESH_TOKEN_TTL as i64),
+            expires_at: chrono::Utc::now() + chrono::Duration::seconds(REFRESH_TOKEN_TTL as i64),
         },
     )
     .await?;

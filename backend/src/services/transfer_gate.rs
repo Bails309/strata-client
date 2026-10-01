@@ -131,7 +131,9 @@ impl TransferGate for PolicyGate {
 
 /// The last component of a browser path, which is what the share records.
 fn leaf(name: &str) -> &str {
-    name.rsplit('/').find(|part| !part.is_empty()).unwrap_or(name)
+    name.rsplit('/')
+        .find(|part| !part.is_empty())
+        .unwrap_or(name)
 }
 
 async fn file_size(path: &Path) -> u64 {

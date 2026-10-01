@@ -272,14 +272,19 @@ async fn with_account_lock<T>(
 
     let result = tokio::time::timeout(OPERATION_DEADLINE, op)
         .await
-        .unwrap_or_else(|_| Err(AppError::Internal(format!("Password {operation} timed out"))));
+        .unwrap_or_else(|_| {
+            Err(AppError::Internal(format!(
+                "Password {operation} timed out"
+            )))
+        });
 
-    if let Err(e) =
-        sqlx::query("DELETE FROM managed_account_locks WHERE account_key = $1 AND operation_id = $2")
-            .bind(&key)
-            .bind(operation_id)
-            .execute(pool)
-            .await
+    if let Err(e) = sqlx::query(
+        "DELETE FROM managed_account_locks WHERE account_key = $1 AND operation_id = $2",
+    )
+    .bind(&key)
+    .bind(operation_id)
+    .execute(pool)
+    .await
     {
         tracing::warn!("could not release the lock on managed account '{key}': {e}");
     }

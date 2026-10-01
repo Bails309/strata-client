@@ -15,6 +15,7 @@ vi.mock("../api", () => ({
   updateCredentialProfile: vi.fn(),
   deleteCredentialProfile: vi.fn(),
   getProfileMappings: vi.fn(),
+  getMyCredentialMappings: vi.fn(),
   setCredentialMapping: vi.fn(),
   removeCredentialMapping: vi.fn(),
   getMyConnections: vi.fn(),
@@ -66,6 +67,7 @@ import {
   getMyConnections,
   getServiceHealth,
   getProfileMappings,
+  getMyCredentialMappings,
   removeCredentialMapping,
   getMyCheckouts,
   getMyManagedAccounts,
@@ -148,6 +150,16 @@ function setupDefaults() {
   vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
   vi.mocked(getServiceHealth).mockResolvedValue(vaultConfigured);
   vi.mocked(getProfileMappings).mockResolvedValue([]);
+  // Tests describe mappings per profile; the page fetches them all at once.
+  vi.mocked(getMyCredentialMappings).mockImplementation(async () => {
+    const owned = await getCredentialProfiles();
+    const rows = await Promise.all(
+      owned.map(async (p) =>
+        (await getProfileMappings(p.id)).map((m) => ({ ...m, profile_id: p.id }))
+      )
+    );
+    return rows.flat();
+  });
 }
 
 describe("Credentials", () => {

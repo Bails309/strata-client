@@ -41,7 +41,7 @@ vi.mock("../api", () => ({
   getFavorites: vi.fn(),
   toggleFavorite: vi.fn(),
   getCredentialProfiles: vi.fn(),
-  getProfileMappings: vi.fn(),
+  getMyCredentialMappings: vi.fn(),
   setCredentialMapping: vi.fn(),
   removeCredentialMapping: vi.fn(),
   createTunnelTicket: vi.fn(),
@@ -81,7 +81,7 @@ import {
   getFavorites,
   getCredentialProfiles,
   getStatus,
-  getProfileMappings,
+  getMyCredentialMappings,
   toggleFavorite,
   setCredentialMapping,
   removeCredentialMapping,
@@ -176,6 +176,7 @@ describe("Dashboard", () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
     vi.mocked(getFavorites).mockResolvedValue([]);
     vi.mocked(getCredentialProfiles).mockResolvedValue([]);
+    vi.mocked(getMyCredentialMappings).mockResolvedValue([]);
     vi.mocked(getTags).mockResolvedValue([]);
     vi.mocked(getConnectionTags).mockResolvedValue({});
     vi.mocked(getAdminTags).mockResolvedValue([]);
@@ -287,7 +288,7 @@ describe("Dashboard", () => {
         extended_expiry: false,
       },
     ]);
-    vi.mocked(getProfileMappings).mockResolvedValue([]);
+    vi.mocked(getMyCredentialMappings).mockResolvedValue([]);
     renderDashboard();
     await screen.findByText("Server Alpha");
     // Profile selector should appear per-row when vault is configured - shows "None" as default
@@ -489,7 +490,7 @@ describe("Dashboard", () => {
         expired: false,
       },
     ]);
-    vi.mocked(getProfileMappings).mockResolvedValue([]);
+    vi.mocked(getMyCredentialMappings).mockResolvedValue([]);
     vi.mocked(setCredentialMapping).mockResolvedValue({ status: "success" });
     renderDashboard();
     await screen.findByText("Server Alpha");
@@ -631,8 +632,8 @@ describe("Dashboard", () => {
         expired: false,
       },
     ]);
-    vi.mocked(getProfileMappings).mockResolvedValue([
-      { connection_id: "1", connection_name: "Server Alpha", protocol: "rdp" },
+    vi.mocked(getMyCredentialMappings).mockResolvedValue([
+      { profile_id: "p1", connection_id: "1", connection_name: "Server Alpha", protocol: "rdp" },
     ]);
     vi.mocked(getMyConnections).mockResolvedValue([
       {
@@ -692,8 +693,8 @@ describe("Dashboard", () => {
         expired: true,
       },
     ]);
-    vi.mocked(getProfileMappings).mockResolvedValue([
-      { connection_id: "1", connection_name: "Server Alpha", protocol: "rdp" },
+    vi.mocked(getMyCredentialMappings).mockResolvedValue([
+      { profile_id: "p1", connection_id: "1", connection_name: "Server Alpha", protocol: "rdp" },
     ]);
     vi.mocked(getMyConnections).mockResolvedValue([
       {
@@ -898,8 +899,13 @@ describe("Dashboard", () => {
         expired: false,
       },
     ]);
-    vi.mocked(getProfileMappings).mockResolvedValue([
-      { connection_id: "1", connection_name: "Server Alpha", protocol: "rdp" },
+    vi.mocked(getMyCredentialMappings).mockResolvedValue([
+      {
+        profile_id: "prof1",
+        connection_id: "1",
+        connection_name: "Server Alpha",
+        protocol: "rdp",
+      },
     ]);
     vi.mocked(removeCredentialMapping).mockResolvedValue({ status: "ok" });
     renderDashboard();
@@ -954,7 +960,7 @@ describe("Dashboard", () => {
         expired: true,
       },
     ]);
-    vi.mocked(getProfileMappings).mockResolvedValue([]);
+    vi.mocked(getMyCredentialMappings).mockResolvedValue([]);
     renderDashboard();
     await screen.findByText("Server Alpha");
     // Open profile selector
@@ -1012,7 +1018,7 @@ describe("Dashboard", () => {
     vi.mocked(getCredentialProfiles).mockResolvedValue([
       { id: "p1", label: "Admin", expired: false } as any,
     ]);
-    vi.mocked(getProfileMappings).mockRejectedValue(new Error("fail"));
+    vi.mocked(getMyCredentialMappings).mockRejectedValue(new Error("fail"));
     renderDashboard();
     await screen.findByText("Server Alpha");
     // Should just show "None" for all profiles
@@ -1026,7 +1032,7 @@ describe("Dashboard", () => {
     vi.mocked(getCredentialProfiles).mockResolvedValue([
       { id: "p1", label: "Admin", expired: false } as any,
     ]);
-    vi.mocked(getProfileMappings).mockResolvedValue([]);
+    vi.mocked(getMyCredentialMappings).mockResolvedValue([]);
     vi.mocked(setCredentialMapping).mockRejectedValue(new Error("fail"));
     renderDashboard();
     await screen.findByText("Server Alpha");

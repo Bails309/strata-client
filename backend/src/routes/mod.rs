@@ -433,7 +433,7 @@ pub fn build_router(state: SharedState) -> Router {
         )
         .route(
             "/api/user/credential-mappings",
-            put(user::set_credential_mapping),
+            put(user::set_credential_mapping).get(user::list_my_credential_mappings),
         )
         .route(
             "/api/user/credential-mappings/{connection_id}",

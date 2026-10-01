@@ -11,7 +11,7 @@ import {
   getFavorites,
   toggleFavorite,
   getCredentialProfiles,
-  getProfileMappings,
+  getMyCredentialMappings,
   getMyCheckouts,
   setCredentialMapping,
   removeCredentialMapping,
@@ -242,22 +242,16 @@ export default function Dashboard() {
 
   const loadProfiles = useCallback(async () => {
     try {
-      const profiles = await getCredentialProfiles();
+      const [profiles, mappings] = await Promise.all([
+        getCredentialProfiles(),
+        getMyCredentialMappings().catch(() => []),
+      ]);
       setCredProfiles(profiles);
       // Build reverse map: connection_id → profile_id
       const map: Record<string, string> = {};
-      await Promise.all(
-        profiles.map(async (p) => {
-          try {
-            const mappings = await getProfileMappings(p.id);
-            for (const m of mappings) {
-              map[m.connection_id] = p.id;
-            }
-          } catch {
-            /* ignore */
-          }
-        })
-      );
+      for (const m of mappings) {
+        map[m.connection_id] = m.profile_id;
+      }
       setConnProfileMap(map);
     } catch {
       /* vault may not be configured */

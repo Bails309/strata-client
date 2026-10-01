@@ -2157,12 +2157,7 @@ pub async fn create_user(
 
         auth::validate_password(&plain)?;
 
-        use argon2::{password_hash::SaltString, PasswordHasher};
-        let salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
-        let hash = crate::services::password::pinned_argon2()
-            .hash_password(plain.as_bytes(), &salt)
-            .map_err(|e| AppError::Internal(format!("Argon2 error: {e}")))?
-            .to_string();
+        let hash = crate::services::password::hash(plain.clone()).await?;
 
         (Some(hash), Some(plain))
     } else {
@@ -2266,12 +2261,7 @@ pub async fn reset_user_password(
         .map(char::from)
         .collect();
 
-    use argon2::{password_hash::SaltString, PasswordHasher};
-    let salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
-    let hash = crate::services::password::pinned_argon2()
-        .hash_password(plain.as_bytes(), &salt)
-        .map_err(|e| AppError::Internal(format!("Argon2 error: {e}")))?
-        .to_string();
+    let hash = crate::services::password::hash(plain.clone()).await?;
 
     users_svc::set_password_hash(&db.pool, id, &hash).await?;
 

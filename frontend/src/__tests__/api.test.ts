@@ -58,6 +58,7 @@ import {
   updateCredentialProfile,
   deleteCredentialProfile,
   getProfileMappings,
+  getMyCredentialMappings,
   setCredentialMapping,
   removeCredentialMapping,
   getConnectionInfo,
@@ -726,6 +727,13 @@ describe("API endpoint functions", () => {
     const fn = mockFetch([]);
     await getProfileMappings("p1");
     expect(lastCall(fn).url).toBe("/api/user/credential-profiles/p1/mappings");
+  });
+
+  it("getMyCredentialMappings sends one GET for every profile", async () => {
+    const fn = mockFetch([]);
+    await getMyCredentialMappings();
+    expect(lastCall(fn).url).toBe("/api/user/credential-mappings");
+    expect(lastCall(fn).method).toBe("GET");
   });
 
   it("setCredentialMapping sends PUT", async () => {

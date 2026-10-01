@@ -15,7 +15,7 @@ import {
   createCredentialProfile,
   updateCredentialProfile,
   deleteCredentialProfile,
-  getProfileMappings,
+  getMyCredentialMappings,
   setCredentialMapping,
   removeCredentialMapping,
   getMyConnections,
@@ -141,16 +141,16 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
         .catch(() => {});
 
       // Load mappings for all profiles
-      const m: Record<string, CredentialMapping[]> = {};
-      await Promise.all(
-        profs.map(async (p) => {
-          try {
-            m[p.id] = await getProfileMappings(p.id);
-          } catch {
-            m[p.id] = [];
-          }
-        })
+      const m: Record<string, CredentialMapping[]> = Object.fromEntries(
+        profs.map((p) => [p.id, [] as CredentialMapping[]])
       );
+      try {
+        for (const { profile_id, ...row } of await getMyCredentialMappings()) {
+          m[profile_id]?.push(row);
+        }
+      } catch {
+        /* shown as unmapped */
+      }
       setMappings(m);
     } catch {
       setError("Failed to load credential data");

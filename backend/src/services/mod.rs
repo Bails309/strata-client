@@ -34,6 +34,7 @@ pub mod notifications;
 pub mod outbound_share_ingest;
 pub mod outbound_shares;
 pub mod password;
+pub mod recording_index;
 pub mod recordings;
 pub mod refresh_tokens;
 pub mod request_id;

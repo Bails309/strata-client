@@ -3,7 +3,7 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use crate::config::VaultConfig;
 use crate::error::AppError;
@@ -161,13 +161,8 @@ async fn vault_post_with_retry_inner<T: Serialize>(
 /// 2. Encrypt plaintext with DEK (AES-256-GCM)
 /// 3. Wrap DEK via Vault Transit
 pub async fn seal(vault: &VaultConfig, plaintext: &[u8]) -> Result<SealedCredential, AppError> {
-    let b64 = base64::engine::general_purpose::STANDARD;
-
-    // 1. Generate random DEK (32 bytes for AES-256)
-    let mut dek: [u8; 32] = rand::rng().random();
-
-    // 2. Encrypt plaintext with DEK
-    let cipher = Aes256Gcm::new_from_slice(&dek)
+    let (dek, encrypted_dek) = new_data_key(vault).await?;
+    let cipher = Aes256Gcm::new_from_slice(&*dek)
         .map_err(|e| AppError::Internal(format!("AES init: {e}")))?;
 
     let nonce_bytes: [u8; 12] = rand::rng().random();
@@ -177,7 +172,19 @@ pub async fn seal(vault: &VaultConfig, plaintext: &[u8]) -> Result<SealedCredent
         .encrypt(&nonce, plaintext)
         .map_err(|e| AppError::Internal(format!("AES encrypt: {e}")))?;
 
-    // 3. Wrap DEK via Vault Transit engine (with retry)
+    Ok(SealedCredential {
+        ciphertext,
+        encrypted_dek,
+        nonce: nonce_bytes.to_vec(),
+    })
+}
+
+/// A fresh random 256-bit data key, and the same key wrapped by Vault
+/// Transit for storage.
+pub async fn new_data_key(vault: &VaultConfig) -> Result<(Zeroizing<[u8; 32]>, Vec<u8>), AppError> {
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let dek = Zeroizing::new(rand::rng().random::<[u8; 32]>());
+
     let url = format!(
         "{}/v1/transit/encrypt/{}",
         vault.address.trim_end_matches('/'),
@@ -188,7 +195,7 @@ pub async fn seal(vault: &VaultConfig, plaintext: &[u8]) -> Result<SealedCredent
         &url,
         &vault.token,
         &VaultEncryptRequest {
-            plaintext: b64.encode(dek),
+            plaintext: b64.encode(*dek),
         },
     )
     .await?;
@@ -206,30 +213,16 @@ pub async fn seal(vault: &VaultConfig, plaintext: &[u8]) -> Result<SealedCredent
         .await
         .map_err(|e| AppError::Vault(format!("Vault response parse: {e}")))?;
 
-    let encrypted_dek = vault_resp.data.ciphertext.into_bytes();
-
-    // Zeroize plaintext DEK from memory
-    dek.zeroize();
-
-    Ok(SealedCredential {
-        ciphertext,
-        encrypted_dek,
-        nonce: nonce_bytes.to_vec(),
-    })
+    Ok((dek, vault_resp.data.ciphertext.into_bytes()))
 }
 
-/// Decrypt a credential using envelope encryption:
-/// 1. Unwrap DEK via Vault Transit
-/// 2. Decrypt ciphertext with DEK (AES-256-GCM)
-pub async fn unseal(
+/// Unwrap a data key produced by [`new_data_key`].
+pub async fn unwrap_data_key(
     vault: &VaultConfig,
     encrypted_dek: &[u8],
-    ciphertext: &[u8],
-    nonce_bytes: &[u8],
-) -> Result<Vec<u8>, AppError> {
+) -> Result<Zeroizing<Vec<u8>>, AppError> {
     let b64 = base64::engine::general_purpose::STANDARD;
 
-    // 1. Unwrap DEK via Vault Transit (with retry)
     let url = format!(
         "{}/v1/transit/decrypt/{}",
         vault.address.trim_end_matches('/'),
@@ -261,13 +254,32 @@ pub async fn unseal(
         .await
         .map_err(|e| AppError::Vault(format!("Vault response parse: {e}")))?;
 
-    let mut dek = b64
-        .decode(&vault_resp.data.plaintext)
-        .map_err(|e| AppError::Vault(format!("DEK base64 decode: {e}")))?;
+    b64.decode(&vault_resp.data.plaintext)
+        .map(Zeroizing::new)
+        .map_err(|e| AppError::Vault(format!("DEK base64 decode: {e}")))
+}
 
-    // 2. Decrypt ciphertext with DEK
-    let cipher = Aes256Gcm::new_from_slice(&dek)
-        .map_err(|e| AppError::Internal(format!("AES init: {e}")))?;
+/// Decrypt a credential using envelope encryption:
+/// 1. Unwrap DEK via Vault Transit
+/// 2. Decrypt ciphertext with DEK (AES-256-GCM)
+pub async fn unseal(
+    vault: &VaultConfig,
+    encrypted_dek: &[u8],
+    ciphertext: &[u8],
+    nonce_bytes: &[u8],
+) -> Result<Vec<u8>, AppError> {
+    let dek = unwrap_data_key(vault, encrypted_dek).await?;
+    decrypt_with_key(&dek, ciphertext, nonce_bytes)
+}
+
+/// AES-256-GCM decrypt of a [`seal`]ed payload with an unwrapped data key.
+pub fn decrypt_with_key(
+    dek: &[u8],
+    ciphertext: &[u8],
+    nonce_bytes: &[u8],
+) -> Result<Vec<u8>, AppError> {
+    let cipher =
+        Aes256Gcm::new_from_slice(dek).map_err(|e| AppError::Internal(format!("AES init: {e}")))?;
 
     if nonce_bytes.len() != 12 {
         return Err(AppError::Internal(format!(
@@ -278,14 +290,9 @@ pub async fn unseal(
     let mut nonce_arr = [0u8; 12];
     nonce_arr.copy_from_slice(nonce_bytes);
     let nonce = Nonce::from(nonce_arr);
-    let plaintext = cipher
+    cipher
         .decrypt(&nonce, ciphertext)
-        .map_err(|e| AppError::Internal(format!("AES decrypt: {e}")))?;
-
-    // Zeroize DEK from memory
-    dek.zeroize();
-
-    Ok(plaintext)
+        .map_err(|e| AppError::Internal(format!("AES decrypt: {e}")))
 }
 
 /// Encode sealed bytes into a `vault:{json}` envelope string.

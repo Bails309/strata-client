@@ -57,7 +57,7 @@ jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
 
 # Cryptography (envelope encryption)
-aes-gcm = "0.10"
+aes-gcm = { version = "0.10", features = ["stream"] }
 # Chromium Login Data password store (rustguac parity, web sessions): the
 # Linux `--password-store=basic` profile uses AES-128-CBC with a key derived
 # via PBKDF2-HMAC-SHA1 from the literal "peanuts" passphrase + "saltysalt"

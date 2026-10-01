@@ -280,6 +280,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   figures were computed (`generated_at`). Active sessions and the
   recording setting stay live. No rollup tables were added: the window
   is a fixed 30 days and `recordings.started_at` is already indexed.
+- **Outbound shares are encrypted and decrypted in chunks (PERF-03).** A
+  submission no longer loads the whole file into memory to hash and
+  encrypt it, and a download no longer holds both the ciphertext and the
+  plaintext. Files are sealed in 64 KiB AES-256-GCM chunks under the
+  STREAM construction, with one Vault-wrapped key per file, and hashed
+  in the same pass. A download authenticates the whole file before it
+  spends the one-shot link, then decrypts as it sends. At most four files
+  are encrypted or verified at once by default
+  (`STRATA_FILE_CRYPTO_CONCURRENCY`), and a failed submission leaves no
+  ciphertext behind. Shares staged before the upgrade still download
+  (migration 100 records each blob's format).
 
 ## [2.2.0] — 2026-09-25
 

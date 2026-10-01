@@ -376,6 +376,12 @@ pub async fn update_settings(
 
     // Block restricted keys — must use dedicated endpoints
     validate_no_restricted_keys(&body.settings)?;
+    for kv in &body.settings {
+        if kv.key == crate::services::web_session::SETTING_WEB_ALLOWED_NETWORKS {
+            crate::services::web_session::validate_allowed_networks(&kv.value)
+                .map_err(|e| AppError::Validation(format!("Web allowed networks: {e}")))?;
+        }
+    }
 
     for kv in &body.settings {
         // If it's a sensitive key and matches a redaction mask, skip updating it

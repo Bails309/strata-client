@@ -76,6 +76,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list refuses the launch, as the docs always said. Loopback and
   link-local addresses (including `169.254.169.254`) are refused even
   under `0.0.0.0/0`.
+- **`web_allowed_networks` can be edited in the UI.** Admin → Network has a
+  *Web Browser Sessions → Allowed Networks* field; until now the setting had
+  no editor, so the fail-closed check above refused every web session.
+  Single IP addresses are accepted alongside CIDR ranges, and invalid entries
+  are rejected on save instead of being silently dropped.
 - **SFTP uploads never follow a symlink (SEC-11).** An existing symlink at
   the target name is refused; an existing file is removed and the upload
   is created with `O_EXCL`, so a link planted mid-upload makes the create

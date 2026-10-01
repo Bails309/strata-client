@@ -4,7 +4,7 @@
    eslint.config.js W4-1 commentary. */
 import { useEffect, useState } from "react";
 import EnterpriseCheckbox from "../../components/EnterpriseCheckbox";
-import { updateDns } from "../../api";
+import { updateDns, updateSettings } from "../../api";
 
 export default function NetworkTab({
   settings,
@@ -16,6 +16,7 @@ export default function NetworkTab({
   const [dnsEnabled, setDnsEnabled] = useState(settings.dns_enabled === "true");
   const [dnsServers, setDnsServers] = useState(settings.dns_servers || "");
   const [dnsSearchDomains, setDnsSearchDomains] = useState(settings.dns_search_domains || "");
+  const [webNetworks, setWebNetworks] = useState(settings.web_allowed_networks || "");
   const [saving, setSaving] = useState(false);
   const [restartNeeded, setRestartNeeded] = useState(false);
 
@@ -23,12 +24,16 @@ export default function NetworkTab({
     setDnsEnabled(settings.dns_enabled === "true");
     setDnsServers(settings.dns_servers || "");
     setDnsSearchDomains(settings.dns_search_domains || "");
+    setWebNetworks(settings.web_allowed_networks || "");
   }, [settings]);
 
   async function handleSave() {
     setSaving(true);
     setRestartNeeded(false);
     try {
+      if (webNetworks.trim() !== (settings.web_allowed_networks || "").trim()) {
+        await updateSettings([{ key: "web_allowed_networks", value: webNetworks.trim() }]);
+      }
       const res = await updateDns({
         dns_enabled: dnsEnabled,
         dns_servers: dnsServers.trim(),
@@ -85,6 +90,20 @@ export default function NetworkTab({
   }
 
   const searchDomainError = validateSearchDomains();
+
+  // Shape check only; the server parses each entry as a CIDR or IP.
+  function validateWebNetworks(): string | null {
+    for (const entry of webNetworks.split(/[\s,]+/).filter(Boolean)) {
+      // One character class plus a bounded optional suffix — not ReDoS-vulnerable.
+      // eslint-disable-next-line security/detect-unsafe-regex
+      if (!/^[0-9a-fA-F:.]+(\/\d{1,3})?$/.test(entry)) {
+        return `Invalid network: "${entry}". Use CIDR ranges (10.0.0.0/8) or IP addresses.`;
+      }
+    }
+    return null;
+  }
+
+  const webNetworksError = validateWebNetworks();
 
   const dnsServerList = dnsServers
     .split(",")
@@ -209,6 +228,32 @@ export default function NetworkTab({
             </div>
           </div>
         )}
+
+        <div className="pt-6 border-t border-border/10">
+          <h4 className="text-sm font-semibold text-txt-primary uppercase tracking-wider mb-4">
+            Web Browser Sessions
+          </h4>
+          <div className="form-group">
+            <label htmlFor="web-allowed-networks" className="form-label">
+              Allowed Networks
+            </label>
+            <textarea
+              id="web-allowed-networks"
+              className="input font-mono"
+              rows={4}
+              value={webNetworks}
+              onChange={(e) => setWebNetworks(e.target.value)}
+              placeholder={"e.g. 10.0.0.0/8\n192.168.0.0/16"}
+            />
+            <p className="text-sm text-txt-secondary mt-1">
+              CIDR ranges or IP addresses, one per line or comma-separated. A web session only
+              starts if every address its URL resolves to is in this list. Empty blocks all web
+              sessions; <code>0.0.0.0/0</code> allows the public internet. Loopback and link-local
+              addresses (including cloud metadata) are always refused.
+            </p>
+            {webNetworksError && <p className="text-sm text-danger mt-1">{webNetworksError}</p>}
+          </div>
+        </div>
       </div>
 
       {restartNeeded && (
@@ -226,7 +271,11 @@ export default function NetworkTab({
         <button
           className="btn btn-primary"
           onClick={handleSave}
-          disabled={saving || (dnsEnabled && (!!validationError || !!searchDomainError))}
+          disabled={
+            saving ||
+            !!webNetworksError ||
+            (dnsEnabled && (!!validationError || !!searchDomainError))
+          }
         >
           {saving ? "Saving..." : "Save Network Settings"}
         </button>

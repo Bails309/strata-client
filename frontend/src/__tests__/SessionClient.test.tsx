@@ -510,6 +510,40 @@ describe("SessionClient", () => {
     expect(root.getByText("Saved Credential Profile")).toBeInTheDocument();
   });
 
+  it("sends the domain typed at the prompt", async () => {
+    vi.mocked(api.getConnectionInfo).mockResolvedValue({ protocol: "rdp", has_credentials: false });
+    vi.mocked(api.getCredentialProfiles).mockResolvedValue([]);
+    await renderSessionClient();
+
+    const root = within(document.getElementById("root")!);
+    const input = async (label: string) =>
+      (await root.findByText(label)).nextElementSibling as HTMLInputElement;
+    fireEvent.change(await input("Username"), { target: { value: "alice" } });
+    fireEvent.change(await input("Password"), { target: { value: "pw" } });
+    fireEvent.change(await input("Domain"), { target: { value: " CORP " } });
+    fireEvent.submit(root.getByRole("button", { name: "Connect" }).closest("form")!);
+
+    await waitFor(() =>
+      expect(api.createTunnelTicket).toHaveBeenCalledWith(
+        expect.objectContaining({ username: "alice", password: "pw", domain: "CORP" })
+      )
+    );
+  });
+
+  it("does not ask for a domain the connection already sets", async () => {
+    vi.mocked(api.getConnectionInfo).mockResolvedValue({
+      protocol: "rdp",
+      has_credentials: false,
+      has_domain: true,
+    });
+    vi.mocked(api.getCredentialProfiles).mockResolvedValue([]);
+    await renderSessionClient();
+
+    const root = within(document.getElementById("root")!);
+    expect(await root.findByText("Username")).toBeInTheDocument();
+    expect(root.queryByText("Domain")).not.toBeInTheDocument();
+  });
+
   it("does not prompt for credentials on a VDI connection", async () => {
     // VDI tunnels as RDP at the wire level but Strata auto-provisions
     // ephemeral credentials on the backend (the entrypoint creates

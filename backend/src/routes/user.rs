@@ -2520,7 +2520,7 @@ pub async fn connection_info(
     }
 
     // Fetch protocol, extra params, and watermark setting for this connection
-    let (protocol, extra, watermark, name) =
+    let (protocol, extra, watermark, name, has_domain) =
         crate::services::connections::get_session_info(&db.pool, connection_id)
             .await?
             .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
@@ -2565,6 +2565,7 @@ pub async fn connection_info(
 
     let mut resp = json!({
         "name": name,
+        "has_domain": has_domain,
         "protocol": protocol,
         "has_credentials": has_vault_creds,
         "ignore_cert": ignore_cert,

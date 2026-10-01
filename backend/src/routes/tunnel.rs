@@ -116,6 +116,8 @@ pub struct CreateTicketRequest {
     pub connection_id: Uuid,
     pub username: Option<String>,
     pub password: Option<String>,
+    /// Domain typed at the credential prompt.
+    pub domain: Option<String>,
     pub credential_profile_id: Option<Uuid>,
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -123,6 +125,22 @@ pub struct CreateTicketRequest {
     pub ignore_cert: Option<bool>,
     pub webp: Option<bool>,
     pub h264: Option<bool>,
+}
+
+/// The prompt's domain, trimmed; blank is none.
+fn prompt_domain(domain: Option<String>) -> Result<Option<String>, AppError> {
+    let Some(domain) = domain
+        .map(|d| d.trim().to_owned())
+        .filter(|d| !d.is_empty())
+    else {
+        return Ok(None);
+    };
+    if domain.chars().count() > 255 || domain.chars().any(char::is_control) {
+        return Err(AppError::Validation(
+            "domain must be at most 255 characters, without control characters".into(),
+        ));
+    }
+    Ok(Some(domain))
 }
 
 pub async fn create_tunnel_ticket(
@@ -171,6 +189,7 @@ pub async fn create_tunnel_ticket(
         connection_id: body.connection_id,
         username: body.username,
         password: body.password,
+        domain: prompt_domain(body.domain)?,
         credential_profile_id: body.credential_profile_id,
         width: body.width.unwrap_or(1920),
         height: body.height.unwrap_or(1080),
@@ -301,6 +320,10 @@ pub async fn ws_tunnel(
         crate::services::connections::fetch_tunnel_details(&db.pool, connection_id)
             .await?
             .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
+    // A domain set on the connection wins over one typed at the prompt.
+    let domain = domain
+        .filter(|d| !d.trim().is_empty())
+        .or_else(|| ticket_creds.as_ref().and_then(|t| t.domain.clone()));
 
     // Admission (PERF-04): before any checkout, container or connection,
     // reserve this session's memory and count it against the user's
@@ -1483,6 +1506,23 @@ pub async fn ws_tunnel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_prompt_domain_is_trimmed_bounded_and_printable() {
+        assert_eq!(prompt_domain(None).unwrap(), None);
+        assert_eq!(prompt_domain(Some("  ".into())).unwrap(), None);
+        assert_eq!(
+            prompt_domain(Some(" CORP ".into())).unwrap().as_deref(),
+            Some("CORP")
+        );
+        assert!(prompt_domain(Some("CO\nRP".into())).is_err());
+        assert!(prompt_domain(Some("x".repeat(256))).is_err());
+        let r: CreateTicketRequest = serde_json::from_str(
+            r#"{"connection_id":"550e8400-e29b-41d4-a716-446655440000","domain":"CORP"}"#,
+        )
+        .unwrap();
+        assert_eq!(r.domain.as_deref(), Some("CORP"));
+    }
 
     // ── clamp_dimension ────────────────────────────────────────────
     #[test]

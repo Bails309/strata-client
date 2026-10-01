@@ -225,6 +225,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`VAULT_CACERT`, trusted for Vault calls alone) and refuses a Vault it
   cannot verify. Existing installs switch to `https://vault:8200` on the
   next `docker compose up`, with no setup to redo.
+- **The credential prompt's Domain field is used.** The RDP prompt asked
+  for a domain but never sent it, so whatever was typed was ignored. It is
+  now sent with the one-time credentials (`domain` on
+  `POST /api/tunnel/ticket`) and used when the connection sets no domain
+  of its own; when it does, the prompt no longer asks (`has_domain` on
+  the connection info).
 
 ### Build
 

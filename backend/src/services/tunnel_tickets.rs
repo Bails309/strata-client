@@ -12,6 +12,8 @@ pub struct TunnelTicket {
     pub connection_id: Uuid,
     pub username: Option<String>,
     pub password: Option<String>,
+    /// Typed at the credential prompt; used only when the connection has none.
+    pub domain: Option<String>,
     pub credential_profile_id: Option<Uuid>,
     pub width: u32,
     pub height: u32,
@@ -68,6 +70,7 @@ mod tests {
             connection_id: Uuid::new_v4(),
             username: Some("testuser".into()),
             password: Some("testpass".into()),
+            domain: None,
             credential_profile_id: None,
             width: 1920,
             height: 1080,
@@ -127,6 +130,7 @@ mod tests {
             connection_id: cid,
             username: Some("alice".into()),
             password: Some("pass123".into()),
+            domain: Some("CORP".into()),
             credential_profile_id: None,
             width: 2560,
             height: 1440,
@@ -142,6 +146,7 @@ mod tests {
         assert_eq!(consumed.connection_id, cid);
         assert_eq!(consumed.username.as_deref(), Some("alice"));
         assert_eq!(consumed.password.as_deref(), Some("pass123"));
+        assert_eq!(consumed.domain.as_deref(), Some("CORP"));
         assert_eq!(consumed.width, 2560);
         assert_eq!(consumed.height, 1440);
         assert_eq!(consumed.dpi, 144);
@@ -157,6 +162,7 @@ mod tests {
             connection_id: Uuid::new_v4(),
             username: None,
             password: None,
+            domain: None,
             credential_profile_id: None,
             width: 1920,
             height: 1080,

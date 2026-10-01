@@ -6,7 +6,6 @@ import {
   createConnectionFolder,
   deleteConnectionFolder,
   updateConnectionFolder,
-  type Connection,
   type ConnectionFolder,
 } from "../../api";
 import { buildFolderTree, type FolderNode } from "../../utils/folderTree";
@@ -56,7 +55,7 @@ export default function ConnectionFoldersView({
   onFoldersChanged,
 }: {
   folders: ConnectionFolder[];
-  connections: Connection[];
+  connections: { name: string; folder_id?: string | null }[];
   onFoldersChanged: (folders: ConnectionFolder[]) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());

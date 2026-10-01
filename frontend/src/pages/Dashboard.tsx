@@ -5,7 +5,6 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  getMyConnections,
   getConnectionInfo,
   Connection,
   getFavorites,
@@ -46,10 +45,15 @@ import EnterpriseCheckbox from "../components/EnterpriseCheckbox";
 import ConnectionEmptyState from "../components/ConnectionEmptyState";
 import ActiveFilterChips from "../components/ActiveFilterChips";
 import useConnectionFilter from "../hooks/useConnectionFilter";
+import useDashboardConnections, {
+  UNGROUPED,
+  type FolderRows,
+} from "../hooks/useDashboardConnections";
 import { useSettings } from "../contexts/SettingsContext";
 import { isWebPSupported } from "../utils/browserCapabilities";
 
 const PAGE_SIZE = 50;
+const SEARCH_DEBOUNCE_MS = 250;
 const FOLDER_VIEW_KEY = "strata-folder-view";
 const EXPANDED_FOLDERS_KEY = "strata-expanded-folders";
 const SHOW_FAVORITES_KEY = "strata-show-favorites";
@@ -198,7 +202,6 @@ interface TiledCredPrompt {
 }
 
 export default function Dashboard() {
-  const [connections, setConnections] = useState<Connection[]>([]);
   const [folders, setFolders] = useState<ConnectionFolder[]>([]);
   const [page, setPage] = useState(1);
   const [checked, setChecked] = useState<Set<string>>(new Set());
@@ -267,16 +270,6 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    getMyConnections()
-      .then((conns) => {
-        setConnections(conns);
-        // Auto-enable folder view if folders exist and user hasn't set a preference
-        if (localStorage.getItem(FOLDER_VIEW_KEY) === null && conns.some((c) => c.folder_id)) {
-          setFolderView(true);
-          localStorage.setItem(FOLDER_VIEW_KEY, "true");
-        }
-      })
-      .catch(() => {});
     getMyConnectionFolders()
       .then(setFolders)
       .catch(() => {});
@@ -336,22 +329,8 @@ export default function Dashboard() {
     });
   }, [credProfiles, allCheckouts]);
 
-  const enrichedConnections = useMemo(() => {
-    return connections.map((c) => ({
-      ...c,
-      isFavorite: favorites.has(c.id),
-      tags: allConnTagMap[c.id] || [],
-    }));
-  }, [connections, favorites, allConnTagMap]);
-
-  const {
-    filters,
-    setFilter,
-    resetAllFilters,
-    clearScope,
-    filteredConnections: filtered,
-    globalSearchMatches,
-  } = useConnectionFilter(enrichedConnections, {
+  // Filter state only: matching happens on the server.
+  const { filters, setFilter, resetAllFilters, clearScope } = useConnectionFilter<Connection>([], {
     searchQuery: "",
     favoritesOnly: localStorage.getItem(SHOW_FAVORITES_KEY) === "true",
     selectedTag: (() => {
@@ -369,6 +348,22 @@ export default function Dashboard() {
     selectedProtocol: "ALL",
   });
 
+  const [debouncedSearch, setDebouncedSearch] = useState(filters.searchQuery);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(filters.searchQuery.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [filters.searchQuery]);
+
+  const serverFilters = useMemo(
+    () => ({
+      search: debouncedSearch,
+      protocol: filters.selectedProtocol === "ALL" ? "" : filters.selectedProtocol,
+      favorites: filters.favoritesOnly,
+      tag: filters.selectedTag,
+    }),
+    [debouncedSearch, filters.selectedProtocol, filters.favoritesOnly, filters.selectedTag]
+  );
+
   useEffect(() => {
     localStorage.setItem(SHOW_FAVORITES_KEY, String(filters.favoritesOnly));
   }, [filters.favoritesOnly]);
@@ -383,41 +378,70 @@ export default function Dashboard() {
 
   useEffect(() => {
     setPage(1);
-  }, [filters]);
+  }, [serverFilters]);
+
+  const {
+    facets,
+    pageRows,
+    folderRows,
+    recents: recentConnections,
+    rowsById,
+    ensureFolders,
+    loadMore,
+    reload: reloadConnections,
+  } = useDashboardConnections({
+    filters: serverFilters,
+    folderView,
+    page,
+    pageSize: PAGE_SIZE,
+  });
+
+  // Default to the folder view when the user has folders and no preference.
+  useEffect(() => {
+    if (
+      facets &&
+      localStorage.getItem(FOLDER_VIEW_KEY) === null &&
+      facets.folders.some((f) => f.folder_id)
+    ) {
+      setFolderView(true);
+      localStorage.setItem(FOLDER_VIEW_KEY, "true");
+    }
+  }, [facets]);
 
   const selectedTagName = useMemo(() => {
     if (!filters.selectedTag) return null;
     return allTags.find((t) => t.id === filters.selectedTag)?.name || filters.selectedTag;
   }, [filters.selectedTag, allTags]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const matchingCount = facets?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil((pageRows?.total ?? 0) / PAGE_SIZE));
+  const paged = useMemo(() => pageRows?.items ?? [], [pageRows]);
 
-  // Build nested folder tree for folder view. Walks `folders` (which carry
-  // `parent_id`) to construct the hierarchy and buckets each connection
-  // under its leaf `folder_id`. Returns null when folder view is off.
-  // Connections whose folder_id no longer matches any known folder fall into
-  // the synthetic "Ungrouped" bucket alongside truly folderless ones.
+  // Nested folder tree for folder view. Counts come from the facets; each
+  // folder's rows are fetched when it is opened.
   const folderTree = useMemo(() => {
     if (!folderView) return null;
 
-    type Node = {
-      id: string;
-      name: string;
-      children: Node[];
-      connections: Connection[];
-      /** Total connection count including all descendants. */
-      totalCount: number;
-    };
+    const direct = new Map<string, number>();
+    let ungroupedCount = 0;
+    for (const f of facets?.folders ?? []) {
+      if (f.folder_id) direct.set(f.folder_id, f.count);
+      else ungroupedCount = f.count;
+    }
 
-    const folderById = new Map(folders.map((f) => [f.id, f]));
-    const nodes = new Map<string, Node>(
+    const nodes = new Map<string, FolderTreeNode>(
       folders.map((f) => [
         f.id,
-        { id: f.id, name: f.name, children: [], connections: [], totalCount: 0 },
+        {
+          id: f.id,
+          name: f.name,
+          children: [],
+          directCount: direct.get(f.id) ?? 0,
+          totalCount: 0,
+        },
       ])
     );
-    const roots: Node[] = [];
+    const roots: FolderTreeNode[] = [];
     for (const f of folders) {
       const node = nodes.get(f.id)!;
       if (f.parent_id && nodes.has(f.parent_id)) {
@@ -427,54 +451,67 @@ export default function Dashboard() {
       }
     }
 
-    const ungrouped: Connection[] = [];
-    for (const conn of filtered) {
-      const fid = conn.folder_id;
-      if (fid && nodes.has(fid)) {
-        nodes.get(fid)!.connections.push(conn);
-      } else {
-        ungrouped.push(conn);
-      }
-    }
-
     // Compute descendant counts depth-first.
-    const computeCount = (n: Node): number => {
-      n.totalCount = n.connections.length + n.children.reduce((a, c) => a + computeCount(c), 0);
+    const computeCount = (n: FolderTreeNode): number => {
+      n.totalCount = n.directCount + n.children.reduce((a, c) => a + computeCount(c), 0);
       return n.totalCount;
     };
     roots.forEach(computeCount);
 
     // Sort children alphabetically at every level for predictable display.
-    const sortRec = (n: Node) => {
+    const sortRec = (n: FolderTreeNode) => {
       n.children.sort((a, b) => a.name.localeCompare(b.name));
       n.children.forEach(sortRec);
     };
     roots.sort((a, b) => a.name.localeCompare(b.name));
     roots.forEach(sortRec);
 
-    return { roots, ungrouped, folderById };
-  }, [folderView, folders, filtered]);
+    const ungrouped: FolderTreeNode | null =
+      ungroupedCount > 0
+        ? {
+            id: UNGROUPED,
+            name: "Ungrouped",
+            children: [],
+            directCount: ungroupedCount,
+            totalCount: ungroupedCount,
+          }
+        : null;
+    return { roots, ungrouped };
+  }, [folderView, folders, facets]);
 
   // When a search filter is active, auto-expand any folder containing
   // matches so users don't see an empty tree.
   const autoExpandedIds = useMemo(() => {
-    if (!folderTree || !filters.searchQuery.trim()) return null;
+    if (!folderTree || !debouncedSearch) return null;
     const ids = new Set<string>();
-    type VisitNode = { id: string; children: VisitNode[]; totalCount: number };
-    const visit = (node: VisitNode): boolean => {
-      let hit = false;
-      for (const c of node.children) {
-        if (visit(c)) hit = true;
-      }
-      if (node.totalCount > 0 || hit) {
-        ids.add(node.id);
-        return true;
-      }
-      return false;
+    const visit = (node: FolderTreeNode) => {
+      if (node.totalCount > 0) ids.add(node.id);
+      node.children.forEach(visit);
     };
-    folderTree.roots.forEach((r) => visit(r));
+    folderTree.roots.forEach(visit);
+    if (folderTree.ungrouped) ids.add(UNGROUPED);
     return ids;
-  }, [folderTree, filters.searchQuery]);
+  }, [folderTree, debouncedSearch]);
+
+  // Folders whose rows are on screen: open, with every ancestor open too.
+  const openFolders = useMemo(() => {
+    if (!folderTree) return [];
+    const isOpen = (id: string) =>
+      autoExpandedIds ? autoExpandedIds.has(id) : expandedFolders.has(id);
+    const open: FolderTreeNode[] = [];
+    const visit = (node: FolderTreeNode) => {
+      if (!isOpen(node.id)) return;
+      if (node.directCount > 0) open.push(node);
+      node.children.forEach(visit);
+    };
+    folderTree.roots.forEach(visit);
+    if (folderTree.ungrouped) visit(folderTree.ungrouped);
+    return open;
+  }, [folderTree, autoExpandedIds, expandedFolders]);
+
+  useEffect(() => {
+    ensureFolders(openFolders.map((n) => n.id));
+  }, [openFolders, ensureFolders]);
 
   const toggleFolderCollapse = useCallback((fid: string) => {
     setExpandedFolders((prev) => {
@@ -498,12 +535,15 @@ export default function Dashboard() {
     return c.status === "Active" && c.expires_at && new Date(c.expires_at!).getTime() > Date.now();
   }, []);
 
-  // The visible connections: folder view shows all filtered, flat view shows paged slice
-  const visibleConnections = folderView ? filtered : paged;
+  // The rows on screen: loaded rows of open folders, or the current page.
+  const visibleConnections = useMemo(
+    () => (folderView ? openFolders.flatMap((n) => folderRows[n.id]?.items ?? []) : paged),
+    [folderView, openFolders, folderRows, paged]
+  );
 
   const protocols = useMemo(
-    () => [...new Set(connections.map((c) => c.protocol.toUpperCase()))].sort(),
-    [connections]
+    () => [...new Set((facets?.protocols ?? []).map((p) => p.toUpperCase()))].sort(),
+    [facets]
   );
 
   const handleProfileChange = useCallback(async (connectionId: string, profileId: string) => {
@@ -524,15 +564,20 @@ export default function Dashboard() {
     }
   }, []);
 
-  const handleToggleFavorite = useCallback(async (connectionId: string) => {
-    const result = await toggleFavorite(connectionId);
-    setFavorites((prev) => {
-      const next = new Set(prev);
-      if (result.favorited) next.add(connectionId);
-      else next.delete(connectionId);
-      return next;
-    });
-  }, []);
+  const handleToggleFavorite = useCallback(
+    async (connectionId: string) => {
+      const result = await toggleFavorite(connectionId);
+      setFavorites((prev) => {
+        const next = new Set(prev);
+        if (result.favorited) next.add(connectionId);
+        else next.delete(connectionId);
+        return next;
+      });
+      // The server filters by favourite, so a scoped list must be refetched.
+      if (filters.favoritesOnly) reloadConnections();
+    },
+    [filters.favoritesOnly, reloadConnections]
+  );
 
   const handleSetConnectionTags = useCallback(
     async (connectionId: string, tagIds: string[]) => {
@@ -541,11 +586,12 @@ export default function Dashboard() {
         const userOnly = tagIds.filter((tid) => !adminTagIds.has(tid));
         await setConnectionTags(connectionId, userOnly);
         setConnTagMap((prev) => ({ ...prev, [connectionId]: userOnly }));
+        if (filters.selectedTag) reloadConnections();
       } catch {
         /* ignore */
       }
     },
-    [adminTagIds]
+    [adminTagIds, filters.selectedTag, reloadConnections]
   );
 
   const handleCreateTag = useCallback(async (name: string, color: string): Promise<UserTag> => {
@@ -602,9 +648,7 @@ export default function Dashboard() {
     if (checked.size < 2) return;
 
     // Check which connections need credentials
-    const checkedConns = [...checked]
-      .map((id) => connections.find((c) => c.id === id))
-      .filter(Boolean) as Connection[];
+    const checkedConns = [...checked].map((id) => rowsById.get(id)).filter(Boolean) as Connection[];
 
     const infos = await Promise.all(
       checkedConns.map(async (conn) => {
@@ -652,7 +696,7 @@ export default function Dashboard() {
     }
     // launchTiled is defined below; including it would create a circular dep cycle
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [checked, connections]);
+  }, [checked, rowsById]);
 
   /** Create all tiled sessions and navigate */
   const launchTiled = useCallback(
@@ -731,14 +775,6 @@ export default function Dashboard() {
     const allConns = [...tiledCredPrompt.ready, ...tiledCredPrompt.needsCreds];
     launchTiled(allConns, tiledCreds);
   }, [tiledCredPrompt, tiledCreds, launchTiled]);
-
-  // ── Top 5 most recently accessed connections for the hero cards ──
-  const recentConnections = useMemo(() => {
-    return [...connections]
-      .filter((c) => c.last_accessed)
-      .sort((a, b) => new Date(b.last_accessed!).getTime() - new Date(a.last_accessed!).getTime())
-      .slice(0, 5);
-  }, [connections]);
 
   const sessionStates = useMemo(() => {
     const map: Record<string, TargetSessionState> = {};
@@ -945,50 +981,48 @@ export default function Dashboard() {
           Folders
         </button>
 
-        {folderView &&
-          folderTree &&
-          (folderTree.roots.length > 0 || folderTree.ungrouped.length > 0) && (
-            <>
-              <button
-                className="btn-sm inline-flex items-center gap-1.5"
-                onClick={() => {
-                  // Collect every folder ID in the tree (recursively) plus the
-                  // synthetic ungrouped bucket so all rows pop open at once.
-                  const all = new Set<string>();
-                  type WalkNode = { id: string; children: WalkNode[] };
-                  const walk = (n: WalkNode) => {
-                    all.add(n.id);
-                    n.children.forEach(walk);
-                  };
-                  folderTree.roots.forEach(walk);
-                  if (folderTree.ungrouped.length > 0) all.add("__ungrouped");
-                  setExpandedFolders(all);
-                  try {
-                    localStorage.setItem(EXPANDED_FOLDERS_KEY, JSON.stringify([...all]));
-                  } catch {
-                    /* localStorage may be unavailable; persistence best-effort. */
-                  }
-                }}
-                title="Expand all folders"
-              >
-                Expand all
-              </button>
-              <button
-                className="btn-sm inline-flex items-center gap-1.5"
-                onClick={() => {
-                  setExpandedFolders(new Set());
-                  try {
-                    localStorage.setItem(EXPANDED_FOLDERS_KEY, "[]");
-                  } catch {
-                    /* localStorage may be unavailable; persistence best-effort. */
-                  }
-                }}
-                title="Collapse all folders"
-              >
-                Collapse all
-              </button>
-            </>
-          )}
+        {folderView && folderTree && (folderTree.roots.length > 0 || folderTree.ungrouped) && (
+          <>
+            <button
+              className="btn-sm inline-flex items-center gap-1.5"
+              onClick={() => {
+                // Collect every folder ID in the tree (recursively) plus the
+                // synthetic ungrouped bucket so all rows pop open at once.
+                const all = new Set<string>();
+                type WalkNode = { id: string; children: WalkNode[] };
+                const walk = (n: WalkNode) => {
+                  all.add(n.id);
+                  n.children.forEach(walk);
+                };
+                folderTree.roots.forEach(walk);
+                if (folderTree.ungrouped) all.add(UNGROUPED);
+                setExpandedFolders(all);
+                try {
+                  localStorage.setItem(EXPANDED_FOLDERS_KEY, JSON.stringify([...all]));
+                } catch {
+                  /* localStorage may be unavailable; persistence best-effort. */
+                }
+              }}
+              title="Expand all folders"
+            >
+              Expand all
+            </button>
+            <button
+              className="btn-sm inline-flex items-center gap-1.5"
+              onClick={() => {
+                setExpandedFolders(new Set());
+                try {
+                  localStorage.setItem(EXPANDED_FOLDERS_KEY, "[]");
+                } catch {
+                  /* localStorage may be unavailable; persistence best-effort. */
+                }
+              }}
+              title="Collapse all folders"
+            >
+              Collapse all
+            </button>
+          </>
+        )}
 
         {allTags.length > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -1106,65 +1140,37 @@ export default function Dashboard() {
             </tr>
           </thead>
           <tbody>
-            {folderView && folderTree && filtered.length > 0 ? (
+            {folderView && folderTree && matchingCount > 0 ? (
               <>
-                {folderTree.roots.map((root) => (
-                  <ConnectionFolderTree
-                    key={root.id}
-                    node={root}
-                    depth={0}
-                    expandedFolders={expandedFolders}
-                    autoExpandedIds={autoExpandedIds}
-                    onToggleCollapse={toggleFolderCollapse}
-                    checked={checked}
-                    toggleChecked={toggleChecked}
-                    favorites={favorites}
-                    onToggleFavorite={handleToggleFavorite}
-                    vaultConfigured={vaultConfigured}
-                    credProfiles={filteredProfiles}
-                    allCheckouts={allCheckouts}
-                    connProfileMap={connProfileMap}
-                    sessionStates={sessionStates}
-                    onProfileChange={handleProfileChange}
-                    navigate={navigate}
-                    tags={allTags}
-                    connTagMap={allConnTagMap}
-                    onSetConnectionTags={handleSetConnectionTags}
-                    onCreateTag={handleCreateTag}
-                    adminTagIds={adminTagIds}
-                  />
-                ))}
-                {folderTree.ungrouped.length > 0 && (
-                  <ConnectionFolderTree
-                    key="__ungrouped"
-                    node={{
-                      id: "__ungrouped",
-                      name: "Ungrouped",
-                      children: [],
-                      connections: folderTree.ungrouped,
-                      totalCount: folderTree.ungrouped.length,
-                    }}
-                    depth={0}
-                    expandedFolders={expandedFolders}
-                    autoExpandedIds={autoExpandedIds}
-                    onToggleCollapse={toggleFolderCollapse}
-                    checked={checked}
-                    toggleChecked={toggleChecked}
-                    favorites={favorites}
-                    onToggleFavorite={handleToggleFavorite}
-                    vaultConfigured={vaultConfigured}
-                    credProfiles={filteredProfiles}
-                    allCheckouts={allCheckouts}
-                    connProfileMap={connProfileMap}
-                    sessionStates={sessionStates}
-                    onProfileChange={handleProfileChange}
-                    navigate={navigate}
-                    tags={allTags}
-                    connTagMap={allConnTagMap}
-                    onSetConnectionTags={handleSetConnectionTags}
-                    onCreateTag={handleCreateTag}
-                    adminTagIds={adminTagIds}
-                  />
+                {[...folderTree.roots, ...(folderTree.ungrouped ? [folderTree.ungrouped] : [])].map(
+                  (root) => (
+                    <ConnectionFolderTree
+                      key={root.id}
+                      node={root}
+                      depth={0}
+                      expandedFolders={expandedFolders}
+                      autoExpandedIds={autoExpandedIds}
+                      onToggleCollapse={toggleFolderCollapse}
+                      folderRows={folderRows}
+                      onLoadMore={loadMore}
+                      checked={checked}
+                      toggleChecked={toggleChecked}
+                      favorites={favorites}
+                      onToggleFavorite={handleToggleFavorite}
+                      vaultConfigured={vaultConfigured}
+                      credProfiles={filteredProfiles}
+                      allCheckouts={allCheckouts}
+                      connProfileMap={connProfileMap}
+                      sessionStates={sessionStates}
+                      onProfileChange={handleProfileChange}
+                      navigate={navigate}
+                      tags={allTags}
+                      connTagMap={allConnTagMap}
+                      onSetConnectionTags={handleSetConnectionTags}
+                      onCreateTag={handleCreateTag}
+                      adminTagIds={adminTagIds}
+                    />
+                  )
                 )}
               </>
             ) : (
@@ -1191,16 +1197,16 @@ export default function Dashboard() {
                 />
               ))
             )}
-            {visibleConnections.length === 0 && (
+            {facets && matchingCount === 0 && (
               <tr>
                 <td colSpan={8} className="p-0">
                   <ConnectionEmptyState
                     filters={filters}
-                    filteredCount={filtered.length}
-                    globalCount={globalSearchMatches.length}
+                    filteredCount={matchingCount}
+                    globalCount={facets.search_total}
                     onClearScope={clearScope}
                     onResetAll={resetAllFilters}
-                    totalConnections={connections.length}
+                    totalConnections={facets.all_total}
                   />
                 </td>
               </tr>
@@ -1210,25 +1216,20 @@ export default function Dashboard() {
       </div>
 
       {/* ── Pagination (hidden in folder view) ── */}
-      {folderView && filtered.length > 0 && (
+      {folderView && folderTree && matchingCount > 0 && (
         <div className="mt-4">
           <span className="text-[0.8125rem] text-txt-secondary">
-            {filtered.length} connection{filtered.length !== 1 ? "s" : ""} in{" "}
-            {folderTree ? folderTree.roots.length + (folderTree.ungrouped.length > 0 ? 1 : 0) : 0}{" "}
-            folder
-            {(folderTree
-              ? folderTree.roots.length + (folderTree.ungrouped.length > 0 ? 1 : 0)
-              : 0) !== 1
-              ? "s"
-              : ""}
+            {matchingCount} connection{matchingCount !== 1 ? "s" : ""} in{" "}
+            {folderTree.roots.length + (folderTree.ungrouped ? 1 : 0)} folder
+            {folderTree.roots.length + (folderTree.ungrouped ? 1 : 0) !== 1 ? "s" : ""}
           </span>
         </div>
       )}
-      {!folderView && filtered.length > PAGE_SIZE && (
+      {!folderView && (pageRows?.total ?? 0) > PAGE_SIZE && (
         <div className="flex items-center justify-between mt-4 flex-wrap gap-4">
           <span className="text-[0.8125rem] text-txt-secondary">
-            Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of{" "}
-            {filtered.length} connections
+            Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, pageRows?.total ?? 0)}{" "}
+            of {pageRows?.total ?? 0} connections
           </span>
           <div className="flex items-center gap-1">
             <button
@@ -1827,7 +1828,9 @@ interface FolderTreeNode {
   id: string;
   name: string;
   children: FolderTreeNode[];
-  connections: Connection[];
+  /** Matching connections filed directly in this folder. */
+  directCount: number;
+  /** Matching connections in this folder and every descendant. */
   totalCount: number;
 }
 
@@ -1839,6 +1842,9 @@ interface FolderTreeProps {
    *  are force-expanded regardless of the user's manual expand/collapse state. */
   autoExpandedIds: Set<string> | null;
   onToggleCollapse: (fid: string) => void;
+  /** Rows loaded so far, by folder id. */
+  folderRows: Record<string, FolderRows>;
+  onLoadMore: (fid: string) => void;
   checked: Set<string>;
   toggleChecked: (id: string) => void;
   favorites: Set<string>;
@@ -1866,6 +1872,8 @@ function ConnectionFolderTree(props: FolderTreeProps) {
   // 16px indent per depth level — matches VS Code Explorer / Outlook folder pane.
   const indentPx = 8 + depth * 16;
   const hasChildren = node.children.length > 0;
+  const rows = props.folderRows[node.id];
+  const loaded = rows?.items ?? [];
 
   return (
     <>
@@ -1891,7 +1899,7 @@ function ConnectionFolderTree(props: FolderTreeProps) {
               style={{
                 transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)",
                 transition: "transform 0.15s",
-                opacity: hasChildren || node.connections.length > 0 ? 1 : 0.3,
+                opacity: hasChildren || node.directCount > 0 ? 1 : 0.3,
               }}
             >
               <polyline points="6 9 12 15 18 9" />
@@ -1922,7 +1930,15 @@ function ConnectionFolderTree(props: FolderTreeProps) {
           {node.children.map((child) => (
             <ConnectionFolderTree key={child.id} {...props} node={child} depth={depth + 1} />
           ))}
-          {node.connections.map((conn) => (
+          {node.directCount > 0 && !rows && (
+            <tr>
+              <td />
+              <td colSpan={7} className="!py-2 text-[0.8125rem] text-txt-tertiary">
+                <span style={{ paddingLeft: `${indentPx + 16}px` }}>Loading…</span>
+              </td>
+            </tr>
+          )}
+          {loaded.map((conn) => (
             <ConnectionRow
               key={conn.id}
               conn={conn}
@@ -1945,6 +1961,21 @@ function ConnectionFolderTree(props: FolderTreeProps) {
               indentPx={indentPx + 16}
             />
           ))}
+          {rows && loaded.length < rows.total && (
+            <tr>
+              <td />
+              <td colSpan={7} className="!py-2">
+                <button
+                  type="button"
+                  className="btn-sm"
+                  style={{ marginLeft: `${indentPx + 16}px` }}
+                  onClick={() => props.onLoadMore(node.id)}
+                >
+                  Show more ({rows.total - loaded.length} more)
+                </button>
+              </td>
+            </tr>
+          )}
         </>
       )}
     </>

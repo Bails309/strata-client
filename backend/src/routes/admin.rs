@@ -230,7 +230,7 @@ fn validate_kerberos_hostnames(
 
 /// Compute per_page and offset from optional page/per_page query params.
 /// `per_page` is clamped to [1, max_per_page], page to >= 1.
-fn paginate(page: Option<i64>, per_page: Option<i64>, max_per_page: i64) -> (i64, i64) {
+pub(crate) fn paginate(page: Option<i64>, per_page: Option<i64>, max_per_page: i64) -> (i64, i64) {
     let per_page = per_page.unwrap_or(50).clamp(1, max_per_page);
     let offset = (page.unwrap_or(1).max(1) - 1) * per_page;
     (per_page, offset)
@@ -1443,6 +1443,84 @@ pub async fn list_connections(
     Ok(Json(rows))
 }
 
+/// `GET /api/admin/connections/page` — one filtered page of the fleet.
+pub async fn list_connections_page(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    axum::extract::Query(query): axum::extract::Query<connections::AdminConnectionQuery>,
+) -> Result<Json<connections::Page<ConnectionRow>>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
+    let db = require_running(&state).await?;
+    let (limit, offset) = paginate(query.page, query.per_page, 200);
+    let mut page = connections::admin_page(&db.pool, &query, limit, offset).await?;
+    for row in &mut page.items {
+        connections::redact_secret_extras(&mut row.extra);
+    }
+    Ok(Json(page))
+}
+
+/// `GET /api/admin/connections/refs` — every matching connection, named
+/// but without parameters, for pickers and bulk selection.
+pub async fn list_connection_refs(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    axum::extract::Query(query): axum::extract::Query<connections::AdminConnectionQuery>,
+) -> Result<Json<Vec<connections::ConnectionRef>>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
+    let db = require_running(&state).await?;
+    Ok(Json(connections::admin_refs(&db.pool, &query).await?))
+}
+
+/// `GET /api/admin/connections/summary` — whole-fleet counts.
+pub async fn connection_fleet_summary(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<connections::FleetSummary>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
+    let db = require_running(&state).await?;
+    Ok(Json(connections::fleet_summary(&db.pool).await?))
+}
+
+#[derive(Deserialize)]
+pub struct MoveConnectionsRequest {
+    pub ids: Vec<Uuid>,
+    /// `None` moves them to the root.
+    pub folder_id: Option<Uuid>,
+}
+
+/// Most connections one bulk move may name.
+const MAX_BULK_MOVE: usize = 5000;
+
+/// `POST /api/admin/connections/move` — file connections in one folder.
+pub async fn move_connections(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<MoveConnectionsRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
+    if body.ids.len() > MAX_BULK_MOVE {
+        return Err(AppError::Validation(format!(
+            "at most {MAX_BULK_MOVE} connections can be moved at once"
+        )));
+    }
+    let db = require_running(&state).await?;
+    let moved = connections::move_to_folder(&db.pool, &body.ids, body.folder_id).await?;
+    for (id, name) in &moved {
+        audit::log(
+            &db.pool,
+            Some(user.id),
+            "connection.updated",
+            &json!({
+                "id": id.to_string(),
+                "name": name,
+                "folder_id": body.folder_id.map(|f| f.to_string()),
+            }),
+        )
+        .await?;
+    }
+    Ok(Json(json!({ "moved": moved.len() })))
+}
+
 async fn vault_config(state: &SharedState) -> Option<crate::config::VaultConfig> {
     state
         .read()
@@ -2016,6 +2094,20 @@ pub async fn list_users(
     let include_deleted = query.include_deleted.unwrap_or(false);
     let rows = users_svc::list_all(&db.pool, include_deleted).await?;
     Ok(Json(rows))
+}
+
+/// `GET /api/admin/users/page` — one filtered page of users.
+pub async fn list_users_page(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    axum::extract::Query(query): axum::extract::Query<users_svc::UserPageQuery>,
+) -> Result<Json<connections::Page<UserRow>>, AppError> {
+    crate::services::middleware::check_user_management_permission(&user)?;
+    let db = require_running(&state).await?;
+    let (limit, offset) = paginate(query.page, query.per_page, 200);
+    Ok(Json(
+        users_svc::page(&db.pool, &query, limit, offset).await?,
+    ))
 }
 
 pub async fn restore_user(

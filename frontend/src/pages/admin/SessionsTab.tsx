@@ -345,7 +345,10 @@ export default function SessionsTab() {
           gateway has been. Only “Active Now” is measured live. Enable recording to populate them.
         </p>
       ) : (
-        <p className="text-xs text-txt-tertiary italic">Showing data from the last 30 days</p>
+        <p className="text-xs text-txt-tertiary italic">
+          Showing data from the last 30 days
+          {stats?.generated_at ? ` · as of ${formatDateTime(stats.generated_at)}` : ""}
+        </p>
       )}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div

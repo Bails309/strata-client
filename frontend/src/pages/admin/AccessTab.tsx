@@ -5,7 +5,6 @@ import EnterpriseCheckbox from "../../components/EnterpriseCheckbox";
 import EditRoleModal from "./roles/EditRoleModal";
 import { useSettings } from "../../contexts/SettingsContext";
 import {
-  Connection,
   ConnectionFolder,
   MeResponse,
   Role,
@@ -14,7 +13,7 @@ import {
   deleteRole,
   deleteUser,
   getRoles,
-  getUsers,
+  getUsersPage,
   restoreUser,
   updateUser,
 } from "../../api";
@@ -35,22 +34,13 @@ function getVisiblePages(current: number, total: number): (number | string)[] {
 interface AccessTabProps {
   user: MeResponse;
   roles: Role[];
-  connections?: Connection[];
   folders?: ConnectionFolder[];
-  users: User[];
   onRolesChanged: (r: Role[]) => void;
-  onUsersChanged: (u: User[]) => void;
 }
 
-export default function AccessTab({
-  user,
-  roles,
-  connections = [],
-  folders = [],
-  users,
-  onRolesChanged,
-  onUsersChanged,
-}: AccessTabProps) {
+const USER_SEARCH_DEBOUNCE_MS = 300;
+
+export default function AccessTab({ user, roles, folders = [], onRolesChanged }: AccessTabProps) {
   const { formatDateTime } = useSettings();
   const [subTab, setSubTab] = useState<"roles" | "permissions" | "policies">("roles");
 
@@ -97,8 +87,9 @@ export default function AccessTab({
     safeRolePage * rolePerPage
   );
 
-  // Users list — client-side filter + pagination
+  // Users list — searched and paged on the server
   const [userSearch, setUserSearch] = useState("");
+  const [debouncedUserSearch, setDebouncedUserSearch] = useState("");
   const [userPage, setUserPage] = useState(1);
   const userPerPage = 20;
 
@@ -115,34 +106,37 @@ export default function AccessTab({
   const [userError, setUserError] = useState("");
   const [userSaving, setUserSaving] = useState(false);
   const [showDeletedUsers, setShowDeletedUsers] = useState(false);
-  const [deletedUsers, setDeletedUsers] = useState<User[]>([]);
+  const [pagedUsers, setPagedUsers] = useState<User[]>([]);
+  const [userTotal, setUserTotal] = useState(0);
+  const [usersReload, setUsersReload] = useState(0);
+  const reloadUsers = () => setUsersReload((n) => n + 1);
 
   useEffect(() => {
-    if (showDeletedUsers) {
-      getUsers(true).then((all) => {
-        setDeletedUsers(all.filter((u) => !!u.deleted_at));
-      });
-    }
-  }, [showDeletedUsers, users]);
+    const t = setTimeout(() => setDebouncedUserSearch(userSearch.trim()), USER_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [userSearch]);
 
-  const visibleUsersSource = showDeletedUsers ? deletedUsers : users;
-  const filteredUsers = visibleUsersSource.filter((u) => {
-    if (!userSearch) return true;
-    const q = userSearch.toLowerCase();
-    return (
-      u.username.toLowerCase().includes(q) ||
-      (u.email || "").toLowerCase().includes(q) ||
-      (u.full_name || "").toLowerCase().includes(q) ||
-      (u.role_name || "").toLowerCase().includes(q) ||
-      (u.sub || "").toLowerCase().includes(q)
-    );
-  });
-  const userTotalPages = Math.max(1, Math.ceil(filteredUsers.length / userPerPage));
+  const canListUsers = !!(user.can_manage_system || user.can_create_users);
+  useEffect(() => {
+    if (!canListUsers) return;
+    let cancelled = false;
+    getUsersPage(userPage, userPerPage, {
+      search: debouncedUserSearch,
+      deleted: showDeletedUsers,
+    })
+      .then((page) => {
+        if (cancelled) return;
+        setPagedUsers(page.items);
+        setUserTotal(page.total);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [canListUsers, userPage, debouncedUserSearch, showDeletedUsers, usersReload]);
+
+  const userTotalPages = Math.max(1, Math.ceil(userTotal / userPerPage));
   const safeUserPage = Math.min(userPage, userTotalPages);
-  const pagedUsers = filteredUsers.slice(
-    (safeUserPage - 1) * userPerPage,
-    safeUserPage * userPerPage
-  );
 
   return (
     <div className="space-y-6">
@@ -681,11 +675,8 @@ export default function AccessTab({
             />
           </div>
           <p className="text-sm text-txt-secondary mb-2">
-            Showing{" "}
-            {filteredUsers.length === visibleUsersSource.length
-              ? visibleUsersSource.length
-              : `${filteredUsers.length} of ${visibleUsersSource.length}`}{" "}
-            user{visibleUsersSource.length !== 1 ? "s" : ""}
+            {debouncedUserSearch ? "Found" : "Showing"} {userTotal}{" "}
+            {showDeletedUsers ? "deleted " : ""}user{userTotal !== 1 ? "s" : ""}
           </p>
 
           <div className="table-responsive w-full">
@@ -735,8 +726,7 @@ export default function AccessTab({
                         onChange={async (newRoleId) => {
                           try {
                             await updateUser(u.id, { role_id: newRoleId });
-                            const refreshed = await getUsers();
-                            onUsersChanged(refreshed);
+                            reloadUsers();
                           } catch (err) {
                             alert(err instanceof Error ? err.message : "Failed to update role");
                           }
@@ -753,8 +743,7 @@ export default function AccessTab({
                           const enabled = e.target.checked;
                           try {
                             await updateUser(u.id, { safeguard_jit_enabled: enabled });
-                            const refreshed = await getUsers();
-                            onUsersChanged(refreshed);
+                            reloadUsers();
                           } catch (err) {
                             alert(
                               err instanceof Error ? err.message : "Failed to toggle Safeguard JIT"
@@ -780,8 +769,7 @@ export default function AccessTab({
                             await updateUser(u.id, {
                               outbound_share_requires_approval: requires_approval,
                             });
-                            const refreshed = await getUsers();
-                            onUsersChanged(refreshed);
+                            reloadUsers();
                           } catch (err) {
                             alert(
                               err instanceof Error
@@ -814,8 +802,7 @@ export default function AccessTab({
                             onClick={async () => {
                               try {
                                 await restoreUser(u.id);
-                                const all = await getUsers();
-                                onUsersChanged(all);
+                                reloadUsers();
                               } catch (err) {
                                 alert(
                                   err instanceof Error ? err.message : "Failed to restore user"
@@ -837,7 +824,7 @@ export default function AccessTab({
                                 onConfirm: async () => {
                                   try {
                                     await deleteUser(u.id);
-                                    onUsersChanged(users.filter((x) => x.id !== u.id));
+                                    reloadUsers();
                                   } catch (err) {
                                     alert(
                                       err instanceof Error ? err.message : "Failed to delete user"
@@ -890,8 +877,6 @@ export default function AccessTab({
           role={roleEditor.role}
           roles={roles}
           folders={folders}
-          connections={connections}
-          users={users}
           onClose={() => setRoleEditor(null)}
           onSaved={(r, created) =>
             onRolesChanged(created ? [...roles, r] : roles.map((x) => (x.id === r.id ? r : x)))
@@ -948,6 +933,7 @@ export default function AccessTab({
                   className="btn-primary w-full py-3"
                   onClick={() => {
                     setUserModalOpen(false);
+                    reloadUsers();
                   }}
                 >
                   Done
@@ -1029,7 +1015,7 @@ export default function AccessTab({
                           setCreatedPassword(res.password);
                         } else {
                           setUserModalOpen(false);
-                          getUsers().then(onUsersChanged);
+                          reloadUsers();
                         }
                       } catch (err) {
                         setUserError(err instanceof Error ? err.message : "Failed to create user");

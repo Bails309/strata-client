@@ -1,6 +1,6 @@
 /* Derived, display-ready view of the connection fleet. Everything here is
    computed from data the backend already returns — no invented metrics. */
-import type { ActiveSession, Connection, ConnectionFolder } from "../../../api";
+import type { ActiveSession, Connection, ConnectionFolder, FleetSummary } from "../../../api";
 
 export type Health = "online" | "offline" | "unknown";
 
@@ -134,39 +134,46 @@ export interface FleetTelemetry {
   lastSweep: number | null;
 }
 
-const countBy = <T>(items: T[], key: (t: T) => string) => {
-  const m = new Map<string, number>();
-  for (const i of items) m.set(key(i), (m.get(key(i)) ?? 0) + 1);
-  return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-};
+const sortCounts = (counts: [string, number][]) =>
+  counts.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 
+/** Labels of the alerting badges in {@link policiesFor}, by summary field. */
+const ALERTS: [keyof FleetSummary, string][] = [
+  ["legacy_sec", "Legacy Sec"],
+  ["unpinned", "Unpinned"],
+  ["cert_ignored", "Cert Ignored"],
+];
+
+/** Fleet-wide figures from the server summary; sessions are polled live. */
 export function computeTelemetry(
-  records: FleetRecord[],
+  summary: FleetSummary | null,
   sessions: ActiveSession[] | null
 ): FleetTelemetry {
-  const online = records.filter((r) => r.health === "online").length;
-  const offline = records.filter((r) => r.health === "offline").length;
-  const alerts = records.flatMap((r) => r.policies.filter((p) => p.alert));
-  const lastSweep = records.reduce<number | null>((max, r) => {
-    const t = r.conn.health_checked_at ? Date.parse(r.conn.health_checked_at) : NaN;
-    return Number.isFinite(t) && (max === null || t > max) ? t : max;
-  }, null);
+  const total = summary?.total ?? 0;
+  const online = summary?.online ?? 0;
+  const offline = summary?.offline ?? 0;
+  const lastSweep = summary?.last_sweep ? Date.parse(summary.last_sweep) : NaN;
   return {
-    total: records.length,
-    protocolSummary: countBy(records, (r) => r.conn.protocol.toUpperCase())
+    total,
+    protocolSummary: sortCounts(
+      (summary?.protocols ?? []).map((p): [string, number] => [p.protocol.toUpperCase(), p.count])
+    )
       .map(([p, n]) => `${n} ${p}`)
       .join(" · "),
     online,
     offline,
-    unknown: records.length - online - offline,
+    unknown: total - online - offline,
     reachability: online + offline > 0 ? Math.round((online / (online + offline)) * 100) : null,
-    alertCount: records.filter((r) => r.policies.some((p) => p.alert)).length,
-    alertSummary: countBy(alerts, (a) => a.label)
+    alertCount: summary?.alert_count ?? 0,
+    alertSummary: sortCounts(
+      summary ? ALERTS.map(([key, label]): [string, number] => [label, summary[key] as number]) : []
+    )
+      .filter(([, n]) => n > 0)
       .map(([label, n]) => `${n} ${label}`)
       .join(" · "),
     sessions: sessions ? sessions.length : null,
     liveUsers: sessions ? new Set(sessions.map((s) => s.user_id)).size : null,
-    lastSweep,
+    lastSweep: Number.isFinite(lastSweep) ? lastSweep : null,
   };
 }
 
@@ -187,22 +194,6 @@ export function connectionPayload(
     watermark: c.watermark,
     ...overrides,
   };
-}
-
-/** Folder ids that are `rootId` or any of its descendants. */
-export function folderSubtree(folders: ConnectionFolder[], rootId: string): Set<string> {
-  const out = new Set([rootId]);
-  let grew = true;
-  while (grew) {
-    grew = false;
-    for (const f of folders) {
-      if (f.parent_id && out.has(f.parent_id) && !out.has(f.id)) {
-        out.add(f.id);
-        grew = true;
-      }
-    }
-  }
-  return out;
 }
 
 export function formatAgo(ms: number, now = Date.now()): string {

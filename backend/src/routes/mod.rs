@@ -150,6 +150,19 @@ pub fn build_router(state: SharedState) -> Router {
         )
         .route("/api/admin/connections", get(admin::list_connections))
         .route("/api/admin/connections", post(admin::create_connection))
+        .route(
+            "/api/admin/connections/page",
+            get(admin::list_connections_page),
+        )
+        .route(
+            "/api/admin/connections/refs",
+            get(admin::list_connection_refs),
+        )
+        .route(
+            "/api/admin/connections/summary",
+            get(admin::connection_fleet_summary),
+        )
+        .route("/api/admin/connections/move", post(admin::move_connections))
         .route("/api/admin/connections/{id}", put(admin::update_connection))
         .route(
             "/api/admin/connections/{id}",
@@ -195,6 +208,7 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/admin/users",
             get(admin::list_users).post(admin::create_user),
         )
+        .route("/api/admin/users/page", get(admin::list_users_page))
         .route(
             "/api/admin/users/{id}",
             delete(admin::delete_user)
@@ -365,6 +379,11 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/user/command-audit", post(user::post_command_audit))
         .route("/api/roadmap", get(roadmap::get_statuses))
         .route("/api/user/connections", get(user::my_connections))
+        .route("/api/user/connections/page", get(user::my_connections_page))
+        .route(
+            "/api/user/connections/facets",
+            get(user::my_connection_facets),
+        )
         .route(
             "/api/user/connection-folders",
             get(user::my_connection_folders),

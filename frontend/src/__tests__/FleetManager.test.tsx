@@ -6,6 +6,10 @@ vi.mock("../api", () => ({
   deleteConnection: vi.fn(),
   getActiveSessions: vi.fn(),
   getAdSyncConfigs: vi.fn(),
+  getConnectionRefs: vi.fn(),
+  getConnectionsPage: vi.fn(),
+  getFleetSummary: vi.fn(),
+  moveConnections: vi.fn(),
   probeConnection: vi.fn(),
   triggerAdSync: vi.fn(),
   updateConnection: vi.fn(),
@@ -14,6 +18,10 @@ vi.mock("../api", () => ({
 import {
   getActiveSessions,
   getAdSyncConfigs,
+  getConnectionRefs,
+  getConnectionsPage,
+  getFleetSummary,
+  moveConnections,
   probeConnection,
   triggerAdSync,
   updateConnection,
@@ -26,9 +34,9 @@ import {
   buildFleet,
   computeTelemetry,
   connectionPayload,
-  folderSubtree,
   policiesFor,
 } from "../pages/admin/fleet/fleetModel";
+import { adminMatches, adminPage, fleetSummary, toRefs } from "./fakeListServer";
 
 const conn = (over: Partial<Connection> & { id: string; name: string }): Connection => ({
   protocol: "rdp",
@@ -88,7 +96,7 @@ describe("fleetModel", () => {
     ] as never[];
     const fleet = buildFleet(CONNS, FOLDERS, sessions);
     expect(fleet.find((r) => r.conn.id === "dc01")?.sessions).toBe(2);
-    const t = computeTelemetry(fleet, sessions);
+    const t = computeTelemetry(fleetSummary(CONNS), sessions);
     expect(t.total).toBe(4);
     expect(t.protocolSummary).toBe("2 RDP · 2 SSH");
     expect(t.reachability).toBe(67);
@@ -102,17 +110,13 @@ describe("fleetModel", () => {
     const p = connectionPayload(CONNS[0], { folder_id: undefined });
     expect(p).toMatchObject({ name: "DC01", extra: CONNS[0].extra, folder_id: undefined });
   });
-
-  it("expands a folder filter to its descendants", () => {
-    expect([...folderSubtree(FOLDERS, "prod")].sort()).toEqual(["prod", "web"]);
-  });
 });
 
 function mount(overrides: Partial<Parameters<typeof FleetManager>[0]> = {}) {
   const props = {
     user: admin,
-    connections: CONNS,
     folders: FOLDERS,
+    reloadKey: 0,
     activeFormId: null,
     hostKeyPanel: null,
     verifyingHostKeys: false,
@@ -121,8 +125,6 @@ function mount(overrides: Partial<Parameters<typeof FleetManager>[0]> = {}) {
     onEdit: vi.fn(),
     onDuplicate: vi.fn(),
     onDelete: vi.fn(),
-    onConnectionUpdated: vi.fn(),
-    onConnectionDeleted: vi.fn(),
     requestConfirm: vi.fn(),
     ...overrides,
   };
@@ -137,14 +139,26 @@ describe("FleetManager", () => {
     vi.mocked(probeConnection).mockReset();
     vi.mocked(updateConnection).mockReset();
     vi.mocked(triggerAdSync).mockReset();
+    vi.mocked(getConnectionsPage)
+      .mockReset()
+      .mockImplementation(async (page, perPage, f) => adminPage(CONNS, FOLDERS, page, perPage, f));
+    vi.mocked(getConnectionRefs)
+      .mockReset()
+      .mockImplementation(async (f) => toRefs(adminMatches(CONNS, FOLDERS, f)));
+    vi.mocked(getFleetSummary).mockReset().mockResolvedValue(fleetSummary(CONNS));
+    vi.mocked(moveConnections)
+      .mockReset()
+      .mockResolvedValue({ moved: 2 } as never);
   });
 
   it("renders the telemetry strip and two-tier endpoint cells", async () => {
     mount();
     const kpis = screen.getByRole("group", { name: "Fleet summary" });
-    expect(within(kpis).getByText("2 RDP · 2 SSH")).toBeInTheDocument();
+    expect(await within(kpis).findByText("2 RDP · 2 SSH")).toBeInTheDocument();
     expect(within(kpis).getByText("67%")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Copy dc01.corp.local:3389" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Copy dc01.corp.local:3389" })
+    ).toBeInTheDocument();
     expect(screen.getByText("Unpinned")).toBeInTheDocument();
     await waitFor(() => expect(screen.getAllByText("0 active").length).toBe(4));
   });
@@ -152,23 +166,25 @@ describe("FleetManager", () => {
   it("filters by protocol and folder subtree", async () => {
     const user = userEvent.setup();
     mount();
+    await screen.findByText("Jump");
     await user.click(screen.getByRole("button", { name: "Folder: All" }));
     await user.click(screen.getByRole("option", { name: "Production" }));
+    await waitFor(() => expect(screen.queryByText("Jump")).toBeNull());
     expect(screen.getByText("DC01")).toBeInTheDocument();
     expect(screen.getByText("WEB01")).toBeInTheDocument();
-    expect(screen.queryByText("Jump")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Protocol: All" }));
     await user.click(screen.getByRole("option", { name: "SSH" }));
-    expect(screen.getByText("No connections match these filters.")).toBeInTheDocument();
+    expect(await screen.findByText("No connections match these filters.")).toBeInTheDocument();
   });
 
   it("debounces the search box", async () => {
     const user = userEvent.setup();
     mount();
+    await screen.findByText("DC01");
     await user.type(screen.getByLabelText("Search connections"), "bastion");
     expect(screen.getByText("DC01")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText("DC01")).toBeNull());
-    expect(screen.getByText("Bastion")).toBeInTheDocument();
+    expect(await screen.findByText("Bastion")).toBeInTheDocument();
   });
 
   it("probes a single endpoint and shows the measured latency", async () => {
@@ -179,31 +195,26 @@ describe("FleetManager", () => {
       latency_ms: 12,
       health_checked_at: new Date().toISOString(),
     });
-    const props = mount();
-    await user.click(screen.getByRole("button", { name: "Probe DC01" }));
+    mount();
+    await user.click(await screen.findByRole("button", { name: "Probe DC01" }));
     expect(probeConnection).toHaveBeenCalledWith("dc01");
     expect(await screen.findByText("12ms")).toBeInTheDocument();
-    expect(props.onConnectionUpdated).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "dc01", health_status: "online" })
-    );
   });
 
   it("moves the selection to a folder from the bulk dock", async () => {
     const user = userEvent.setup();
-    vi.mocked(updateConnection).mockImplementation(async (id, data) => ({ id, ...data }));
-    const props = mount();
-    await user.click(screen.getByLabelText("Select Jump"));
+    mount();
+    await user.click(await screen.findByLabelText("Select Jump"));
     await user.click(screen.getByLabelText("Select Bastion"));
     const dock = screen.getByRole("region", { name: "Bulk actions" });
     expect(dock).toHaveTextContent("2Endpoints Selected");
     await user.click(within(dock).getByRole("button", { name: "Move to folder" }));
     await user.click(screen.getByRole("menuitem", { name: /Web tier/ }));
-    await waitFor(() => expect(updateConnection).toHaveBeenCalledTimes(2));
-    expect(updateConnection).toHaveBeenCalledWith(
-      "jump",
-      expect.objectContaining({ folder_id: "web", name: "Jump" })
-    );
-    expect(props.onConnectionUpdated).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(moveConnections).toHaveBeenCalledTimes(1));
+    const [ids, folder] = vi.mocked(moveConnections).mock.calls[0];
+    expect([...ids].sort()).toEqual(["bastion", "jump"]);
+    expect(folder).toBe("web");
+    expect(updateConnection).not.toHaveBeenCalled();
   });
 
   it("asks for confirmation before bulk delete and warns about live sessions", async () => {
@@ -215,18 +226,20 @@ describe("FleetManager", () => {
     await waitFor(() => expect(screen.getByText("1 active")).toBeInTheDocument());
     await user.click(screen.getByLabelText("Select all matching connections"));
     await user.click(screen.getByRole("button", { name: "Delete Selected" }));
-    expect(props.requestConfirm).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: "Delete 4 connections",
-        message: expect.stringContaining("1 of them has active sessions"),
-      })
+    await waitFor(() =>
+      expect(props.requestConfirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Delete 4 connections",
+          message: expect.stringContaining("1 of them has active sessions"),
+        })
+      )
     );
   });
 
   it("scopes host-key pinning to the selected SSH targets", async () => {
     const user = userEvent.setup();
     const props = mount();
-    await user.click(screen.getByLabelText("Select DC01"));
+    await user.click(await screen.findByLabelText("Select DC01"));
     await user.click(screen.getByLabelText("Select Jump"));
     await user.click(screen.getByRole("button", { name: "Pin Host Keys (1)" }));
     expect(props.onVerifyHostKeys).toHaveBeenCalledWith(["jump"]);
@@ -247,7 +260,7 @@ describe("FleetManager", () => {
   it("offers clear-host-key only for pinned SSH targets", async () => {
     const user = userEvent.setup();
     const props = mount();
-    await user.click(screen.getByRole("button", { name: "More actions for Jump" }));
+    await user.click(await screen.findByRole("button", { name: "More actions for Jump" }));
     expect(screen.queryByRole("menuitem", { name: "Clear pinned host key" })).toBeNull();
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "More actions for Bastion" }));

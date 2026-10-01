@@ -1,11 +1,11 @@
 import { Fragment, useMemo, useState } from "react";
-import type { Connection, ConnectionFolder } from "../../../api";
+import type { ConnectionFolder, ConnectionRef } from "../../../api";
 import EnterpriseCheckbox from "../../../components/EnterpriseCheckbox";
 import { buildFolderTree, type FolderNode } from "../../../utils/folderTree";
 
 interface Props {
   folders: ConnectionFolder[];
-  connections: Connection[];
+  connections: ConnectionRef[];
   folderIds: ReadonlySet<string>;
   connectionIds: ReadonlySet<string>;
   inherited: ReadonlySet<string>;
@@ -17,8 +17,8 @@ interface Props {
 const INDENT = 20;
 const UNFILED = "__unfiled__";
 
-const targetOf = (c: Connection) =>
-  (c.protocol === "web" ? c.extra?.url : undefined) || c.hostname || "—";
+const targetOf = (c: ConnectionRef) =>
+  (c.protocol === "web" ? c.url : undefined) || c.hostname || "—";
 
 export default function RoleAssignmentsTab({
   folders,
@@ -35,7 +35,7 @@ export default function RoleAssignmentsTab({
 
   const tree = useMemo(() => buildFolderTree(folders, connections), [folders, connections]);
   const byFolder = useMemo(() => {
-    const map = new Map<string, Connection[]>();
+    const map = new Map<string, ConnectionRef[]>();
     for (const c of [...connections].sort((a, b) => a.name.localeCompare(b.name))) {
       const key = c.folder_id && folders.some((f) => f.id === c.folder_id) ? c.folder_id : UNFILED;
       const list = map.get(key) ?? [];
@@ -46,7 +46,7 @@ export default function RoleAssignmentsTab({
   }, [connections, folders]);
 
   const q = search.trim().toLowerCase();
-  const connMatches = (c: Connection) =>
+  const connMatches = (c: ConnectionRef) =>
     !q || c.name.toLowerCase().includes(q) || targetOf(c).toLowerCase().includes(q);
 
   // Folders to show while searching: a match, or an ancestor of one.
@@ -81,7 +81,7 @@ export default function RoleAssignmentsTab({
   const reachable = new Set([...inherited, ...connectionIds]);
   const directOnly = [...connectionIds].filter((id) => !inherited.has(id)).length;
 
-  const renderConnection = (c: Connection, depth: number) => {
+  const renderConnection = (c: ConnectionRef, depth: number) => {
     const isInherited = inherited.has(c.id);
     const isDirect = connectionIds.has(c.id);
     return (

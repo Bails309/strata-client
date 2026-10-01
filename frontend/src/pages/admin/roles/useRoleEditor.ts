@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useState } from "react";
-import type { Connection } from "../../../api";
 import {
   ROLE_FLAGS,
   inheritedConnectionIds,
@@ -23,7 +22,7 @@ const toggled = (set: ReadonlySet<string>, id: string) => {
 
 export function useRoleEditor(
   initial: RoleEditorInitial,
-  connections: Pick<Connection, "id" | "folder_id">[]
+  connections: { id: string; folder_id?: string | null }[]
 ) {
   const [draft, setDraft] = useState<RoleDraft>(initial.draft);
   const [folderIds, setFolderIds] = useState<Set<string>>(() => new Set(initial.folderIds));

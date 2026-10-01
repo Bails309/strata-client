@@ -5,7 +5,7 @@
 
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, Pool, Postgres};
+use sqlx::{FromRow, Pool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 /// Columns returned by list/create/update in a stable order.
@@ -272,6 +272,406 @@ pub async fn list_for_user(
         .await?
     };
     Ok(rows)
+}
+
+// ── Paged listings (PERF-08) ───────────────────────────────────────────
+
+/// One page of a listing and how many rows match in all.
+#[derive(Serialize, Debug)]
+pub struct Page<T> {
+    pub items: Vec<T>,
+    pub total: i64,
+}
+
+/// `ILIKE` pattern matching `s` anywhere, with its wildcards taken literally.
+pub fn contains_pattern(s: &str) -> String {
+    let escaped = s
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{escaped}%")
+}
+
+fn non_empty(s: &Option<String>) -> Option<&str> {
+    s.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// Filters for the admin connection table.
+#[derive(Deserialize, Debug, Default)]
+pub struct AdminConnectionQuery {
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+    /// Substring of name, host, port, description, folder or protocol.
+    pub search: Option<String>,
+    pub protocol: Option<String>,
+    /// A folder id (that folder and its subfolders) or `unfiled`.
+    pub folder: Option<String>,
+    /// `online`, `offline` or `unknown`.
+    pub health: Option<String>,
+}
+
+const ADMIN_FROM: &str = " FROM connections c
+     LEFT JOIN connection_folders cf ON cf.id = c.folder_id
+     WHERE c.soft_deleted_at IS NULL";
+
+fn push_admin_filters(
+    q: &mut QueryBuilder<'_, Postgres>,
+    f: &AdminConnectionQuery,
+) -> Result<(), AppError> {
+    if let Some(search) = non_empty(&f.search) {
+        q.push(
+            " AND concat_ws(E'\\n', c.name, c.hostname, c.port::text, c.description, cf.name, c.protocol) ILIKE ",
+        )
+        .push_bind(contains_pattern(search));
+    }
+    if let Some(protocol) = non_empty(&f.protocol) {
+        q.push(" AND c.protocol = ").push_bind(protocol.to_owned());
+    }
+    match non_empty(&f.folder) {
+        None => {}
+        Some("unfiled") => {
+            q.push(" AND c.folder_id IS NULL");
+        }
+        Some(id) => {
+            let id: Uuid = id.parse().map_err(|_| {
+                AppError::Validation("folder must be a folder id or `unfiled`".into())
+            })?;
+            q.push(
+                " AND c.folder_id IN (WITH RECURSIVE sub(id) AS (SELECT ",
+            )
+            .push_bind(id)
+            .push(
+                "::uuid UNION SELECT f.id FROM connection_folders f JOIN sub ON f.parent_id = sub.id) SELECT id FROM sub)",
+            );
+        }
+    }
+    match non_empty(&f.health) {
+        None => {}
+        Some(h @ ("online" | "offline")) => {
+            q.push(" AND c.health_status = ").push_bind(h.to_owned());
+        }
+        Some("unknown") => {
+            q.push(" AND c.health_status NOT IN ('online', 'offline')");
+        }
+        Some(_) => {
+            return Err(AppError::Validation(
+                "health must be online, offline or unknown".into(),
+            ))
+        }
+    }
+    Ok(())
+}
+
+/// One page of the admin connection table, ordered by name.
+pub async fn admin_page(
+    pool: &Pool<Postgres>,
+    f: &AdminConnectionQuery,
+    limit: i64,
+    offset: i64,
+) -> Result<Page<ConnectionRow>, AppError> {
+    let mut count = QueryBuilder::new(format!("SELECT COUNT(*){ADMIN_FROM}"));
+    push_admin_filters(&mut count, f)?;
+    let total: i64 = count.build_query_scalar().fetch_one(pool).await?;
+
+    let mut q = QueryBuilder::new(format!(
+        "SELECT c.id, c.name, c.protocol, c.hostname, c.port, c.domain, c.description,
+                c.folder_id, c.extra, c.last_accessed, c.watermark, c.health_status,
+                c.health_checked_at{ADMIN_FROM}"
+    ));
+    push_admin_filters(&mut q, f)?;
+    q.push(" ORDER BY c.name, c.id LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+    let items = q.build_query_as().fetch_all(pool).await?;
+    Ok(Page { items, total })
+}
+
+/// Enough of a connection to name it in a picker or a bulk action.
+#[derive(Serialize, FromRow, Debug, Clone)]
+pub struct ConnectionRef {
+    pub id: Uuid,
+    pub name: String,
+    pub protocol: String,
+    pub hostname: String,
+    pub port: i32,
+    pub folder_id: Option<Uuid>,
+    /// The target of a `web` connection.
+    pub url: Option<String>,
+}
+
+/// Every connection matching `f`, without `extra`.
+pub async fn admin_refs(
+    pool: &Pool<Postgres>,
+    f: &AdminConnectionQuery,
+) -> Result<Vec<ConnectionRef>, AppError> {
+    let mut q = QueryBuilder::new(format!(
+        "SELECT c.id, c.name, c.protocol, c.hostname, c.port, c.folder_id, c.extra->>'url' AS url{ADMIN_FROM}"
+    ));
+    push_admin_filters(&mut q, f)?;
+    q.push(" ORDER BY c.name, c.id");
+    Ok(q.build_query_as().fetch_all(pool).await?)
+}
+
+#[derive(Serialize, FromRow, Debug, Default)]
+pub struct FleetCounts {
+    pub total: i64,
+    pub online: i64,
+    pub offline: i64,
+    /// Connections with at least one posture alert.
+    pub alert_count: i64,
+    pub legacy_sec: i64,
+    pub unpinned: i64,
+    pub cert_ignored: i64,
+    pub last_sweep: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Serialize, FromRow, Debug)]
+pub struct ProtocolCount {
+    pub protocol: String,
+    pub count: i64,
+}
+
+/// Whole-fleet figures for the admin summary strip.
+#[derive(Serialize, Debug)]
+pub struct FleetSummary {
+    #[serde(flatten)]
+    pub counts: FleetCounts,
+    pub protocols: Vec<ProtocolCount>,
+}
+
+/// Mirrors the alerting badges in the admin fleet view (`policiesFor`).
+pub async fn fleet_summary(pool: &Pool<Postgres>) -> Result<FleetSummary, AppError> {
+    let counts: FleetCounts = sqlx::query_as(
+        "SELECT COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE health_status = 'online') AS online,
+                COUNT(*) FILTER (WHERE health_status = 'offline') AS offline,
+                COUNT(*) FILTER (WHERE legacy OR unpinned OR cert) AS alert_count,
+                COUNT(*) FILTER (WHERE legacy) AS legacy_sec,
+                COUNT(*) FILTER (WHERE unpinned) AS unpinned,
+                COUNT(*) FILTER (WHERE cert) AS cert_ignored,
+                MAX(health_checked_at) AS last_sweep
+         FROM (
+             SELECT health_status, health_checked_at,
+                    protocol IN ('rdp', 'vdi') AND COALESCE(extra->>'security', '') = 'rdp' AS legacy,
+                    protocol = 'ssh' AND COALESCE(extra->>'host-key', '') = '' AS unpinned,
+                    COALESCE(extra->>'ignore-cert', '') = 'true' AS cert
+             FROM connections WHERE soft_deleted_at IS NULL
+         ) c",
+    )
+    .fetch_one(pool)
+    .await?;
+    let protocols = sqlx::query_as(
+        "SELECT protocol, COUNT(*) AS count FROM connections
+         WHERE soft_deleted_at IS NULL GROUP BY protocol ORDER BY count DESC, protocol",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(FleetSummary { counts, protocols })
+}
+
+/// Move connections into `folder_id` (or to the root). Returns what moved.
+pub async fn move_to_folder(
+    pool: &Pool<Postgres>,
+    ids: &[Uuid],
+    folder_id: Option<Uuid>,
+) -> Result<Vec<(Uuid, String)>, AppError> {
+    let rows = sqlx::query_as(
+        "UPDATE connections SET folder_id = $1, updated_at = now()
+         WHERE id = ANY($2) AND soft_deleted_at IS NULL
+         RETURNING id, name",
+    )
+    .bind(folder_id)
+    .bind(ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Filters for a user's dashboard.
+#[derive(Deserialize, Debug, Default)]
+pub struct UserConnectionQuery {
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+    /// Substring of name, host or description.
+    pub search: Option<String>,
+    pub protocol: Option<String>,
+    pub favorites: Option<bool>,
+    /// A user tag or admin tag id.
+    pub tag: Option<Uuid>,
+    /// A folder id (that folder only) or `none`.
+    pub folder: Option<String>,
+    /// `recent`: most recently opened first, opened ones only.
+    pub sort: Option<String>,
+}
+
+/// `FROM`/`WHERE` for the connections `user_id` may open.
+fn push_user_base(q: &mut QueryBuilder<'_, Postgres>, user_id: Uuid, see_all: bool) {
+    q.push(
+        " FROM connections c
+         LEFT JOIN connection_folders cf ON cf.id = c.folder_id
+         LEFT JOIN user_connection_access uca ON uca.connection_id = c.id AND uca.user_id = ",
+    )
+    .push_bind(user_id)
+    .push(" WHERE c.soft_deleted_at IS NULL");
+    if !see_all {
+        q.push(
+            " AND (EXISTS (SELECT 1 FROM role_connections rc JOIN users u ON u.role_id = rc.role_id
+                           WHERE u.id = ",
+        )
+        .push_bind(user_id)
+        .push(
+            " AND rc.connection_id = c.id)
+                 OR EXISTS (SELECT 1 FROM role_folders rf JOIN users u ON u.role_id = rf.role_id
+                           WHERE u.id = ",
+        )
+        .push_bind(user_id)
+        .push(" AND rf.folder_id = c.folder_id))");
+    }
+}
+
+fn push_user_search(q: &mut QueryBuilder<'_, Postgres>, search: &str) {
+    q.push(" AND concat_ws(E'\\n', c.name, c.hostname, c.description) ILIKE ")
+        .push_bind(contains_pattern(search));
+}
+
+/// Every filter but the folder.
+fn push_user_filters(q: &mut QueryBuilder<'_, Postgres>, user_id: Uuid, f: &UserConnectionQuery) {
+    if let Some(search) = non_empty(&f.search) {
+        push_user_search(q, search);
+    }
+    if let Some(protocol) = non_empty(&f.protocol) {
+        q.push(" AND lower(c.protocol) = lower(")
+            .push_bind(protocol.to_owned())
+            .push(")");
+    }
+    if f.favorites == Some(true) {
+        q.push(" AND EXISTS (SELECT 1 FROM user_favorites fv WHERE fv.connection_id = c.id AND fv.user_id = ")
+            .push_bind(user_id)
+            .push(")");
+    }
+    if let Some(tag) = f.tag {
+        q.push(" AND (EXISTS (SELECT 1 FROM user_connection_tags t WHERE t.connection_id = c.id AND t.user_id = ")
+            .push_bind(user_id)
+            .push(" AND t.tag_id = ")
+            .push_bind(tag)
+            .push(") OR EXISTS (SELECT 1 FROM admin_connection_tags t WHERE t.connection_id = c.id AND t.tag_id = ")
+            .push_bind(tag)
+            .push("))");
+    }
+}
+
+/// One page of the connections `user_id` may open.
+pub async fn user_page(
+    pool: &Pool<Postgres>,
+    user_id: Uuid,
+    see_all: bool,
+    f: &UserConnectionQuery,
+    limit: i64,
+    offset: i64,
+) -> Result<Page<UserConnectionRow>, AppError> {
+    let recent = match non_empty(&f.sort) {
+        None => false,
+        Some("recent") => true,
+        Some(_) => return Err(AppError::Validation("sort must be `recent`".into())),
+    };
+    let push_where = |q: &mut QueryBuilder<'_, Postgres>| -> Result<(), AppError> {
+        push_user_base(q, user_id, see_all);
+        push_user_filters(q, user_id, f);
+        match non_empty(&f.folder) {
+            None => {}
+            Some("none") => {
+                q.push(" AND c.folder_id IS NULL");
+            }
+            Some(id) => {
+                let id: Uuid = id.parse().map_err(|_| {
+                    AppError::Validation("folder must be a folder id or `none`".into())
+                })?;
+                q.push(" AND c.folder_id = ").push_bind(id);
+            }
+        }
+        if recent {
+            q.push(" AND uca.last_accessed IS NOT NULL");
+        }
+        Ok(())
+    };
+
+    let mut count = QueryBuilder::new("SELECT COUNT(*)");
+    push_where(&mut count)?;
+    let total: i64 = count.build_query_scalar().fetch_one(pool).await?;
+
+    let mut q = QueryBuilder::new(
+        "SELECT c.id, c.name, c.protocol, c.hostname, c.port, c.description,
+                c.folder_id, cf.name AS folder_name, uca.last_accessed, c.watermark,
+                c.health_status, c.health_checked_at",
+    );
+    push_where(&mut q)?;
+    q.push(if recent {
+        " ORDER BY uca.last_accessed DESC, c.name, c.id"
+    } else {
+        " ORDER BY c.name, c.id"
+    });
+    q.push(" LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+    let items = q.build_query_as().fetch_all(pool).await?;
+    Ok(Page { items, total })
+}
+
+#[derive(Serialize, FromRow, Debug)]
+pub struct FolderCount {
+    /// `None`: connections in no folder.
+    pub folder_id: Option<Uuid>,
+    pub count: i64,
+}
+
+/// Counts that let the dashboard draw its folder tree and filters without
+/// loading every connection.
+#[derive(Serialize, Debug)]
+pub struct UserConnectionFacets {
+    /// Matching every filter.
+    pub total: i64,
+    /// Matching the search alone.
+    pub search_total: i64,
+    /// Every connection the user may open.
+    pub all_total: i64,
+    /// Protocols among every connection the user may open.
+    pub protocols: Vec<String>,
+    /// Matches by the folder they are filed in directly.
+    pub folders: Vec<FolderCount>,
+}
+
+pub async fn user_facets(
+    pool: &Pool<Postgres>,
+    user_id: Uuid,
+    see_all: bool,
+    f: &UserConnectionQuery,
+) -> Result<UserConnectionFacets, AppError> {
+    let mut q = QueryBuilder::new("SELECT c.folder_id, COUNT(*) AS count");
+    push_user_base(&mut q, user_id, see_all);
+    push_user_filters(&mut q, user_id, f);
+    q.push(" GROUP BY c.folder_id");
+    let folders: Vec<FolderCount> = q.build_query_as().fetch_all(pool).await?;
+
+    let mut q = QueryBuilder::new("SELECT COUNT(*), COUNT(*) FILTER (WHERE TRUE");
+    if let Some(search) = non_empty(&f.search) {
+        push_user_search(&mut q, search);
+    }
+    q.push(
+        "), COALESCE(array_agg(DISTINCT c.protocol) FILTER (WHERE c.protocol IS NOT NULL), '{}')",
+    );
+    push_user_base(&mut q, user_id, see_all);
+    let (all_total, search_total, protocols): (i64, i64, Vec<String>) =
+        q.build_query_as().fetch_one(pool).await?;
+
+    Ok(UserConnectionFacets {
+        total: folders.iter().map(|f| f.count).sum(),
+        search_total,
+        all_total,
+        protocols,
+        folders,
+    })
 }
 
 pub async fn create(
@@ -542,6 +942,260 @@ pub async fn touch_user_access(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_search_pattern_matches_wildcards_literally() {
+        assert_eq!(contains_pattern("50%_off\\"), "%50\\%\\_off\\\\%");
+    }
+
+    /// Needs `TEST_DATABASE_URL` pointing at a migrated database.
+    #[tokio::test]
+    async fn paged_listings_filter_authorise_and_count() {
+        let Some(pool) = std::env::var("TEST_DATABASE_URL")
+            .ok()
+            .and_then(|url| sqlx::PgPool::connect_lazy(&url).ok())
+        else {
+            eprintln!("TEST_DATABASE_URL unset, skipping");
+            return;
+        };
+        let tag = Uuid::new_v4().simple().to_string();
+        let role: Uuid = sqlx::query_scalar("INSERT INTO roles (name) VALUES ($1) RETURNING id")
+            .bind(format!("r-{tag}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let user: Uuid = sqlx::query_scalar(
+            "INSERT INTO users (username, email, role_id) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind(format!("u-{tag}"))
+        .bind(format!("{tag}@example.test"))
+        .bind(role)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let folder = |name: String, parent: Option<Uuid>| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO connection_folders (name, parent_id) VALUES ($1, $2) RETURNING id",
+                )
+                .bind(name)
+                .bind(parent)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let a = folder(format!("a-{tag}"), None).await;
+        let b = folder(format!("b-{tag}"), Some(a)).await;
+        let conn = |name: &str,
+                    protocol: &str,
+                    folder: Option<Uuid>,
+                    health: &str,
+                    extra: serde_json::Value| {
+            let pool = pool.clone();
+            let name = format!("{tag}-{name}");
+            let protocol = protocol.to_owned();
+            let health = health.to_owned();
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO connections (name, protocol, hostname, port, folder_id, health_status, extra)
+                     VALUES ($1, $2, 'h', 1, $3, $4, $5) RETURNING id",
+                )
+                .bind(name)
+                .bind(protocol)
+                .bind(folder)
+                .bind(health)
+                .bind(extra)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let c1 = conn(
+            "c1",
+            "rdp",
+            Some(a),
+            "online",
+            json!({"ignore-cert": "true"}),
+        )
+        .await;
+        let c2 = conn("c2", "ssh", Some(b), "offline", json!({})).await;
+        let c3 = conn("c3", "rdp", None, "unknown", json!({})).await;
+        let c4 = conn("c4", "ssh", Some(b), "unknown", json!({"host-key": "k"})).await;
+        // A folder grant covers only connections filed directly in it.
+        sqlx::query("INSERT INTO role_folders (role_id, folder_id) VALUES ($1, $2)")
+            .bind(role)
+            .bind(a)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO role_connections (role_id, connection_id) VALUES ($1, $2)")
+            .bind(role)
+            .bind(c3)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO user_favorites (user_id, connection_id) VALUES ($1, $2)")
+            .bind(user)
+            .bind(c3)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let admin = |f: AdminConnectionQuery| {
+            let pool = pool.clone();
+            async move {
+                let page = admin_page(&pool, &f, 50, 0).await.unwrap();
+                (
+                    page.total,
+                    page.items.into_iter().map(|c| c.id).collect::<Vec<_>>(),
+                )
+            }
+        };
+        let mine = || AdminConnectionQuery {
+            search: Some(tag.clone()),
+            ..Default::default()
+        };
+        assert_eq!(admin(mine()).await, (4, vec![c1, c2, c3, c4]));
+        let in_a = AdminConnectionQuery {
+            folder: Some(a.to_string()),
+            ..mine()
+        };
+        assert_eq!(admin(in_a).await, (3, vec![c1, c2, c4]), "subfolders count");
+        let unfiled = AdminConnectionQuery {
+            folder: Some("unfiled".into()),
+            ..mine()
+        };
+        assert_eq!(admin(unfiled).await, (1, vec![c3]));
+        let online = AdminConnectionQuery {
+            health: Some("online".into()),
+            ..mine()
+        };
+        assert_eq!(admin(online).await, (1, vec![c1]));
+        let unknown = AdminConnectionQuery {
+            health: Some("unknown".into()),
+            ..mine()
+        };
+        assert_eq!(admin(unknown).await, (2, vec![c3, c4]));
+        let ssh = AdminConnectionQuery {
+            protocol: Some("ssh".into()),
+            ..mine()
+        };
+        assert_eq!(admin(ssh).await, (2, vec![c2, c4]));
+        let by_folder = AdminConnectionQuery {
+            search: Some(format!("b-{tag}")),
+            ..Default::default()
+        };
+        assert_eq!(
+            admin(by_folder).await,
+            (2, vec![c2, c4]),
+            "folder name is searched"
+        );
+        let second = admin_page(&pool, &mine(), 2, 2).await.unwrap();
+        assert_eq!(second.total, 4);
+        assert_eq!(
+            second.items.iter().map(|c| c.id).collect::<Vec<_>>(),
+            vec![c3, c4]
+        );
+        let refs = admin_refs(
+            &pool,
+            &AdminConnectionQuery {
+                folder: Some(b.to_string()),
+                ..mine()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(refs.iter().map(|r| r.id).collect::<Vec<_>>(), vec![c2, c4]);
+        assert!(fleet_summary(&pool).await.unwrap().counts.unpinned >= 1);
+
+        let user_q = |f: UserConnectionQuery| {
+            let pool = pool.clone();
+            async move {
+                let page = user_page(&pool, user, false, &f, 50, 0).await.unwrap();
+                (
+                    page.total,
+                    page.items.into_iter().map(|c| c.id).collect::<Vec<_>>(),
+                )
+            }
+        };
+        assert_eq!(
+            user_q(UserConnectionQuery::default()).await,
+            (2, vec![c1, c3]),
+            "only granted"
+        );
+        let in_a = UserConnectionQuery {
+            folder: Some(a.to_string()),
+            ..Default::default()
+        };
+        assert_eq!(user_q(in_a).await, (1, vec![c1]));
+        let none = UserConnectionQuery {
+            folder: Some("none".into()),
+            ..Default::default()
+        };
+        assert_eq!(user_q(none).await, (1, vec![c3]));
+        let favs = UserConnectionQuery {
+            favorites: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(user_q(favs).await, (1, vec![c3]));
+        let facets = user_facets(
+            &pool,
+            user,
+            false,
+            &UserConnectionQuery {
+                search: Some("c1".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (facets.total, facets.search_total, facets.all_total),
+            (1, 1, 2)
+        );
+        assert_eq!(facets.protocols, vec!["rdp".to_owned()]);
+        assert_eq!(facets.folders.len(), 1);
+        assert_eq!(facets.folders[0].folder_id, Some(a));
+
+        let users = crate::services::users::page(
+            &pool,
+            &crate::services::users::UserPageQuery {
+                search: Some(tag.clone()),
+                role_id: Some(role),
+                ..Default::default()
+            },
+            50,
+            0,
+        )
+        .await
+        .unwrap();
+        assert_eq!((users.total, users.items[0].id), (1, user));
+
+        for id in [c1, c2, c3, c4] {
+            sqlx::query("DELETE FROM connections WHERE id = $1")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("DELETE FROM connection_folders WHERE id = ANY($1)")
+            .bind(vec![b, a])
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM roles WHERE id = $1")
+            .bind(role)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
 
     #[test]
     fn redact_hides_every_secret_but_keeps_other_extras() {

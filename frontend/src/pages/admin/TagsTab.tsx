@@ -4,7 +4,7 @@
    eslint.config.js W4-1 commentary. */
 import { useCallback, useEffect, useState } from "react";
 import {
-  Connection,
+  ConnectionRef,
   UserTag,
   createAdminTag,
   deleteAdminTag,
@@ -30,7 +30,7 @@ export default function TagsTab({
   connections,
   onSave,
 }: {
-  connections: Connection[];
+  connections: Pick<ConnectionRef, "id" | "name" | "protocol" | "hostname" | "port">[];
   onSave: () => void;
 }) {
   const [tags, setTags] = useState<UserTag[]>([]);

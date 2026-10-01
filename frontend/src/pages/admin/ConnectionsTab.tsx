@@ -1,9 +1,10 @@
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import Select from "../../components/Select";
 import ConfirmModal from "../../components/ConfirmModal";
 import {
   Connection,
   ConnectionFolder,
+  ConnectionRef,
   HostKeySurveyRow,
   MeResponse,
   createConnection,
@@ -11,7 +12,7 @@ import {
   deleteConnection,
   surveySshHostKeys,
   approveSshHostKeys,
-  getConnections,
+  getConnectionRefs,
   parseKubeconfig,
 } from "../../api";
 import {
@@ -29,23 +30,24 @@ import FleetManager from "./fleet/FleetManager";
 
 interface ConnectionsTabProps {
   user: MeResponse;
-  connections: Connection[];
   folders: ConnectionFolder[];
-  onConnectionCreated: (c: Connection) => void;
-  onConnectionUpdated: (c: Connection) => void;
-  onConnectionDeleted: (id: string) => void;
   onFoldersChanged: (folders: ConnectionFolder[]) => void;
 }
 
-export default function ConnectionsTab({
-  user,
-  connections,
-  folders,
-  onConnectionCreated,
-  onConnectionUpdated,
-  onConnectionDeleted,
-  onFoldersChanged,
-}: ConnectionsTabProps) {
+export default function ConnectionsTab({ user, folders, onFoldersChanged }: ConnectionsTabProps) {
+  /** Bumped after any change so the table and folder counts reload. */
+  const [reloadKey, setReloadKey] = useState(0);
+  const reload = () => setReloadKey((n) => n + 1);
+  const [refs, setRefs] = useState<ConnectionRef[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    getConnectionRefs()
+      .then((r) => !cancelled && setRefs(r))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
   const [formMode, setFormMode] = useState<"closed" | "add" | "edit">("closed");
   const [formId, setFormId] = useState<string | null>(null);
   const [formCore, setFormCore] = useState({
@@ -98,9 +100,7 @@ export default function ConnectionsTab({
     if (keys.length === 0) return;
     try {
       await approveSshHostKeys(keys);
-      for (const updated of await getConnections()) {
-        if (keys.some((k) => k.id === updated.id)) onConnectionUpdated(updated);
-      }
+      reload();
       await runHostKeySurvey();
     } catch (e) {
       setSurveyError(e instanceof Error ? e.message : "Could not store the host keys");
@@ -320,14 +320,13 @@ export default function ConnectionsTab({
       let c;
       if (formMode === "add") {
         c = await createConnection(payload);
-        onConnectionCreated(c);
       } else if (formMode === "edit" && formId) {
         c = await updateConnection(formId, payload);
-        onConnectionUpdated(c);
       }
       if (c) {
         setFormExtra(c.extra || {});
       }
+      reload();
       closeForm();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to save connection");
@@ -343,7 +342,7 @@ export default function ConnectionsTab({
       onConfirm: async () => {
         try {
           await deleteConnection(id);
-          onConnectionDeleted(id);
+          reload();
           if (id === formId) {
             closeForm();
           }
@@ -362,8 +361,8 @@ export default function ConnectionsTab({
       {(user.can_manage_system || user.can_create_connections) && (
         <FleetManager
           user={user}
-          connections={connections}
           folders={folders}
+          reloadKey={reloadKey}
           activeFormId={formId}
           hostKeyPanel={renderHostKeySurveyPanel()}
           verifyingHostKeys={surveying}
@@ -372,8 +371,6 @@ export default function ConnectionsTab({
           onEdit={openEdit}
           onDuplicate={openDuplicate}
           onDelete={handleDelete}
-          onConnectionUpdated={onConnectionUpdated}
-          onConnectionDeleted={onConnectionDeleted}
           requestConfirm={setConfirmModal}
         />
       )}
@@ -566,7 +563,7 @@ export default function ConnectionsTab({
       {(user.can_manage_system || user.can_create_connections) && (
         <ConnectionFoldersView
           folders={folders}
-          connections={connections}
+          connections={refs}
           onFoldersChanged={onFoldersChanged}
         />
       )}

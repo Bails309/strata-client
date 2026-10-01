@@ -988,6 +988,7 @@ export const updateDns = (data: {
 
 export const updateRecordings = (data: {
   enabled: boolean;
+  required?: boolean;
   retention_days?: number;
   storage_type?: string;
   azure_account_name?: string;
@@ -1780,6 +1781,10 @@ export interface HistoricalRecording {
   /** Session engine that served the recording. `null` for recordings
    *  created before migration 081. */
   engine?: "guacd" | "native" | null;
+  /** `incomplete`: stopped early or its tail may be lost; `failed`:
+   *  nothing usable was recorded. */
+  status?: "recording" | "complete" | "incomplete" | "failed";
+  failure?: string | null;
 }
 
 export const getRecordings = (

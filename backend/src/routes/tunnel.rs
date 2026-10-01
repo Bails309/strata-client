@@ -1258,13 +1258,31 @@ pub async fn ws_tunnel(
         .await
         {
             tracing::error!(
-                "Failed to insert recording row for session '{}': {e} — \
-                 aborting recording for this session to avoid orphaned files",
+                "Failed to insert recording row for session '{}': {e}",
                 nvr_session_id
             );
-            // Disable recording for this session. The session itself
-            // proceeds unrecorded — better than silently losing audit data
-            // by writing a recording file that has no DB row to point at.
+            if let Err(audit_err) = crate::services::audit::log(
+                &db.pool,
+                Some(user_id),
+                "recording.failed",
+                &serde_json::json!({
+                    "connection_id": connection_id.to_string(),
+                    "session_id": nvr_session_id,
+                    "stage": "metadata",
+                    "required": rec_config.required,
+                }),
+            )
+            .await
+            {
+                tracing::error!("could not audit the recording failure: {audit_err}");
+            }
+            if rec_config.required {
+                return Err(AppError::Internal(format!(
+                    "recording is required and its metadata could not be written: {e}"
+                )));
+            }
+            // Best effort: no file without a row to point at it, so the
+            // session runs unrecorded.
             recording_name = None;
         }
     }
@@ -1310,6 +1328,7 @@ pub async fn ws_tunnel(
         ignore_cert,
         recording_path,
         recording_name: recording_name.clone(),
+        recording_required: rec_config.required,
         width: effective_width,
         height: effective_height,
         dpi: effective_dpi,

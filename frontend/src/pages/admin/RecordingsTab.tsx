@@ -15,6 +15,7 @@ export default function RecordingsTab({
   onSave: () => void;
 }) {
   const [enabled, setEnabled] = useState(settings.recordings_enabled === "true");
+  const [required, setRequired] = useState(settings.recordings_required === "true");
   const [days, setDays] = useState(settings.recordings_retention_days || "30");
   const [storageType, setStorageType] = useState(settings.recordings_storage_type || "local");
   const [azureAccount, setAzureAccount] = useState(settings.recordings_azure_account_name || "");
@@ -25,6 +26,7 @@ export default function RecordingsTab({
 
   useEffect(() => {
     setEnabled(settings.recordings_enabled === "true");
+    setRequired(settings.recordings_required === "true");
     setDays(settings.recordings_retention_days || "30");
     setStorageType(settings.recordings_storage_type || "local");
     setAzureAccount(settings.recordings_azure_account_name || "");
@@ -42,6 +44,19 @@ export default function RecordingsTab({
           label="Enable session recording"
           aria-label="Enable session recording"
         />
+      </div>
+      <div className="form-group">
+        <EnterpriseCheckbox
+          checked={required}
+          onChange={(e) => setRequired(e.target.checked)}
+          disabled={!enabled}
+          label="Require recording"
+          aria-label="Require recording"
+        />
+        <p className="text-xs text-txt-secondary mt-1">
+          Refuse a session whose recording cannot start, and end one whose recording fails.
+          Otherwise the session continues unrecorded and the failure is audited.
+        </p>
       </div>
       <div className="form-group">
         <label htmlFor="rec-retention-days">Retention (days)</label>
@@ -101,6 +116,7 @@ export default function RecordingsTab({
         onClick={async () => {
           await updateRecordings({
             enabled,
+            required,
             retention_days: parseInt(days),
             storage_type: storageType,
             azure_account_name: storageType === "azure_blob" ? azureAccount : undefined,

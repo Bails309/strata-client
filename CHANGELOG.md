@@ -40,6 +40,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checkpoint key apart from the JWT secret it is otherwise derived from.
   Deleting a user no longer rewrites their audit entries. See
   docs/security.md for what this does and does not protect against.
+- **Recording failures no longer go unnoticed (SEC-16).** New setting
+  *Require recording*: a session whose recording cannot start is refused
+  before the target is contacted, and one whose recording fails is ended.
+  Without it the session continues unrecorded, as before. Either way the
+  failure is audited as `recording.failed`, and recordings now carry a
+  status (`complete`, `incomplete`, `failed`) that the recording lists
+  show (migration 099). A session that ended on an error, or whose browser
+  vanished, used to skip finalising its recording, shutting down the
+  engine and revoking its credential; every session end now does all
+  three, each within 10 seconds. Recordings are synced to disk every 5
+  seconds, and any still open when the backend starts are marked
+  incomplete.
 - **Files too large to scan are refused in block mode (SEC-13).**
   `Skipped { reason: "oversize" }` now follows `STRATA_AV_FAIL_MODE` like an
   engine error. The Compose default `STRATA_AV_MAX_SCAN_SIZE` was 100 MiB
@@ -248,6 +260,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rows, so deep pages cost the same as the first. Only the filters in use
   reach the query. Free-text search is indexed with trigrams when the
   database allows `pg_trgm`, and works unindexed otherwise.
+- **Recording playback reads and sends less (PERF-13).** The player's
+  parser works on bytes with a moving cursor instead of re-scanning and
+  copying a string, and no longer corrupts a character split across two
+  reads. Instructions go out in batches of up to 64 KiB instead of one
+  WebSocket message each, which matters most when seeking.
 
 ## [2.2.0] — 2026-09-25
 

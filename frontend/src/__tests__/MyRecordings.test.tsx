@@ -168,6 +168,27 @@ describe("MyRecordings", () => {
     expect(await screen.findByText("—")).toBeInTheDocument();
   });
 
+  it("flags an incomplete recording with the reason", async () => {
+    vi.mocked(getMyRecordings).mockResolvedValue([
+      makeRecording({ status: "incomplete", failure: "write: disk full" }),
+    ]);
+    await act(async () => {
+      render(<MyRecordings />);
+    });
+    const badge = await screen.findByText("Incomplete");
+    expect(badge).toHaveAttribute("title", "write: disk full");
+  });
+
+  it("does not flag a complete recording", async () => {
+    vi.mocked(getMyRecordings).mockResolvedValue([makeRecording({ status: "complete" })]);
+    await act(async () => {
+      render(<MyRecordings />);
+    });
+    await screen.findByText("Server A");
+    expect(screen.queryByText("Incomplete")).not.toBeInTheDocument();
+    expect(screen.queryByText("Failed")).not.toBeInTheDocument();
+  });
+
   it("shows table headers", async () => {
     await act(async () => {
       render(<MyRecordings />);

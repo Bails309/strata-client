@@ -24,8 +24,8 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use secrecy::SecretString;
 use strata_session::actor::{
-    AuditSink, GuacRecordingSink, NullAuditSink, RecordingPolicy, SessionActor, SessionConfig,
-    SessionHandle,
+    AuditRecord, AuditSink, GuacRecordingSink, NullAuditSink, RecordingPolicy, SessionActor,
+    SessionConfig, SessionHandle,
 };
 use strata_session::engine::keymap::Backspace;
 use strata_session::engine::kube::{KubeConfig, KubeEngineFactory};
@@ -827,8 +827,31 @@ pub async fn run_native(
     watchdog_token: Option<String>,
     user_id: Uuid,
 ) -> Result<(), AppError> {
-    let engine = connect_engine(protocol, &handshake).await?;
-    let audit = open_recording(&handshake).await?;
+    // Storage before the target: a session that must be recorded never
+    // reaches the target unless its recording is open.
+    let (audit, fault) = match open_recording(&handshake).await {
+        Ok(opened) => opened,
+        Err(e) => {
+            recording_failed(nvr.as_ref(), &handshake, user_id, "open", &e.to_string()).await;
+            if handshake.recording_required {
+                return Err(e);
+            }
+            (Box::new(NullAuditSink) as Box<dyn AuditSink>, None)
+        }
+    };
+    let engine = match connect_engine(protocol, &handshake).await {
+        Ok(engine) => engine,
+        Err(e) => {
+            mark_recording(
+                nvr.as_ref(),
+                &handshake,
+                "failed",
+                "the session did not connect",
+            )
+            .await;
+            return Err(e);
+        }
+    };
 
     let session_id = nvr
         .as_ref()
@@ -866,6 +889,7 @@ pub async fn run_native(
             }
             None => {
                 tracing::error!("Session limit reached — rejecting native tunnel");
+                mark_recording(nvr.as_ref(), &handshake, "failed", "session limit reached").await;
                 return Err(AppError::Internal(
                     "Maximum concurrent session limit reached".into(),
                 ));
@@ -1031,24 +1055,169 @@ pub async fn run_native(
     tracing::info!(%reason, "native session ending");
     let _ = handle.terminate(reason).await;
     let _ = sink.close().await;
+    // The recording's outcome is only known once the actor has finalised it.
+    if tokio::time::timeout(ACTOR_TEARDOWN, handle.closed())
+        .await
+        .is_err()
+    {
+        tracing::warn!("session actor did not finish tearing down in time");
+    }
+    let fault = fault.and_then(|f| f.lock().ok().and_then(|g| g.clone()));
 
     if let Some(ctx) = nvr.as_ref() {
-        finalize_session(ctx, bandwidth.as_ref()).await;
+        if let Some(why) = &fault {
+            recording_failed(Some(ctx), &handshake, user_id, "write", why).await;
+        }
+        finalize_session(ctx, bandwidth.as_ref(), fault.as_deref()).await;
     }
     Ok(())
 }
 
+/// Longest to wait for the actor's teardown, which bounds each of its
+/// three steps at 10 seconds.
+const ACTOR_TEARDOWN: Duration = Duration::from_secs(45);
+
+/// First recording failure, shared between the actor's sink and the bridge.
+type RecordingFault = Arc<std::sync::Mutex<Option<String>>>;
+
+/// A `.guac` recording that reports its first failure and applies the
+/// recording policy to it: a required recording ends the session, a
+/// best-effort one stops recording and lets the session continue.
+struct TrackedRecording {
+    inner: GuacRecordingSink,
+    required: bool,
+    fault: RecordingFault,
+    stopped: bool,
+}
+
+impl TrackedRecording {
+    fn fail(
+        &mut self,
+        err: strata_session::SessionError,
+    ) -> Result<(), strata_session::SessionError> {
+        let why = err.to_string();
+        if let Ok(mut fault) = self.fault.lock() {
+            fault.get_or_insert_with(|| why.clone());
+        }
+        if self.required {
+            return Err(err);
+        }
+        tracing::error!(error = %why, "recording failed; the session continues unrecorded");
+        self.stopped = true;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl AuditSink for TrackedRecording {
+    async fn record(&mut self, record: AuditRecord) -> Result<(), strata_session::SessionError> {
+        if self.stopped {
+            return Ok(());
+        }
+        match self.inner.record(record).await {
+            Ok(()) => Ok(()),
+            Err(e) => self.fail(e),
+        }
+    }
+
+    async fn checkpoint(&mut self) -> Result<(), strata_session::SessionError> {
+        if self.stopped {
+            return Ok(());
+        }
+        match self.inner.checkpoint().await {
+            Ok(()) => Ok(()),
+            Err(e) => self.fail(e),
+        }
+    }
+
+    async fn finalize(&mut self) -> Result<(), strata_session::SessionError> {
+        if self.stopped {
+            return Ok(());
+        }
+        let result = self.inner.finalize().await;
+        if let Err(e) = &result {
+            if let Ok(mut fault) = self.fault.lock() {
+                fault.get_or_insert_with(|| e.to_string());
+            }
+        }
+        result
+    }
+}
+
+/// Set this session's recording status, if it has a recording.
+async fn mark_recording(
+    nvr: Option<&NvrContext>,
+    handshake: &HandshakeParams,
+    status: &str,
+    why: &str,
+) {
+    if let (Some(ctx), Some(_)) = (nvr, &handshake.recording_name) {
+        crate::services::recordings::mark_failed(&ctx.db_pool, &ctx.session_id, status, why).await;
+    }
+}
+
+/// Mark the recording failed and raise `recording.failed`.
+async fn recording_failed(
+    nvr: Option<&NvrContext>,
+    handshake: &HandshakeParams,
+    user_id: Uuid,
+    stage: &str,
+    why: &str,
+) {
+    let Some(ctx) = nvr else {
+        return;
+    };
+    if handshake.recording_name.is_none() {
+        return;
+    }
+    // A write failure leaves what was recorded before it.
+    let status = if stage == "write" {
+        "incomplete"
+    } else {
+        "failed"
+    };
+    crate::services::recordings::mark_failed(&ctx.db_pool, &ctx.session_id, status, why).await;
+    tracing::error!(session_id = %ctx.session_id, stage, error = why, "session recording failed");
+    if let Err(e) = crate::services::audit::log(
+        &ctx.db_pool,
+        Some(user_id),
+        "recording.failed",
+        &serde_json::json!({
+            "connection_id": ctx.connection_id.to_string(),
+            "session_id": ctx.session_id,
+            "stage": stage,
+            "required": handshake.recording_required,
+            "error": why,
+        }),
+    )
+    .await
+    {
+        tracing::error!("could not audit the recording failure: {e}");
+    }
+}
+
 /// Open the `.guac` recording for this session, if recording is on.
-async fn open_recording(handshake: &HandshakeParams) -> Result<Box<dyn AuditSink>, AppError> {
+async fn open_recording(
+    handshake: &HandshakeParams,
+) -> Result<(Box<dyn AuditSink>, Option<RecordingFault>), AppError> {
     let (Some(dir), Some(name)) = (&handshake.recording_path, &handshake.recording_name) else {
-        return Ok(Box::new(NullAuditSink));
+        return Ok((Box::new(NullAuditSink), None));
     };
     let path = Path::new(dir).join(name);
     let sink = GuacRecordingSink::create(&path)
         .await
         .map_err(|e| AppError::Internal(format!("open recording {}: {e}", path.display())))?;
     tracing::info!(path = %path.display(), "recording native session");
-    Ok(Box::new(sink))
+    let fault = RecordingFault::default();
+    Ok((
+        Box::new(TrackedRecording {
+            inner: sink,
+            required: handshake.recording_required,
+            fault: Arc::clone(&fault),
+            stopped: false,
+        }),
+        Some(fault),
+    ))
 }
 
 /// Why the watchdog wants the session closed.
@@ -1102,6 +1271,7 @@ where
 async fn finalize_session(
     ctx: &NvrContext,
     bandwidth: Option<&Arc<crate::services::session_registry::ActiveSession>>,
+    recording_fault: Option<&str>,
 ) {
     let (bytes_down, bytes_up) = bandwidth.map_or((0i64, 0i64), |sess| {
         (
@@ -1124,14 +1294,23 @@ async fn finalize_session(
     }
 
     let duration = (chrono::Utc::now() - ctx.started_at).num_seconds() as i32;
+    // A status already set by a failure stands.
+    let outcome = if recording_fault.is_some() {
+        "incomplete"
+    } else {
+        "complete"
+    };
     match sqlx::query(
         "UPDATE recordings SET duration_secs = $1, bytes_down = $2, bytes_up = $3, \
-         engine = 'native' WHERE session_id = $4",
+         engine = 'native', \
+         status = CASE WHEN status = 'recording' THEN $5 ELSE status END \
+         WHERE session_id = $4",
     )
     .bind(duration)
     .bind(bytes_down)
     .bind(bytes_up)
     .bind(&ctx.session_id)
+    .bind(outcome)
     .execute(&ctx.db_pool)
     .await
     {
@@ -1582,6 +1761,7 @@ mod tests {
             ignore_cert: false,
             recording_path: None,
             recording_name: None,
+            recording_required: false,
             width: 1024,
             height: 768,
             dpi: 96,

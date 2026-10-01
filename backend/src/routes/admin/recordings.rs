@@ -411,6 +411,9 @@ async fn handle_recording_stream(
         .await?;
 
     let mut parser = GuacamoleParser::new();
+    // Instructions waiting to go out as one message. Flushed before every
+    // control message and pacing wait so ordering and timing hold.
+    let mut outbox = String::new();
     let mut first_guac_ts: Option<u64> = None; // never changes — for absolute progress
     let mut base_guac_ts: Option<u64> = None; // reset on speed change — for pacing
     let mut base_real_ts: Option<std::time::Instant> = None;
@@ -444,6 +447,7 @@ async fn handle_recording_stream(
                                 // ── Seeking: fast-forward without pacing ──
                                 if seeking {
                                     if abs_elapsed >= seek_ms {
+                                        flush_outbox(&mut socket, &mut outbox).await?;
                                         // Seek complete — reset timing for normal playback
                                         seeking = false;
                                         base_guac_ts = Some(ts);
@@ -457,6 +461,7 @@ async fn handle_recording_stream(
                                             .send(axum::extract::ws::Message::Text(seeked.into()))
                                             .await?;
                                     } else if last_progress_sent.elapsed().as_millis() > 200 {
+                                        flush_outbox(&mut socket, &mut outbox).await?;
                                         let prog = format_guac_instruction(
                                             "nvrprogress",
                                             &[&abs_elapsed.to_string()],
@@ -469,6 +474,7 @@ async fn handle_recording_stream(
                                 }
 
                                 if !seeking {
+                                    flush_outbox(&mut socket, &mut outbox).await?;
                                     // ── Drain pending messages (incl. speed) ──
                                     let (p, s) = drain_incoming(&mut socket, paused, speed).await;
                                     paused = p;
@@ -612,12 +618,14 @@ async fn handle_recording_stream(
             // screen or fast-replay artefact).  Non-sync drawing instructions
             // are always sent so the display state builds up correctly.
             if !(seeking && instruction.opcode == "sync") {
-                socket
-                    .send(axum::extract::ws::Message::Text(instruction.raw.into()))
-                    .await?;
+                outbox.push_str(&instruction.raw);
+                if outbox.len() >= OUTBOX_BYTES || (!seeking && instruction.opcode == "sync") {
+                    flush_outbox(&mut socket, &mut outbox).await?;
+                }
             }
         }
     }
+    flush_outbox(&mut socket, &mut outbox).await?;
 
     // Signal end-of-recording so the frontend can close gracefully
     let end_msg = format_guac_instruction("nvrend", &[]);
@@ -627,6 +635,25 @@ async fn handle_recording_stream(
     let _ = socket.send(axum::extract::ws::Message::Close(None)).await;
 
     Ok(())
+}
+
+/// Batched playback messages are sent once they reach this size.
+const OUTBOX_BYTES: usize = 64 * 1024;
+
+/// Send the batched instructions as one message. The client's tunnel
+/// parses every instruction in a message, so batches split only between
+/// instructions.
+async fn flush_outbox(
+    socket: &mut axum::extract::ws::WebSocket,
+    outbox: &mut String,
+) -> Result<(), axum::Error> {
+    if outbox.is_empty() {
+        return Ok(());
+    }
+    let text = std::mem::take(outbox);
+    socket
+        .send(axum::extract::ws::Message::Text(text.into()))
+        .await
 }
 
 /// Format a Guacamole protocol instruction from an opcode and arguments.
@@ -668,93 +695,45 @@ struct GuacamoleInstruction {
     raw: String,
 }
 
+/// Incremental parser over raw bytes. A character split across two reads
+/// is decoded once both halves are in, and consumed instructions are
+/// released by moving the buffer's start rather than copying the rest.
 struct GuacamoleParser {
-    buffer: String,
+    buffer: bytes::BytesMut,
 }
 
 impl GuacamoleParser {
     fn new() -> Self {
         Self {
-            buffer: String::new(),
+            buffer: bytes::BytesMut::new(),
         }
     }
 
     fn push(&mut self, data: &[u8]) {
-        self.buffer.push_str(&String::from_utf8_lossy(data));
+        self.buffer.extend_from_slice(data);
     }
 
+    /// The next complete instruction. Malformed input is discarded.
     fn next_instruction(&mut self) -> Option<GuacamoleInstruction> {
-        let mut elements = Vec::new();
-        let mut cursor_bytes = 0;
-
-        loop {
-            // Find length prefix
-            let remaining = &self.buffer[cursor_bytes..];
-            let dot_pos = remaining.find('.')?;
-
-            let len_str = &remaining[..dot_pos];
-            let len: usize = match len_str.parse() {
-                Ok(l) => l,
+        use bytes::Buf;
+        let (instruction, consumed) =
+            match strata_session::protocol::guacamole::try_parse_instruction(&self.buffer) {
+                Ok(Some((parsed, consumed))) => (
+                    GuacamoleInstruction {
+                        opcode: parsed.opcode.to_owned(),
+                        args: parsed.args.iter().map(|a| (*a).to_owned()).collect(),
+                        raw: String::from_utf8_lossy(&self.buffer[..consumed]).into_owned(),
+                    },
+                    consumed,
+                ),
+                Ok(None) => return None,
                 Err(_) => {
-                    // Malformed prefix, clear and stop
                     self.buffer.clear();
                     return None;
                 }
             };
-
-            let content_start_bytes = cursor_bytes + dot_pos + 1;
-            let after_prefix = &self.buffer[content_start_bytes..];
-
-            // We need 'len' characters. Find the byte offset for 'len' characters.
-            let mut char_count = 0;
-            let mut content_end_offset = 0;
-            let mut found_end = false;
-            for (i, _) in after_prefix.char_indices() {
-                if char_count == len {
-                    content_end_offset = i;
-                    found_end = true;
-                    break;
-                }
-                char_count += 1;
-            }
-
-            if char_count < len {
-                return None; // Need more data
-            }
-
-            // Content ends exactly at buffer boundary — terminator not yet available
-            if !found_end {
-                return None;
-            }
-
-            let content = &after_prefix[..content_end_offset];
-            elements.push(content.to_string());
-
-            let terminator_pos = content_start_bytes + content_end_offset;
-            if terminator_pos >= self.buffer.len() {
-                return None; // Need more data (terminator)
-            }
-
-            let terminator = self.buffer.as_bytes()[terminator_pos] as char;
-            if terminator == ';' {
-                let raw = self.buffer[..=terminator_pos].to_string();
-                self.buffer.drain(..=terminator_pos);
-
-                let opcode = elements.remove(0);
-                return Some(GuacamoleInstruction {
-                    opcode,
-                    args: elements,
-                    raw,
-                });
-            } else if terminator == ',' {
-                cursor_bytes = terminator_pos + 1;
-                continue;
-            } else {
-                // Malformed
-                self.buffer.clear();
-                return None;
-            }
-        }
+        self.buffer.advance(consumed);
+        Some(instruction)
     }
 }
 
@@ -924,6 +903,20 @@ mod tests {
     }
 
     #[test]
+    fn a_character_split_across_reads_is_not_corrupted() {
+        // Reads are 16 KiB; a multi-byte character can straddle two.
+        let raw = "4.text,2.中x;3.nop;".as_bytes();
+        let split = raw.iter().position(|&b| b >= 0x80).unwrap() + 1;
+        let mut parser = GuacamoleParser::new();
+        parser.push(&raw[..split]);
+        assert!(parser.next_instruction().is_none());
+        parser.push(&raw[split..]);
+        let inst = parser.next_instruction().unwrap();
+        assert_eq!(inst.args, vec!["中x"]);
+        assert_eq!(parser.next_instruction().unwrap().opcode, "nop");
+    }
+
+    #[test]
     fn test_parser_consecutive_after_partial() {
         let mut parser = GuacamoleParser::new();
         parser.push(b"3.img,5.hello;3.nop;");
@@ -969,6 +962,20 @@ mod tests {
     fn test_parser_new_is_empty() {
         let mut parser = GuacamoleParser::new();
         assert!(parser.next_instruction().is_none());
+    }
+
+    #[test]
+    fn a_character_split_across_reads_survives() {
+        // "é" is two bytes; a 16 KiB read can end between them.
+        let raw = "9.clipboard,4.café;".as_bytes();
+        let split = raw.len() - 2;
+        let mut parser = GuacamoleParser::new();
+        parser.push(&raw[..split]);
+        assert!(parser.next_instruction().is_none());
+        parser.push(&raw[split..]);
+        let inst = parser.next_instruction().unwrap();
+        assert_eq!(inst.args, vec!["café"]);
+        assert_eq!(inst.raw, "9.clipboard,4.café;");
     }
 
     #[test]

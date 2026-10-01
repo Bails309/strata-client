@@ -1258,6 +1258,8 @@ async fn regenerate_krb5_conf(pool: &sqlx::Pool<sqlx::Postgres>) -> Result<(), A
 #[derive(Deserialize)]
 pub struct RecordingsUpdateRequest {
     pub enabled: bool,
+    /// End or refuse sessions rather than let them run unrecorded.
+    pub required: Option<bool>,
     pub retention_days: Option<u32>,
     pub storage_type: Option<String>,
     pub azure_account_name: Option<String>,
@@ -1278,6 +1280,14 @@ pub async fn update_recordings(
         if body.enabled { "true" } else { "false" },
     )
     .await?;
+    if let Some(required) = body.required {
+        settings::set(
+            &db.pool,
+            "recordings_required",
+            if required { "true" } else { "false" },
+        )
+        .await?;
+    }
     if let Some(days) = body.retention_days {
         settings::set(&db.pool, "recordings_retention_days", &days.to_string()).await?;
     }
@@ -1317,7 +1327,7 @@ pub async fn update_recordings(
         &db.pool,
         Some(user.id),
         "recordings.configured",
-        &json!({ "enabled": body.enabled }),
+        &json!({ "enabled": body.enabled, "required": body.required }),
     )
     .await?;
     Ok(Json(json!({ "status": "recordings_updated" })))

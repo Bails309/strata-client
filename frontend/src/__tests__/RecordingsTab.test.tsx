@@ -9,12 +9,17 @@ vi.mock("../api", async () => {
   return { ...actual, updateRecordings: vi.fn().mockResolvedValue({}) };
 });
 
+const enableBox = () => screen.getByRole("checkbox", { name: "Enable session recording" });
+const requireBox = () => screen.getByRole("checkbox", { name: "Require recording" });
+
 describe("RecordingsTab", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("renders defaults when settings are empty", () => {
     render(<RecordingsTab settings={{}} onSave={vi.fn()} />);
-    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    expect(enableBox()).not.toBeChecked();
+    expect(requireBox()).not.toBeChecked();
+    expect(requireBox()).toBeDisabled();
     expect(screen.getByLabelText("Retention (days)")).toHaveValue(30);
   });
 
@@ -32,7 +37,7 @@ describe("RecordingsTab", () => {
         onSave={vi.fn()}
       />
     );
-    expect(screen.getByRole("checkbox")).toBeChecked();
+    expect(enableBox()).toBeChecked();
     expect(screen.getByLabelText("Retention (days)")).toHaveValue(90);
     expect(screen.getByLabelText("Account Name")).toHaveValue("acct");
     expect(screen.getByLabelText("Container Name")).toHaveValue("cont");
@@ -41,9 +46,20 @@ describe("RecordingsTab", () => {
 
   it("toggles enabled checkbox", async () => {
     render(<RecordingsTab settings={{}} onSave={vi.fn()} />);
-    const checkbox = screen.getByRole("checkbox");
+    const checkbox = enableBox();
     await userEvent.click(checkbox);
     expect(checkbox).toBeChecked();
+  });
+
+  it("saves the required setting once recording is enabled", async () => {
+    render(<RecordingsTab settings={{ recordings_enabled: "true" }} onSave={vi.fn()} />);
+    await userEvent.click(requireBox());
+    await userEvent.click(screen.getByRole("button", { name: "Save Recording Settings" }));
+    await waitFor(() =>
+      expect(api.updateRecordings).toHaveBeenCalledWith(
+        expect.objectContaining({ enabled: true, required: true })
+      )
+    );
   });
 
   it("updates retention days", () => {
@@ -79,12 +95,13 @@ describe("RecordingsTab", () => {
   it("calls updateRecordings with local storage payload and invokes onSave", async () => {
     const onSave = vi.fn();
     render(<RecordingsTab settings={{}} onSave={onSave} />);
-    await userEvent.click(screen.getByRole("checkbox"));
+    await userEvent.click(enableBox());
     fireEvent.change(screen.getByLabelText("Retention (days)"), { target: { value: "45" } });
     await userEvent.click(screen.getByRole("button", { name: "Save Recording Settings" }));
     await waitFor(() => expect(api.updateRecordings).toHaveBeenCalled());
     expect(api.updateRecordings).toHaveBeenCalledWith({
       enabled: true,
+      required: false,
       retention_days: 45,
       storage_type: "local",
       azure_account_name: undefined,
@@ -111,6 +128,7 @@ describe("RecordingsTab", () => {
     await waitFor(() => expect(api.updateRecordings).toHaveBeenCalled());
     expect(api.updateRecordings).toHaveBeenCalledWith({
       enabled: false,
+      required: false,
       retention_days: 30,
       storage_type: "azure_blob",
       azure_account_name: "a",

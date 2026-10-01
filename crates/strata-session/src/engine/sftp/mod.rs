@@ -376,10 +376,7 @@ impl SftpEngine {
         tokio::spawn(async move {
             let outcome = match stage_download(&sftp, &path, limit).await {
                 Ok(staged) => match gate {
-                    Some(gate) => gate
-                        .admit_download(&staged.0, &name)
-                        .await
-                        .map(|()| staged),
+                    Some(gate) => gate.admit_download(&staged.0, &name).await.map(|()| staged),
                     None => Ok(staged),
                 },
                 Err(message) => Err(message),
@@ -537,7 +534,11 @@ impl SftpEngine {
         upload.size += data.len() as u64;
         if upload.size > limit {
             self.uploads.remove(&stream);
-            self.fail(stream, "file is larger than the transfer limit", STATUS_FORBIDDEN);
+            self.fail(
+                stream,
+                "file is larger than the transfer limit",
+                STATUS_FORBIDDEN,
+            );
             return Ok(());
         }
         if let Err(err) = upload.file.write_all(data).await {

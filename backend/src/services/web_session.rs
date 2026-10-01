@@ -819,7 +819,10 @@ mod tests {
     fn bare_ips_are_single_host_networks() {
         let nets = parse_allowed_networks("203.0.113.7\n2001:db8::5");
         assert!(is_ip_allowed_by_cidr("203.0.113.7".parse().unwrap(), &nets));
-        assert!(!is_ip_allowed_by_cidr("203.0.113.8".parse().unwrap(), &nets));
+        assert!(!is_ip_allowed_by_cidr(
+            "203.0.113.8".parse().unwrap(),
+            &nets
+        ));
         assert!(is_ip_allowed_by_cidr("2001:db8::5".parse().unwrap(), &nets));
     }
 

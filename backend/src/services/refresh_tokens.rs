@@ -174,9 +174,10 @@ pub async fn revoke_family_of(pool: &Pool<Postgres>, jti: Uuid) -> Result<(), Ap
 
 /// Drop rows whose tokens can no longer be presented.
 pub async fn prune_expired(pool: &Pool<Postgres>) -> Result<u64, AppError> {
-    let done = sqlx::query("DELETE FROM refresh_tokens WHERE expires_at < now() - interval '1 day'")
-        .execute(pool)
-        .await?;
+    let done =
+        sqlx::query("DELETE FROM refresh_tokens WHERE expires_at < now() - interval '1 day'")
+            .execute(pool)
+            .await?;
     Ok(done.rows_affected())
 }
 
@@ -191,7 +192,10 @@ mod tests {
 
     #[test]
     fn a_token_spent_long_ago_is_a_replay() {
-        assert_eq!(classify(Some(CONCURRENT_GRACE_SECS + 1.0), false), Rotation::Reused);
+        assert_eq!(
+            classify(Some(CONCURRENT_GRACE_SECS + 1.0), false),
+            Rotation::Reused
+        );
     }
 
     #[test]

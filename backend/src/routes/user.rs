@@ -2387,7 +2387,9 @@ pub async fn list_my_credential_mappings(
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<cp_svc::UserMappingRow>>, AppError> {
     let db = require_running(&state).await?;
-    Ok(Json(cp_svc::list_mappings_for_user(&db.pool, user.id).await?))
+    Ok(Json(
+        cp_svc::list_mappings_for_user(&db.pool, user.id).await?,
+    ))
 }
 
 pub async fn set_credential_mapping(

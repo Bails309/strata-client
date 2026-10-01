@@ -17,10 +17,11 @@ import {
   MAX_PASTE_TEXT_LEN,
   UserTag,
   getConnectionFolders,
-  getMyConnections,
+  getMyConnectionsByIds,
   getTags,
 } from "../api";
 import { useUserPreferences } from "./UserPreferencesProvider";
+import { useConnectionSearch } from "../hooks/useLookups";
 
 type ActionKind = CommandMapping["action"];
 
@@ -162,6 +163,10 @@ interface PickerProps<T> {
   getLabel: (it: T) => string;
   placeholder: string;
   invalid?: boolean;
+  /** `items` are already the matches for the query; don't filter them again. */
+  remote?: boolean;
+  /** The query while open, `null` while closed. */
+  onQueryChange?: (query: string | null) => void;
 }
 
 /** Searchable typeahead picker — used for connection / folder / tag args.
@@ -175,11 +180,17 @@ function TypeaheadPicker<T>({
   getLabel,
   placeholder,
   invalid,
+  remote,
+  onQueryChange,
 }: PickerProps<T>) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const selected = items.find((it) => getId(it) === selectedId);
+
+  useEffect(() => {
+    onQueryChange?.(open ? query : null);
+  }, [open, query, onQueryChange]);
 
   // Close on outside click — onBlur alone fights with the dropdown click.
   useEffect(() => {
@@ -193,9 +204,9 @@ function TypeaheadPicker<T>({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return items.slice(0, 50);
+    if (!q || remote) return items.slice(0, 50);
     return items.filter((it) => getLabel(it).toLowerCase().includes(q)).slice(0, 50);
-  }, [items, query, getLabel]);
+  }, [items, query, getLabel, remote]);
 
   return (
     <div ref={wrapRef} className="relative flex-1 min-w-0">
@@ -259,9 +270,46 @@ function TypeaheadPicker<T>({
   );
 }
 
+const connectionLabel = (c: Connection) => `${c.name} (${c.protocol.toUpperCase()})`;
+const connectionId = (c: Connection) => c.id;
+
+/** Searches the server as you type rather than loading every connection. */
+function ConnectionPicker({
+  selectedId,
+  known,
+  onSelect,
+  invalid,
+}: {
+  selectedId: string;
+  known: Map<string, Connection>;
+  onSelect: (id: string) => void;
+  invalid?: boolean;
+}) {
+  const [query, setQuery] = useState<string | null>(null);
+  const [picked, setPicked] = useState<Connection | null>(null);
+  const { items } = useConnectionSearch(query ?? "", query !== null);
+  const selected = picked?.id === selectedId ? picked : (known.get(selectedId) ?? null);
+  return (
+    <TypeaheadPicker
+      items={query === null ? (selected ? [selected] : []) : items}
+      selectedId={selectedId}
+      onSelect={(id) => {
+        setPicked(items.find((c) => c.id === id) ?? null);
+        onSelect(id);
+      }}
+      getId={connectionId}
+      getLabel={connectionLabel}
+      placeholder="Search connections…"
+      invalid={invalid}
+      remote
+      onQueryChange={setQuery}
+    />
+  );
+}
+
 interface RowProps {
   mapping: CommandMapping;
-  connections: Connection[];
+  connections: Map<string, Connection>;
   folders: ConnectionFolder[];
   tags: UserTag[];
   otherTriggers: string[];
@@ -421,13 +469,10 @@ function MappingRow({
 
         {/* Action-specific argument picker */}
         {mapping.action === "open-connection" && (
-          <TypeaheadPicker
-            items={connections}
+          <ConnectionPicker
             selectedId={mapping.args.connection_id}
+            known={connections}
             onSelect={(id) => onChange({ ...mapping, args: { connection_id: id } })}
-            getId={(c) => c.id}
-            getLabel={(c) => `${c.name} (${c.protocol.toUpperCase()})`}
-            placeholder="Search connections…"
             invalid={!!argError}
           />
         )}
@@ -519,7 +564,7 @@ function MappingRow({
 export default function CommandMappingsSection() {
   const { preferences, update, loading } = useUserPreferences();
   const [draft, setDraft] = useState<CommandMapping[]>(preferences.commandMappings ?? []);
-  const [connections, setConnections] = useState<Connection[]>([]);
+  const [connections, setConnections] = useState<Map<string, Connection>>(() => new Map());
   const [folders, setFolders] = useState<ConnectionFolder[]>([]);
   const [tags, setTags] = useState<UserTag[]>([]);
   const [status, setStatus] = useState<string | null>(null);
@@ -533,14 +578,23 @@ export default function CommandMappingsSection() {
   // Load reference data for the typeahead pickers. Failures are
   // non-fatal — the user simply gets an empty dropdown.
   useEffect(() => {
-    void Promise.allSettled([getMyConnections(), getConnectionFolders(), getTags()]).then(
-      ([cs, fs, ts]) => {
-        if (cs.status === "fulfilled") setConnections(cs.value);
-        if (fs.status === "fulfilled") setFolders(fs.value);
-        if (ts.status === "fulfilled") setTags(ts.value);
-      }
-    );
+    void Promise.allSettled([getConnectionFolders(), getTags()]).then(([fs, ts]) => {
+      if (fs.status === "fulfilled") setFolders(fs.value);
+      if (ts.status === "fulfilled") setTags(ts.value);
+    });
   }, []);
+
+  // Only the connections saved mappings point at, to name them.
+  const savedTargets = (preferences.commandMappings ?? [])
+    .flatMap((m) => (m.action === "open-connection" ? [m.args.connection_id] : []))
+    .sort()
+    .join(",");
+  useEffect(() => {
+    if (!savedTargets) return;
+    getMyConnectionsByIds(savedTargets.split(","))
+      .then((cs) => setConnections(new Map(cs.map((c) => [c.id, c]))))
+      .catch(() => {});
+  }, [savedTargets]);
 
   const triggers = useMemo(() => draft.map((m) => m.trigger.trim()), [draft]);
   const dirty = JSON.stringify(draft) !== JSON.stringify(preferences.commandMappings ?? []);

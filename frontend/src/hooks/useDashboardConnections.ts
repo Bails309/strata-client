@@ -18,6 +18,8 @@ export interface FolderRows {
   items: Connection[];
   /** Matching connections filed directly in the folder. */
   total: number;
+  /** Continuation for "Show more"; absent once everything is loaded. */
+  next?: string;
 }
 
 interface Options {
@@ -88,22 +90,23 @@ export default function useDashboardConnections({ filters, folderView, page, pag
   );
 
   const fetchFolder = useCallback(
-    (id: string, folderPage: number) => {
+    (id: string, after?: string) => {
       const requestKey = key;
-      const tag = `${requestKey}|${id}|${folderPage}`;
+      const tag = `${requestKey}|${id}|${after ?? ""}`;
       if (inflight.current.has(tag)) return;
       inflight.current.add(tag);
-      getMyConnectionsPage(folderPage, FOLDER_PAGE_SIZE, {
+      getMyConnectionsPage(1, FOLDER_PAGE_SIZE, {
         ...filters,
         folder: id === UNGROUPED ? "none" : id,
+        after,
       })
         .then((p) =>
           setFolderRows((prev) => {
             // A response for filters that have since changed is dropped.
             if (requestKey !== keyRef.current) return prev;
             const rows = prev.key === requestKey ? { ...prev.rows } : {};
-            const before = folderPage === 1 ? [] : (rows[id]?.items ?? []);
-            rows[id] = { items: [...before, ...p.items], total: p.total };
+            const before = after ? (rows[id]?.items ?? []) : [];
+            rows[id] = { items: [...before, ...p.items], total: p.total, next: p.next };
             return { key: requestKey, rows };
           })
         )
@@ -117,7 +120,7 @@ export default function useDashboardConnections({ filters, folderView, page, pag
   const ensureFolders = useCallback(
     (ids: string[]) => {
       for (const id of ids) {
-        if (!rowsNow[id]) fetchFolder(id, 1);
+        if (!rowsNow[id]) fetchFolder(id);
       }
     },
     [rowsNow, fetchFolder]
@@ -125,8 +128,8 @@ export default function useDashboardConnections({ filters, folderView, page, pag
 
   const loadMore = useCallback(
     (id: string) => {
-      const loaded = rowsNow[id]?.items.length ?? 0;
-      fetchFolder(id, Math.floor(loaded / FOLDER_PAGE_SIZE) + 1);
+      const next = rowsNow[id]?.next;
+      if (next) fetchFolder(id, next);
     },
     [rowsNow, fetchFolder]
   );

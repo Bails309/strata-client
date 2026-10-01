@@ -8,36 +8,45 @@ vi.mock("../components/ThemeProvider", () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-vi.mock("../api", () => ({
-  readCookie: vi.fn(),
-  getCredentialProfiles: vi.fn(),
-  createCredentialProfile: vi.fn(),
-  updateCredentialProfile: vi.fn(),
-  deleteCredentialProfile: vi.fn(),
-  getProfileMappings: vi.fn(),
-  getMyCredentialMappings: vi.fn(),
-  setCredentialMapping: vi.fn(),
-  removeCredentialMapping: vi.fn(),
-  getMyConnections: vi.fn(),
-  getServiceHealth: vi.fn(),
-  getMyCheckouts: vi.fn().mockResolvedValue([]),
-  getMyManagedAccounts: vi.fn().mockResolvedValue([]),
-  requestCheckout: vi.fn(),
-  revealCheckoutPassword: vi.fn(),
-  linkCheckoutToProfile: vi.fn(),
-  checkinCheckout: vi.fn(),
-  retryCheckoutActivation: vi.fn(),
-  getSafeguardEnabled: vi.fn().mockResolvedValue({ enabled: false }),
-  getSafeguardSigninStatus: vi.fn().mockResolvedValue({
-    signed_in: false,
-    appliance_fqdn: "",
-    idp_alias: "",
-    auth_mode: "a2a",
-    enabled: false,
-  }),
-  submitSafeguardToken: vi.fn(),
-  clearSafeguardToken: vi.fn(),
-}));
+// The caller's connections in each test; the paged search answers from them
+// the way the server does.
+const { getMyConnections } = vi.hoisted(() => ({ getMyConnections: vi.fn() }));
+
+vi.mock("../api", async () => {
+  const { myConnectionsPage } = await import("./fakeListServer");
+  return {
+    readCookie: vi.fn(),
+    getCredentialProfiles: vi.fn(),
+    createCredentialProfile: vi.fn(),
+    updateCredentialProfile: vi.fn(),
+    deleteCredentialProfile: vi.fn(),
+    getProfileMappings: vi.fn(),
+    getMyCredentialMappings: vi.fn(),
+    setCredentialMapping: vi.fn(),
+    removeCredentialMapping: vi.fn(),
+    getMyConnectionsPage: vi.fn(async (page: number, perPage: number, f: object) =>
+      myConnectionsPage(await getMyConnections(), page, perPage, f)
+    ),
+    getServiceHealth: vi.fn(),
+    getMyCheckouts: vi.fn().mockResolvedValue([]),
+    getMyManagedAccounts: vi.fn().mockResolvedValue([]),
+    requestCheckout: vi.fn(),
+    revealCheckoutPassword: vi.fn(),
+    linkCheckoutToProfile: vi.fn(),
+    checkinCheckout: vi.fn(),
+    retryCheckoutActivation: vi.fn(),
+    getSafeguardEnabled: vi.fn().mockResolvedValue({ enabled: false }),
+    getSafeguardSigninStatus: vi.fn().mockResolvedValue({
+      signed_in: false,
+      appliance_fqdn: "",
+      idp_alias: "",
+      auth_mode: "a2a",
+      enabled: false,
+    }),
+    submitSafeguardToken: vi.fn(),
+    clearSafeguardToken: vi.fn(),
+  };
+});
 
 vi.mock("../contexts/SettingsContext", () => ({
   useSettings: () => ({
@@ -64,7 +73,6 @@ import {
   createCredentialProfile,
   updateCredentialProfile,
   deleteCredentialProfile,
-  getMyConnections,
   getServiceHealth,
   getProfileMappings,
   getMyCredentialMappings,
@@ -664,9 +672,9 @@ describe("Credentials", () => {
     // Type in search
     const searchInput = screen.getByPlaceholderText("Search connections…");
     await user.type(searchInput, "Alpha");
-    // Only Alpha should be visible
+    // Only Alpha should be visible once the search answers
+    await waitFor(() => expect(screen.queryByText(/Server Beta/)).not.toBeInTheDocument());
     expect(screen.getByText(/Server Alpha/)).toBeInTheDocument();
-    expect(screen.queryByText(/Server Beta/)).not.toBeInTheDocument();
   });
 
   it('shows "No matching connections" when search has no results', async () => {
@@ -679,7 +687,7 @@ describe("Credentials", () => {
     await user.click(screen.getByText("Select connections…"));
     const searchInput = screen.getByPlaceholderText("Search connections…");
     await user.type(searchInput, "nonexistent");
-    expect(screen.getByText("No matching connections")).toBeInTheDocument();
+    expect(await screen.findByText("No matching connections")).toBeInTheDocument();
   });
 
   it("deselects a connection via option toggle", async () => {

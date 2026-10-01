@@ -2063,6 +2063,17 @@ pub async fn list_users_page(
     ))
 }
 
+/// `GET /api/admin/users/refs` — users to pick from, or to name by id.
+pub async fn list_user_refs(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    axum::extract::Query(query): axum::extract::Query<users_svc::UserRefQuery>,
+) -> Result<Json<Vec<users_svc::UserRef>>, AppError> {
+    crate::services::middleware::check_user_management_permission(&user)?;
+    let db = require_running(&state).await?;
+    Ok(Json(users_svc::refs(&db.pool, &query).await?))
+}
+
 pub async fn restore_user(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,

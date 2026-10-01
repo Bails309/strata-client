@@ -6,25 +6,35 @@ import { MemoryRouter } from "react-router-dom";
 // jsdom doesn't implement scrollIntoView
 Element.prototype.scrollIntoView = vi.fn();
 
-// Mock the API
-vi.mock("../api", () => ({
-  readCookie: vi.fn(),
-  getMyConnections: vi.fn(),
-  getTags: vi.fn(),
-  getConnectionTags: vi.fn(),
-  getConnectionFolders: vi.fn().mockResolvedValue([]),
-  getMyConnectionFolders: vi.fn().mockResolvedValue([]),
-  postCommandAudit: vi.fn().mockResolvedValue(undefined),
-  BUILTIN_COMMANDS: ["reload", "disconnect", "fullscreen", "commands", "close", "explorer"],
-  MAX_OPEN_PATH_LEN: 1024,
-}));
+// Mock the API. `listAll` stands in for the caller's connections; the paged
+// endpoints answer from it the way the server does.
+const { listAll } = vi.hoisted(() => ({ listAll: vi.fn() }));
+vi.mock("../api", async () => {
+  const { myConnectionsPage } = await import("./fakeListServer");
+  return {
+    readCookie: vi.fn(),
+    getMyConnectionsPage: vi.fn(async (page: number, perPage: number, f: object) =>
+      myConnectionsPage(await listAll(), page, perPage, f)
+    ),
+    getMyConnectionsByIds: vi.fn(async (ids: string[]) =>
+      (await listAll()).filter((c: { id: string }) => ids.includes(c.id))
+    ),
+    getTags: vi.fn(),
+    getConnectionTags: vi.fn(),
+    getConnectionFolders: vi.fn().mockResolvedValue([]),
+    getMyConnectionFolders: vi.fn().mockResolvedValue([]),
+    postCommandAudit: vi.fn().mockResolvedValue(undefined),
+    BUILTIN_COMMANDS: ["reload", "disconnect", "fullscreen", "commands", "close", "explorer"],
+    MAX_OPEN_PATH_LEN: 1024,
+  };
+});
 
 // Mock SessionManager
 vi.mock("../components/SessionManager", () => ({
   useSessionManager: vi.fn(),
 }));
 
-import { getMyConnections, getTags, getConnectionTags } from "../api";
+import { getTags, getConnectionTags } from "../api";
 import { useSessionManager } from "../components/SessionManager";
 import CommandPalette from "../components/CommandPalette";
 
@@ -56,7 +66,7 @@ const mockConnections = [
 
 function setup(open = true) {
   const onClose = vi.fn();
-  (getMyConnections as ReturnType<typeof vi.fn>).mockResolvedValue(mockConnections);
+  listAll.mockResolvedValue(mockConnections);
   (getTags as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   (getConnectionTags as ReturnType<typeof vi.fn>).mockResolvedValue({});
   (useSessionManager as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -109,7 +119,7 @@ describe("CommandPalette", () => {
     await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
 
     await user.type(screen.getByPlaceholderText(/Search connections/i), "prod");
-    expect(screen.queryByText("Dev Server")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Dev Server")).not.toBeInTheDocument());
     expect(screen.getByText("Prod DB")).toBeInTheDocument();
   });
 
@@ -119,6 +129,7 @@ describe("CommandPalette", () => {
     await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
 
     await user.type(screen.getByPlaceholderText(/Search connections/i), "qa.local");
+    await waitFor(() => expect(screen.queryByText("Prod DB")).not.toBeInTheDocument());
     expect(screen.queryByText("Dev Server")).not.toBeInTheDocument();
     expect(screen.getByText("QA Desktop")).toBeInTheDocument();
   });
@@ -129,8 +140,8 @@ describe("CommandPalette", () => {
     await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
 
     await user.type(screen.getByPlaceholderText(/Search connections/i), "Work");
+    await waitFor(() => expect(screen.queryByText("Prod DB")).not.toBeInTheDocument());
     expect(screen.getByText("Dev Server")).toBeInTheDocument();
-    expect(screen.queryByText("Prod DB")).not.toBeInTheDocument();
   });
 
   it("shows empty state for no matches", async () => {
@@ -139,7 +150,7 @@ describe("CommandPalette", () => {
     await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
 
     await user.type(screen.getByPlaceholderText(/Search connections/i), "zzzznotfound");
-    expect(screen.getByText(/No connections found/)).toBeInTheDocument();
+    expect(await screen.findByText(/No connections found/)).toBeInTheDocument();
   });
 
   it("navigates on Enter key", async () => {
@@ -158,7 +169,7 @@ describe("CommandPalette", () => {
     const user = userEvent.setup();
     const { onClose } = setup();
     const input = screen.getByPlaceholderText(/Search connections/i);
-    await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Prod DB")).toBeInTheDocument());
 
     input.focus();
     await user.keyboard("{ArrowDown}{Enter}");
@@ -220,7 +231,7 @@ describe("CommandPalette", () => {
   });
 
   it("renders default protocol icon for unknown protocols", async () => {
-    (getMyConnections as ReturnType<typeof vi.fn>).mockResolvedValue([
+    listAll.mockResolvedValue([
       { id: "c4", name: "Telnet Box", protocol: "telnet", hostname: "legacy.local", port: 23 },
     ]);
     (useSessionManager as ReturnType<typeof vi.fn>).mockReturnValue({ sessions: [] });
@@ -240,7 +251,7 @@ describe("CommandPalette", () => {
     // API returns connections in alphabetical-ish API order: c1, c2, c3.
     // Two are open: c1 (currently displayed) and c3.
     // Expected list order: c3 (other open) → c1 (currently displayed) → c2 (not open).
-    (getMyConnections as ReturnType<typeof vi.fn>).mockResolvedValue(mockConnections);
+    listAll.mockResolvedValue(mockConnections);
     (getTags as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (getConnectionTags as ReturnType<typeof vi.fn>).mockResolvedValue({});
     (useSessionManager as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -258,7 +269,7 @@ describe("CommandPalette", () => {
       </MemoryRouter>
     );
 
-    await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Prod DB")).toBeInTheDocument());
 
     // Read DOM order of result rows.
     const rows = Array.from(document.querySelectorAll('[role="option"]'));

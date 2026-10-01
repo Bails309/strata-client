@@ -148,7 +148,8 @@ function myMatches(
   const favs = new Set(scope.favorites ?? []);
   return all
     .filter((c) => {
-      if (!contains([c.name, c.hostname, c.description], f.search)) return false;
+      if (!contains([c.name, c.hostname, c.description, c.folder_name, c.protocol], f.search))
+        return false;
       if (!withScope) return true;
       if (f.protocol && c.protocol.toLowerCase() !== f.protocol.toLowerCase()) return false;
       if (f.favorites && !favs.has(c.id)) return false;
@@ -168,11 +169,25 @@ export function myConnectionsPage(
   let rows = myMatches(all, f, scope);
   if (f.folder === "none") rows = rows.filter((c) => !c.folder_id);
   else if (f.folder) rows = rows.filter((c) => c.folder_id === f.folder);
+  if (f.ids) {
+    const ids = new Set(f.ids.split(","));
+    rows = rows.filter((c) => ids.has(c.id));
+  }
   if (f.sort === "recent")
     rows = rows
       .filter((c) => c.last_accessed)
       .sort((a, b) => Date.parse(b.last_accessed!) - Date.parse(a.last_accessed!));
-  return paginate(rows, page, perPage);
+  if (f.after === undefined) {
+    const p = paginate(rows, page, perPage);
+    return p.items.length === perPage ? { ...p, next: p.items[perPage - 1].id } : p;
+  }
+  // The fake's cursor is the id of the last row sent.
+  const items = rows.slice(rows.findIndex((c) => c.id === f.after) + 1).slice(0, perPage);
+  return {
+    items,
+    total: rows.length,
+    next: items.length === perPage ? items[perPage - 1].id : undefined,
+  };
 }
 
 export function myConnectionFacets(

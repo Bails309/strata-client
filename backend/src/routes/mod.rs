@@ -209,6 +209,7 @@ pub fn build_router(state: SharedState) -> Router {
             get(admin::list_users).post(admin::create_user),
         )
         .route("/api/admin/users/page", get(admin::list_users_page))
+        .route("/api/admin/users/refs", get(admin::list_user_refs))
         .route(
             "/api/admin/users/{id}",
             delete(admin::delete_user)

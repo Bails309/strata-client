@@ -12,10 +12,11 @@ import {
   outboundShareDownloadUrl,
   OutboundShare,
   OutboundShareApprover,
-  User,
+  UserRef,
 } from "../../api";
-import Select from "../../components/Select";
 import ConfirmModal from "../../components/ConfirmModal";
+import UserPicker from "../../components/UserPicker";
+import { useUserNames } from "../../hooks/useLookups";
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -40,7 +41,6 @@ function statusBadge(status: string): string {
 }
 
 interface Props {
-  users: User[];
   /** True when the current user has `can_manage_system` — only super-admins
    *  can manage the approver list and run manual purges. */
   isSuperAdmin: boolean;
@@ -74,12 +74,7 @@ interface Props {
  * `variant` controls which of those three blocks render — see the
  * [`Props`] docstring for the breakdown.
  */
-export default function OutboundSharesTab({
-  users,
-  isSuperAdmin,
-  onSave,
-  variant = "admin",
-}: Props) {
+export default function OutboundSharesTab({ isSuperAdmin, onSave, variant = "admin" }: Props) {
   const showQueue = variant === "admin" || variant === "queue-only";
   const showApprovers = variant === "admin" || variant === "policy-only";
   const [pending, setPending] = useState<OutboundShare[]>([]);
@@ -94,7 +89,7 @@ export default function OutboundSharesTab({
   // shared ConfirmModal component) instead of dropping the user
   // into the browser-native modal.
   const [purgeModal, setPurgeModal] = useState<OutboundShare | null>(null);
-  const [addingApprover, setAddingApprover] = useState<string>("");
+  const [addingApprover, setAddingApprover] = useState<UserRef | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -160,16 +155,13 @@ export default function OutboundSharesTab({
     };
   }, [refresh]);
 
-  const userById = useMemo(() => {
-    const m = new Map<string, User>();
-    for (const u of users) m.set(u.id, u);
-    return m;
-  }, [users]);
-
-  const eligibleApprovers = useMemo(() => {
-    const have = new Set(approvers.map((a) => a.user_id));
-    return users.filter((u) => !u.deleted_at && !have.has(u.id));
-  }, [users, approvers]);
+  // The approvals queue is also shown to approvers who cannot look users up.
+  const userById = useUserNames(
+    variant === "queue-only"
+      ? []
+      : [...pending, ...history].flatMap((s) => [s.requester_user_id, s.decided_by])
+  );
+  const approverIds = useMemo(() => approvers.map((a) => a.user_id), [approvers]);
 
   const handleApprove = useCallback(
     async (s: OutboundShare) => {
@@ -218,8 +210,8 @@ export default function OutboundSharesTab({
   const handleAddApprover = useCallback(async () => {
     if (!addingApprover) return;
     try {
-      await addOutboundApprover(addingApprover);
-      setAddingApprover("");
+      await addOutboundApprover(addingApprover.id);
+      setAddingApprover(null);
       onSave();
       await refresh();
     } catch (e: unknown) {
@@ -484,15 +476,12 @@ export default function OutboundSharesTab({
             )}
             <div className="flex gap-2 items-center pt-2">
               <div className="flex-1">
-                <Select
-                  value={addingApprover}
-                  onChange={setAddingApprover}
+                <UserPicker
+                  ariaLabel="Add an approver"
                   placeholder="Add an approver…"
-                  searchable
-                  options={eligibleApprovers.map((u) => ({
-                    value: u.id,
-                    label: `${u.username} (${u.email})`,
-                  }))}
+                  value={addingApprover}
+                  exclude={approverIds}
+                  onSelect={setAddingApprover}
                 />
               </div>
               <button

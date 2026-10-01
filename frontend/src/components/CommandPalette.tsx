@@ -5,7 +5,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  getMyConnections,
+  getMyConnectionsByIds,
   getTags,
   getConnectionTags,
   getMyConnectionFolders,
@@ -21,6 +21,7 @@ import { useUserPreferences } from "./UserPreferencesProvider";
 import { useSessionManager } from "./SessionManager";
 import { sendClipboardToRemote } from "./clipboardSync";
 import { requestFullscreenWithLock, exitFullscreenWithUnlock } from "../utils/keyboardLock";
+import { useConnectionSearch } from "../hooks/useLookups";
 
 /* ── Protocol icon (inline SVG, matching Dashboard) ──────────────── */
 function ProtocolIcon({ protocol }: { protocol: string }) {
@@ -167,27 +168,40 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const { sessions, activeSessionId, closeSession } = useSessionManager();
   const { preferences } = useUserPreferences();
   const [query, setQuery] = useState("");
+  /** Open sessions' and saved mappings' connections, fetched by id. */
   const [connections, setConnections] = useState<Connection[]>([]);
   const [folders, setFolders] = useState<ConnectionFolder[]>([]);
   const [tags, setTags] = useState<UserTag[]>([]);
   const [connectionTags, setConnectionTags] = useState<Record<string, string[]>>({});
-  const [loading, setLoading] = useState(false);
+  const [metaLoading, setMetaLoading] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   /** True while user has typed `:` to enter command mode. */
   const isCommandMode = query.startsWith(":");
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const { items: found, loading: searching } = useConnectionSearch(
+    isCommandMode ? "" : query,
+    open && !isCommandMode
+  );
 
-  // Fetch connections + tags + per-connection tag map when opened.
-  // Tags and the assignment map are best-effort: if they fail we still show
-  // connections, just without tag pills / tag-based filtering.
+  // Fetch tags, the per-connection tag map, folders and the connections
+  // named by open sessions or mappings when opened. The rest are searched
+  // on the server as the user types. All best-effort.
   useEffect(() => {
     if (!open) return;
     setQuery("");
     setSelectedIndex(0);
-    setLoading(true);
+    setMetaLoading(true);
+    const ids = [
+      ...sessions.map((s) => s.connectionId),
+      ...(preferences.commandMappings ?? []).flatMap((m) =>
+        m.action === "open-connection" ? [m.args.connection_id] : []
+      ),
+    ];
     Promise.all([
-      getMyConnections().catch(() => [] as Connection[]),
+      (ids.length ? getMyConnectionsByIds(ids) : Promise.resolve([])).catch(
+        () => [] as Connection[]
+      ),
       getTags().catch(() => [] as UserTag[]),
       getConnectionTags().catch(() => ({}) as Record<string, string[]>),
       getMyConnectionFolders().catch(() => [] as ConnectionFolder[]),
@@ -198,7 +212,9 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
         setConnectionTags(ctags);
         setFolders(fs);
       })
-      .finally(() => setLoading(false));
+      .finally(() => setMetaLoading(false));
+    // Sessions and mappings are read once per opening.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // Auto-focus input
@@ -228,7 +244,9 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
   // Pre-resolve tag id → tag for O(1) lookup during the per-row render.
   const tagById = new Map(tags.map((t) => [t.id, t]));
 
-  const filtered = connections
+  // Open sessions are matched here, everything else by the server search.
+  const openMatches = connections
+    .filter((c) => activeConnectionIds.has(c.id))
     .filter((c) => {
       if (!query) return true;
       const tagIds = connectionTags[c.id] || [];
@@ -248,15 +266,12 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
     // *within* each rank bucket.
     //   0 — open session you're NOT currently on (fastest to switch to)
     //   1 — open session you ARE currently on
-    //   2 — not open
     .sort((a, b) => {
-      const rank = (id: string) => {
-        if (!activeConnectionIds.has(id)) return 2;
-        if (id === activeConnectionId) return 1;
-        return 0;
-      };
+      const rank = (id: string) => (id === activeConnectionId ? 1 : 0);
       return rank(a.id) - rank(b.id);
     });
+  const filtered = [...openMatches, ...found.filter((c) => !activeConnectionIds.has(c.id))];
+  const loading = metaLoading || (searching && filtered.length === 0);
 
   // Clamp selected index when filtered list changes
   useEffect(() => {

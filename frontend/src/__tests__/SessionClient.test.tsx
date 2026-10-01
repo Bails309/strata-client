@@ -183,6 +183,18 @@ describe("SessionClient", () => {
     });
   });
 
+  it("names the session from the connection info", async () => {
+    vi.mocked(api.getConnectionInfo).mockResolvedValue({
+      name: "Jump Host",
+      protocol: "ssh",
+      has_credentials: true,
+    });
+    await renderSessionClient();
+    await waitFor(() =>
+      expect(mockCreateSession).toHaveBeenCalledWith(expect.objectContaining({ name: "Jump Host" }))
+    );
+  });
+
   it("handles SSH credential requirement", async () => {
     await renderSessionClient();
 

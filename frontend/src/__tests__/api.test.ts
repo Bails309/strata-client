@@ -35,6 +35,8 @@ import {
   deleteRole,
   getConnections,
   getMyConnections,
+  getMyConnectionsByIds,
+  getUserRefs,
   createConnection,
   updateConnection,
   deleteConnection,
@@ -545,6 +547,24 @@ describe("API endpoint functions", () => {
     const fn = mockFetch([]);
     await getMyConnections();
     expect(lastCall(fn).url).toBe("/api/user/connections");
+  });
+
+  it("getMyConnectionsByIds asks for just those ids, once each", async () => {
+    const fn = mockFetch({ items: [], total: 0 });
+    await getMyConnectionsByIds(["a", "b", "a", ""]);
+    expect(lastCall(fn).url).toBe("/api/user/connections/page?page=1&per_page=2&ids=a%2Cb");
+  });
+
+  it("getUserRefs sends a search", async () => {
+    const fn = mockFetch([]);
+    await getUserRefs({ search: "al", limit: 20 });
+    expect(lastCall(fn).url).toBe("/api/admin/users/refs?search=al&limit=20");
+  });
+
+  it("getUserRefs sends ids", async () => {
+    const fn = mockFetch([]);
+    await getUserRefs({ ids: ["u1", "u2"] });
+    expect(lastCall(fn).url).toBe("/api/admin/users/refs?ids=u1%2Cu2");
   });
 
   it("createConnection sends POST", async () => {

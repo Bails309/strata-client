@@ -1177,6 +1177,8 @@ export interface Page<T> {
   items: T[];
   /** Rows matching the filters across every page. */
   total: number;
+  /** Pass as `after` for the following rows; absent on the last page. */
+  next?: string;
 }
 
 /** Query string from the set values; `false` and empty strings are left out. */
@@ -1249,6 +1251,10 @@ export interface MyConnectionFilters {
   /** A folder id (that folder only) or `none`. */
   folder?: string;
   sort?: "recent";
+  /** `next` from the previous page; replaces the page number. */
+  after?: string;
+  /** Only these connections, comma-separated. */
+  ids?: string;
 }
 
 export const getMyConnectionsPage = (
@@ -1259,6 +1265,17 @@ export const getMyConnectionsPage = (
   request<Page<Connection>>(
     `/user/connections/page?${listQuery({ page, per_page: perPage, ...filters })}`
   );
+
+/** The caller's connections among `ids`; ones they cannot open are left out. */
+export async function getMyConnectionsByIds(ids: string[]): Promise<Connection[]> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  const chunks: string[][] = [];
+  for (let i = 0; i < unique.length; i += 200) chunks.push(unique.slice(i, i + 200));
+  const pages = await Promise.all(
+    chunks.map((c) => getMyConnectionsPage(1, c.length, { ids: c.join(",") }))
+  );
+  return pages.flatMap((p) => p.items);
+}
 
 export interface ConnectionFacets {
   /** Matching every filter. */
@@ -1476,6 +1493,25 @@ export interface UserPageFilters {
 export const getUsersPage = (page: number, perPage: number, filters: UserPageFilters = {}) =>
   request<Page<User>>(`/admin/users/page?${listQuery({ page, per_page: perPage, ...filters })}`);
 
+/** Enough of a user to name or pick them. */
+export interface UserRef {
+  id: string;
+  username: string;
+  email: string;
+  full_name: string | null;
+  deleted: boolean;
+}
+
+/** Live users matching `search` (at most `limit`, up to 50), or the users named by `ids`. */
+export const getUserRefs = (params: { search?: string; ids?: string[]; limit?: number }) =>
+  request<UserRef[]>(
+    `/admin/users/refs?${listQuery({
+      search: params.search,
+      ids: params.ids?.join(","),
+      limit: params.limit,
+    })}`
+  );
+
 export const createUser = (data: CreateUserRequest) =>
   request<CreateUserResponse>("/admin/users", { method: "POST", body: JSON.stringify(data) });
 
@@ -1629,6 +1665,7 @@ export const linkCheckoutToProfile = (profileId: string, checkoutId: string | nu
 // ── Connection info (pre-connect credential check) ──────────────────
 
 export interface ConnectionInfo {
+  name?: string;
   protocol: string;
   has_credentials: boolean;
   ignore_cert?: boolean;

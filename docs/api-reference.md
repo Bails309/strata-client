@@ -1090,6 +1090,25 @@ One page of users, filtered and counted on the server. Requires `can_manage_user
 | `search` | Case-insensitive substring of username, email, full name, role name or subject |
 | `deleted` | `true` lists soft-deleted users, newest deletion first; otherwise active users, ordered by email |
 | `role_id` | Only users holding this role |
+| `after` | The previous page's `next`; replaces `page` |
+
+A full page also carries `next`, a cursor for the rows after it. Paging with cursors never repeats or skips a user when others are added or renamed in between.
+
+#### `GET /api/admin/users/refs` (Unreleased)
+
+Users for pickers and name lookups, without loading every user. Requires `can_manage_users`.
+
+| Query | Meaning |
+| ----- | ------- |
+| `search` | Case-insensitive substring of username, email or full name. Active users only, by username |
+| `limit` | Results for a search, default `20`, at most `50` |
+| `ids` | Comma-separated user ids (at most 200) to name, soft-deleted users included; `search` and `limit` are ignored |
+
+**Response** `200 OK`
+
+```json
+[{ "id": "uuid", "username": "alice", "email": "alice@example.com", "full_name": null, "deleted": false }]
+```
 
 #### `POST /api/admin/users/:id/reset-password`
 
@@ -1746,12 +1765,16 @@ One page of the connections the caller may open, with the same access rules and 
 | Query | Meaning |
 | ----- | ------- |
 | `page`, `per_page` | As for `GET /api/admin/connections/page` (max `200`) |
-| `search` | Case-insensitive substring of name, hostname or description |
+| `search` | Case-insensitive substring of name, hostname, description, folder name or protocol, or of the name of a tag the caller sees on the connection |
 | `protocol` | Protocol, case-insensitive |
 | `favorites` | `true` keeps only the caller's favourites |
 | `tag` | A user tag or admin tag id |
 | `folder` | A folder id (that folder only, not subfolders), or `none` |
 | `sort` | `recent`: opened connections only, most recent first. Any other value is a `400` |
+| `ids` | Comma-separated connection ids (at most 200). Ids the caller cannot open are left out |
+| `after` | The previous page's `next`; replaces `page`. A value that is not a cursor is a `400` |
+
+A full page also carries `next`, a cursor for the rows after it. Paging with cursors never repeats or skips a connection when others are added or renamed in between.
 
 ### `GET /api/user/connections/facets` (Unreleased)
 
@@ -1775,10 +1798,13 @@ Pre-connect information for a specific connection. Used by the session client to
 
 **Path Parameter**: `id` (UUID) — connection ID
 
+Returns `403` unless the caller's role grants the connection, directly or through its folder, or the caller can manage connections or the system.
+
 **Response** `200 OK`
 
 ```json
 {
+  "name": "Finance RDS",
   "protocol": "rdp",
   "has_credentials": false,
   "ignore_cert": true,
@@ -1798,6 +1824,7 @@ Pre-connect information for a specific connection. Used by the session client to
 
 | Field                   | Type           | Description                                                                                                                                                                                                                                                                                                   |
 | ----------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                  | string         | Connection name (Unreleased)                                                                                                                                                                                                                                                                                   |
 | `protocol`              | string         | `rdp`, `vnc`, `ssh`, `web`, `vdi`, or `kubernetes`                                                                                                                                                                                                                                                            |
 | `has_credentials`       | boolean        | `true` if a non-expired vault credential profile is mapped to this user + connection                                                                                                                                                                                                                          |
 | `ignore_cert`           | boolean        | Whether the connection's RDP certificate validation is disabled                                                                                                                                                                                                                                               |

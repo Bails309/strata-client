@@ -25,17 +25,14 @@
 //! Chromium child, Xvnc child, profile tempdir, display reservation,
 //! CDP port reservation. Dropping the handle releases all of them —
 //! including SIGKILL'ing both child processes via `kill_on_drop(true)`.
-//! The registry holds `Arc<WebSessionHandle>`; when the last reference
-//! drops (typically at session-end audit), cleanup is automatic.
+//! The registry hands each attached tunnel a [`WebLease`]; when the last
+//! lease drops the handle is removed and cleanup is automatic.
 //!
 //! ## What is NOT here
 //!
 //! - The HTTP route. `routes/tunnel.rs` calls
-//!   [`WebRuntimeRegistry::ensure`] and gets back a [`WebEndpoint`];
-//!   that's the entire surface from the route's perspective.
-//! - Per-tenant concurrency caps. `max_web_sessions` enforcement lives
-//!   one layer up in `routes/tunnel.rs` so it can return a clean 429
-//!   to the operator before any side effects fire.
+//!   [`WebRuntimeRegistry::ensure`] and holds the returned lease for the
+//!   life of the tunnel.
 //! - The reaper. Sessions are reaped by the existing
 //!   `session_cleanup` job which removes inactive entries from
 //!   [`WebRuntimeRegistry`]; the `Drop` impl on [`WebSessionHandle`]
@@ -47,8 +44,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
 use uuid::Uuid;
+
+use super::keyed_lock::KeyedLocks;
 
 use super::web_autofill::{populate_login_data, LoginsRow, PopulateError};
 use super::web_login_script::{
@@ -111,6 +109,9 @@ pub struct WebSpawnSpec {
     /// Stable label for the NSS nickname — typically the trusted-CA
     /// bundle's UUID. Only consulted when `trusted_ca_pem` is `Some`.
     pub trusted_ca_label: Option<String>,
+    /// `max_web_sessions`: kiosks this replica may run at once. `None`
+    /// leaves only the display allocator's range as the limit.
+    pub max_sessions: Option<usize>,
 }
 
 /// Plaintext username/password pair for autofill. Caller is expected
@@ -153,6 +154,8 @@ pub const WEB_LOGIN_SCRIPT_DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum WebRuntimeError {
+    #[error("the configured limit of {0} web browser sessions is reached")]
+    CapacityReached(usize),
     #[error("display range exhausted (max concurrent web sessions)")]
     DisplayExhausted,
     #[error("CDP port range exhausted (max concurrent web sessions)")]
@@ -243,14 +246,90 @@ impl Drop for WebSessionHandle {
 /// different user spawns a fresh one.
 type RegistryKey = (Uuid, Uuid);
 
+struct Slot<T> {
+    value: Arc<T>,
+    leases: usize,
+}
+
+type Table<T> = Arc<std::sync::Mutex<HashMap<RegistryKey, Slot<T>>>>;
+
+/// One attachment to a running kiosk (PERF-16). Every tunnel attached to a
+/// kiosk holds one; the kiosk is removed, and its processes stopped, when
+/// the last is dropped, so closing one tab never ends another tab's session.
+pub struct Lease<T> {
+    table: Table<T>,
+    key: RegistryKey,
+    value: Arc<T>,
+}
+
+/// A lease on a running web kiosk.
+pub type WebLease = Lease<WebSessionHandle>;
+
+impl<T> std::ops::Deref for Lease<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
+impl<T> Drop for Lease<T> {
+    fn drop(&mut self) {
+        let removed = {
+            let mut table = self.table.lock().unwrap_or_else(|e| e.into_inner());
+            match table.get_mut(&self.key) {
+                // A different value means this slot was evicted and replaced.
+                Some(slot) if Arc::ptr_eq(&slot.value, &self.value) => {
+                    slot.leases -= 1;
+                    if slot.leases == 0 {
+                        table.remove(&self.key)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        };
+        // Dropped outside the lock: this is what stops the processes.
+        drop(removed);
+    }
+}
+
+/// Join the value already running under `key`, if any.
+fn attach<T>(table: &Table<T>, key: RegistryKey) -> Option<Lease<T>> {
+    let mut guard = table.lock().unwrap_or_else(|e| e.into_inner());
+    let slot = guard.get_mut(&key)?;
+    slot.leases += 1;
+    Some(Lease {
+        table: Arc::clone(table),
+        key,
+        value: Arc::clone(&slot.value),
+    })
+}
+
+/// Register a newly started value under `key` with one lease.
+fn publish<T>(table: &Table<T>, key: RegistryKey, value: T) -> Lease<T> {
+    let value = Arc::new(value);
+    table.lock().unwrap_or_else(|e| e.into_inner()).insert(
+        key,
+        Slot {
+            value: Arc::clone(&value),
+            leases: 1,
+        },
+    );
+    Lease {
+        table: Arc::clone(table),
+        key,
+        value,
+    }
+}
+
 /// Process-global registry of live web sessions. Held on
 /// [`crate::services::app_state::AppState`] as `Arc<WebRuntimeRegistry>`.
-///
-/// Internally a `Mutex<HashMap<...>>` rather than `RwLock` because
-/// the spawn path needs an exclusive insert and the read path is
-/// never hot (looked up at most once per WebSocket upgrade).
 pub struct WebRuntimeRegistry {
-    inner: Mutex<HashMap<RegistryKey, Arc<WebSessionHandle>>>,
+    inner: Table<WebSessionHandle>,
+    /// One start-up per key at a time: a second tab opened while the first
+    /// is still launching waits and joins it instead of launching another.
+    starting: KeyedLocks,
     displays: Arc<WebDisplayAllocator>,
     cdp_ports: Arc<CdpPortAllocator>,
 }
@@ -258,24 +337,25 @@ pub struct WebRuntimeRegistry {
 impl WebRuntimeRegistry {
     pub fn new(displays: Arc<WebDisplayAllocator>) -> Self {
         Self {
-            inner: Mutex::new(HashMap::new()),
+            inner: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            starting: KeyedLocks::default(),
             displays,
             cdp_ports: Arc::new(CdpPortAllocator::new()),
         }
     }
 
-    /// Look up an existing session without spawning. Returned `Arc`
-    /// keeps the session alive even if it's evicted between the
-    /// lookup and the WebSocket upgrade.
+    /// Look up an existing session without spawning or attaching.
+    #[allow(dead_code)]
     pub async fn get(&self, connection_id: Uuid, user_id: Uuid) -> Option<Arc<WebSessionHandle>> {
         self.inner
             .lock()
-            .await
+            .unwrap_or_else(|e| e.into_inner())
             .get(&(connection_id, user_id))
-            .cloned()
+            .map(|slot| Arc::clone(&slot.value))
     }
 
-    /// Get-or-spawn entry point for the tunnel route.
+    /// Get-or-spawn entry point for the tunnel route. The returned lease
+    /// must be held for as long as the tunnel uses the kiosk.
     ///
     /// Spawn pipeline (rustguac parity, in this exact order — order
     /// matters: Login Data must exist *before* Chromium opens the
@@ -300,14 +380,32 @@ impl WebRuntimeRegistry {
         user_id: Uuid,
         session_id: &str,
         spec: WebSpawnSpec,
-    ) -> Result<Arc<WebSessionHandle>, WebRuntimeError> {
-        // Fast path: already running.
-        if let Some(existing) = self.get(connection_id, user_id).await {
-            return Ok(existing);
+    ) -> Result<WebLease, WebRuntimeError> {
+        let key = (connection_id, user_id);
+        if let Some(lease) = attach(&self.inner, key) {
+            return Ok(lease);
         }
+        let start_lock = self.starting.get(&format!("{connection_id}:{user_id}"));
+        let _starting = start_lock.lock().await;
+        // Whoever held the lock before us may have started it.
+        if let Some(lease) = attach(&self.inner, key) {
+            return Ok(lease);
+        }
+        if let Some(max) = spec.max_sessions {
+            if self.inner.lock().unwrap_or_else(|e| e.into_inner()).len() >= max {
+                return Err(WebRuntimeError::CapacityReached(max));
+            }
+        }
+        let handle = self.spawn(session_id, spec).await?;
+        Ok(publish(&self.inner, key, handle))
+    }
 
-        // Step 1: allocate. Failure here is fatal — caller surfaces
-        // 503 or 429 depending on `max_web_sessions`.
+    async fn spawn(
+        &self,
+        session_id: &str,
+        spec: WebSpawnSpec,
+    ) -> Result<WebSessionHandle, WebRuntimeError> {
+        // Step 1: allocate. Failure here is fatal.
         let display = self
             .displays
             .allocate()
@@ -442,13 +540,11 @@ impl WebRuntimeRegistry {
             .await?;
         }
 
-        // Step 8: register + return.
-        // Disarm the guards now that we're handing ownership to the
-        // `WebSessionHandle`. From here onward, cleanup is the
-        // handle's Drop impl.
+        // Step 8: hand ownership to the `WebSessionHandle`, whose Drop impl
+        // does the cleanup from here on; the caller registers it.
         display_guard.disarm();
         cdp_guard.disarm();
-        let handle = Arc::new(WebSessionHandle {
+        Ok(WebSessionHandle {
             display,
             cdp_port,
             endpoint: WebEndpoint {
@@ -461,34 +557,34 @@ impl WebRuntimeRegistry {
             _chromium: chromium,
             displays: self.displays.clone(),
             cdp_ports: self.cdp_ports.clone(),
-        });
-        self.inner
-            .lock()
-            .await
-            .insert((connection_id, user_id), handle.clone());
-        Ok(handle)
+        })
     }
 
-    /// Evict and drop the handle for `(connection_id, user_id)`.
+    /// Remove the kiosk for `(connection_id, user_id)` regardless of leases.
+    /// It stops once the tunnels still attached to it end.
     /// Returns `true` if a session was present.
     #[allow(dead_code)]
     pub async fn evict(&self, connection_id: Uuid, user_id: Uuid) -> bool {
-        self.inner
+        let removed = self
+            .inner
             .lock()
-            .await
-            .remove(&(connection_id, user_id))
-            .is_some()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&(connection_id, user_id));
+        removed.is_some()
     }
 
     /// Live session count. Surface for `/api/admin/web-sessions/stats`.
     pub async fn len(&self) -> usize {
-        self.inner.lock().await.len()
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     /// Convenience for completeness with `len()`.
     #[allow(dead_code)]
     pub async fn is_empty(&self) -> bool {
-        self.inner.lock().await.is_empty()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
     }
 }
 
@@ -718,5 +814,57 @@ mod tests {
         let reg = WebRuntimeRegistry::new(alloc);
         let evicted = reg.evict(Uuid::new_v4(), Uuid::new_v4()).await;
         assert!(!evicted);
+    }
+
+    /// Counts live instances so tests can see when a kiosk would stop.
+    struct Probe(Arc<std::sync::atomic::AtomicUsize>);
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn probe_table() -> (Table<Probe>, Arc<std::sync::atomic::AtomicUsize>) {
+        (
+            Arc::new(std::sync::Mutex::new(HashMap::new())),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        )
+    }
+
+    fn new_probe(live: &Arc<std::sync::atomic::AtomicUsize>) -> Probe {
+        live.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Probe(Arc::clone(live))
+    }
+
+    #[test]
+    fn closing_one_tab_keeps_the_kiosk_for_the_other() {
+        let (table, live) = probe_table();
+        let key = (Uuid::new_v4(), Uuid::new_v4());
+        let first = publish(&table, key, new_probe(&live));
+        let second = attach(&table, key).expect("joins the running kiosk");
+        assert_eq!(live.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        drop(first);
+        assert_eq!(live.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(attach(&table, key).is_some());
+
+        drop(second);
+        assert_eq!(live.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(table.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_lease_on_an_evicted_kiosk_leaves_its_replacement_alone() {
+        let (table, live) = probe_table();
+        let key = (Uuid::new_v4(), Uuid::new_v4());
+        let old = publish(&table, key, new_probe(&live));
+        table.lock().unwrap().remove(&key);
+        let new = publish(&table, key, new_probe(&live));
+
+        drop(old);
+        assert!(table.lock().unwrap().contains_key(&key));
+        assert_eq!(live.load(std::sync::atomic::Ordering::SeqCst), 1);
+        drop(new);
+        assert_eq!(live.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }

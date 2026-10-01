@@ -5,6 +5,7 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::error::AppError;
+use crate::services::keyed_lock::KeyedLocks;
 
 /// Standard OIDC claims extracted from the access token.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -52,6 +53,12 @@ pub struct OidcDiscovery {
 #[derive(Deserialize, Clone)]
 struct Jwks {
     keys: Vec<Jwk>,
+}
+
+impl Jwks {
+    fn has_kid(&self, kid: &str) -> bool {
+        self.keys.iter().any(|k| k.kid.as_deref() == Some(kid))
+    }
 }
 
 #[derive(Deserialize, Clone)]
@@ -102,6 +109,32 @@ static OIDC_DISCOVERY_CACHE: LazyLock<Mutex<HashMap<String, CachedDiscovery>>> =
 static OIDC_JWKS_CACHE: LazyLock<Mutex<HashMap<String, CachedJwks>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// One upstream fetch per discovery URL or JWKS URI at a time (PERF-14).
+static OIDC_IN_FLIGHT: LazyLock<KeyedLocks> = LazyLock::new(KeyedLocks::default);
+
+/// An unknown `kid` refetches the JWKS at most this often, so key ids an
+/// attacker invents cannot drive unbounded requests to the IdP.
+const JWKS_FORCED_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+
+fn cached_discovery(issuer_url: &str) -> Option<OidcDiscovery> {
+    let cache = OIDC_DISCOVERY_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    cache
+        .get(issuer_url)
+        .filter(|entry| entry.fetched_at.elapsed() < OIDC_CACHE_TTL)
+        .map(|entry| entry.discovery.clone())
+}
+
+/// The cached JWKS for `jwks_uri` if it was fetched less than `max_age` ago.
+fn cached_jwks(jwks_uri: &str, max_age: Duration) -> Option<Jwks> {
+    let cache = OIDC_JWKS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    cache
+        .get(jwks_uri)
+        .filter(|entry| entry.fetched_at.elapsed() < max_age)
+        .map(|entry| entry.jwks.clone())
+}
+
 /// Fetch (and cache for ~10 minutes) the OIDC discovery document for an
 /// issuer. The cache is shared across the SSO callback and bearer-token
 /// validation paths. Also asserts that the discovered `issuer` matches
@@ -111,15 +144,13 @@ pub async fn fetch_oidc_discovery_cached(issuer_url: &str) -> Result<OidcDiscove
     if !issuer_url.starts_with("https://") {
         return Err(AppError::Auth("OIDC issuer must use HTTPS".into()));
     }
-    {
-        let cache = OIDC_DISCOVERY_CACHE
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = cache.get(issuer_url) {
-            if entry.fetched_at.elapsed() < OIDC_CACHE_TTL {
-                return Ok(entry.discovery.clone());
-            }
-        }
+    if let Some(discovery) = cached_discovery(issuer_url) {
+        return Ok(discovery);
+    }
+    let lock = OIDC_IN_FLIGHT.get(issuer_url);
+    let _guard = lock.lock().await;
+    if let Some(discovery) = cached_discovery(issuer_url) {
+        return Ok(discovery);
     }
 
     let client = crate::services::http_client::oidc_client();
@@ -160,15 +191,18 @@ pub async fn fetch_oidc_discovery_cached(issuer_url: &str) -> Result<OidcDiscove
     Ok(discovery)
 }
 
-/// Fetch (and cache for ~10 minutes) the JWKS for an OIDC issuer.
-async fn fetch_jwks_cached(jwks_uri: &str) -> Result<Jwks, AppError> {
-    {
-        let cache = OIDC_JWKS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = cache.get(jwks_uri) {
-            if entry.fetched_at.elapsed() < OIDC_CACHE_TTL {
-                return Ok(entry.jwks.clone());
-            }
-        }
+/// Fetch (and cache for ~10 minutes) the JWKS for an OIDC issuer. A cached
+/// set younger than `max_age` is returned as-is; pass a short `max_age` to
+/// force a refetch after a key rotation.
+async fn fetch_jwks_cached(jwks_uri: &str, max_age: Duration) -> Result<Jwks, AppError> {
+    if let Some(jwks) = cached_jwks(jwks_uri, max_age) {
+        return Ok(jwks);
+    }
+    let lock = OIDC_IN_FLIGHT.get(jwks_uri);
+    let _guard = lock.lock().await;
+    // A caller ahead of us may have just fetched it.
+    if let Some(jwks) = cached_jwks(jwks_uri, max_age) {
+        return Ok(jwks);
     }
     let client = crate::services::http_client::oidc_client();
     let jwks: Jwks = client
@@ -199,21 +233,27 @@ pub async fn validate_token(
     client_id: &str,
     token: &str,
 ) -> Result<Claims, AppError> {
-    // 1. Fetch (cached) OIDC discovery — also rejects non-HTTPS issuers
-    //    and verifies the discovered issuer matches the configured one.
-    let discovery = fetch_oidc_discovery_cached(issuer_url).await?;
-
-    // 2. Fetch (cached) JWKS
-    let jwks = fetch_jwks_cached(&discovery.jwks_uri).await?;
-
-    // 3. Decode header to find kid
+    if !issuer_url.starts_with("https://") {
+        return Err(AppError::Auth("OIDC issuer must use HTTPS".into()));
+    }
+    // 1. Reject a malformed token before any upstream request. A kid is
+    //    required to prevent key confusion attacks.
     let header = jsonwebtoken::decode_header(token)
         .map_err(|e| AppError::Auth(format!("Token header: {e}")))?;
-
-    // Require a kid in the token header to prevent key confusion attacks
     let kid = header
         .kid
         .ok_or_else(|| AppError::Auth("Token missing kid header claim".into()))?;
+
+    // 2. Fetch (cached) OIDC discovery — also rejects non-HTTPS issuers
+    //    and verifies the discovered issuer matches the configured one.
+    let discovery = fetch_oidc_discovery_cached(issuer_url).await?;
+
+    // 3. Fetch (cached) JWKS. An unknown kid usually means the IdP rotated
+    //    its key, so refetch once, at most every JWKS_FORCED_REFRESH_INTERVAL.
+    let mut jwks = fetch_jwks_cached(&discovery.jwks_uri, OIDC_CACHE_TTL).await?;
+    if !jwks.has_kid(&kid) {
+        jwks = fetch_jwks_cached(&discovery.jwks_uri, JWKS_FORCED_REFRESH_INTERVAL).await?;
+    }
     let jwk = jwks
         .keys
         .iter()
@@ -419,5 +459,25 @@ mod tests {
         )
         .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_malformed_token_is_refused_before_contacting_the_idp() {
+        // `.invalid` never resolves, so reaching the network would surface
+        // as a discovery error instead of a header error.
+        let err = validate_token("https://idp.invalid", "client", "not-a-jwt")
+            .await
+            .unwrap_err();
+        assert!(format!("{err}").contains("Token header"), "{err}");
+    }
+
+    #[test]
+    fn a_key_set_reports_which_ids_it_holds() {
+        let jwks: Jwks = serde_json::from_str(
+            r#"{"keys":[{"kid":"a","n":"x","e":"AQAB","kty":"RSA"},{"n":"y","e":"AQAB","kty":"RSA"}]}"#,
+        )
+        .unwrap();
+        assert!(jwks.has_kid("a"));
+        assert!(!jwks.has_kid("rotated"));
     }
 }

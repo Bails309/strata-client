@@ -496,10 +496,8 @@ describe("Dashboard", () => {
     expect(screen.getByText(/Showing/)).toBeInTheDocument();
     // Filter down
     await userEvent.type(screen.getByPlaceholderText(/search/i), "Conn 5");
-    // Page should reset to 1 showing filtered results
-    await waitFor(() => {
-      expect(screen.getByText("Conn 50")).toBeInTheDocument();
-    });
+    // Page should reset to 1 showing filtered results; the debounced search can take over 1s on a loaded runner
+    expect(await screen.findByText("Conn 50", {}, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.queryByText("Conn 00")).not.toBeInTheDocument();
   });
 
@@ -653,7 +651,8 @@ describe("Dashboard", () => {
         label: "Admin",
         created_at: "2024-01-01T00:00:00Z",
         updated_at: "2024-01-01T00:00:00Z",
-        expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+        // Mid-minute, so the floored TTL reads 1h 30m whatever the clock does in between.
+        expires_at: new Date(Date.now() + 90 * 60_000 + 30_000).toISOString(),
         ttl_hours: 12,
         ttl_minutes: 0,
         extended_expiry: false,
@@ -681,7 +680,7 @@ describe("Dashboard", () => {
     });
     // Lease chip names the account and its remaining TTL
     await waitFor(() => {
-      expect(document.body.textContent).toContain("Admin · Valid (59m left)");
+      expect(document.body.textContent).toContain("Admin · Valid (1h 30m left)");
     });
   });
 

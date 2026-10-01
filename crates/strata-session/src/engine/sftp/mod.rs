@@ -11,17 +11,18 @@
 //! filesystem object this announces.
 
 use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use russh::client;
 use russh::keys::PrivateKeyWithHashAlg;
-use russh_sftp::client::fs::File;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;
 use secrecy::{ExposeSecret, SecretString};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::mpsc;
 
 use crate::engine::ssh::{map_russh, HostKeyChecker, HostKeyPolicy};
 use crate::engine::{FileEvent, FileRequest, InputEvent, Protocol, ProtocolEngine, TargetEvent};
@@ -36,6 +37,25 @@ const CHUNK_BYTES: usize = 4096;
 
 /// Uploads plus downloads a single session may hold open at once.
 const MAX_OPEN_TRANSFERS: usize = 8;
+
+/// Default ceiling on one transfer, matching Quick Share's.
+pub const DEFAULT_MAX_TRANSFER_BYTES: u64 = 500 * 1024 * 1024;
+
+/// Read size when copying between the target and a staged copy.
+const STAGE_CHUNK_BYTES: usize = 64 * 1024;
+
+/// Policy applied to every transfer once it is fully staged on this side,
+/// before any byte reaches its destination. Lets the host application
+/// scan, approve or refuse a file without this crate knowing how.
+#[async_trait]
+pub trait TransferGate: Send + Sync {
+    /// `Ok` lets a staged upload be written to the target; `Err` is the
+    /// reason shown to the user.
+    async fn admit_upload(&self, staged: &Path, name: &str) -> Result<(), String>;
+    /// `Ok` delivers a staged download to the browser; `Err` is the reason
+    /// it was withheld, including "held for approval".
+    async fn admit_download(&self, staged: &Path, name: &str) -> Result<(), String>;
+}
 
 /// The single filesystem this engine announces.
 const OBJECT: i32 = 1;
@@ -72,6 +92,10 @@ pub struct SftpConfig {
     pub disable_upload: bool,
     /// Label shown in the file browser.
     pub name: String,
+    /// Applied to every transfer before it is delivered. `None` admits all.
+    pub gate: Option<Arc<dyn TransferGate>>,
+    /// Largest file either direction will stage.
+    pub max_transfer_bytes: u64,
 }
 
 // Hand-written so a credential cannot reach a log through a derive.
@@ -89,6 +113,7 @@ impl std::fmt::Debug for SftpConfig {
             .field("root", &self.root)
             .field("disable_download", &self.disable_download)
             .field("disable_upload", &self.disable_upload)
+            .field("gated", &self.gate.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -110,14 +135,71 @@ impl SftpConfig {
             disable_download: false,
             disable_upload: false,
             name: "Files".to_owned(),
+            gate: None,
+            max_transfer_bytes: DEFAULT_MAX_TRANSFER_BYTES,
         }
     }
+}
+
+/// A local copy of a file in transit, deleted when dropped.
+struct Staged(PathBuf);
+
+impl Staged {
+    async fn create() -> std::io::Result<(Self, tokio::fs::File)> {
+        // The `strata-upload-` prefix is what the backend's boot sweep removes.
+        let path =
+            std::env::temp_dir().join(format!("strata-upload-sftp-{}", uuid::Uuid::new_v4()));
+        let mut options = tokio::fs::OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let file = options.open(&path).await?;
+        Ok((Self(path), file))
+    }
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// An upload being received into its staged copy.
+struct Upload {
+    file: tokio::fs::File,
+    staged: Staged,
+    remote: String,
+    name: String,
+    size: u64,
+}
+
+/// An admitted download being streamed from its staged copy.
+struct Delivery {
+    file: tokio::fs::File,
+    _staged: Staged,
+}
+
+/// Result of a transfer's background stage: gate plus target I/O.
+enum Completion {
+    DownloadReady {
+        stream: i32,
+        name: String,
+        staged: Staged,
+    },
+    DownloadWithheld {
+        stream: i32,
+        message: String,
+    },
+    UploadFinished {
+        message: String,
+        ok: bool,
+    },
 }
 
 /// An engine with file transfer attached.
 pub struct SftpEngine {
     inner: Box<dyn ProtocolEngine>,
-    sftp: SftpSession,
+    sftp: Arc<SftpSession>,
     /// Holds the SSH connection open; dropping it closes the subsystem.
     _ssh: client::Handle<HostKeyChecker>,
     config: Arc<SftpConfig>,
@@ -125,8 +207,13 @@ pub struct SftpEngine {
     /// Stream indices this engine allocates. Negative so they cannot
     /// collide with the client's, which the actor also routes.
     next_stream: i32,
-    downloads: HashMap<i32, File>,
-    uploads: HashMap<i32, File>,
+    downloads: HashMap<i32, Delivery>,
+    uploads: HashMap<i32, Upload>,
+    /// Transfers handed to a background task (gate and target I/O), so a
+    /// slow scan never stalls the session itself.
+    in_flight: usize,
+    done_tx: mpsc::UnboundedSender<Completion>,
+    done_rx: mpsc::UnboundedReceiver<Completion>,
 }
 
 impl SftpEngine {
@@ -164,17 +251,30 @@ impl SftpEngine {
             object: OBJECT,
             name: config.name.clone(),
         }));
+        let (done_tx, done_rx) = mpsc::unbounded_channel();
 
         Ok(Self {
             inner,
-            sftp,
+            sftp: Arc::new(sftp),
             _ssh: handle,
             config,
             pending,
             next_stream: -1,
             downloads: HashMap::new(),
             uploads: HashMap::new(),
+            in_flight: 0,
+            done_tx,
+            done_rx,
         })
+    }
+
+    fn busy(&self) -> usize {
+        self.downloads.len() + self.uploads.len() + self.in_flight
+    }
+
+    fn notice(&mut self, message: String, ok: bool) {
+        self.pending
+            .push_back(TargetEvent::File(FileEvent::Notice { message, ok }));
     }
 
     fn allocate_stream(&mut self) -> i32 {
@@ -263,33 +363,86 @@ impl SftpEngine {
             self.fail(stream, "downloads are disabled", STATUS_FORBIDDEN);
             return Ok(());
         }
-        if self.downloads.len() + self.uploads.len() >= MAX_OPEN_TRANSFERS {
+        if self.busy() >= MAX_OPEN_TRANSFERS {
             self.fail(stream, "too many transfers in progress", STATUS_FORBIDDEN);
             return Ok(());
         }
-        let Ok(file) = self.sftp.open(path.to_owned()).await else {
-            self.fail(stream, "cannot open file", STATUS_FORBIDDEN);
-            return Ok(());
-        };
-        self.downloads.insert(stream, file);
-        self.pending.push_back(TargetEvent::File(FileEvent::Body {
-            object: OBJECT,
-            stream,
-            mimetype: "application/octet-stream".to_owned(),
-            name: name.to_owned(),
-        }));
-        // The client acknowledges `body` before any data, so the first
-        // chunk goes out on that ack like every later one.
+        self.in_flight += 1;
+        let sftp = Arc::clone(&self.sftp);
+        let gate = self.config.gate.clone();
+        let limit = self.config.max_transfer_bytes;
+        let done = self.done_tx.clone();
+        let (path, name) = (path.to_owned(), name.to_owned());
+        tokio::spawn(async move {
+            let outcome = match stage_download(&sftp, &path, limit).await {
+                Ok(staged) => match gate {
+                    Some(gate) => gate
+                        .admit_download(&staged.0, &name)
+                        .await
+                        .map(|()| staged),
+                    None => Ok(staged),
+                },
+                Err(message) => Err(message),
+            };
+            let _ = done.send(match outcome {
+                Ok(staged) => Completion::DownloadReady {
+                    stream,
+                    name,
+                    staged,
+                },
+                Err(message) => Completion::DownloadWithheld { stream, message },
+            });
+        });
         Ok(())
+    }
+
+    /// Act on a finished background stage. Synchronous so that a cancelled
+    /// `next_event` can never drop a completion it already received.
+    fn on_completion(&mut self, done: Completion) {
+        self.in_flight = self.in_flight.saturating_sub(1);
+        match done {
+            Completion::DownloadReady {
+                stream,
+                name,
+                staged,
+            } => match std::fs::File::open(&staged.0) {
+                Ok(file) => {
+                    self.downloads.insert(
+                        stream,
+                        Delivery {
+                            file: tokio::fs::File::from_std(file),
+                            _staged: staged,
+                        },
+                    );
+                    // The client acknowledges `body` before any data, so the
+                    // first chunk goes out on that ack like every later one.
+                    self.pending.push_back(TargetEvent::File(FileEvent::Body {
+                        object: OBJECT,
+                        stream,
+                        mimetype: "application/octet-stream".to_owned(),
+                        name,
+                    }));
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "staged download vanished");
+                    self.fail(stream, "cannot read file", STATUS_FORBIDDEN);
+                }
+            },
+            Completion::DownloadWithheld { stream, message } => {
+                self.fail(stream, &message, STATUS_FORBIDDEN);
+                self.notice(message, false);
+            }
+            Completion::UploadFinished { message, ok } => self.notice(message, ok),
+        }
     }
 
     /// Send the next chunk of a download, or finish the stream.
     async fn continue_download(&mut self, stream: i32) -> Result<(), EngineError> {
-        let Some(file) = self.downloads.get_mut(&stream) else {
+        let Some(delivery) = self.downloads.get_mut(&stream) else {
             return Ok(());
         };
         let mut buffer = vec![0u8; CHUNK_BYTES];
-        let read = match file.read(&mut buffer).await {
+        let read = match delivery.file.read(&mut buffer).await {
             Ok(read) => read,
             Err(err) => {
                 tracing::warn!(error = %err, "sftp read failed");
@@ -318,7 +471,7 @@ impl SftpEngine {
             self.fail(stream, "uploads are disabled", STATUS_FORBIDDEN);
             return Ok(());
         }
-        if self.downloads.len() + self.uploads.len() >= MAX_OPEN_TRANSFERS {
+        if self.busy() >= MAX_OPEN_TRANSFERS {
             self.fail(stream, "too many transfers in progress", STATUS_FORBIDDEN);
             return Ok(());
         }
@@ -337,10 +490,7 @@ impl SftpEngine {
         }
 
         let path = format!("{}/{leaf}", directory.trim_end_matches('/'));
-        // SFTP has no O_NOFOLLOW. Instead the existing entry is removed (which
-        // never follows a link) and the file is created exclusively, so a
-        // symlink planted at any point makes the create fail rather than
-        // redirect the write outside the root.
+        // Early refusal only; `write_remote` re-checks when it writes.
         match self.sftp.symlink_metadata(path.clone()).await {
             Ok(meta) if meta.is_symlink() => {
                 self.fail(
@@ -354,31 +504,44 @@ impl SftpEngine {
                 self.fail(stream, "a directory has that name", STATUS_FORBIDDEN);
                 return Ok(());
             }
-            Ok(_) => {
-                if self.sftp.remove_file(path.clone()).await.is_err() {
-                    self.fail(stream, "cannot replace file", STATUS_FORBIDDEN);
-                    return Ok(());
-                }
-            }
-            Err(_) => {}
+            _ => {}
         }
-        let flags = OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE;
-        let Ok(file) = self.sftp.open_with_flags(path, flags).await else {
-            self.fail(stream, "cannot create file", STATUS_FORBIDDEN);
-            return Ok(());
+        let (staged, file) = match Staged::create().await {
+            Ok(created) => created,
+            Err(err) => {
+                tracing::warn!(error = %err, "cannot stage sftp upload");
+                self.fail(stream, "cannot stage file", STATUS_FORBIDDEN);
+                return Ok(());
+            }
         };
-        self.uploads.insert(stream, file);
+        self.uploads.insert(
+            stream,
+            Upload {
+                file,
+                staged,
+                remote: path,
+                name: leaf.to_owned(),
+                size: 0,
+            },
+        );
         // Acknowledging the `put` is what makes the browser start sending.
         self.fail(stream, "", STATUS_SUCCESS);
         Ok(())
     }
 
     async fn on_upload_data(&mut self, stream: i32, data: &Bytes) -> Result<(), EngineError> {
-        let Some(file) = self.uploads.get_mut(&stream) else {
+        let limit = self.config.max_transfer_bytes;
+        let Some(upload) = self.uploads.get_mut(&stream) else {
             return Ok(());
         };
-        if let Err(err) = file.write_all(data).await {
-            tracing::warn!(error = %err, "sftp write failed");
+        upload.size += data.len() as u64;
+        if upload.size > limit {
+            self.uploads.remove(&stream);
+            self.fail(stream, "file is larger than the transfer limit", STATUS_FORBIDDEN);
+            return Ok(());
+        }
+        if let Err(err) = upload.file.write_all(data).await {
+            tracing::warn!(error = %err, "staging an sftp upload failed");
             self.uploads.remove(&stream);
             self.fail(stream, "write failed", STATUS_FORBIDDEN);
             return Ok(());
@@ -387,17 +550,118 @@ impl SftpEngine {
         Ok(())
     }
 
+    /// The client has sent everything: gate the staged copy, then write it
+    /// to the target. Reported by notice, because the stream is closed.
     async fn on_upload_end(&mut self, stream: i32) -> Result<(), EngineError> {
-        if let Some(mut file) = self.uploads.remove(&stream) {
-            // Flushed explicitly: the write half buffers, and a file that
-            // closes without it arrives truncated.
-            if let Err(err) = file.flush().await {
-                tracing::warn!(error = %err, "sftp flush failed");
-            }
-            let _ = file.close().await;
+        let Some(mut upload) = self.uploads.remove(&stream) else {
+            return Ok(());
+        };
+        if let Err(err) = upload.file.flush().await {
+            tracing::warn!(error = %err, "staging an sftp upload failed");
+            self.notice(format!("{}: upload failed", upload.name), false);
+            return Ok(());
         }
+        drop(upload.file);
+        self.in_flight += 1;
+        let sftp = Arc::clone(&self.sftp);
+        let gate = self.config.gate.clone();
+        let done = self.done_tx.clone();
+        let Upload {
+            staged,
+            remote,
+            name,
+            ..
+        } = upload;
+        tokio::spawn(async move {
+            let outcome = async {
+                if let Some(gate) = gate {
+                    gate.admit_upload(&staged.0, &name).await?;
+                }
+                write_remote(&sftp, &remote, &staged.0).await
+            }
+            .await;
+            let (message, ok) = match outcome {
+                Ok(()) => (format!("Uploaded {name}"), true),
+                Err(reason) => (format!("{name}: {reason}"), false),
+            };
+            let _ = done.send(Completion::UploadFinished { message, ok });
+        });
         Ok(())
     }
+}
+
+/// Copy a target file into a staged local copy, refusing anything over `limit`.
+async fn stage_download(sftp: &SftpSession, path: &str, limit: u64) -> Result<Staged, String> {
+    let mut remote = sftp
+        .open(path.to_owned())
+        .await
+        .map_err(|_| "cannot open file".to_owned())?;
+    let (staged, mut local) = Staged::create()
+        .await
+        .map_err(|_| "cannot stage file".to_owned())?;
+    let mut buffer = vec![0u8; STAGE_CHUNK_BYTES];
+    let mut total = 0u64;
+    loop {
+        let read = remote
+            .read(&mut buffer)
+            .await
+            .map_err(|_| "read failed".to_owned())?;
+        if read == 0 {
+            break;
+        }
+        total += read as u64;
+        if total > limit {
+            return Err("file is larger than the transfer limit".into());
+        }
+        local
+            .write_all(&buffer[..read])
+            .await
+            .map_err(|_| "cannot stage file".to_owned())?;
+    }
+    local
+        .flush()
+        .await
+        .map_err(|_| "cannot stage file".to_owned())?;
+    Ok(staged)
+}
+
+/// Write a staged upload to `path` on the target without following links.
+///
+/// SFTP has no O_NOFOLLOW. Instead the existing entry is removed (which
+/// never follows a link) and the file is created exclusively, so a symlink
+/// planted at any point makes the create fail rather than redirect the
+/// write outside the root.
+async fn write_remote(sftp: &SftpSession, path: &str, staged: &Path) -> Result<(), String> {
+    match sftp.symlink_metadata(path.to_owned()).await {
+        Ok(meta) if meta.is_symlink() => {
+            return Err("refusing to overwrite a symbolic link".into());
+        }
+        Ok(meta) if meta.is_dir() => return Err("a directory has that name".into()),
+        Ok(_) => sftp
+            .remove_file(path.to_owned())
+            .await
+            .map_err(|_| "cannot replace file".to_owned())?,
+        Err(_) => {}
+    }
+    let flags = OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE;
+    let mut remote = sftp
+        .open_with_flags(path.to_owned(), flags)
+        .await
+        .map_err(|_| "cannot create file".to_owned())?;
+    let mut local = tokio::fs::File::open(staged)
+        .await
+        .map_err(|_| "cannot read staged file".to_owned())?;
+    tokio::io::copy(&mut local, &mut remote)
+        .await
+        .map_err(|_| "write failed".to_owned())?;
+    // Flushed explicitly: the write half buffers, and a file that closes
+    // without it arrives truncated.
+    remote
+        .flush()
+        .await
+        .map_err(|_| "write failed".to_owned())?;
+    let _ = remote.shutdown().await;
+    Ok(())
 }
 
 /// Resolve a client-supplied path inside `root`.
@@ -507,14 +771,17 @@ impl ProtocolEngine for SftpEngine {
     }
 
     async fn next_event(&mut self) -> Result<Option<TargetEvent>, EngineError> {
-        if let Some(event) = self.pending.pop_front() {
-            return Ok(Some(event));
+        loop {
+            if let Some(event) = self.pending.pop_front() {
+                return Ok(Some(event));
+            }
+            // Cancel-safe: partial state lives in `self.pending`, and both
+            // branches are cancel-safe receives.
+            tokio::select! {
+                Some(done) = self.done_rx.recv() => self.on_completion(done),
+                event = self.inner.next_event() => return event,
+            }
         }
-        // Everything this engine produces is generated by `handle_input`,
-        // so with nothing queued the only source left is the session
-        // underneath. Cancel-safe because all partial state is in
-        // `self.pending`.
-        self.inner.next_event().await
     }
 
     async fn shutdown(&mut self) -> Result<(), EngineError> {

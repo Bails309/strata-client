@@ -130,6 +130,7 @@ declare module "guacamole-common-js" {
       onclipboard: ((stream: InputStream, mimetype: string) => void) | null;
       onfile: ((stream: InputStream, mimetype: string, filename: string) => void) | null;
       onfilesystem: ((object: GuacObject, name: string) => void) | null;
+      onmsg: ((code: number, args: string[]) => boolean | void) | null;
       onpipe: ((stream: InputStream, mimetype: string, name: string) => void) | null;
       onaudio: ((stream: InputStream, mimetype: string) => AudioPlayer | null) | null;
       onvideo:
@@ -719,6 +720,7 @@ declare module "guacamole-common-js" {
       onclipboard: ((stream: InputStream, mimetype: string) => void) | null;
       onfile: ((stream: InputStream, mimetype: string, filename: string) => void) | null;
       onfilesystem: ((object: GuacObject, name: string) => void) | null;
+      onmsg: ((code: number, args: string[]) => boolean | void) | null;
       onrequired: ((parameters: string[]) => void) | null;
     }
 

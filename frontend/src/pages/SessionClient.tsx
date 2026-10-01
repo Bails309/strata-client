@@ -1209,6 +1209,7 @@ export default function SessionClient() {
           "/" + file.name
         );
         const writer = new Guacamole.BlobWriter(stream);
+        writer.oncomplete = () => writer.sendEnd();
         writer.sendBlob(file);
       }
     };

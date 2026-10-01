@@ -311,6 +311,37 @@ describe("FileBrowser", () => {
     expect(mockWriter.sendBlob).toHaveBeenCalledWith(file);
   });
 
+  it("ends the stream once the file is sent, so the gateway can scan it", async () => {
+    const mockWriter = {
+      onprogress: null as any,
+      oncomplete: null as any,
+      onerror: null as any,
+      sendBlob: vi.fn(),
+      sendEnd: vi.fn(),
+    };
+    vi.mocked((await import("guacamole-common-js")).default.BlobWriter).mockImplementation(
+      function () {
+        return mockWriter as any;
+      }
+    );
+
+    const fs = createMockFilesystem();
+    render(<FileBrowser filesystem={fs as any} onClose={vi.fn()} />);
+    act(() => {
+      simulateDirectoryLoad({});
+    });
+    await waitFor(() => expect(screen.getByText("Empty directory")).toBeInTheDocument());
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(fileInput, new File(["x"], "done.txt", { type: "text/plain" }));
+    expect(mockWriter.sendEnd).not.toHaveBeenCalled();
+
+    act(() => {
+      mockWriter.oncomplete?.(new Blob());
+    });
+    expect(mockWriter.sendEnd).toHaveBeenCalledTimes(1);
+  });
+
   it("shows upload progress", async () => {
     const mockWriter = {
       onprogress: null as any,

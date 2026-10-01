@@ -73,6 +73,9 @@ pub struct HandshakeParams {
     /// Additional connection parameters from the `extra` JSONB column.
     /// Keys are Guacamole arg names (e.g. "enable-wallpaper", "color-depth").
     pub extra: std::collections::HashMap<String, String>,
+    /// Policy applied to SFTP transfers before they reach either side:
+    /// AV scanning, and the outbound approval queue for downloads.
+    pub transfer_gate: Option<std::sync::Arc<dyn strata_session::engine::sftp::TransferGate>>,
 }
 
 /// Run a session between a WebSocket (frontend) and the native engine.

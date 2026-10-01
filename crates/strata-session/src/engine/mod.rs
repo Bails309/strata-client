@@ -381,7 +381,20 @@ pub enum FileEvent {
         /// Guacamole status code, 0 for success.
         status: i32,
     },
+    /// Tell the user how a transfer ended when no stream is left to carry
+    /// it: an upload decided after its stream closed, or a download held
+    /// back before one opened. Sent as `msg` [`TRANSFER_NOTICE_MSG`].
+    Notice {
+        /// Text shown to the user.
+        message: String,
+        /// Whether the transfer went through.
+        ok: bool,
+    },
 }
+
+/// `msg` code carrying a [`FileEvent::Notice`]; args are `ok`|`warning`
+/// then the message. Outside the range Guacamole itself assigns.
+pub const TRANSFER_NOTICE_MSG: i32 = 0x5354;
 
 /// A live connection to one target.
 #[async_trait]

@@ -53,8 +53,8 @@ fn staging_root() -> PathBuf {
 
 #[derive(serde::Serialize)]
 pub struct SubmitResponse {
-    id: Uuid,
-    status: String,
+    pub(crate) id: Uuid,
+    pub(crate) status: String,
     dlp_score: i32,
     dlp_reasons: Vec<String>,
     /// Only present when the share was auto-approved.
@@ -333,9 +333,9 @@ async fn parse_outbound_multipart(
 
 /// Run the per-user approval lookup and seal-and-stage submit. Used
 /// by both the cookie-auth `submit` handler and the token-auth
-/// `ingest_via_token` handler.
+/// `ingest_via_token` handler, and by SFTP downloads.
 #[allow(clippy::too_many_arguments)]
-async fn finalize_submit(
+pub(crate) async fn finalize_submit(
     pool: &sqlx::PgPool,
     vault_cfg: &crate::config::VaultConfig,
     user_id: Uuid,

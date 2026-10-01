@@ -176,24 +176,65 @@ pub(crate) struct DiscoveredComputer {
 
 // ── Execute a full sync for one config ─────────────────────────────────
 
+/// A session advisory lock that cannot outlive a cancelled holder: unless
+/// released, dropping it closes its connection instead of returning it to
+/// the pool still holding the lock.
+struct SessionLock {
+    conn: Option<sqlx::pool::PoolConnection<Postgres>>,
+    key: (i32, i32),
+}
+
+impl SessionLock {
+    async fn try_acquire(pool: &Pool<Postgres>, key: (i32, i32)) -> sqlx::Result<Option<Self>> {
+        let mut conn = pool.acquire().await?;
+        let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1, $2)")
+            .bind(key.0)
+            .bind(key.1)
+            .fetch_one(&mut *conn)
+            .await?;
+        Ok(acquired.then_some(Self {
+            conn: Some(conn),
+            key,
+        }))
+    }
+
+    async fn release(mut self) {
+        let Some(mut conn) = self.conn.take() else {
+            return;
+        };
+        let unlocked = sqlx::query("SELECT pg_advisory_unlock($1, $2)")
+            .bind(self.key.0)
+            .bind(self.key.1)
+            .execute(&mut *conn)
+            .await;
+        if unlocked.is_err() {
+            drop(conn.detach());
+        }
+    }
+}
+
+impl Drop for SessionLock {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            drop(conn.detach());
+        }
+    }
+}
+
 pub async fn run_sync(pool: &Pool<Postgres>, config: &AdSyncConfig) -> anyhow::Result<Uuid> {
     // Advisory lock keyed on config UUID to prevent concurrent syncs for the same config.
     // Use pg_advisory_lock(int, int) with two i32 halves of the UUID.  This uses 64 of the
     // UUID's 128 bits, giving ~4 billion distinct lock keys — more than sufficient for the
     // expected number of sync configs (typically < 100).  A collision would only cause one
     // sync to be skipped until the other finishes.
-    let mut conn = pool.acquire().await?;
     let uuid_bytes = config.id.as_u128();
     let lock_key_hi = (uuid_bytes >> 64) as i64;
     let lock_key_lo = uuid_bytes as i64;
-    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1, $2)")
-        .bind(lock_key_hi as i32)
-        .bind(lock_key_lo as i32)
-        .fetch_one(&mut *conn)
-        .await?;
-    if !acquired {
+    let Some(lock) =
+        SessionLock::try_acquire(pool, (lock_key_hi as i32, lock_key_lo as i32)).await?
+    else {
         anyhow::bail!("Sync already in progress for config '{}'", config.label);
-    }
+    };
 
     // Create run record
     let run_id: Uuid =
@@ -204,12 +245,7 @@ pub async fn run_sync(pool: &Pool<Postgres>, config: &AdSyncConfig) -> anyhow::R
 
     let result = do_sync(pool, config, run_id).await;
 
-    // Always release the advisory lock on the SAME connection, even on error
-    let _ = sqlx::query("SELECT pg_advisory_unlock($1, $2)")
-        .bind(lock_key_hi as i32)
-        .bind(lock_key_lo as i32)
-        .execute(&mut *conn)
-        .await;
+    lock.release().await;
 
     match result {
         Ok(_) => {

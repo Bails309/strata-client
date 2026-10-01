@@ -98,6 +98,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   taken a backup can accept named versions with
   `STRATA_MIGRATION_REPAIR_VERSIONS=29,46`, which is logged at error
   level with the old and new checksums.
+- **Refresh tokens rotate against the database (SEC-07).** Each refresh
+  token now has a row (migration 096), grouped into a family that starts
+  at sign-in. Refresh consumes the token and records its successor in
+  one transaction, so two requests with the same token can no longer
+  both succeed. A token presented again more than 30 seconds after it
+  was used is treated as stolen: the whole family is revoked and
+  `auth.refresh_token_reused` is audited. Within 30 seconds the server
+  answers `409`, because that is another tab of the same browser; tabs
+  now also take turns to refresh where the browser supports Web Locks.
+  Sign-out revokes the family. Tokens issued before the upgrade are
+  accepted once and then join a family.
+- **Revocations reach every replica (SEC-07).** Each backend pulls new
+  revocations from the database every 15 seconds instead of only at
+  startup. Live revocations are never dropped from the cache under
+  pressure any more. If a replica cannot sync for 5 minutes it treats
+  every token as revoked until it can.
+- **One password operation per managed account (SEC-09).** Activation,
+  check-in, expiry and service-account rotation of the same AD account
+  now take a lock on that account (migration 097), not on a single
+  checkout, so they can no longer reset its password over each other.
+  A checkout cannot activate while another user's checkout of the same
+  account is active. The new password is sealed and saved on the
+  checkout before AD is changed, so a failure after the reset does not
+  lose it. The AD-sync lock can no longer be stranded on a pooled
+  connection by a cancelled sync.
 
 ### Build
 

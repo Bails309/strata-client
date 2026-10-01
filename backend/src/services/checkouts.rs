@@ -224,63 +224,91 @@ pub async fn seal_managed_credential(
     Ok(profile_id)
 }
 
-// ── Activate a checkout: rotate password, push to AD, seal to Vault ────
+// ── One password operation per managed account (SEC-09) ────────────────
 
-/// Upper bound on one activation, LDAP and Vault included.
-const ACTIVATION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
-/// Longer than [`ACTIVATION_DEADLINE`], so a live activation never loses its lease.
-const ACTIVATION_LEASE_SECS: f64 = 300.0;
+/// Upper bound on one password operation, LDAP and Vault included.
+const OPERATION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+/// Longer than [`OPERATION_DEADLINE`], so a live operation never loses its lock.
+const ACCOUNT_LOCK_SECS: f64 = 300.0;
+
+/// DNs compare case-insensitively in AD.
+fn account_key(managed_ad_dn: &str) -> String {
+    managed_ad_dn.trim().to_lowercase()
+}
+
+/// Run `op` while holding the lock for `managed_ad_dn`, so activation,
+/// check-in, expiry and rotation of one account never interleave. The lock
+/// is a row, not a session lock, so no connection is held across LDAP and
+/// Vault; one left by a crashed backend lapses on its own.
+async fn with_account_lock<T>(
+    pool: &Pool<Postgres>,
+    managed_ad_dn: &str,
+    operation: &str,
+    op: impl std::future::Future<Output = Result<T, AppError>>,
+) -> Result<T, AppError> {
+    let key = account_key(managed_ad_dn);
+    let operation_id = Uuid::new_v4();
+    let claimed: Option<Uuid> = sqlx::query_scalar(
+        "INSERT INTO managed_account_locks (account_key, operation_id, operation, locked_until)
+         VALUES ($1, $2, $3, now() + make_interval(secs => $4))
+         ON CONFLICT (account_key) DO UPDATE
+           SET operation_id = EXCLUDED.operation_id,
+               operation = EXCLUDED.operation,
+               locked_until = EXCLUDED.locked_until
+           WHERE managed_account_locks.locked_until < now()
+         RETURNING operation_id",
+    )
+    .bind(&key)
+    .bind(operation_id)
+    .bind(operation)
+    .bind(ACCOUNT_LOCK_SECS)
+    .fetch_optional(pool)
+    .await?;
+    if claimed.is_none() {
+        return Err(AppError::Validation(
+            "Another password operation on this account is in progress".into(),
+        ));
+    }
+
+    let result = tokio::time::timeout(OPERATION_DEADLINE, op)
+        .await
+        .unwrap_or_else(|_| Err(AppError::Internal(format!("Password {operation} timed out"))));
+
+    if let Err(e) =
+        sqlx::query("DELETE FROM managed_account_locks WHERE account_key = $1 AND operation_id = $2")
+            .bind(&key)
+            .bind(operation_id)
+            .execute(pool)
+            .await
+    {
+        tracing::warn!("could not release the lock on managed account '{key}': {e}");
+    }
+    result
+}
+
+async fn checkout_dn(pool: &Pool<Postgres>, checkout_id: Uuid) -> Result<String, AppError> {
+    sqlx::query_scalar("SELECT managed_ad_dn FROM password_checkout_requests WHERE id = $1")
+        .bind(checkout_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))
+}
+
+// ── Activate a checkout: rotate password, push to AD, seal to Vault ────
 
 pub async fn activate_checkout(
     pool: &Pool<Postgres>,
     vault_cfg: &VaultConfig,
     checkout_id: Uuid,
 ) -> Result<(), AppError> {
-    // One activator per checkout, enforced by a lease on the row rather than
-    // a session lock, so no pooled connection is held across LDAP and Vault
-    // (PERF-18). A crashed activator's lease simply expires.
-    let claimed: Option<Uuid> = sqlx::query_scalar(
-        "UPDATE password_checkout_requests
-         SET activation_lease_until = now() + make_interval(secs => $2)
-         WHERE id = $1
-           AND (activation_lease_until IS NULL OR activation_lease_until < now())
-         RETURNING id",
-    )
-    .bind(checkout_id)
-    .bind(ACTIVATION_LEASE_SECS)
-    .fetch_optional(pool)
-    .await?;
-    if claimed.is_none() {
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM password_checkout_requests WHERE id = $1)",
-        )
-        .bind(checkout_id)
-        .fetch_one(pool)
-        .await?;
-        return Err(if exists {
-            AppError::Validation("Another activation for this checkout is already in progress".into())
-        } else {
-            AppError::NotFound("Checkout request not found".into())
-        });
-    }
-
-    let result = tokio::time::timeout(
-        ACTIVATION_DEADLINE,
+    let dn = checkout_dn(pool, checkout_id).await?;
+    with_account_lock(
+        pool,
+        &dn,
+        "activation",
         activate_checkout_inner(pool, vault_cfg, checkout_id),
     )
     .await
-    .unwrap_or_else(|_| Err(AppError::Internal("Checkout activation timed out".into())));
-
-    if let Err(e) =
-        sqlx::query("UPDATE password_checkout_requests SET activation_lease_until = NULL WHERE id = $1")
-            .bind(checkout_id)
-            .execute(pool)
-            .await
-    {
-        tracing::warn!("could not release the activation lease on checkout {checkout_id}: {e}");
-    }
-
-    result
 }
 
 async fn activate_checkout_inner(
@@ -322,9 +350,40 @@ async fn activate_checkout_inner(
         .ad_sync_config_id
         .ok_or_else(|| AppError::Validation("Checkout has no associated AD sync config".into()))?;
 
+    // Exclusive: activating would change the password another holder is using.
+    let other_holder: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM password_checkout_requests
+         WHERE lower(managed_ad_dn) = lower($1) AND status = 'Active' AND id <> $2
+         LIMIT 1",
+    )
+    .bind(&req.managed_ad_dn)
+    .bind(checkout_id)
+    .fetch_optional(pool)
+    .await?;
+    if other_holder.is_some() {
+        return Err(AppError::Validation(
+            "This account is checked out by someone else. Try again once it is checked in.".into(),
+        ));
+    }
+
     // ── Phase 2: external IO (LDAP + Vault) — no DB lock held ──────────
     let policy = load_policy(pool, config_id).await?;
     let new_password = generate_password(&policy);
+
+    // Recorded, sealed, before AD changes, so a failure after the reset
+    // cannot lose the only copy. Not usable until the final commit.
+    let pending = vault::seal(vault_cfg, new_password.as_bytes()).await?;
+    sqlx::query(
+        "UPDATE password_checkout_requests
+         SET pending_secret = $1, pending_dek = $2, pending_nonce = $3
+         WHERE id = $4",
+    )
+    .bind(&pending.ciphertext)
+    .bind(&pending.encrypted_dek)
+    .bind(&pending.nonce)
+    .bind(checkout_id)
+    .execute(pool)
+    .await?;
 
     let config: crate::services::ad_sync::AdSyncConfig =
         sqlx::query_as("SELECT * FROM ad_sync_configs WHERE id = $1")
@@ -375,6 +434,9 @@ async fn activate_checkout_inner(
          SET status = 'Active',
              expires_at = now() + ($1 || ' minutes')::INTERVAL,
              vault_credential_id = $2,
+             pending_secret = NULL,
+             pending_dek = NULL,
+             pending_nonce = NULL,
              updated_at = now()
          WHERE id = $3",
     )
@@ -431,6 +493,22 @@ async fn activate_checkout_inner(
 // ── Check in a checkout early: scramble password, mark CheckedIn ───────
 
 pub async fn checkin_checkout(
+    pool: &Pool<Postgres>,
+    vault_cfg: &VaultConfig,
+    checkout_id: Uuid,
+    user_id: Uuid,
+) -> Result<(), AppError> {
+    let dn = checkout_dn(pool, checkout_id).await?;
+    with_account_lock(
+        pool,
+        &dn,
+        "check-in",
+        checkin_checkout_inner(pool, vault_cfg, checkout_id, user_id),
+    )
+    .await
+}
+
+async fn checkin_checkout_inner(
     pool: &Pool<Postgres>,
     vault_cfg: &VaultConfig,
     checkout_id: Uuid,
@@ -544,6 +622,21 @@ pub async fn checkin_checkout(
 // ── Expire a checkout: rotate to orphan password, mark expired ─────────
 
 pub async fn expire_checkout(
+    pool: &Pool<Postgres>,
+    vault_cfg: &VaultConfig,
+    checkout_id: Uuid,
+) -> Result<(), AppError> {
+    let dn = checkout_dn(pool, checkout_id).await?;
+    with_account_lock(
+        pool,
+        &dn,
+        "expiry",
+        expire_checkout_inner(pool, vault_cfg, checkout_id),
+    )
+    .await
+}
+
+async fn expire_checkout_inner(
     pool: &Pool<Postgres>,
     _vault_cfg: &VaultConfig,
     checkout_id: Uuid,
@@ -1017,6 +1110,25 @@ pub async fn ldap_reset_password(
 // ── Auto-rotation: rotate service account password ─────────────────────
 
 pub async fn auto_rotate_service_account(
+    pool: &Pool<Postgres>,
+    vault_cfg: &VaultConfig,
+    config_id: Uuid,
+) -> Result<(), AppError> {
+    let bind_dn: String = sqlx::query_scalar("SELECT bind_dn FROM ad_sync_configs WHERE id = $1")
+        .bind(config_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
+    with_account_lock(
+        pool,
+        &bind_dn,
+        "rotation",
+        auto_rotate_service_account_inner(pool, vault_cfg, config_id),
+    )
+    .await
+}
+
+async fn auto_rotate_service_account_inner(
     pool: &Pool<Postgres>,
     vault_cfg: &VaultConfig,
     config_id: Uuid,
@@ -1949,6 +2061,14 @@ pub async fn set_role_accounts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_account_has_one_lock_whatever_the_case_of_its_dn() {
+        assert_eq!(
+            account_key(" CN=Svc,OU=Admins,DC=Example,DC=com "),
+            account_key("cn=svc,ou=admins,dc=example,dc=com")
+        );
+    }
 
     #[test]
     fn generate_password_default_policy() {

@@ -197,6 +197,13 @@ pub fn detect_database_mode(db_url: &str) -> DatabaseMode {
 mod tests {
     use super::*;
 
+    /// Tests run in parallel and `CONFIG_PATH` is process-wide.
+    static CONFIG_PATH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_config_path() -> std::sync::MutexGuard<'static, ()> {
+        CONFIG_PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn round_trip_save_load() {
         let dir = tempfile::tempdir().unwrap();
@@ -316,6 +323,7 @@ mod tests {
 
     #[test]
     fn local_vault_secrets_save_creates_file() {
+        let _env = lock_config_path();
         // Use env var to redirect the config path into a temp directory
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
@@ -414,6 +422,7 @@ mod tests {
 
     #[test]
     fn system_secrets_round_trip() {
+        let _env = lock_config_path();
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         std::env::set_var("CONFIG_PATH", config_path.to_str().unwrap());
@@ -431,6 +440,7 @@ mod tests {
 
     #[test]
     fn system_secrets_load_missing_returns_none() {
+        let _env = lock_config_path();
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("nonexistent").join("config.toml");
         std::env::set_var("CONFIG_PATH", config_path.to_str().unwrap());
@@ -451,6 +461,7 @@ mod tests {
 
     #[test]
     fn system_secrets_path_derives_from_config() {
+        let _env = lock_config_path();
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         std::env::set_var("CONFIG_PATH", config_path.to_str().unwrap());
@@ -464,6 +475,7 @@ mod tests {
 
     #[test]
     fn config_path_default() {
+        let _env = lock_config_path();
         std::env::remove_var("CONFIG_PATH");
         let path = AppConfig::config_path();
         assert_eq!(path, "/app/config/config.toml");
@@ -471,6 +483,7 @@ mod tests {
 
     #[test]
     fn local_vault_secrets_load_missing_returns_none() {
+        let _env = lock_config_path();
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("nonexistent").join("config.toml");
         std::env::set_var("CONFIG_PATH", config_path.to_str().unwrap());
@@ -482,6 +495,7 @@ mod tests {
 
     #[test]
     fn local_vault_secrets_path_derives_from_config() {
+        let _env = lock_config_path();
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         std::env::set_var("CONFIG_PATH", config_path.to_str().unwrap());

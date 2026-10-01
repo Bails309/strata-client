@@ -1224,6 +1224,27 @@ describe("refreshAccessToken", () => {
     expect(r2).toBe(true);
     expect(callCount).toBe(1); // only one actual fetch
   });
+
+  it("treats a refresh another tab has just made as success", async () => {
+    globalThis.fetch = vi.fn(
+      async () => new Response("", { status: 409 })
+    ) as unknown as typeof fetch;
+    expect(await refreshAccessToken()).toBe(true);
+  });
+
+  it("takes turns with other tabs when the browser supports locks", async () => {
+    const request = vi.fn(async (_name: string, cb: () => Promise<boolean>) => cb());
+    vi.stubGlobal("navigator", { ...navigator, locks: { request } });
+    globalThis.fetch = vi.fn(
+      async () => new Response("{}", { status: 200 })
+    ) as unknown as typeof fetch;
+    try {
+      expect(await refreshAccessToken()).toBe(true);
+      expect(request).toHaveBeenCalledWith("strata-auth-refresh", expect.any(Function));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 // ── ensureFreshToken branch coverage ────────────────────────────────

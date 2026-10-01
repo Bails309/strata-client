@@ -52,7 +52,7 @@ function buildHeaders(
 export async function refreshAccessToken(): Promise<boolean> {
   if (isRefreshing && refreshPromise) return refreshPromise;
   isRefreshing = true;
-  refreshPromise = (async () => {
+  const attempt = async (): Promise<boolean> => {
     try {
       // NOTE: do NOT log CSRF cookie presence here. Devtools / extensions
       // can read console output, and the historical message exposed a CSRF
@@ -62,6 +62,9 @@ export async function refreshAccessToken(): Promise<boolean> {
         headers: buildHeaders("POST"),
         credentials: "include",
       });
+      // 409: another tab rotated the same token a moment ago, and the
+      // browser now holds its new cookies.
+      if (res.status === 409) return true;
       if (!res.ok) {
         console.error(`[refreshAccessToken] Failed with status: ${res.status}`);
       }
@@ -69,11 +72,17 @@ export async function refreshAccessToken(): Promise<boolean> {
     } catch (e) {
       console.error(`[refreshAccessToken] Fetch threw an error:`, e);
       return false;
-    } finally {
+    }
+  };
+  // Tabs share the refresh cookie; taking turns means each one presents
+  // the cookie the previous one received, rather than a spent token.
+  const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+  refreshPromise = (locks ? locks.request("strata-auth-refresh", attempt) : attempt()).finally(
+    () => {
       isRefreshing = false;
       refreshPromise = null;
     }
-  })();
+  );
   return refreshPromise;
 }
 

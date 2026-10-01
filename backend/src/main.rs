@@ -78,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Load revoked tokens from the database to survive restarts ──
     services::token_revocation::load_from_db(&db.pool).await;
+    tokio::spawn(services::token_revocation::run_sync(db.pool.clone()));
 
     // ── Ensure default admin account exists ──
     ensure_default_admin(&db).await?;

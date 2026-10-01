@@ -294,9 +294,10 @@ Bundled in Docker Compose for zero-configuration credential encryption. On first
 2. Unseals the Vault
 3. Enables the Transit Secrets Engine
 4. Creates the encryption key (`guac-master-key` by default)
-5. Stores the root token and unseal key in `config.toml`
+5. Writes a `strata-transit` policy (encrypt/decrypt on that key, renew and look up its own token) and issues an orphan, periodic (72 h) runtime token with only that policy
+6. Stores the runtime token and the unseal key in `vault-secrets.json` (mode `0600`) and revokes the root token
 
-On subsequent startups, the backend auto-unseals using the stored unseal key.
+On subsequent startups, the backend auto-unseals using the stored unseal key and renews the runtime token hourly. A root token left by an older release is replaced and revoked on the first start; if the runtime token has lapsed, the backend regenerates root from the unseal key (`generate-root`), issues a new runtime token and revokes root again.
 
 Alternatively, users can connect to an **external Vault instance** by selecting "External" mode during setup or in Admin Settings, providing their own address, token, and transit key name.
 

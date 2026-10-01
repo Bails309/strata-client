@@ -2,11 +2,32 @@
 //!
 //! Handles first-time initialization (operator init), unseal,
 //! enabling the Transit secrets engine, and creating the encryption key.
+//!
+//! The backend never keeps a root token (SEC-25). Root is used only while
+//! provisioning — from `operator init`, from a token stored by an older
+//! release, or regenerated from the unseal key when the runtime token has
+//! been lost — to issue a Transit-only runtime token, and is then revoked.
+//! The unseal key stays with the backend so restarts remain automatic.
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 use crate::services::http_client::default_client;
+
+/// Policy attached to the runtime token.
+pub const RUNTIME_POLICY: &str = "strata-transit";
+
+/// The runtime token lapses unless renewed within this period.
+pub const RUNTIME_TOKEN_PERIOD: &str = "72h";
+
+/// Credentials the backend keeps for the bundled Vault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalCredentials {
+    /// Transit-only runtime token.
+    pub token: String,
+    pub unseal_key: String,
+}
 
 /// Result of `vault operator init` with a single unseal key.
 #[derive(Debug, Clone)]
@@ -210,56 +231,377 @@ pub async fn create_transit_key(
     Ok(())
 }
 
-/// Full provisioning flow for the bundled Vault:
-/// 1. Check health
-/// 2. Init if not initialized
-/// 3. Unseal if sealed
-/// 4. Enable Transit engine
-/// 5. Create the encryption key
+/// Bring the bundled Vault to a usable state and return the credentials
+/// the backend should run with:
+/// 1. Initialise it if needed, and unseal it if sealed.
+/// 2. If there is no usable non-root token — first boot, a root token
+///    stored by an older release, or a runtime token that has lapsed —
+///    take root (from init, the stored token, or regenerated with the
+///    unseal key), enable Transit, create the key, issue a Transit-only
+///    runtime token, hand it to `persist`, and revoke root.
 ///
-/// Returns the VaultInitResult if init was performed (first boot),
-/// or None if the vault was already initialized and just needed unsealing.
+/// Root is revoked only after `persist` succeeds, so a failure to save
+/// the new token leaves a stored legacy root token usable.
 pub async fn provision(
     address: &str,
     transit_key: &str,
     existing_unseal_key: Option<&str>,
     existing_token: Option<&str>,
-) -> Result<Option<VaultInitResult>, AppError> {
+    persist: impl FnOnce(&LocalCredentials) -> anyhow::Result<()>,
+) -> Result<LocalCredentials, AppError> {
+    check_key_name(transit_key)?;
     let (initialized, sealed) = health(address).await?;
 
-    let (token, unseal_key, init_result) = if !initialized {
-        // First boot — initialize
+    if !initialized {
         tracing::info!("Vault is not initialized, running operator init...");
         let result = init(address).await?;
         tracing::info!("Vault initialized successfully");
-        (
-            result.root_token.clone(),
+        unseal(address, &result.unseal_key).await?;
+        tracing::info!("Vault unsealed");
+        return with_root(
+            address,
+            transit_key,
+            &result.root_token,
             result.unseal_key.clone(),
-            Some(result),
+            persist,
         )
-    } else {
-        // Already initialized — use stored credentials
-        let token = existing_token
-            .ok_or_else(|| AppError::Vault("Vault is initialized but no token is stored".into()))?
-            .to_string();
-        let key = existing_unseal_key
-            .ok_or_else(|| AppError::Vault("Vault is sealed but no unseal key is stored".into()))?
-            .to_string();
-        (token, key, None)
-    };
+        .await;
+    }
 
-    if sealed || !initialized {
-        // Need to unseal (init always produces a sealed vault)
+    let unseal_key = existing_unseal_key
+        .ok_or_else(|| AppError::Vault("Vault is initialized but no unseal key is stored".into()))?
+        .to_string();
+    if sealed {
         tracing::info!("Unsealing Vault...");
         unseal(address, &unseal_key).await?;
         tracing::info!("Vault unsealed");
     }
 
-    // Enable transit and create key
-    enable_transit(address, &token).await?;
-    create_transit_key(address, &token, transit_key).await?;
+    let lookup = match existing_token {
+        Some(token) if !token.is_empty() => lookup_self(address, token).await?,
+        _ => None,
+    };
+    match (lookup, existing_token) {
+        (Some(policies), Some(token)) if policies.iter().any(|p| p == "root") => {
+            tracing::warn!(
+                "Stored Vault token is a root token; replacing it with a Transit-only token"
+            );
+            with_root(address, transit_key, token, unseal_key, persist).await
+        }
+        (Some(_), Some(token)) => Ok(LocalCredentials {
+            token: token.to_string(),
+            unseal_key,
+        }),
+        _ => {
+            tracing::warn!(
+                "No usable Vault runtime token; regenerating root from the unseal key to issue one"
+            );
+            let root = generate_root(address, &unseal_key).await?;
+            with_root(address, transit_key, &root, unseal_key, persist).await
+        }
+    }
+}
 
-    Ok(init_result)
+/// Use `root` to finish provisioning, issue the runtime token, persist it,
+/// then revoke `root`.
+async fn with_root(
+    address: &str,
+    transit_key: &str,
+    root: &str,
+    unseal_key: String,
+    persist: impl FnOnce(&LocalCredentials) -> anyhow::Result<()>,
+) -> Result<LocalCredentials, AppError> {
+    enable_transit(address, root).await?;
+    create_transit_key(address, root, transit_key).await?;
+    put_runtime_policy(address, root, transit_key).await?;
+    let token = create_runtime_token(address, root).await?;
+    check_runtime_token(address, &token, transit_key).await?;
+
+    let creds = LocalCredentials { token, unseal_key };
+    persist(&creds)
+        .map_err(|e| AppError::Vault(format!("Could not save the Vault runtime token: {e}")))?;
+
+    if let Err(e) = revoke_self(address, root).await {
+        tracing::error!("Could not revoke the Vault root token: {e}");
+    } else {
+        tracing::info!("Vault root token revoked; running with a Transit-only token");
+    }
+    Ok(creds)
+}
+
+/// Transit key names go into the policy text, so keep them to a safe set.
+fn check_key_name(key: &str) -> Result<(), AppError> {
+    let ok = !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if ok {
+        Ok(())
+    } else {
+        Err(AppError::Config(
+            "Vault transit key names may only contain letters, digits, '-' and '_'".into(),
+        ))
+    }
+}
+
+fn runtime_policy(transit_key: &str) -> String {
+    format!(
+        "path \"transit/encrypt/{transit_key}\" {{ capabilities = [\"update\"] }}\n\
+         path \"transit/decrypt/{transit_key}\" {{ capabilities = [\"update\"] }}\n\
+         path \"auth/token/renew-self\" {{ capabilities = [\"update\"] }}\n\
+         path \"auth/token/lookup-self\" {{ capabilities = [\"read\"] }}\n"
+    )
+}
+
+fn url(address: &str, path: &str) -> String {
+    format!("{}/v1/{path}", address.trim_end_matches('/'))
+}
+
+async fn vault_call(
+    req: reqwest::RequestBuilder,
+    what: &str,
+) -> Result<reqwest::Response, AppError> {
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| AppError::Vault(format!("{what} request failed: {e}")))?;
+    if resp.status().is_success() {
+        return Ok(resp);
+    }
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    Err(AppError::Vault(format!("{what} failed ({status}): {body}")))
+}
+
+async fn put_runtime_policy(address: &str, root: &str, transit_key: &str) -> Result<(), AppError> {
+    let req = default_client()
+        .put(url(address, &format!("sys/policies/acl/{RUNTIME_POLICY}")))
+        .header("X-Vault-Token", root)
+        .json(&serde_json::json!({ "policy": runtime_policy(transit_key) }));
+    vault_call(req, "Vault policy write").await.map(drop)
+}
+
+/// An orphan, so revoking the root that created it leaves it valid.
+async fn create_runtime_token(address: &str, root: &str) -> Result<String, AppError> {
+    #[derive(Deserialize)]
+    struct Auth {
+        client_token: String,
+    }
+    #[derive(Deserialize)]
+    struct Created {
+        auth: Auth,
+    }
+    let req = default_client()
+        .post(url(address, "auth/token/create-orphan"))
+        .header("X-Vault-Token", root)
+        .json(&serde_json::json!({
+            "policies": [RUNTIME_POLICY],
+            "no_default_policy": true,
+            "period": RUNTIME_TOKEN_PERIOD,
+            "renewable": true,
+            "display_name": "strata-backend",
+        }));
+    let created: Created = vault_call(req, "Vault token create")
+        .await?
+        .json()
+        .await
+        .map_err(|e| AppError::Vault(format!("Vault token create parse: {e}")))?;
+    Ok(created.auth.client_token)
+}
+
+/// Prove the runtime token can use the key before anything depends on it.
+async fn check_runtime_token(
+    address: &str,
+    token: &str,
+    transit_key: &str,
+) -> Result<(), AppError> {
+    let req = default_client()
+        .post(url(address, &format!("transit/encrypt/{transit_key}")))
+        .header("X-Vault-Token", token)
+        .json(&serde_json::json!({
+            "plaintext": base64::engine::general_purpose::STANDARD.encode("strata-probe"),
+        }));
+    vault_call(req, "Vault runtime token check").await.map(drop)
+}
+
+/// The token's policies, or `None` if Vault no longer accepts it.
+async fn lookup_self(address: &str, token: &str) -> Result<Option<Vec<String>>, AppError> {
+    #[derive(Deserialize)]
+    struct Data {
+        #[serde(default)]
+        policies: Vec<String>,
+    }
+    #[derive(Deserialize)]
+    struct Lookup {
+        data: Data,
+    }
+    let resp = default_client()
+        .get(url(address, "auth/token/lookup-self"))
+        .header("X-Vault-Token", token)
+        .send()
+        .await
+        .map_err(|e| AppError::Vault(format!("Vault token lookup request failed: {e}")))?;
+    if resp.status() == reqwest::StatusCode::FORBIDDEN {
+        return Ok(None);
+    }
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(AppError::Vault(format!(
+            "Vault token lookup failed ({status}): {body}"
+        )));
+    }
+    let lookup: Lookup = resp
+        .json()
+        .await
+        .map_err(|e| AppError::Vault(format!("Vault token lookup parse: {e}")))?;
+    Ok(Some(lookup.data.policies))
+}
+
+async fn revoke_self(address: &str, token: &str) -> Result<(), AppError> {
+    let req = default_client()
+        .post(url(address, "auth/token/revoke-self"))
+        .header("X-Vault-Token", token);
+    vault_call(req, "Vault token revoke").await.map(drop)
+}
+
+/// Extend the runtime token's lease by another period.
+pub async fn renew_self(address: &str, token: &str) -> Result<(), AppError> {
+    let req = default_client()
+        .post(url(address, "auth/token/renew-self"))
+        .header("X-Vault-Token", token)
+        .json(&serde_json::json!({}));
+    vault_call(req, "Vault token renew").await.map(drop)
+}
+
+/// Generate a root token with the unseal key (`vault operator
+/// generate-root`), for re-issuing a lost runtime token.
+async fn generate_root(address: &str, unseal_key: &str) -> Result<String, AppError> {
+    #[derive(Deserialize)]
+    struct Attempt {
+        nonce: String,
+        otp: String,
+    }
+    #[derive(Deserialize)]
+    struct Update {
+        complete: bool,
+        #[serde(default)]
+        encoded_token: String,
+        #[serde(default)]
+        encoded_root_token: String,
+    }
+
+    let client = default_client();
+    // A stale attempt from an interrupted run would block a new one.
+    let _ = client
+        .delete(url(address, "sys/generate-root/attempt"))
+        .send()
+        .await;
+    let attempt: Attempt = vault_call(
+        client
+            .put(url(address, "sys/generate-root/attempt"))
+            .json(&serde_json::json!({})),
+        "Vault generate-root start",
+    )
+    .await?
+    .json()
+    .await
+    .map_err(|e| AppError::Vault(format!("Vault generate-root start parse: {e}")))?;
+    let update: Update = vault_call(
+        client
+            .put(url(address, "sys/generate-root/update"))
+            .json(&serde_json::json!({ "key": unseal_key, "nonce": attempt.nonce })),
+        "Vault generate-root update",
+    )
+    .await?
+    .json()
+    .await
+    .map_err(|e| AppError::Vault(format!("Vault generate-root update parse: {e}")))?;
+    if !update.complete {
+        return Err(AppError::Vault(
+            "Vault generate-root did not complete".into(),
+        ));
+    }
+    let encoded = if update.encoded_token.is_empty() {
+        update.encoded_root_token
+    } else {
+        update.encoded_token
+    };
+    decode_root(&encoded, &attempt.otp)
+}
+
+/// Vault returns the new root token XOR the one-time password, base64
+/// encoded without padding.
+fn decode_root(encoded: &str, otp: &str) -> Result<String, AppError> {
+    let bytes = base64::engine::general_purpose::STANDARD_NO_PAD
+        .decode(encoded.trim_end_matches('='))
+        .map_err(|e| AppError::Vault(format!("Vault generate-root token decode: {e}")))?;
+    if bytes.len() != otp.len() {
+        return Err(AppError::Vault(
+            "Vault generate-root token and OTP lengths differ".into(),
+        ));
+    }
+    let token: Vec<u8> = bytes.iter().zip(otp.bytes()).map(|(a, b)| a ^ b).collect();
+    String::from_utf8(token)
+        .map_err(|_| AppError::Vault("Vault generate-root token is not text".into()))
+}
+
+/// Save the bundled Vault's credentials for the next start.
+pub fn save_local_credentials(creds: &LocalCredentials) -> anyhow::Result<()> {
+    crate::config::LocalVaultSecrets {
+        token: creds.token.clone(),
+        unseal_key: creds.unseal_key.clone(),
+    }
+    .save()
+}
+
+/// Renew the bundled Vault's runtime token every hour, well inside its
+/// period. If Vault no longer accepts it, provision a new one.
+pub fn spawn_token_renewal(
+    state: crate::services::app_state::SharedState,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    use crate::services::worker::{spawn_periodic, PeriodicConfig};
+    use std::time::Duration;
+
+    spawn_periodic(
+        PeriodicConfig {
+            label: "vault_token_renewal",
+            initial_delay: Duration::from_secs(60),
+            interval: Duration::from_secs(3600),
+            iteration_timeout: Duration::from_secs(120),
+            error_backoff_base: Duration::from_secs(60),
+        },
+        shutdown,
+        move || {
+            let state = state.clone();
+            async move {
+                let vault = {
+                    let s = state.read().await;
+                    s.config.as_ref().and_then(|c| c.vault.clone())
+                };
+                let Some(v) = vault.filter(|v| v.mode == crate::config::VaultMode::Local) else {
+                    return Ok::<(), AppError>(());
+                };
+                if renew_self(&v.address, &v.token).await.is_ok() {
+                    return Ok(());
+                }
+                let creds = provision(
+                    &v.address,
+                    &v.transit_key,
+                    v.unseal_key.as_deref(),
+                    Some(&v.token),
+                    save_local_credentials,
+                )
+                .await?;
+                let mut s = state.write().await;
+                if let Some(v) = s.config.as_mut().and_then(|c| c.vault.as_mut()) {
+                    v.token = creds.token;
+                }
+                Ok(())
+            }
+        },
+    )
 }
 
 #[cfg(test)]
@@ -388,13 +730,19 @@ mod tests {
 
     use axum::{
         extract::{Path as AxumPath, State as AxumState},
+        http::{HeaderMap, StatusCode},
+        response::IntoResponse,
         routing::{get, post, put},
         Json, Router,
     };
     use serde_json::json;
+    use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::sync::Arc;
     use tokio::sync::Mutex;
+
+    const MOCK_OTP: &str = "abcdefghijklmnopqrst";
+    const REGENERATED_ROOT: &str = "hvs.regenerated-r00t";
 
     #[derive(Default, Clone)]
     struct MockVault {
@@ -402,6 +750,24 @@ mod tests {
         sealed: Arc<Mutex<bool>>,
         transit_mounted: Arc<Mutex<bool>>,
         keys_created: Arc<Mutex<Vec<String>>>,
+        /// Live tokens and their policies.
+        tokens: Arc<Mutex<HashMap<String, Vec<String>>>>,
+        revoked: Arc<Mutex<Vec<String>>>,
+        policies: Arc<Mutex<HashMap<String, String>>>,
+    }
+
+    impl MockVault {
+        async fn add_token(&self, token: &str, policy: &str) {
+            self.tokens
+                .lock()
+                .await
+                .insert(token.into(), vec![policy.into()]);
+        }
+
+        async fn policies_of(&self, headers: &HeaderMap) -> Option<Vec<String>> {
+            let token = headers.get("x-vault-token")?.to_str().ok()?;
+            self.tokens.lock().await.get(token).cloned()
+        }
     }
 
     async fn start_mock_vault(state: MockVault) -> SocketAddr {
@@ -420,6 +786,7 @@ mod tests {
                 put(|AxumState(s): AxumState<MockVault>| async move {
                     *s.initialized.lock().await = true;
                     *s.sealed.lock().await = true;
+                    s.add_token("hvs.mock-root-token", "root").await;
                     Json(json!({
                         "keys": ["mock-unseal-key"],
                         "root_token": "hvs.mock-root-token",
@@ -459,6 +826,79 @@ mod tests {
                         Json(json!({}))
                     },
                 ),
+            )
+            .route(
+                "/v1/transit/encrypt/{name}",
+                post(|AxumState(s): AxumState<MockVault>, h: HeaderMap| async move {
+                    match s.policies_of(&h).await {
+                        Some(_) => Json(json!({ "data": { "ciphertext": "vault:v1:x" } }))
+                            .into_response(),
+                        None => StatusCode::FORBIDDEN.into_response(),
+                    }
+                }),
+            )
+            .route(
+                "/v1/sys/policies/acl/{name}",
+                put(
+                    |AxumState(s): AxumState<MockVault>,
+                     AxumPath(name): AxumPath<String>,
+                     Json(body): Json<serde_json::Value>| async move {
+                        let policy = body["policy"].as_str().unwrap_or_default().to_string();
+                        s.policies.lock().await.insert(name, policy);
+                        StatusCode::NO_CONTENT
+                    },
+                ),
+            )
+            .route(
+                "/v1/auth/token/create-orphan",
+                post(|AxumState(s): AxumState<MockVault>, h: HeaderMap| async move {
+                    if s.policies_of(&h).await != Some(vec!["root".into()]) {
+                        return StatusCode::FORBIDDEN.into_response();
+                    }
+                    let token = format!("hvs.runtime-{}", s.tokens.lock().await.len());
+                    s.add_token(&token, RUNTIME_POLICY).await;
+                    Json(json!({ "auth": { "client_token": token } })).into_response()
+                }),
+            )
+            .route(
+                "/v1/auth/token/lookup-self",
+                get(|AxumState(s): AxumState<MockVault>, h: HeaderMap| async move {
+                    match s.policies_of(&h).await {
+                        Some(p) => Json(json!({ "data": { "policies": p } })).into_response(),
+                        None => StatusCode::FORBIDDEN.into_response(),
+                    }
+                }),
+            )
+            .route(
+                "/v1/auth/token/revoke-self",
+                post(|AxumState(s): AxumState<MockVault>, h: HeaderMap| async move {
+                    let token = h
+                        .get("x-vault-token")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default()
+                        .to_string();
+                    s.tokens.lock().await.remove(&token);
+                    s.revoked.lock().await.push(token);
+                    StatusCode::NO_CONTENT
+                }),
+            )
+            .route(
+                "/v1/sys/generate-root/attempt",
+                put(|| async { Json(json!({ "nonce": "n1", "otp": MOCK_OTP })) })
+                    .delete(|| async { StatusCode::NO_CONTENT }),
+            )
+            .route(
+                "/v1/sys/generate-root/update",
+                put(|AxumState(s): AxumState<MockVault>| async move {
+                    s.add_token(REGENERATED_ROOT, "root").await;
+                    let xored: Vec<u8> = REGENERATED_ROOT
+                        .bytes()
+                        .zip(MOCK_OTP.bytes())
+                        .map(|(a, b)| a ^ b)
+                        .collect();
+                    let encoded = base64::engine::general_purpose::STANDARD_NO_PAD.encode(xored);
+                    Json(json!({ "complete": true, "encoded_token": encoded }))
+                }),
             )
             .with_state(state);
 
@@ -547,19 +987,26 @@ mod tests {
             .contains(&"master-key".to_string()));
     }
 
+    fn no_persist(_: &LocalCredentials) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     #[tokio::test]
-    async fn provision_first_boot_flow_end_to_end() {
-        // Uninitialised vault → init, unseal, enable transit, create key
+    async fn first_boot_ends_with_a_transit_only_token_and_no_root() {
         let state = MockVault::default();
         let addr = start_mock_vault(state.clone()).await;
-        let result = provision(&format!("http://{addr}"), "master-key", None, None)
-            .await
-            .unwrap();
-        // First boot returns the init result
-        assert!(result.is_some());
-        let init = result.unwrap();
-        assert_eq!(init.root_token, "hvs.mock-root-token");
-        assert!(*state.initialized.lock().await);
+        let saved = std::sync::Mutex::new(None);
+        let creds = provision(&format!("http://{addr}"), "master-key", None, None, |c| {
+            *saved.lock().unwrap() = Some(c.clone());
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        assert!(creds.token.starts_with("hvs.runtime-"));
+        assert_eq!(creds.unseal_key, "mock-unseal-key");
+        assert_eq!(saved.lock().unwrap().as_ref(), Some(&creds));
+        assert_eq!(*state.revoked.lock().await, vec!["hvs.mock-root-token"]);
         assert!(!*state.sealed.lock().await);
         assert!(*state.transit_mounted.lock().await);
         assert!(state
@@ -567,36 +1014,85 @@ mod tests {
             .lock()
             .await
             .contains(&"master-key".to_string()));
+        let policy = state.policies.lock().await[RUNTIME_POLICY].clone();
+        assert!(policy.contains("transit/encrypt/master-key"));
+        assert!(!policy.contains("sys/"));
     }
 
     #[tokio::test]
-    async fn provision_existing_initialized_uses_stored_credentials() {
-        // Already initialized and sealed → unseal with stored key
+    async fn a_stored_root_token_is_replaced_and_revoked() {
         let state = MockVault::default();
         *state.initialized.lock().await = true;
         *state.sealed.lock().await = true;
+        state.add_token("hvs.legacy-root", "root").await;
+        let addr = start_mock_vault(state.clone()).await;
+        let creds = provision(
+            &format!("http://{addr}"),
+            "master-key",
+            Some("stored-unseal-key"),
+            Some("hvs.legacy-root"),
+            no_persist,
+        )
+        .await
+        .unwrap();
+        assert!(creds.token.starts_with("hvs.runtime-"));
+        assert!(!*state.sealed.lock().await);
+        assert_eq!(*state.revoked.lock().await, vec!["hvs.legacy-root"]);
+    }
+
+    #[tokio::test]
+    async fn a_stored_root_token_survives_if_the_replacement_cannot_be_saved() {
+        let state = MockVault::default();
+        *state.initialized.lock().await = true;
+        state.add_token("hvs.legacy-root", "root").await;
         let addr = start_mock_vault(state.clone()).await;
         let result = provision(
             &format!("http://{addr}"),
             "master-key",
-            Some("stored-unseal-key"),
-            Some("stored-root-token"),
+            Some("key"),
+            Some("hvs.legacy-root"),
+            |_| anyhow::bail!("disk full"),
         )
-        .await
-        .unwrap();
-        // Existing vault returns None (no new init)
-        assert!(result.is_none());
-        assert!(!*state.sealed.lock().await);
+        .await;
+        assert!(result.is_err());
+        assert!(state.revoked.lock().await.is_empty());
     }
 
     #[tokio::test]
-    async fn provision_initialized_missing_token_errors() {
+    async fn a_working_runtime_token_is_kept() {
         let state = MockVault::default();
         *state.initialized.lock().await = true;
-        let addr = start_mock_vault(state).await;
-        let result = provision(&format!("http://{addr}"), "master-key", Some("key"), None).await;
-        assert!(result.is_err());
-        assert!(format!("{}", result.unwrap_err()).contains("token"));
+        state.add_token("hvs.runtime-7", RUNTIME_POLICY).await;
+        let addr = start_mock_vault(state.clone()).await;
+        let creds = provision(
+            &format!("http://{addr}"),
+            "master-key",
+            Some("key"),
+            Some("hvs.runtime-7"),
+            |_| panic!("nothing new to save"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(creds.token, "hvs.runtime-7");
+        assert!(state.revoked.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_lapsed_runtime_token_is_reissued_with_a_regenerated_root() {
+        let state = MockVault::default();
+        *state.initialized.lock().await = true;
+        let addr = start_mock_vault(state.clone()).await;
+        let creds = provision(
+            &format!("http://{addr}"),
+            "master-key",
+            Some("key"),
+            Some("hvs.expired"),
+            no_persist,
+        )
+        .await
+        .unwrap();
+        assert!(creds.token.starts_with("hvs.runtime-"));
+        assert_eq!(*state.revoked.lock().await, vec![REGENERATED_ROOT]);
     }
 
     #[tokio::test]
@@ -605,8 +1101,97 @@ mod tests {
         *state.initialized.lock().await = true;
         *state.sealed.lock().await = true;
         let addr = start_mock_vault(state).await;
-        let result = provision(&format!("http://{addr}"), "master-key", None, Some("token")).await;
+        let result = provision(
+            &format!("http://{addr}"),
+            "master-key",
+            None,
+            Some("token"),
+            no_persist,
+        )
+        .await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn key_names_that_could_change_the_policy_are_refused() {
+        assert!(check_key_name("guac-master-key").is_ok());
+        assert!(check_key_name("k\" { capabilities = [\"sudo\"] }").is_err());
+        assert!(check_key_name("").is_err());
+    }
+
+    #[test]
+    fn decodes_a_generated_root_token() {
+        let otp = "0123456789abcdefghijklmnopqr";
+        let token = "hvs.AAAAAAAAAAAAAAAAAAAAAAAA";
+        let xored: Vec<u8> = token.bytes().zip(otp.bytes()).map(|(a, b)| a ^ b).collect();
+        let encoded = base64::engine::general_purpose::STANDARD_NO_PAD.encode(xored);
+        assert_eq!(decode_root(&encoded, otp).unwrap(), token);
+        assert!(decode_root(&encoded, "short").is_err());
+    }
+
+    /// Against a real, uninitialised Vault in server mode, e.g.
+    /// `docker run -d -p 18200:8200 -e VAULT_LOCAL_CONFIG='{"storage":{"inmem":{}},"listener":[{"tcp":{"address":"0.0.0.0:8200","tls_disable":true}}],"disable_mlock":true}' hashicorp/vault:1.19 server`
+    /// then `STRATA_TEST_VAULT_ADDR=http://127.0.0.1:18200`.
+    #[tokio::test]
+    async fn real_vault_runtime_token_is_transit_only() {
+        let Ok(addr) = std::env::var("STRATA_TEST_VAULT_ADDR") else {
+            eprintln!("STRATA_TEST_VAULT_ADDR unset, skipping");
+            return;
+        };
+        let creds = provision(&addr, "strata-key", None, None, no_persist)
+            .await
+            .unwrap();
+        let cfg = crate::config::VaultConfig {
+            address: addr.clone(),
+            token: creds.token.clone(),
+            transit_key: "strata-key".into(),
+            mode: crate::config::VaultMode::Local,
+            unseal_key: None,
+        };
+        let sealed = crate::services::vault::seal(&cfg, b"secret").await.unwrap();
+        let opened = crate::services::vault::unseal(
+            &cfg,
+            &sealed.encrypted_dek,
+            &sealed.ciphertext,
+            &sealed.nonce,
+        )
+        .await
+        .unwrap();
+        assert_eq!(opened, b"secret");
+        assert_eq!(
+            lookup_self(&addr, &creds.token).await.unwrap(),
+            Some(vec![RUNTIME_POLICY.to_string()])
+        );
+        renew_self(&addr, &creds.token).await.unwrap();
+
+        // The runtime token can do nothing else.
+        let denied = default_client()
+            .post(url(&addr, "auth/token/create-orphan"))
+            .header("X-Vault-Token", &creds.token)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), reqwest::StatusCode::FORBIDDEN);
+        assert!(put_runtime_policy(&addr, &creds.token, "other")
+            .await
+            .is_err());
+
+        // A lost token is reissued from the unseal key, root revoked again.
+        let again = provision(
+            &addr,
+            "strata-key",
+            Some(&creds.unseal_key),
+            Some("hvs.not-a-token"),
+            no_persist,
+        )
+        .await
+        .unwrap();
+        assert_ne!(again.token, creds.token);
+        assert_eq!(
+            lookup_self(&addr, &again.token).await.unwrap(),
+            Some(vec![RUNTIME_POLICY.to_string()])
+        );
     }
 
     #[tokio::test]

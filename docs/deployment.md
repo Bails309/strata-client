@@ -434,8 +434,8 @@ The Docker Compose stack includes a HashiCorp Vault 1.19 container that is fully
    - Unseals the Vault
    - Enables the Transit Secrets Engine
    - Creates the encryption key (default: `guac-master-key`)
-   - Stores the root token and unseal key in `config.toml`
-3. On subsequent restarts, the backend auto-unseals using the stored key
+   - Issues a Transit-only runtime token, stores it and the unseal key in `vault-secrets.json`, and revokes the root token
+3. On subsequent restarts, the backend auto-unseals using the stored key and renews its runtime token. For tasks that need root, see [Vault operations](runbooks/vault-operations.md#root-token-for-the-bundled-vault).
 
 No manual Vault configuration is required. The bundled Vault uses file storage with a persistent Docker volume (`vault-data`).
 

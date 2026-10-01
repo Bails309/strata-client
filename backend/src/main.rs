@@ -68,12 +68,15 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .or_else(|| persisted.as_ref().and_then(|c| c.database_ca_cert.clone()));
 
-    let vault = resolve_vault_config(&persisted);
+    let mut vault = resolve_vault_config(&persisted);
 
     // ── Connect to database ──
     tracing::info!("Connecting to database …");
     let db = Database::connect(&db_url, db_ssl_mode.as_deref(), db_ca_cert.as_deref()).await?;
     db.migrate().await?;
+    let db = db
+        .into_runtime(&db_url, db_ssl_mode.as_deref(), db_ca_cert.as_deref())
+        .await?;
     tracing::info!("Database connected and migrations applied");
 
     // ── Load revoked tokens from the database to survive restarts ──
@@ -140,53 +143,52 @@ async fn main() -> anyhow::Result<()> {
     // unreachable after the budget, we still continue startup so the rest
     // of the app (UI, health checks) remains available — but a clear error
     // is logged.
-    if let Some(ref v) = vault {
-        if v.mode == VaultMode::Local {
-            if let Some(ref unseal_key) = v.unseal_key {
-                tracing::info!("Bundled Vault detected — checking seal status …");
-                const MAX_ATTEMPTS: u32 = 8;
-                let mut last_err: Option<String> = None;
-                for attempt in 1..=MAX_ATTEMPTS {
-                    match services::vault_provisioning::provision(
-                        &v.address,
-                        &v.transit_key,
-                        Some(unseal_key),
-                        Some(&v.token),
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            tracing::info!("Bundled Vault is ready");
-                            last_err = None;
-                            break;
-                        }
-                        Err(e) => {
-                            last_err = Some(e.to_string());
-                            if attempt < MAX_ATTEMPTS {
-                                // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s, 30s
-                                let delay_secs = std::cmp::min(2u64.pow(attempt - 1), 30);
-                                tracing::warn!(
-                                    "Vault auto-unseal attempt {}/{} failed: {} — retrying in {}s",
-                                    attempt,
-                                    MAX_ATTEMPTS,
-                                    e,
-                                    delay_secs
-                                );
-                                tokio::time::sleep(std::time::Duration::from_secs(delay_secs))
-                                    .await;
-                            }
+    if let Some(v) = vault.as_mut().filter(|v| v.mode == VaultMode::Local) {
+        if let Some(unseal_key) = v.unseal_key.clone() {
+            tracing::info!("Bundled Vault detected — checking seal status …");
+            const MAX_ATTEMPTS: u32 = 8;
+            let mut last_err: Option<String> = None;
+            for attempt in 1..=MAX_ATTEMPTS {
+                match services::vault_provisioning::provision(
+                    &v.address,
+                    &v.transit_key,
+                    Some(&unseal_key),
+                    Some(&v.token),
+                    services::vault_provisioning::save_local_credentials,
+                )
+                .await
+                {
+                    Ok(creds) => {
+                        v.token = creds.token;
+                        tracing::info!("Bundled Vault is ready");
+                        last_err = None;
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = Some(e.to_string());
+                        if attempt < MAX_ATTEMPTS {
+                            // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s, 30s
+                            let delay_secs = std::cmp::min(2u64.pow(attempt - 1), 30);
+                            tracing::warn!(
+                                "Vault auto-unseal attempt {}/{} failed: {} — retrying in {}s",
+                                attempt,
+                                MAX_ATTEMPTS,
+                                e,
+                                delay_secs
+                            );
+                            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
                         }
                     }
                 }
-                if let Some(e) = last_err {
-                    tracing::error!(
-                        "Vault auto-unseal failed after {} attempts: {} — \
-                         API calls requiring Vault will return 502 until \
-                         Vault is manually unsealed",
-                        MAX_ATTEMPTS,
-                        e
-                    );
-                }
+            }
+            if let Some(e) = last_err {
+                tracing::error!(
+                    "Vault auto-unseal failed after {} attempts: {} — \
+                     API calls requiring Vault will return 502 until \
+                     Vault is manually unsealed",
+                    MAX_ATTEMPTS,
+                    e
+                );
             }
         }
     }
@@ -328,6 +330,8 @@ async fn main() -> anyhow::Result<()> {
         services::outbound_shares::spawn_purge_worker(state.clone(), shutdown.clone()),
         // ── Spawn audit chain verifier (every 10 min, full daily) ──
         services::audit_verify::spawn_verifier(db_pool.clone(), shutdown.clone()),
+        // ── Renew the bundled Vault's runtime token (hourly) ──
+        services::vault_provisioning::spawn_token_renewal(state.clone(), shutdown.clone()),
     ];
 
     // ── Spawn SSO state pruner ──

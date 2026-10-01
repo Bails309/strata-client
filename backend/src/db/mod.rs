@@ -40,6 +40,14 @@ impl Database {
         ssl_mode: Option<&str>,
         ca_cert: Option<&str>,
     ) -> anyhow::Result<Self> {
+        Self::connect_with(Self::options(url, ssl_mode, ca_cert)?).await
+    }
+
+    fn options(
+        url: &str,
+        ssl_mode: Option<&str>,
+        ca_cert: Option<&str>,
+    ) -> anyhow::Result<PgConnectOptions> {
         let mut opts = PgConnectOptions::from_str(url)?;
 
         if let Some(mode) = ssl_mode {
@@ -51,7 +59,10 @@ impl Database {
                 opts = opts.ssl_root_cert(cert_path);
             }
         }
+        Ok(opts)
+    }
 
+    async fn connect_with(opts: PgConnectOptions) -> anyhow::Result<Self> {
         let max_conns: u32 = std::env::var("DATABASE_MAX_CONNECTIONS")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -142,6 +153,156 @@ impl Database {
         unlock_result?;
         Ok(())
     }
+
+    /// After migrating as the owner, switch to a role that can read and
+    /// write rows but cannot change the schema, drop the audit triggers, or
+    /// update, delete or truncate audit history (SEC-25).
+    ///
+    /// The role is `<owner>_runtime`. Its password is derived from the
+    /// owner's, so every replica agrees on it without storing another
+    /// secret, and its grants are refreshed on each start so new tables are
+    /// covered. Keeps the owner connection (with a warning) when the owner
+    /// cannot create roles or the URL carries no password, and when
+    /// `STRATA_DB_RUNTIME_ROLE=off`.
+    pub async fn into_runtime(
+        self,
+        url: &str,
+        ssl_mode: Option<&str>,
+        ca_cert: Option<&str>,
+    ) -> anyhow::Result<Self> {
+        if std::env::var("STRATA_DB_RUNTIME_ROLE").as_deref() == Ok("off") {
+            tracing::warn!("STRATA_DB_RUNTIME_ROLE=off: serving requests as the database owner");
+            return Ok(self);
+        }
+        let password = url::Url::parse(url)
+            .ok()
+            .and_then(|u| u.password().map(str::to_owned))
+            .and_then(|p| percent_decode(&p));
+        let Some(owner_password) = password.filter(|p| !p.is_empty()) else {
+            tracing::warn!(
+                "DATABASE_URL has no password to derive a runtime role from; \
+                 serving requests as the database owner"
+            );
+            return Ok(self);
+        };
+
+        let (owner, database, can_create): (String, String, bool) = sqlx::query_as(
+            "SELECT current_user::text, current_database()::text,
+                    (SELECT rolsuper OR rolcreaterole FROM pg_roles WHERE rolname = current_user)",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        if !can_create {
+            tracing::warn!(
+                owner = %owner,
+                "Database owner cannot create roles; serving requests as the owner. \
+                 Grant CREATEROLE to separate runtime privileges."
+            );
+            return Ok(self);
+        }
+        let role = runtime_role_name(&owner);
+        let role_password = runtime_role_password(&owner_password, &role);
+        provision_runtime_role(&self.pool, &role, &role_password, &database).await?;
+
+        let opts = Self::options(url, ssl_mode, ca_cert)?
+            .username(&role)
+            .password(&role_password);
+        let runtime = Self::connect_with(opts).await?;
+        let user: String = sqlx::query_scalar("SELECT current_user::text")
+            .fetch_one(&runtime.pool)
+            .await?;
+        anyhow::ensure!(user == role, "runtime pool connected as {user}, not {role}");
+        self.pool.close().await;
+        tracing::info!(role = %role, "Serving requests with the least-privilege database role");
+        Ok(runtime)
+    }
+}
+
+/// Decode a URL userinfo component, as sqlx does when connecting.
+fn percent_decode(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            out.push(u8::from_str_radix(s.get(i + 1..i + 3)?, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// `<owner>_runtime`, kept within Postgres's 63-byte identifier limit.
+fn runtime_role_name(owner: &str) -> String {
+    const SUFFIX: &str = "_runtime";
+    let mut base = owner.to_string();
+    while base.len() + SUFFIX.len() > 63 {
+        base.pop();
+    }
+    format!("{base}{SUFFIX}")
+}
+
+fn runtime_role_password(owner_password: &str, role: &str) -> String {
+    use hmac::{KeyInit, Mac};
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(owner_password.as_bytes())
+        .expect("HMAC accepts any key length");
+    mac.update(b"strata-runtime-role:");
+    mac.update(role.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// Create or update the runtime role and reset its grants: rows in every
+/// table, but no DDL, no rewriting audit history, no editing migration
+/// history.
+async fn provision_runtime_role(
+    pool: &Pool<Postgres>,
+    role: &str,
+    password: &str,
+    database: &str,
+) -> anyhow::Result<()> {
+    let r = quote_ident(role);
+    let mut tx = pool.begin().await?;
+    // Replicas starting together would race on CREATE ROLE.
+    sqlx::query("SELECT pg_advisory_xact_lock(x'5354524f4c450000'::bigint)")
+        .execute(&mut *tx)
+        .await?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)")
+            .bind(role)
+            .fetch_one(&mut *tx)
+            .await?;
+    // `password` is hex, so it is safe inside the literal.
+    let attrs = format!(
+        "LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+    );
+    let statements = [
+        if exists {
+            format!("ALTER ROLE {r} WITH {attrs}")
+        } else {
+            format!("CREATE ROLE {r} WITH {attrs}")
+        },
+        format!(
+            "GRANT CONNECT, TEMPORARY ON DATABASE {} TO {r}",
+            quote_ident(database)
+        ),
+        format!("GRANT USAGE ON SCHEMA public TO {r}"),
+        format!("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {r}"),
+        format!("GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO {r}"),
+        format!("REVOKE UPDATE, DELETE, TRUNCATE ON audit_logs, audit_checkpoints FROM {r}"),
+        format!("REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON _sqlx_migrations FROM {r}"),
+    ];
+    for sql in statements {
+        sqlx::query(&sql).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Why a stored checksum that differs from the build may still be updated.
@@ -462,5 +623,98 @@ mod tests {
         assert_eq!(v["storage_type"], "azure");
         // Predates migration 081, so the engine is genuinely unknown.
         assert!(v["engine"].is_null());
+    }
+
+    #[test]
+    fn runtime_role_name_and_password_are_stable() {
+        assert_eq!(runtime_role_name("strata"), "strata_runtime");
+        assert_eq!(runtime_role_name(&"x".repeat(70)).len(), 63);
+        let a = runtime_role_password("pw", "strata_runtime");
+        assert_eq!(a, runtime_role_password("pw", "strata_runtime"));
+        assert_ne!(a, runtime_role_password("pw2", "strata_runtime"));
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(percent_decode("p%40ss%2Fw").as_deref(), Some("p@ss/w"));
+        assert_eq!(percent_decode("bad%zz"), None);
+    }
+
+    /// Needs `TEST_DATABASE_URL` for a role that can create databases and
+    /// roles. Migrates a fresh database, then checks the runtime role.
+    #[tokio::test]
+    async fn the_runtime_role_cannot_change_schema_or_audit_history() {
+        let Ok(admin_url) = std::env::var("TEST_DATABASE_URL") else {
+            eprintln!("TEST_DATABASE_URL unset, skipping");
+            return;
+        };
+        let name = format!("strata_rt_{}", uuid::Uuid::new_v4().simple());
+        let admin = Database::connect(&admin_url, None, None).await.unwrap();
+        sqlx::query(&format!("CREATE DATABASE {name}"))
+            .execute(&admin.pool)
+            .await
+            .unwrap();
+        let mut url = url::Url::parse(&admin_url).unwrap();
+        url.set_path(&name);
+        let url = url.to_string();
+
+        let owner = Database::connect(&url, None, None).await.unwrap();
+        owner.migrate().await.unwrap();
+        let db = owner.into_runtime(&url, None, None).await.unwrap();
+
+        let user: String = sqlx::query_scalar("SELECT current_user::text")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert!(user.ends_with("_runtime"), "connected as {user}");
+
+        // What the application does keeps working.
+        sqlx::query("SELECT audit_append(NULL, 'test.action', '{}'::jsonb)")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO roles (name) VALUES ('rt-test')")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE roles SET description = 'x' WHERE name = 'rt-test'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM roles WHERE name = 'rt-test'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("SELECT count(*) FROM _sqlx_migrations")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        for sql in [
+            "UPDATE audit_logs SET action_type = 'x'",
+            "DELETE FROM audit_logs",
+            "TRUNCATE audit_logs",
+            "DELETE FROM audit_checkpoints",
+            "DROP TRIGGER audit_logs_no_change ON audit_logs",
+            "ALTER TABLE audit_logs DISABLE TRIGGER USER",
+            "CREATE TABLE rt_probe (id int)",
+            "DROP TABLE roles",
+            "DELETE FROM _sqlx_migrations",
+            "CREATE ROLE rt_probe",
+        ] {
+            let err = sqlx::query(sql).execute(&db.pool).await.unwrap_err();
+            let code = err
+                .as_database_error()
+                .and_then(|e| e.code())
+                .unwrap_or_default();
+            assert_eq!(code, "42501", "{sql} was allowed or failed oddly: {err}");
+        }
+
+        // A second start finds the role and refreshes it.
+        let owner = Database::connect(&url, None, None).await.unwrap();
+        let again = owner.into_runtime(&url, None, None).await.unwrap();
+        again.pool.close().await;
+        db.pool.close().await;
+        sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
+            .execute(&admin.pool)
+            .await
+            .unwrap();
     }
 }

@@ -67,8 +67,8 @@ struct VaultDecryptData {
 /// Send a POST request to Vault with retry and exponential backoff.
 /// Retries on network errors and 5xx responses; does not retry on 4xx.
 ///
-/// W3-1 — uses the shared `http_client::default_client()` (30s overall,
-/// 5s connect) instead of a fresh `reqwest::Client` with no timeout.
+/// W3-1 — uses the shared `http_client::vault_client()` (30s overall,
+/// 5s connect, trusting `VAULT_CACERT`) instead of a fresh `reqwest::Client` with no timeout.
 /// W3-5 — the whole operation (after internal retries) is gated by the
 /// module-local `VAULT_BREAKER` so sustained Vault outages short-circuit
 /// instead of queueing callers behind a dead dependency.
@@ -94,7 +94,7 @@ async fn vault_post_with_retry_inner<T: Serialize>(
     token: &str,
     body: &T,
 ) -> Result<reqwest::Response, AppError> {
-    let client = crate::services::http_client::default_client();
+    let client = crate::services::http_client::vault_client();
     let mut last_err = None;
 
     for attempt in 0..=VAULT_MAX_RETRIES {

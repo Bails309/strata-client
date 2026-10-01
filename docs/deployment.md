@@ -439,6 +439,8 @@ The Docker Compose stack includes a HashiCorp Vault 1.19 container that is fully
 
 No manual Vault configuration is required. The bundled Vault uses file storage with a persistent Docker volume (`vault-data`).
 
+The backend reaches it at `https://vault:8200`. The `vault-tls-init` service issues Vault's certificate from a private CA on first start and exits; Vault waits for it. The CA certificate is shared with the backend through the read-only `vault-ca` volume (`VAULT_CACERT=/etc/strata/vault-ca/ca.crt`). Existing installs move from `http://` to `https://` on the next `docker compose up`: the `VAULT_ADDR` the compose file sets replaces the address saved at setup. To issue a new CA, stop the stack and remove the `vault-tls` and `vault-ca` volumes; Vault's data is untouched.
+
 #### External Mode
 
 To use your own Vault instance instead of the bundled container:

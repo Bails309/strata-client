@@ -89,6 +89,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counts are reserved atomically, the store is capped at 10 GiB, files
   expire after 24 hours, and orphans are removed at startup. Outbound
   Quick Share parsing gets the same multipart fixes.
+- **Edited migrations stop startup (SEC-22).** Startup used to overwrite
+  the stored checksum of any applied migration whose file had changed,
+  so an edited migration was accepted without its SQL ever running.
+  Startup now refuses, naming the versions. Two cases are still
+  accepted: a difference only in line endings, and the version 29 edits
+  that shipped in 0.11.1. An operator who has checked the schema and
+  taken a backup can accept named versions with
+  `STRATA_MIGRATION_REPAIR_VERSIONS=29,46`, which is logged at error
+  level with the old and new checksums.
 
 ### Build
 
@@ -105,6 +114,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer hides its errors with `|| true`.
 - **Vault provisioning uses the shared, timeout-bounded HTTP client
   (PERF-19).**
+- **Password hashing no longer runs on request workers (PERF-01).**
+  Hashes and checks run on the blocking pool, at most four at a time by
+  default (`STRATA_PASSWORD_HASH_CONCURRENCY`). A request that waits
+  more than 10 seconds for a slot is told the server is busy. The
+  unknown-username path now uses the same Argon2 parameters as real
+  hashes, so its timing matches; it used cheaper defaults before.
+- **One request for credential mappings (PERF-07).** The dashboard and
+  Credentials page fetched each profile's mappings separately. New
+  endpoint `GET /api/user/credential-mappings` returns all of the
+  caller's mappings in one query.
+- **Checkout activation no longer holds a connection across LDAP and
+  Vault (PERF-18).** Activation was serialised by an advisory lock that
+  kept a pooled connection for the whole AD reset. It now claims a
+  lease on the checkout row (migration 095), releases the connection,
+  and gives up after 2 minutes. The lease expires after 5 minutes if
+  the backend dies mid-activation.
 
 ## [2.2.0] — 2026-09-25
 

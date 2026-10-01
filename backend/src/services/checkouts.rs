@@ -226,76 +226,73 @@ pub async fn seal_managed_credential(
 
 // ── Activate a checkout: rotate password, push to AD, seal to Vault ────
 
+/// Upper bound on one activation, LDAP and Vault included.
+const ACTIVATION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+/// Longer than [`ACTIVATION_DEADLINE`], so a live activation never loses its lease.
+const ACTIVATION_LEASE_SECS: f64 = 300.0;
+
 pub async fn activate_checkout(
     pool: &Pool<Postgres>,
     vault_cfg: &VaultConfig,
     checkout_id: Uuid,
 ) -> Result<(), AppError> {
-    // W2-9 — race-free activation, **without holding a DB lock across LDAP/Vault**.
-    //
-    // Original implementation took a row-level `SELECT … FOR UPDATE` and held
-    // the transaction open for the entire LDAP modify + Vault wrap. A slow
-    // AD response (seconds is normal for replication-lagged DCs) blocked
-    // *every* other approver looking at the same row, and burned a Postgres
-    // backend connection for the duration. Worse, if the request task got
-    // dropped (client disconnect, server restart), the row stayed locked
-    // until the txn timed out.
-    //
-    // New flow:
-    //   1. Take a session-scoped Postgres advisory lock keyed on the
-    //      checkout id. Only one activator per checkout can pass.
-    //   2. Read + idempotency check inside a short tx, commit immediately.
-    //   3. Do LDAP + Vault with no DB lock held at all.
-    //   4. Open a fresh tx for the final UPDATEs and commit.
-    //   5. Release the advisory lock on the same connection.
-    //
-    // The advisory lock substitutes for the row lock as the
-    // mutual-exclusion primitive; readers/writers of other rows are
-    // never blocked, and crashing the task drops the connection and
-    // releases the lock automatically.
-    let mut conn = pool.acquire().await.map_err(AppError::Database)?;
-    let uuid_bytes = checkout_id.as_u128();
-    let lock_key_hi = (uuid_bytes >> 64) as i64 as i32;
-    let lock_key_lo = uuid_bytes as i64 as i32;
-    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1, $2)")
-        .bind(lock_key_hi)
-        .bind(lock_key_lo)
-        .fetch_one(&mut *conn)
-        .await
-        .map_err(AppError::Database)?;
-    if !acquired {
-        return Err(AppError::Validation(
-            "Another activation for this checkout is already in progress".into(),
-        ));
+    // One activator per checkout, enforced by a lease on the row rather than
+    // a session lock, so no pooled connection is held across LDAP and Vault
+    // (PERF-18). A crashed activator's lease simply expires.
+    let claimed: Option<Uuid> = sqlx::query_scalar(
+        "UPDATE password_checkout_requests
+         SET activation_lease_until = now() + make_interval(secs => $2)
+         WHERE id = $1
+           AND (activation_lease_until IS NULL OR activation_lease_until < now())
+         RETURNING id",
+    )
+    .bind(checkout_id)
+    .bind(ACTIVATION_LEASE_SECS)
+    .fetch_optional(pool)
+    .await?;
+    if claimed.is_none() {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM password_checkout_requests WHERE id = $1)",
+        )
+        .bind(checkout_id)
+        .fetch_one(pool)
+        .await?;
+        return Err(if exists {
+            AppError::Validation("Another activation for this checkout is already in progress".into())
+        } else {
+            AppError::NotFound("Checkout request not found".into())
+        });
     }
 
-    // RAII helper: always release the lock on the same connection, even
-    // on early return / error. We use a scope guard pattern by wrapping
-    // the rest of the work in a closure-equivalent and matching its
-    // result before returning.
-    let result: Result<(), AppError> =
-        activate_checkout_inner(&mut conn, pool, vault_cfg, checkout_id).await;
+    let result = tokio::time::timeout(
+        ACTIVATION_DEADLINE,
+        activate_checkout_inner(pool, vault_cfg, checkout_id),
+    )
+    .await
+    .unwrap_or_else(|_| Err(AppError::Internal("Checkout activation timed out".into())));
 
-    let _ = sqlx::query("SELECT pg_advisory_unlock($1, $2)")
-        .bind(lock_key_hi)
-        .bind(lock_key_lo)
-        .execute(&mut *conn)
-        .await;
+    if let Err(e) =
+        sqlx::query("UPDATE password_checkout_requests SET activation_lease_until = NULL WHERE id = $1")
+            .bind(checkout_id)
+            .execute(pool)
+            .await
+    {
+        tracing::warn!("could not release the activation lease on checkout {checkout_id}: {e}");
+    }
 
     result
 }
 
 async fn activate_checkout_inner(
-    conn: &mut sqlx::pool::PoolConnection<Postgres>,
     pool: &Pool<Postgres>,
     vault_cfg: &VaultConfig,
     checkout_id: Uuid,
 ) -> Result<(), AppError> {
-    // ── Phase 1: read + idempotency (short tx, no IO) ──────────────────
+    // ── Phase 1: read + idempotency (no IO) ────────────────────────────
     let req: CheckoutRequest =
         sqlx::query_as("SELECT * FROM password_checkout_requests WHERE id = $1")
             .bind(checkout_id)
-            .fetch_optional(&mut **conn)
+            .fetch_optional(pool)
             .await?
             .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
 

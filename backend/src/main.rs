@@ -40,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
     // emit `error!`-level lines so operators see them in production logs.
     log_security_config_warnings();
     services::client_ip::init_from_env().map_err(anyhow::Error::msg)?;
+    tokio::spawn(services::password::warm_up());
 
     // ── Resolve configuration from environment + persisted config ──
     let config_path = AppConfig::config_path();

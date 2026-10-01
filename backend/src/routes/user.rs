@@ -2381,6 +2381,15 @@ pub async fn get_profile_mappings(
     Ok(Json(rows))
 }
 
+/// `GET /api/user/credential-mappings` — all of the caller's mappings at once.
+pub async fn list_my_credential_mappings(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<Vec<cp_svc::UserMappingRow>>, AppError> {
+    let db = require_running(&state).await?;
+    Ok(Json(cp_svc::list_mappings_for_user(&db.pool, user.id).await?))
+}
+
 pub async fn set_credential_mapping(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,

@@ -120,41 +120,14 @@ impl Database {
 
         let migrator = sqlx::migrate!("./migrations");
 
-        // ── Checksum auto-repair ────────────────────────────────────
-        // If a migration file was modified after it was applied (e.g. a
-        // comment change, whitespace fix, or idempotent content update),
-        // sqlx will refuse to run *any* subsequent migrations.  Repair
-        // the stored checksum so the migrator proceeds normally.
-        for migration in migrator.iter() {
-            let version = migration.version;
-            let new_checksum = &migration.checksum;
-
-            let row: Option<(Vec<u8>,)> =
-                sqlx::query_as("SELECT checksum FROM _sqlx_migrations WHERE version = $1")
-                    .bind(version)
-                    .fetch_optional(&mut *conn)
-                    .await
-                    .unwrap_or(None);
-
-            if let Some((old_checksum,)) = row {
-                if old_checksum != new_checksum.as_ref() {
-                    tracing::warn!(
-                        "Migration {version} checksum mismatch — repairing stored checksum"
-                    );
-                    sqlx::query("UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2")
-                        .bind(new_checksum.as_ref())
-                        .bind(version)
-                        .execute(&mut *conn)
-                        .await?;
-                }
-            }
-        }
-
         // sqlx::migrate!().run() requires a Pool, but we hold the lock on
         // `conn`.  The lock prevents other instances from running migrations
         // concurrently.  The migrator may use any pool connection for DDL,
         // which is safe because only one process reaches this point.
-        let result = migrator.run(&self.pool).await;
+        let result = match verify_applied_checksums(&mut conn, &migrator).await {
+            Ok(()) => migrator.run(&self.pool).await.map_err(anyhow::Error::from),
+            Err(err) => Err(err),
+        };
 
         // Always release the lock, even if migrations failed
         let unlock_result = sqlx::query("SELECT pg_advisory_unlock($1)")
@@ -169,6 +142,129 @@ impl Database {
         unlock_result?;
         Ok(())
     }
+}
+
+/// Why a stored checksum that differs from the build may still be updated.
+#[derive(Debug, PartialEq, Eq)]
+enum ChecksumRepair {
+    /// Same SQL, checked out with different line endings.
+    LineEndings,
+    /// A historical edit listed in [`KNOWN_EDITS`].
+    KnownEdit,
+    /// Named in `STRATA_MIGRATION_REPAIR_VERSIONS`.
+    Operator,
+}
+
+/// Checksums of migration contents that shipped in a release and were later
+/// changed, in both line-ending forms. Version 29 was briefly reused by
+/// `029_case_insensitive_email.sql` (0.11.1) before it moved to 030.
+const KNOWN_EDITS: &[(i64, &str)] = &[
+    (29, "c277f20fe638aa15e2e6de56b64f1f365b7825f9b04385fe89349ca1c3647f0f7d5ef85c7bd39fbf24eb1ec808f3fe49"),
+    (29, "e8e5e1d79ea2323f8a900fe3aff85022f7ac2bacd6e0df4575773f65433934ccfd0e47b71771a86c14c294fdf7ae5a60"),
+    (29, "8c21a00a6e8cf61e936cef6c0a81070c513fe53c622a4e71383ffd3fb69d02e322f09d8a7ae06372733f21a9603805e1"),
+    (29, "3b762114628b6f98427c8fccbe38c611cc9721fea5e85a1e754328212e355df24599bbd796a743402be7b042a0f9a9e2"),
+];
+
+/// Versions the operator has explicitly allowed to be re-checksummed.
+fn operator_repair_versions() -> Vec<i64> {
+    std::env::var("STRATA_MIGRATION_REPAIR_VERSIONS")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|v| v.trim().parse().ok())
+        .collect()
+}
+
+fn checksum_repair(
+    version: i64,
+    sql: &str,
+    stored: &[u8],
+    operator_versions: &[i64],
+) -> Option<ChecksumRepair> {
+    use sha2::{Digest, Sha384};
+    let lf = sql.replace("\r\n", "\n");
+    let crlf = lf.replace('\n', "\r\n");
+    if [lf, crlf]
+        .iter()
+        .any(|variant| Sha384::digest(variant.as_bytes())[..] == *stored)
+    {
+        return Some(ChecksumRepair::LineEndings);
+    }
+    let stored_hex = hex::encode(stored);
+    if KNOWN_EDITS
+        .iter()
+        .any(|(v, sum)| *v == version && *sum == stored_hex)
+    {
+        return Some(ChecksumRepair::KnownEdit);
+    }
+    operator_versions
+        .contains(&version)
+        .then_some(ChecksumRepair::Operator)
+}
+
+/// Refuse to run when an applied migration no longer matches its source,
+/// unless [`checksum_repair`] accepts the difference (SEC-22).
+async fn verify_applied_checksums(
+    conn: &mut sqlx::PgConnection,
+    migrator: &sqlx::migrate::Migrator,
+) -> anyhow::Result<()> {
+    let table_exists: bool =
+        sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations') IS NOT NULL")
+            .fetch_one(&mut *conn)
+            .await?;
+    if !table_exists {
+        return Ok(());
+    }
+    let operator_versions = operator_repair_versions();
+    let mut refused = Vec::new();
+    for migration in migrator.iter() {
+        let version = migration.version;
+        let new_checksum = migration.checksum.as_ref();
+        let stored: Option<Vec<u8>> =
+            sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = $1")
+                .bind(version)
+                .fetch_optional(&mut *conn)
+                .await?;
+        let Some(stored) = stored else { continue };
+        if stored == new_checksum {
+            continue;
+        }
+        match checksum_repair(version, &migration.sql, &stored, &operator_versions) {
+            Some(ChecksumRepair::LineEndings) => tracing::info!(
+                version,
+                "migration differs only in line endings; updating its checksum"
+            ),
+            Some(ChecksumRepair::KnownEdit) => tracing::warn!(
+                version,
+                "migration matches a reviewed historical edit; updating its checksum"
+            ),
+            Some(ChecksumRepair::Operator) => tracing::error!(
+                version,
+                old_checksum = %hex::encode(&stored),
+                new_checksum = %hex::encode(new_checksum),
+                "migration checksum overwritten at the operator's request \
+                 (STRATA_MIGRATION_REPAIR_VERSIONS)"
+            ),
+            None => {
+                refused.push(version);
+                continue;
+            }
+        }
+        sqlx::query("UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2")
+            .bind(new_checksum)
+            .bind(version)
+            .execute(&mut *conn)
+            .await?;
+    }
+    if !refused.is_empty() {
+        anyhow::bail!(
+            "applied migration(s) {refused:?} no longer match the SQL in this build. \
+             Applied migrations must not be edited: restore the original file and put \
+             the change in a new migration. If you have verified the schema and taken \
+             a backup, set STRATA_MIGRATION_REPAIR_VERSIONS to those versions to \
+             accept the new checksums."
+        );
+    }
+    Ok(())
 }
 
 // ── Models ──────────────────────────────────────────────────────────
@@ -198,7 +294,56 @@ pub struct Recording {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha384};
     use sqlx::postgres::PgSslMode;
+
+    fn sum(sql: &str) -> Vec<u8> {
+        Sha384::digest(sql.as_bytes()).to_vec()
+    }
+
+    #[test]
+    fn an_edited_migration_is_not_silently_accepted() {
+        let stored = sum("CREATE TABLE a (id int);\n");
+        assert_eq!(
+            checksum_repair(90, "CREATE TABLE a (id bigint);\n", &stored, &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn a_line_ending_difference_is_not_an_edit() {
+        let sql = "CREATE TABLE a (\n  id int\n);\n";
+        let crlf = sql.replace('\n', "\r\n");
+        assert_eq!(
+            checksum_repair(90, sql, &sum(&crlf), &[]),
+            Some(ChecksumRepair::LineEndings)
+        );
+        assert_eq!(
+            checksum_repair(90, &crlf, &sum(sql), &[]),
+            Some(ChecksumRepair::LineEndings)
+        );
+    }
+
+    #[test]
+    fn a_reviewed_historical_edit_is_accepted_only_for_its_version() {
+        let (version, hex_sum) = KNOWN_EDITS[0];
+        let stored = hex::decode(hex_sum).unwrap();
+        assert_eq!(
+            checksum_repair(version, "anything", &stored, &[]),
+            Some(ChecksumRepair::KnownEdit)
+        );
+        assert_eq!(checksum_repair(version + 1, "anything", &stored, &[]), None);
+    }
+
+    #[test]
+    fn an_operator_can_accept_a_named_version() {
+        let stored = sum("old");
+        assert_eq!(
+            checksum_repair(90, "new", &stored, &[90]),
+            Some(ChecksumRepair::Operator)
+        );
+        assert_eq!(checksum_repair(91, "new", &stored, &[90]), None);
+    }
 
     #[test]
     fn parse_ssl_mode_disable() {

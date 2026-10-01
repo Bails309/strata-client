@@ -554,6 +554,34 @@ pub async fn list_mappings(pool: &PgPool, profile_id: Uuid) -> Result<Vec<Mappin
     Ok(rows)
 }
 
+#[derive(Serialize, sqlx::FromRow)]
+pub struct UserMappingRow {
+    pub profile_id: Uuid,
+    pub connection_id: Uuid,
+    pub connection_name: String,
+    pub protocol: String,
+}
+
+/// Every mapping on every profile `user_id` owns, in one query.
+pub async fn list_mappings_for_user(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Vec<UserMappingRow>, AppError> {
+    let rows = sqlx::query_as(
+        "SELECT cm.credential_id AS profile_id, cm.connection_id,
+                c.name AS connection_name, c.protocol
+         FROM credential_mappings cm
+         JOIN credential_profiles cp ON cp.id = cm.credential_id
+         JOIN connections c ON c.id = cm.connection_id
+         WHERE cp.user_id = $1
+         ORDER BY c.name",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Does the user have access to `connection_id` via their role (folders or
 /// per-connection grants) OR via `can_access_all_connections`?
 pub async fn user_has_connection_access(

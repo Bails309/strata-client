@@ -1854,6 +1854,24 @@ as a credential source by the tunnel.
 
 **Response** `204 No Content`
 
+#### `GET /api/user/credential-mappings`
+
+Every connection mapping on every credential profile the caller owns,
+in one query. Use this instead of fetching each profile's mappings.
+
+**Response** `200 OK`
+
+```json
+[
+  {
+    "profile_id": "uuid",
+    "connection_id": "uuid",
+    "connection_name": "Server Alpha",
+    "protocol": "rdp"
+  }
+]
+```
+
 ### `GET /api/recordings/:filename`
 
 Download a session recording file.

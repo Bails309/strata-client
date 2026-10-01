@@ -149,6 +149,59 @@ pub async fn rate_limit_middleware(
     next.run(req).await
 }
 
+/// Longest a request body may go without sending anything.
+pub const BODY_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Longest a request with a body may take to be answered.
+pub const TRANSFER_DEADLINE: Duration = Duration::from_secs(30 * 60);
+
+/// Axum middleware: a request without a body must be answered within
+/// the given timeout (slow-loris guard). A request with one is answered
+/// only after the internal node has read it, so it instead gets
+/// [`TRANSFER_DEADLINE`], and its body fails if it stalls for
+/// [`BODY_IDLE_TIMEOUT`]. Either expiry is a `408`.
+pub async fn request_deadline_middleware(
+    axum::extract::State(timeout): axum::extract::State<Duration>,
+    req: axum::extract::Request,
+    next: Next,
+) -> Response {
+    use http_body::Body as _;
+
+    let (deadline, req) = if req.body().is_end_stream() {
+        (timeout, req)
+    } else {
+        let (parts, body) = req.into_parts();
+        (
+            TRANSFER_DEADLINE,
+            axum::extract::Request::from_parts(parts, idle_limited(body)),
+        )
+    };
+    match tokio::time::timeout(deadline, next.run(req)).await {
+        Ok(resp) => resp,
+        Err(_) => (StatusCode::REQUEST_TIMEOUT, "request timed out").into_response(),
+    }
+}
+
+fn idle_limited(body: axum::body::Body) -> axum::body::Body {
+    use futures_util::StreamExt;
+
+    let chunks = http_body_util::BodyDataStream::new(body);
+    axum::body::Body::from_stream(futures_util::stream::unfold(
+        chunks,
+        |mut chunks| async move {
+            let item = match tokio::time::timeout(BODY_IDLE_TIMEOUT, chunks.next()).await {
+                Ok(None) => return None,
+                Ok(Some(item)) => item.map_err(std::io::Error::other),
+                Err(_) => Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "request body idle",
+                )),
+            };
+            Some((item, chunks))
+        },
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,6 +258,83 @@ mod tests {
         let p = ip(9, 9, 9, 9);
         for _ in 0..10_000 {
             assert!(l.check(p));
+        }
+    }
+
+    mod deadlines {
+        use super::super::*;
+        use axum::body::Body;
+        use axum::routing::{get, post};
+        use bytes::Bytes;
+        use futures_util::StreamExt;
+        use tower::ServiceExt;
+
+        fn app() -> axum::Router {
+            axum::Router::new()
+                .route(
+                    "/slow",
+                    get(|| async {
+                        tokio::time::sleep(Duration::from_secs(20)).await;
+                        "late"
+                    }),
+                )
+                .route(
+                    "/upload",
+                    post(|body: Body| async move {
+                        match axum::body::to_bytes(body, usize::MAX).await {
+                            Ok(b) => (StatusCode::OK, b.len().to_string()),
+                            Err(_) => (StatusCode::BAD_REQUEST, String::new()),
+                        }
+                    }),
+                )
+                .layer(axum::middleware::from_fn_with_state(
+                    Duration::from_secs(15),
+                    request_deadline_middleware,
+                ))
+        }
+
+        async fn send(method: &str, uri: &str, body: Body) -> (StatusCode, String) {
+            let req = axum::http::Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(body)
+                .unwrap();
+            let resp = app().oneshot(req).await.unwrap();
+            let status = resp.status();
+            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            (status, String::from_utf8(bytes.to_vec()).unwrap())
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn a_request_without_a_body_keeps_the_short_timeout() {
+            let (status, _) = send("GET", "/slow", Body::empty()).await;
+            assert_eq!(status, StatusCode::REQUEST_TIMEOUT);
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn an_upload_that_keeps_moving_outlasts_the_short_timeout() {
+            // Five chunks ten seconds apart: 50 s in all.
+            let chunks = futures_util::stream::unfold(0, |i| async move {
+                if i == 5 {
+                    return None;
+                }
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                Some((Ok::<_, std::io::Error>(Bytes::from_static(b"x")), i + 1))
+            });
+            let (status, body) = send("POST", "/upload", Body::from_stream(chunks)).await;
+            assert_eq!((status, body.as_str()), (StatusCode::OK, "5"));
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn a_stalled_upload_fails_after_the_idle_timeout() {
+            let chunks = futures_util::stream::once(async {
+                Ok::<_, std::io::Error>(Bytes::from_static(b"x"))
+            })
+            .chain(futures_util::stream::pending());
+            let (status, _) = send("POST", "/upload", Body::from_stream(chunks)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
         }
     }
 }

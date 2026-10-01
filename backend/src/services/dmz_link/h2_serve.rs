@@ -9,51 +9,71 @@
 //! spawns one task per stream to call the handler.
 //!
 //! The handler abstraction is intentionally narrower than `tower::Service`
-//! so the link adapter can be tested in isolation; the real axum router
-//! adapter lands in a follow-up PR (Phase 1f).
+//! so the link adapter can be tested in isolation; production uses
+//! [`super::RouterHandler`].
 //!
-//! Resource limits enforced here:
+//! Bodies stream in both directions (PERF-02); nothing buffers a whole
+//! request or response. Resource limits enforced here:
 //!
-//! * Request bodies are buffered up to [`MAX_REQUEST_BODY_BYTES`]
-//!   (8 MiB). Anything larger gets `413 Payload Too Large` and the
-//!   connection stays open — a single oversized request must not kill
-//!   the whole link.
-//! * Per-connection inbound concurrency is bounded by h2's flow
-//!   control + `MAX_CONCURRENT_STREAMS` (set on the handshake
-//!   builder).
+//! * Unread request body is bounded by h2 flow control: at most
+//!   [`STREAM_WINDOW`] per stream and [`CONNECTION_WINDOW`] across the
+//!   link. Window is released only as the handler consumes the body, so
+//!   a slow consumer slows the sender instead of growing memory.
+//! * Request bodies over [`MAX_REQUEST_BODY_BYTES`] are refused: with
+//!   `413` up front when `Content-Length` declares it, otherwise by
+//!   failing the body and resetting the stream as soon as the limit is
+//!   crossed. Routes apply their own, smaller limits; the handler sees
+//!   the request head first, so authentication runs before any body is
+//!   read and an early response resets the stream instead of draining it.
+//! * Response bodies are sent only as the peer grants window.
+//! * A body that makes no progress for [`BODY_IDLE_TIMEOUT`], or a stream
+//!   open longer than [`STREAM_DEADLINE`], is reset.
+//! * Per-connection concurrency is bounded by `MAX_CONCURRENT_STREAMS`.
+//! * Request trailers are not passed to the handler; response trailers
+//!   are forwarded.
 
+use std::future::poll_fn;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
+use axum::body::Body;
 use bytes::Bytes;
 use h2::server::SendResponse;
-use h2::RecvStream;
+use h2::{RecvStream, SendStream};
 use http::{Request, Response, StatusCode};
+use http_body_util::BodyExt;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 
 use super::upgrade_handler::{is_websocket_extended_connect, UpgradeHandler};
 
-/// Maximum size of an inbound request body the multiplexer will buffer
-/// before invoking the handler. Anything larger is rejected with 413.
-pub const MAX_REQUEST_BODY_BYTES: usize = 8 * 1024 * 1024;
+/// Largest request body the link carries. Above the biggest route limit
+/// (500 MiB uploads) with room for multipart overhead.
+pub const MAX_REQUEST_BODY_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Bound on `SETTINGS_MAX_CONCURRENT_STREAMS`. Keeps a single misbehaving
 /// DMZ from opening unbounded h2 streams against an internal node.
 pub const MAX_CONCURRENT_STREAMS: u32 = 256;
 
-/// Handler trait for inbound h2 requests.
-///
-/// Implementations receive the request with its body fully buffered
-/// into [`Bytes`] (subject to [`MAX_REQUEST_BODY_BYTES`]) and must
-/// return a fully-buffered response. Streaming bodies are out of scope
-/// for the link multiplexer — the rustguac-style guacd traffic that
-/// motivated the link is multiplexed via WebSockets at the application
-/// layer, not via streaming HTTP requests.
+/// Request body a stream may have in flight before its handler reads it.
+pub const STREAM_WINDOW: u32 = 1024 * 1024;
+
+/// Request body all streams on the link may have in flight together.
+pub const CONNECTION_WINDOW: u32 = 16 * 1024 * 1024;
+
+/// Longest a request or response body may go without progress.
+pub const BODY_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Longest a regular (non-WebSocket) stream may stay open.
+pub const STREAM_DEADLINE: Duration = Duration::from_secs(30 * 60);
+
+/// Handler trait for inbound h2 requests. The request body streams from
+/// the link as the handler reads it; the response body is streamed back.
 #[async_trait]
 pub trait RequestHandler: Send + Sync + 'static {
     /// Handle a single inbound request. Must not panic.
-    async fn handle(&self, req: Request<Bytes>) -> Response<Bytes>;
+    async fn handle(&self, req: Request<Body>) -> Response<Body>;
 }
 
 /// Stub handler that rejects every request with 503 Service Unavailable.
@@ -67,12 +87,12 @@ pub struct RejectHandler;
 
 #[async_trait]
 impl RequestHandler for RejectHandler {
-    async fn handle(&self, _req: Request<Bytes>) -> Response<Bytes> {
+    async fn handle(&self, _req: Request<Body>) -> Response<Body> {
         Response::builder()
             .status(StatusCode::SERVICE_UNAVAILABLE)
             .header("x-strata-link", "no-handler")
-            .body(Bytes::from_static(
-                b"DMZ link reached the internal node but no request handler is registered",
+            .body(Body::from(
+                "DMZ link reached the internal node but no request handler is registered",
             ))
             .expect("static response")
     }
@@ -103,7 +123,10 @@ where
     R: FnOnce() + Send + 'static,
 {
     let mut builder = h2::server::Builder::new();
-    builder.max_concurrent_streams(MAX_CONCURRENT_STREAMS);
+    builder
+        .max_concurrent_streams(MAX_CONCURRENT_STREAMS)
+        .initial_window_size(STREAM_WINDOW)
+        .initial_connection_window_size(CONNECTION_WINDOW);
     // RFC 8441 Extended CONNECT — required so the DMZ side can
     // multiplex WebSocket upgrades over the same h2 link as REST
     // traffic. Without this, the peer is told `:protocol` is
@@ -183,17 +206,12 @@ where
                     tracing::warn!("DMZ link h2 upgrade stream errored: {}", err_str);
                 }
             } else {
-                // Cap regular request handling so a stalled handler
-                // (slow loris reading body bytes one at a time, dead
-                // upstream that never sends EOF, etc.) cannot pin a
-                // stream slot indefinitely against the
-                // MAX_CONCURRENT_STREAMS budget. 120s is comfortably
-                // above the slowest legitimate REST call this link
-                // carries, while still well under the public
-                // gateway's idle timeout.
-                const PER_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+                // Bodies have their own idle deadline; this bounds how
+                // long one stream can hold a slot against
+                // MAX_CONCURRENT_STREAMS. Dropping the stream on expiry
+                // resets it.
                 match tokio::time::timeout(
-                    PER_STREAM_TIMEOUT,
+                    STREAM_DEADLINE,
                     serve_one_stream(request, respond, handler),
                 )
                 .await
@@ -205,7 +223,7 @@ where
                     }
                     Err(_) => {
                         tracing::warn!(
-                            timeout_secs = PER_STREAM_TIMEOUT.as_secs(),
+                            timeout_secs = STREAM_DEADLINE.as_secs(),
                             "DMZ link h2 stream timed out; resetting"
                         );
                     }
@@ -271,32 +289,14 @@ async fn serve_one_stream(
     mut respond: SendResponse<Bytes>,
     handler: Arc<dyn RequestHandler>,
 ) -> anyhow::Result<()> {
-    let (parts, mut body) = request.into_parts();
-
-    // Buffer the request body up to MAX_REQUEST_BODY_BYTES. Anything
-    // larger -> 413 and we drain the body so the stream closes cleanly.
-    let mut buf = Vec::new();
-    let mut oversized = false;
-    while let Some(chunk) = body.data().await {
-        let chunk = chunk.map_err(|e| anyhow::anyhow!("h2 body read: {e}"))?;
-        // Release flow-control window for whatever the peer sent so
-        // h2 keeps delivering frames (or, in the oversized case, so
-        // it drains and closes promptly).
-        let len = chunk.len();
-        let _ = body.flow_control().release_capacity(len);
-
-        if oversized {
-            continue;
-        }
-        if buf.len().saturating_add(len) > MAX_REQUEST_BODY_BYTES {
-            oversized = true;
-            buf.clear();
-            continue;
-        }
-        buf.extend_from_slice(&chunk);
-    }
-
-    if oversized {
+    let declared = request
+        .headers()
+        .get(http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok());
+    if declared.is_some_and(|n| n > MAX_REQUEST_BODY_BYTES) {
+        // Returning drops the body unread, which resets the stream so
+        // the peer stops sending.
         let resp = Response::builder()
             .status(StatusCode::PAYLOAD_TOO_LARGE)
             .body(())
@@ -304,24 +304,110 @@ async fn serve_one_stream(
         let mut send = respond
             .send_response(resp, false)
             .map_err(|e| anyhow::anyhow!("h2 send 413: {e}"))?;
-        let body = Bytes::from_static(b"request body exceeds link multiplexer limit");
-        send.send_data(body, true)
+        send.send_data(Bytes::from_static(b"request body exceeds link limit"), true)
             .map_err(|e| anyhow::anyhow!("h2 send 413 body: {e}"))?;
         return Ok(());
     }
 
-    let req = Request::from_parts(parts, Bytes::from(buf));
+    let (parts, recv) = request.into_parts();
+    let req = Request::from_parts(parts, request_body(recv));
     let response = handler.handle(req).await;
-    let (parts, body) = response.into_parts();
-    let head = Response::from_parts(parts, ());
+    send_response(respond, response).await
+}
 
-    let end_of_stream_on_headers = body.is_empty();
+/// The request body as the handler sees it. Window is released for each
+/// chunk as the handler takes it; going over [`MAX_REQUEST_BODY_BYTES`]
+/// or stalling for [`BODY_IDLE_TIMEOUT`] fails the body and resets the
+/// stream.
+fn request_body(recv: RecvStream) -> Body {
+    let chunks = futures_util::stream::try_unfold((recv, 0u64), |(mut recv, total)| async move {
+        let next = tokio::time::timeout(BODY_IDLE_TIMEOUT, recv.data())
+            .await
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "request body idle"))?;
+        let Some(chunk) = next else {
+            return Ok(None);
+        };
+        let chunk = chunk.map_err(std::io::Error::other)?;
+        let total = total + chunk.len() as u64;
+        if total > MAX_REQUEST_BODY_BYTES {
+            return Err(std::io::Error::other("request body exceeds link limit"));
+        }
+        let _ = recv.flow_control().release_capacity(chunk.len());
+        Ok(Some((chunk, (recv, total))))
+    });
+    Body::from_stream(chunks)
+}
+
+/// Send `response`, streaming its body as the peer grants window.
+async fn send_response(
+    mut respond: SendResponse<Bytes>,
+    response: Response<Body>,
+) -> anyhow::Result<()> {
+    use http_body::Body as _;
+
+    let (parts, mut body) = response.into_parts();
+    let head = Response::from_parts(parts, ());
+    if body.is_end_stream() {
+        respond
+            .send_response(head, true)
+            .map_err(|e| anyhow::anyhow!("h2 send response: {e}"))?;
+        return Ok(());
+    }
     let mut send = respond
-        .send_response(head, end_of_stream_on_headers)
+        .send_response(head, false)
         .map_err(|e| anyhow::anyhow!("h2 send response: {e}"))?;
-    if !end_of_stream_on_headers {
-        send.send_data(body, true)
-            .map_err(|e| anyhow::anyhow!("h2 send body: {e}"))?;
+
+    loop {
+        let frame = match tokio::time::timeout(BODY_IDLE_TIMEOUT, body.frame()).await {
+            Err(_) => {
+                send.send_reset(h2::Reason::CANCEL);
+                anyhow::bail!("response body idle");
+            }
+            Ok(None) => {
+                send.send_data(Bytes::new(), true)
+                    .map_err(|e| anyhow::anyhow!("h2 send end of body: {e}"))?;
+                return Ok(());
+            }
+            Ok(Some(Err(e))) => {
+                send.send_reset(h2::Reason::INTERNAL_ERROR);
+                anyhow::bail!("response body: {e}");
+            }
+            Ok(Some(Ok(frame))) => frame,
+        };
+        match frame.into_data() {
+            Ok(data) => send_data(&mut send, data).await?,
+            Err(frame) => {
+                if let Ok(trailers) = frame.into_trailers() {
+                    send.send_trailers(trailers)
+                        .map_err(|e| anyhow::anyhow!("h2 send trailers: {e}"))?;
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+/// Send `data` in pieces no larger than the window the peer has granted.
+async fn send_data(send: &mut SendStream<Bytes>, mut data: Bytes) -> anyhow::Result<()> {
+    while !data.is_empty() {
+        send.reserve_capacity(data.len());
+        let granted =
+            match tokio::time::timeout(BODY_IDLE_TIMEOUT, poll_fn(|cx| send.poll_capacity(cx)))
+                .await
+            {
+                Err(_) => {
+                    send.send_reset(h2::Reason::CANCEL);
+                    anyhow::bail!("peer stopped reading the response");
+                }
+                Ok(None) => anyhow::bail!("response stream closed by peer"),
+                Ok(Some(Err(e))) => anyhow::bail!("h2 capacity: {e}"),
+                Ok(Some(Ok(n))) => n,
+            };
+        let piece = data.split_to(granted.min(data.len()));
+        if !piece.is_empty() {
+            send.send_data(piece, false)
+                .map_err(|e| anyhow::anyhow!("h2 send body: {e}"))?;
+        }
     }
     Ok(())
 }
@@ -330,7 +416,6 @@ async fn serve_one_stream(
 mod tests {
     use super::*;
     use crate::services::dmz_link::upgrade_handler::RejectUpgradeHandler;
-    use std::time::Duration;
     use tokio::io::duplex;
 
     /// Stub handler that echoes the request URI + body length.
@@ -338,19 +423,101 @@ mod tests {
 
     #[async_trait]
     impl RequestHandler for EchoHandler {
-        async fn handle(&self, req: Request<Bytes>) -> Response<Bytes> {
+        async fn handle(&self, req: Request<Body>) -> Response<Body> {
+            let (parts, body) = req.into_parts();
+            let len = body.collect().await.map(|b| b.to_bytes().len());
             let body = format!(
                 "method={} path={} body_bytes={}",
-                req.method(),
-                req.uri().path(),
-                req.body().len(),
+                parts.method,
+                parts.uri.path(),
+                len.unwrap_or(usize::MAX),
             );
             Response::builder()
                 .status(StatusCode::OK)
                 .header("x-test", "echo")
-                .body(Bytes::from(body))
+                .body(Body::from(body))
                 .unwrap()
         }
+    }
+
+    /// Streams the request body straight back as the response body.
+    struct MirrorHandler;
+
+    #[async_trait]
+    impl RequestHandler for MirrorHandler {
+        async fn handle(&self, req: Request<Body>) -> Response<Body> {
+            Response::new(req.into_body())
+        }
+    }
+
+    /// Answers 401 without reading the body, as an auth layer would.
+    struct DenyHandler;
+
+    #[async_trait]
+    impl RequestHandler for DenyHandler {
+        async fn handle(&self, _req: Request<Body>) -> Response<Body> {
+            Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .body(Body::empty())
+                .unwrap()
+        }
+    }
+
+    /// 200 if the whole body could be read, 400 if reading it failed.
+    struct ReadAllHandler;
+
+    #[async_trait]
+    impl RequestHandler for ReadAllHandler {
+        async fn handle(&self, req: Request<Body>) -> Response<Body> {
+            let status = match req.into_body().collect().await {
+                Ok(_) => StatusCode::OK,
+                Err(_) => StatusCode::BAD_REQUEST,
+            };
+            Response::builder()
+                .status(status)
+                .body(Body::empty())
+                .unwrap()
+        }
+    }
+
+    fn serve(handler: impl RequestHandler) -> tokio::io::DuplexStream {
+        let (server_io, client_io) = duplex(64 * 1024);
+        tokio::spawn(serve_h2(
+            server_io,
+            Arc::new(handler),
+            Arc::new(RejectUpgradeHandler),
+            CancellationToken::new(),
+            || {},
+        ));
+        client_io
+    }
+
+    async fn connect(client_io: tokio::io::DuplexStream) -> h2::client::SendRequest<Bytes> {
+        let (h2, conn) = h2::client::handshake(client_io).await.unwrap();
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+        h2.ready().await.unwrap()
+    }
+
+    fn post(len: Option<u64>) -> http::Request<()> {
+        let mut req = http::Request::builder()
+            .method("POST")
+            .uri("https://internal/api/upload");
+        if let Some(len) = len {
+            req = req.header(http::header::CONTENT_LENGTH, len);
+        }
+        req.body(()).unwrap()
+    }
+
+    async fn read_body(mut recv: RecvStream) -> Vec<u8> {
+        let mut buf = Vec::new();
+        while let Some(chunk) = recv.data().await {
+            let chunk = chunk.unwrap();
+            let _ = recv.flow_control().release_capacity(chunk.len());
+            buf.extend_from_slice(&chunk);
+        }
+        buf
     }
 
     async fn drive_client(
@@ -456,44 +623,66 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn oversized_body_returns_413_and_link_stays_up() {
+    async fn bodies_larger_than_the_old_buffer_stream_both_ways() {
+        let mut h2 = connect(serve(MirrorHandler)).await;
+        let data: Bytes = (0..20 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+        let (resp, mut send) = h2
+            .send_request(post(Some(data.len() as u64)), false)
+            .unwrap();
+        send.send_data(data.clone(), true).unwrap();
+        let resp = resp.await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(read_body(resp.into_body()).await == data);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handler_answers_before_the_body_is_sent() {
+        let mut h2 = connect(serve(DenyHandler)).await;
+        let (resp, mut send) = h2
+            .send_request(post(Some(100 * 1024 * 1024)), false)
+            .unwrap();
+        send.send_data(Bytes::from(vec![0u8; 64 * 1024]), false)
+            .unwrap();
+        let resp = tokio::time::timeout(Duration::from_secs(5), resp)
+            .await
+            .expect("answered without the rest of the body")
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_declared_oversize_body_is_refused_up_front() {
         struct PoisonHandler;
         #[async_trait]
         impl RequestHandler for PoisonHandler {
-            async fn handle(&self, _req: Request<Bytes>) -> Response<Bytes> {
-                // Should NEVER be reached — the multiplexer must short
-                // -circuit oversized bodies before invoking the handler.
-                panic!("handler invoked for oversized body");
+            async fn handle(&self, _req: Request<Body>) -> Response<Body> {
+                panic!("handler invoked for an oversized body");
             }
         }
 
-        let (server_io, client_io) = duplex(MAX_REQUEST_BODY_BYTES + 1024 * 1024);
-        let shutdown = CancellationToken::new();
-        let server = tokio::spawn(serve_h2(
-            server_io,
-            Arc::new(PoisonHandler),
-            Arc::new(RejectUpgradeHandler),
-            shutdown.clone(),
-            || {},
-        ));
-
-        // First request: oversized → expect 413.
-        // Second request: tiny → must succeed (proves link wasn't torn down).
-        let oversized_body = Bytes::from(vec![b'x'; MAX_REQUEST_BODY_BYTES + 1]);
-        let req1 = http::Request::builder()
-            .method("POST")
-            .uri("https://internal/big")
-            .body(())
+        let mut h2 = connect(serve(PoisonHandler)).await;
+        let (resp, _send) = h2
+            .send_request(post(Some(MAX_REQUEST_BODY_BYTES + 1)), false)
             .unwrap();
+        assert_eq!(resp.await.unwrap().status(), StatusCode::PAYLOAD_TOO_LARGE);
 
-        // For the second request switch handlers via a router-style
-        // wrapper. Simpler: make PoisonHandler accept small bodies.
-        // Instead just check the first response is 413.
-        let results = drive_client(client_io, vec![(req1, oversized_body)]).await;
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].0, StatusCode::PAYLOAD_TOO_LARGE);
+        // The link survives for the next request.
+        let mut h2 = h2.ready().await.unwrap();
+        let (resp, _send) = h2
+            .send_request(post(Some(MAX_REQUEST_BODY_BYTES + 1)), false)
+            .unwrap();
+        assert_eq!(resp.await.unwrap().status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
 
-        let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn a_stalled_request_body_fails_after_the_idle_timeout() {
+        let mut h2 = connect(serve(ReadAllHandler)).await;
+        let (resp, mut send) = h2.send_request(post(None), false).unwrap();
+        send.send_data(Bytes::from_static(b"partial"), false)
+            .unwrap();
+        let resp = resp.await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        drop(send);
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -20,7 +20,7 @@
 //! | `STRATA_DMZ_EDGE_HMAC_KEY` | _required_ | Base64 HMAC-SHA-256 key the DMZ uses to sign `x-strata-edge-*` headers. Must match the active key in the internal node's `STRATA_DMZ_EDGE_HMAC_KEYS`. |
 //! | `STRATA_DMZ_CLUSTER_ID` | _required_ | Cluster id this DMZ belongs to. Internal-node handshakes that present a different cluster id are rejected. |
 //! | `STRATA_DMZ_NODE_ID` | hostname | Logical id used in metrics / logs. |
-//! | `STRATA_DMZ_PUBLIC_BODY_LIMIT_BYTES` | `8388608` (8 MiB) | Cap on inbound public request bodies. |
+//! | `STRATA_DMZ_PUBLIC_BODY_LIMIT_BYTES` | `536870912` (512 MiB) | Cap on inbound public request bodies. |
 //! | `STRATA_DMZ_PUBLIC_BODY_LIMITS_BY_IP` | _(unset)_ | Optional CIDR `=` bytes table that overrides the global cap per source IP. See [`crate::body_caps`] for format. |
 //! | `STRATA_DMZ_PUBLIC_HEADER_TIMEOUT_MS` | `15000` | Slow-loris guard: time allowed to receive request headers. |
 //! | `STRATA_DMZ_PUBLIC_RATE_RPS` | `0` (off) | Per-IP request rate cap in req/s. `0` disables. |
@@ -65,10 +65,11 @@ pub const DEFAULT_PUBLIC_BIND: &str = "0.0.0.0:8443";
 /// Default link-server listener address.
 pub const DEFAULT_LINK_BIND: &str = "0.0.0.0:9443";
 
-/// Default body cap on public requests (8 MiB). Matches the link
-/// multiplexer's `MAX_REQUEST_BODY_BYTES` so a request that the
-/// public listener accepts will fit through the link without a 413.
-pub const DEFAULT_PUBLIC_BODY_LIMIT_BYTES: usize = 8 * 1024 * 1024;
+/// Default body cap on public requests (512 MiB), the link's own
+/// ceiling. Bodies stream through to the internal node, which applies
+/// each route's own limit and authenticates before reading, so the cap
+/// no longer bounds memory.
+pub const DEFAULT_PUBLIC_BODY_LIMIT_BYTES: usize = 512 * 1024 * 1024;
 
 /// Default header-receipt timeout (slow-loris guard).
 pub const DEFAULT_PUBLIC_HEADER_TIMEOUT_MS: u64 = 15_000;

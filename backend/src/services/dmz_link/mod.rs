@@ -58,7 +58,7 @@ pub use registry::{LinkRegistry, LinkState, LinkStatus};
 #[allow(unused_imports)]
 pub use resume::{spawn_sweeper, ResumeError, ResumeRegistry};
 #[allow(unused_imports)]
-pub use router_adapter::{RouterHandler, MAX_RESPONSE_BODY_BYTES};
+pub use router_adapter::RouterHandler;
 pub use supervisor::spawn_link_supervisors;
 pub use tls::TlsLinkConnector;
 #[allow(unused_imports)]

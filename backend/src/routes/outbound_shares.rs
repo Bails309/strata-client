@@ -15,7 +15,6 @@
 //! - `POST   /api/admin/outbound-shares/:id/decide`  — approve / deny.
 //! - `DELETE /api/admin/outbound-shares/:id`         — manual purge.
 
-use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::response::Response;
@@ -96,7 +95,7 @@ pub async fn submit(
         parsed.justification.as_deref(),
         &parsed.filename,
         &parsed.content_type,
-        &parsed.plaintext,
+        &parsed.temp.0,
         &parsed.av_verdict,
         parsed.av_backend,
     )
@@ -141,7 +140,9 @@ async fn load_pool_vault_and_av(
 struct ParsedOutboundUpload {
     filename: String,
     content_type: String,
-    plaintext: Vec<u8>,
+    /// The upload on disk, removed when this is dropped.
+    temp: crate::services::file_store::TempUpload,
+    size: u64,
     session_id: Option<String>,
     connection_id: Option<Uuid>,
     justification: Option<String>,
@@ -312,17 +313,11 @@ async fn parse_outbound_multipart(
         return Err(AppError::Validation(msg));
     }
 
-    // Load plaintext from temp file. The submit() service seals it via
-    // Vault before writing to the staging directory.
-    let plaintext = tokio::fs::read(&temp_path)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to read upload temp: {e}")))?;
-    drop(temp);
-
     Ok(ParsedOutboundUpload {
         filename,
         content_type,
-        plaintext,
+        temp,
+        size,
         session_id,
         connection_id,
         justification,
@@ -344,7 +339,7 @@ pub(crate) async fn finalize_submit(
     justification: Option<&str>,
     filename: &str,
     content_type: &str,
-    plaintext: &[u8],
+    source: &std::path::Path,
     av_verdict: &crate::services::av::Verdict,
     av_backend: &'static str,
 ) -> Result<SubmitResponse, AppError> {
@@ -385,7 +380,7 @@ pub(crate) async fn finalize_submit(
             filename,
             content_type,
             justification,
-            plaintext,
+            source,
             staging_root: &staging,
             requires_approval,
             av_verdict,
@@ -426,7 +421,7 @@ pub(crate) async fn finalize_submit(
                         requester_display_name,
                         requester_username: username,
                         filename: filename.to_string(),
-                        size_bytes: plaintext.len() as i64,
+                        size_bytes: outcome.size as i64,
                         justification: justification.map(|s| s.to_string()),
                         approver_user_ids,
                     },
@@ -628,7 +623,7 @@ pub async fn ingest_via_token(
         justification,
         &parsed.filename,
         &parsed.content_type,
-        &parsed.plaintext,
+        &parsed.temp.0,
         &parsed.av_verdict,
         parsed.av_backend,
     )
@@ -643,7 +638,7 @@ pub async fn ingest_via_token(
             "session_id": session_id,
             "connection_id": connection_id,
             "filename": parsed.filename,
-            "size": parsed.plaintext.len(),
+            "size": parsed.size,
             "ip": client_ip,
         }),
     )
@@ -703,7 +698,6 @@ pub async fn download(
         user.can_manage_system,
     )
     .await?;
-    let plaintext = mat.plaintext;
 
     let filename = mat.share.filename.clone();
     let content_type = mat.share.content_type.clone();
@@ -715,8 +709,8 @@ pub async fn download(
             header::CONTENT_DISPOSITION,
             format!("attachment; filename=\"{}\"", sanitize_filename(&filename)),
         )
-        .header(header::CONTENT_LENGTH, plaintext.len())
-        .body(Body::from(plaintext))
+        .header(header::CONTENT_LENGTH, mat.length)
+        .body(mat.body)
         .map_err(|e| AppError::Internal(format!("Response build error: {e}")))?;
     Ok(response)
 }

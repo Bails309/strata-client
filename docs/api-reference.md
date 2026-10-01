@@ -3238,6 +3238,8 @@ List delegated approvers (super-admins are implicit and not enumerated here).
 
 **Public, capability-based.** The single-use download token is issued on approval / auto-release. First successful GET marks the share `downloaded` and consumes the token; subsequent attempts return `404`.
 
+The whole staged file is authenticated before the token is consumed, so a damaged blob fails with `500` and leaves the link usable. The body is then decrypted and sent chunk by chunk with a `Content-Length` of the plaintext size; the server never holds the whole file in memory.
+
 **Audit**: `outbound_share.downloaded`.
 
 ### Environment
@@ -3245,6 +3247,7 @@ List delegated approvers (super-admins are implicit and not enumerated here).
 | Variable                     | Default                       | Description                                                                               |
 | ---------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------- |
 | `STRATA_OUTBOUND_SHARES_DIR` | `/tmp/strata-outbound-shares` | Filesystem directory for sealed staging ciphertexts. Falls back to the platform temp dir. |
+| `STRATA_FILE_CRYPTO_CONCURRENCY` | One per CPU, at most 4 | Files encrypted or verified at once. A transfer that waits more than 30 seconds for a slot gets `429`. |
 
 ### Audit events
 

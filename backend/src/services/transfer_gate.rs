@@ -94,9 +94,6 @@ impl TransferGate for PolicyGate {
             .vault
             .as_ref()
             .ok_or("downloads need Vault, which is not configured")?;
-        let plaintext = tokio::fs::read(staged)
-            .await
-            .map_err(|_| "cannot read file".to_owned())?;
         let justification = format!("Downloaded from the session file browser: {name}");
         let submitted = crate::routes::outbound_shares::finalize_submit(
             &self.pool,
@@ -107,7 +104,7 @@ impl TransferGate for PolicyGate {
             Some(&justification),
             filename,
             "application/octet-stream",
-            &plaintext,
+            staged,
             &verdict,
             self.scanner.backend_tag(),
         )

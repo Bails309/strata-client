@@ -19,6 +19,7 @@ pub mod dns;
 pub mod edge_header;
 pub mod email;
 pub mod favorites;
+pub mod file_crypto;
 pub mod file_store;
 pub mod health_check;
 pub mod http_client;

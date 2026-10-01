@@ -11,8 +11,9 @@
 //!
 //! Lifecycle:
 //!
-//! 1. `submit()` — staging blob written to disk, sealed via [`vault::seal`],
-//!    sealed DEK + nonce stored in DB. A basic DLP scorer runs on the
+//! 1. `submit()` — the staged upload is encrypted chunk by chunk
+//!    ([`file_crypto`]) under a per-file key wrapped by Vault Transit,
+//!    and the wrapped key is stored in the DB. A basic DLP scorer runs on the
 //!    filename/MIME/size and records a score + reasons for audit/UI
 //!    surfacing. If the user has `outbound_share_requires_approval = false`
 //!    (admin override), status transitions to `Approved` and a one-shot
@@ -44,11 +45,13 @@
 
 use crate::config::VaultConfig;
 use crate::error::AppError;
-use crate::services::{audit, vault};
+use crate::services::{audit, file_crypto, vault};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Pool, Postgres};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock};
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 /// Maximum staged file size (mirrors inbound Quick Share).
@@ -159,6 +162,11 @@ pub struct OutboundShare {
     /// the column to be absent from the SELECT.
     #[sqlx(default)]
     pub requester_username: Option<String>,
+    /// Encrypted format of the staged blob; see migration 100. Selected
+    /// only where the blob is read.
+    #[sqlx(default)]
+    #[serde(skip_serializing)]
+    pub blob_format: i16,
 }
 
 /// Input for [`submit`]. Caller has already streamed the upload to disk.
@@ -169,7 +177,8 @@ pub struct SubmitInput<'a> {
     pub filename: &'a str,
     pub content_type: &'a str,
     pub justification: Option<&'a str>,
-    pub plaintext: &'a [u8],
+    /// The plaintext, staged on disk. Left in place for the caller to remove.
+    pub source: &'a Path,
     pub staging_root: &'a Path,
     pub requires_approval: bool,
     /// Verdict from the AV scanner that inspected the upload's temp
@@ -195,6 +204,65 @@ pub struct SubmitOutcome {
     pub dlp_reasons: Vec<String>,
     pub download_token: Option<String>,
     pub expires_at: DateTime<Utc>,
+    /// Plaintext bytes staged.
+    pub size: u64,
+}
+
+// ── Bounded file encryption (PERF-03) ───────────────────────────────────────
+
+/// How long a transfer may wait for an encryption slot before it is refused.
+const CRYPTO_QUEUE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+static CRYPTO_SLOTS: LazyLock<Arc<Semaphore>> =
+    LazyLock::new(|| Arc::new(Semaphore::new(crypto_slots())));
+
+/// Concurrent file encryptions and verifications:
+/// `STRATA_FILE_CRYPTO_CONCURRENCY`, else one per CPU up to 4.
+fn crypto_slots() -> usize {
+    std::env::var("STRATA_FILE_CRYPTO_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|n: &usize| *n > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map_or(1, |n| n.get())
+                .min(4)
+        })
+}
+
+/// Run a whole-file crypto job on the blocking pool, a bounded number at a
+/// time. The slot and the job's result belong to the task, so a cancelled
+/// request neither frees the slot early nor strands what the job produced.
+async fn run_crypto<T: Send + 'static>(
+    job: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, AppError> {
+    let permit = tokio::time::timeout(CRYPTO_QUEUE_WAIT, Arc::clone(&CRYPTO_SLOTS).acquire_owned())
+        .await
+        .map_err(|_| AppError::RateLimited("The server is busy. Please try again.".into()))?
+        .map_err(|_| AppError::Internal("file encryption unavailable".into()))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        job()
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("file encryption failed: {e}")))
+}
+
+/// A staged blob that is deleted when dropped unless [`kept`](Self::keep).
+struct StagedBlob(Option<PathBuf>);
+
+impl StagedBlob {
+    fn keep(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for StagedBlob {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 // ── Submission ────────────────────────────────────────────────────────
@@ -212,7 +280,10 @@ pub async fn submit(
     vault_cfg: &VaultConfig,
     input: SubmitInput<'_>,
 ) -> Result<SubmitOutcome, AppError> {
-    let size = input.plaintext.len() as u64;
+    let size = tokio::fs::metadata(input.source)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to read upload: {e}")))?
+        .len();
     if size == 0 {
         return Err(AppError::Validation("Empty file".into()));
     }
@@ -222,26 +293,33 @@ pub async fn submit(
         ));
     }
 
-    // Hash the plaintext before sealing so the receiver / auditor can
-    // verify integrity end-to-end. We hash on the server because the
-    // browser already trusted us with the plaintext.
-    let sha256 = sha256_hex(input.plaintext);
+    // Encrypt to the staging root under a per-file key wrapped by Vault.
+    // Ciphertext lives on disk and the wrapped key in the DB, so
+    // decrypting needs *both* file-system and DB access. The plaintext is
+    // hashed while it is read so the receiver / auditor can verify
+    // integrity end-to-end.
+    let id = Uuid::new_v4();
+    let (key, wrapped_key) = vault::new_data_key(vault_cfg).await?;
+    let storage_path = ensure_staging_path(input.staging_root, id).await?;
+    let source = input.source.to_path_buf();
+    let dst = storage_path.clone();
+    let blob = StagedBlob(Some(storage_path.clone()));
+    let (blob, sealed) = run_crypto(move || {
+        let sealed = file_crypto::encrypt_file(&source, &dst, &*key, id, MAX_FILE_SIZE);
+        (blob, sealed)
+    })
+    .await?;
+    let sealed = sealed.map_err(|e| match e.kind() {
+        std::io::ErrorKind::FileTooLarge => {
+            AppError::Validation("File exceeds maximum allowed size".into())
+        }
+        _ => AppError::Internal(format!("Failed to stage outbound blob: {e}")),
+    })?;
+    let (size, sha256) = (sealed.size, sealed.sha256);
 
     // Basic DLP heuristic — score + reasons recorded with the row.
     let (dlp_score, dlp_reasons) =
         compute_dlp_score(input.filename, input.content_type, size as i64);
-
-    // Seal the plaintext via Vault Transit (envelope encryption).
-    let sealed = vault::seal(vault_cfg, input.plaintext).await?;
-
-    // Write the sealed ciphertext to disk under the staging root. We
-    // store ciphertext on disk and the DEK in the DB so unsealing
-    // requires *both* file-system and DB access.
-    let id = Uuid::new_v4();
-    let storage_path = ensure_staging_path(input.staging_root, id).await?;
-    tokio::fs::write(&storage_path, &sealed.ciphertext)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to stage outbound blob: {e}")))?;
 
     let now = Utc::now();
     let expires_at = now + default_ttl();
@@ -272,14 +350,16 @@ pub async fn submit(
             storage_path, sealed_dek_ciphertext, sealed_dek_nonce,
             justification, dlp_score, dlp_reasons,
             status, download_token, created_at, expires_at,
-            av_scan_status, av_signature, av_scanned_at, av_scanner_backend
+            av_scan_status, av_signature, av_scanned_at, av_scanner_backend,
+            blob_format
         ) VALUES (
             $1, $2, $3, $4,
             $5, $6, $7, $8,
-            $9, $10, $11,
-            $12, $13, $14,
-            $15, $16, $17, $18,
-            $19, $20, $21, $22
+            $9, $10, NULL,
+            $11, $12, $13,
+            $14, $15, $16, $17,
+            $18, $19, $20, $21,
+            2
         )",
     )
     .bind(id)
@@ -291,8 +371,7 @@ pub async fn submit(
     .bind(size as i64)
     .bind(&sha256)
     .bind(storage_path.to_string_lossy().to_string())
-    .bind(&sealed.encrypted_dek)
-    .bind(&sealed.nonce)
+    .bind(&wrapped_key)
     .bind(input.justification)
     .bind(dlp_score)
     .bind(&reasons_json)
@@ -306,6 +385,7 @@ pub async fn submit(
     .bind(input.av_backend)
     .execute(pool)
     .await?;
+    blob.keep();
 
     let _ = audit::log(
         pool,
@@ -335,6 +415,7 @@ pub async fn submit(
         dlp_reasons,
         download_token,
         expires_at,
+        size,
     })
 }
 
@@ -471,15 +552,18 @@ pub async fn decide(
 
 // ── Download ─────────────────────────────────────────────────────────
 
-/// Result of [`consume_download_token`]: the share row plus decrypted bytes.
+/// Result of [`consume_download_token`]: the share row plus its plaintext.
 pub struct DownloadMaterial {
     pub share: OutboundShare,
-    pub plaintext: Vec<u8>,
+    /// Decrypted chunk by chunk as it is sent (format 2), or in one piece
+    /// for blobs staged before PERF-03.
+    pub body: axum::body::Body,
+    pub length: u64,
 }
 
 /// Atomically consume a one-shot download token. The row is locked, the
-/// caller is authorised, the file is decrypted, and only then is the token
-/// cleared — a refused caller or a decryption failure leaves it usable.
+/// caller is authorised, the whole file is authenticated, and only then is
+/// the token cleared — a refused caller or a damaged file leaves it usable.
 pub async fn consume_download_token(
     pool: &Pool<Postgres>,
     vault_cfg: &VaultConfig,
@@ -495,7 +579,8 @@ pub async fn consume_download_token(
                 sealed_dek_ciphertext, sealed_dek_nonce,
                 justification, dlp_score, dlp_reasons, status,
                 decided_by, decided_at, decision_reason,
-                download_token, downloaded_at, created_at, expires_at, purged_at
+                download_token, downloaded_at, created_at, expires_at, purged_at,
+                blob_format
          FROM outbound_shares
          WHERE download_token = $1
          FOR UPDATE",
@@ -516,26 +601,48 @@ pub async fn consume_download_token(
         return Err(AppError::Validation("Share has already expired".into()));
     }
 
-    let storage_path = row
-        .storage_path
-        .clone()
-        .ok_or_else(|| AppError::Internal("Share missing storage path".into()))?;
+    let storage_path = PathBuf::from(
+        row.storage_path
+            .as_deref()
+            .ok_or_else(|| AppError::Internal("Share missing storage path".into()))?,
+    );
     let sealed_dek = row
         .sealed_dek_ciphertext
-        .clone()
+        .as_deref()
         .ok_or_else(|| AppError::Internal("Share missing sealed DEK".into()))?;
-    let nonce = row
-        .sealed_dek_nonce
-        .clone()
-        .ok_or_else(|| AppError::Internal("Share missing sealed nonce".into()))?;
+    let key = vault::unwrap_data_key(vault_cfg, sealed_dek).await?;
 
-    // Read the on-disk ciphertext *before* clearing the token so a
-    // disk-read failure does not leave the row in a state where the
-    // token is gone but the requester never got the bytes.
-    let ciphertext = tokio::fs::read(&storage_path)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to read staged blob: {e}")))?;
-    let plaintext = vault::unseal(vault_cfg, &sealed_dek, &ciphertext, &nonce).await?;
+    // Everything that can fail happens *before* the token is cleared, so
+    // a failure never spends the link without delivering the file.
+    let (body, length) = if row.blob_format == 2 {
+        // Opened now: the stream keeps reading this file even if a purge
+        // unlinks it after the commit.
+        let file = tokio::fs::File::open(&storage_path)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to open staged blob: {e}")))?;
+        let length = u64::try_from(row.size)
+            .map_err(|_| AppError::Internal("Share has a negative size".into()))?;
+        let (verify_key, id) = (key.clone(), row.id);
+        run_crypto(move || file_crypto::verify_file(&storage_path, &verify_key, id, length))
+            .await?
+            .map_err(|e| AppError::Internal(format!("Staged blob failed verification: {e}")))?;
+        let stream = file_crypto::decrypt_stream(file, &key, row.id)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to read staged blob: {e}")))?;
+        (axum::body::Body::from_stream(stream), length)
+    } else {
+        let nonce = row
+            .sealed_dek_nonce
+            .as_deref()
+            .ok_or_else(|| AppError::Internal("Share missing sealed nonce".into()))?;
+        let ciphertext = tokio::fs::read(&storage_path)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to read staged blob: {e}")))?;
+        let plaintext = vault::decrypt_with_key(&key, &ciphertext, nonce)?;
+        let length = plaintext.len() as u64;
+        (axum::body::Body::from(plaintext), length)
+    };
+    drop(key);
 
     sqlx::query(
         "UPDATE outbound_shares
@@ -566,7 +673,8 @@ pub async fn consume_download_token(
 
     Ok(DownloadMaterial {
         share: row,
-        plaintext,
+        body,
+        length,
     })
 }
 
@@ -938,19 +1046,6 @@ fn mint_token() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(bytes);
-    let out = h.finalize();
-    let mut s = String::with_capacity(out.len() * 2);
-    for b in out.iter() {
-        use std::fmt::Write;
-        let _ = write!(s, "{:02x}", b);
-    }
-    s
-}
-
 async fn ensure_staging_path(root: &Path, id: Uuid) -> Result<PathBuf, AppError> {
     tokio::fs::create_dir_all(root)
         .await
@@ -1144,12 +1239,177 @@ mod tests {
         assert_eq!(a.len(), 64);
     }
 
-    #[test]
-    fn sha256_known_vector() {
-        let h = sha256_hex(b"hello");
-        assert_eq!(
-            h,
-            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
-        );
+    /// A Transit stand-in that "wraps" a key by tagging it.
+    async fn fake_vault() -> VaultConfig {
+        use axum::{routing::post, Json, Router};
+        async fn encrypt(Json(b): Json<serde_json::Value>) -> Json<serde_json::Value> {
+            let pt = b["plaintext"].as_str().unwrap_or_default();
+            Json(serde_json::json!({ "data": { "ciphertext": format!("vault:v1:{pt}") } }))
+        }
+        async fn decrypt(Json(b): Json<serde_json::Value>) -> Json<serde_json::Value> {
+            let ct = b["ciphertext"].as_str().unwrap_or_default();
+            let pt = ct.trim_start_matches("vault:v1:");
+            Json(serde_json::json!({ "data": { "plaintext": pt } }))
+        }
+        let app = Router::new()
+            .route("/v1/transit/encrypt/{key}", post(encrypt))
+            .route("/v1/transit/decrypt/{key}", post(decrypt));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        VaultConfig {
+            address: format!("http://{addr}"),
+            token: "test-token".into(),
+            transit_key: "strata-key".into(),
+            mode: crate::config::VaultMode::Local,
+            unseal_key: None,
+        }
+    }
+
+    /// Needs `TEST_DATABASE_URL` pointing at a migrated database.
+    #[tokio::test]
+    async fn shares_are_staged_encrypted_and_streamed_back() {
+        let Some(pool) = std::env::var("TEST_DATABASE_URL")
+            .ok()
+            .and_then(|url| sqlx::PgPool::connect_lazy(&url).ok())
+        else {
+            eprintln!("TEST_DATABASE_URL unset, skipping");
+            return;
+        };
+        let vault_cfg = fake_vault().await;
+        let tag = Uuid::new_v4().simple().to_string();
+        let role: Uuid = sqlx::query_scalar("INSERT INTO roles (name) VALUES ($1) RETURNING id")
+            .bind(format!("r-{tag}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let user: Uuid = sqlx::query_scalar(
+            "INSERT INTO users (username, email, role_id) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind(format!("u-{tag}"))
+        .bind(format!("{tag}@example.test"))
+        .bind(role)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let staging = dir.path().join("staging");
+        let source = dir.path().join("upload");
+        let data: Vec<u8> = (0..3 * file_crypto::CHUNK + 5)
+            .map(|i| (i % 251) as u8)
+            .collect();
+        tokio::fs::write(&source, &data).await.unwrap();
+        let verdict = crate::services::av::Verdict::Clean;
+        let submit_one = || {
+            submit(
+                &pool,
+                &vault_cfg,
+                SubmitInput {
+                    requester_user_id: user,
+                    session_id: None,
+                    connection_id: None,
+                    filename: "report.bin",
+                    content_type: "application/octet-stream",
+                    justification: None,
+                    source: &source,
+                    staging_root: &staging,
+                    requires_approval: false,
+                    av_verdict: &verdict,
+                    av_backend: "off",
+                },
+            )
+        };
+        let data_len = data.len() as u64;
+        let download = |token: String, caller: Uuid| {
+            let (pool, vault_cfg) = (pool.clone(), vault_cfg.clone());
+            async move {
+                let mat = consume_download_token(&pool, &vault_cfg, &token, caller, false).await?;
+                assert_eq!(mat.length, data_len);
+                let bytes = axum::body::to_bytes(mat.body, usize::MAX)
+                    .await
+                    .map_err(|e| AppError::Internal(e.to_string()))?;
+                Ok::<_, AppError>(bytes.to_vec())
+            }
+        };
+
+        // Staged as format 2, hashed, and nothing readable on disk.
+        let good = submit_one().await.unwrap();
+        assert_eq!(good.size, data.len() as u64);
+        let (format, sha, path, nonce): (i16, String, String, Option<Vec<u8>>) = sqlx::query_as(
+            "SELECT blob_format, sha256, storage_path, sealed_dek_nonce
+             FROM outbound_shares WHERE id = $1",
+        )
+        .bind(good.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((format, nonce), (2, None));
+        let digest = <sha2::Sha256 as sha2::Digest>::digest(&data);
+        let expected: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(sha, expected);
+        let on_disk = tokio::fs::read(&path).await.unwrap();
+        assert!(!on_disk.windows(64).any(|w| w == &data[..64]));
+
+        // Another user cannot spend the link.
+        let token = good.download_token.clone().unwrap();
+        assert!(matches!(
+            download(token.clone(), Uuid::new_v4()).await,
+            Err(AppError::Forbidden)
+        ));
+
+        // A damaged blob is refused and leaves the link usable.
+        let damaged = submit_one().await.unwrap();
+        let (damaged_path,): (String,) =
+            sqlx::query_as("SELECT storage_path FROM outbound_shares WHERE id = $1")
+                .bind(damaged.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let mut bytes = tokio::fs::read(&damaged_path).await.unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 1;
+        tokio::fs::write(&damaged_path, bytes).await.unwrap();
+        let damaged_token = damaged.download_token.unwrap();
+        assert!(download(damaged_token.clone(), user).await.is_err());
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM outbound_shares WHERE download_token = $1")
+                .bind(&damaged_token)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(status, "approved");
+
+        // The owner gets the exact bytes back, once.
+        assert_eq!(download(token.clone(), user).await.unwrap(), data);
+        assert!(download(token, user).await.is_err());
+
+        // Blobs staged before the chunked format still download.
+        let sealed = vault::seal(&vault_cfg, &data).await.unwrap();
+        let legacy_path = dir.path().join("legacy.bin");
+        tokio::fs::write(&legacy_path, &sealed.ciphertext)
+            .await
+            .unwrap();
+        let legacy_token = mint_token();
+        sqlx::query(
+            "INSERT INTO outbound_shares (
+                id, requester_user_id, filename, content_type, size, sha256,
+                storage_path, sealed_dek_ciphertext, sealed_dek_nonce,
+                dlp_score, dlp_reasons, status, download_token, expires_at
+             ) VALUES ($1, $2, 'old.bin', 'application/octet-stream', $3, $4,
+                       $5, $6, $7, 0, '[]', 'approved', $8, NOW() + INTERVAL '1 hour')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(user)
+        .bind(data.len() as i64)
+        .bind(&expected)
+        .bind(legacy_path.to_string_lossy().to_string())
+        .bind(&sealed.encrypted_dek)
+        .bind(&sealed.nonce)
+        .bind(&legacy_token)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(download(legacy_token, user).await.unwrap(), data);
     }
 }

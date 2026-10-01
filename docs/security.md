@@ -982,12 +982,20 @@ capped at 500 MiB, and a session may have at most 8 at once.
 ### Common pipeline (both paths)
 
 1. A fresh cryptographically random 256-bit **DEK** is generated.
-2. The plaintext is AES-256-GCM-encrypted with that DEK (12-byte
-   nonce).
+2. The plaintext is read from its staging file in 64 KiB chunks and
+   each chunk is AES-256-GCM-encrypted with that DEK under the STREAM
+   construction (`aead::stream`, BE32). The nonce carries the chunk's
+   position and a last-chunk flag, and every chunk is bound to the
+   format header and the share id, so reordered, duplicated, dropped or
+   truncated chunks fail to authenticate. The SHA-256 of the plaintext
+   is computed in the same pass. Shares staged before this format (one
+   AES-256-GCM message, 12-byte nonce in `sealed_dek_nonce`) remain
+   readable; `outbound_shares.blob_format` records which is which.
 3. The DEK is sealed by **Vault Transit** and stored in
    `outbound_shares.sealed_dek`.
 4. The ciphertext is written to `STRATA_OUTBOUND_SHARES_DIR` (default
-   `/tmp/strata-outbound-shares`, platform-temp-dir fallback).
+   `/tmp/strata-outbound-shares`, platform-temp-dir fallback), and
+   removed again if the submission fails.
 5. A built-in DLP heuristic computes `dlp_score` and a list of
    `dlp_flags` against the plaintext.
 6. If `dlp_score ≤ AUTO_APPROVE_THRESHOLD` **and** the submitter's

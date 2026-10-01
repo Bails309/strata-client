@@ -2323,8 +2323,7 @@ to hold:
   for non-default deployments). The DMZ never originates outbound
   TCP to anything other than the link itself.
 - **Memory amplification cap.** WebSocket streams are long-lived and
-  cannot be size-capped by the existing `MAX_REQUEST_BODY_BYTES` /
-  `MAX_PROXY_BODY_BYTES` buffers used on the REST path. Instead the
+  are not subject to the REST path's request-body ceiling. Instead the
   DMZ→public direction caps individual h2 frames at 8 MiB so a
   misbehaving (or RCE'd) internal node cannot make the DMZ buffer
   arbitrary memory before flushing to the public socket. h2
@@ -2463,10 +2462,16 @@ are now streamed end-to-end:
   with `413` before any link is touched.
 - **Response body** flows through a new `RecvStreamBody` adapter
   implementing `futures::Stream` over `h2::RecvStream`. It releases
-  the flow-control window per chunk and enforces the cap as data
-  flows. Mid-stream overshoot truncates the response and closes
-  the public connection. A pre-flight `Content-Length` check
-  returns `507` before any byte reaches the public client.
+  the flow-control window per chunk as the public client takes it.
+  Responses are not size-capped at the DMZ (PERF-02); memory is
+  bounded by the link's flow-control windows, and the internal node
+  decides what it sends.
+
+The internal end of the link streams too (PERF-02): a request reaches
+the router, and its authentication, before its body is read, and
+unread body is bounded at 1 MiB per stream and 16 MiB per link by h2
+flow control. Request bodies over 512 MiB are refused, and bodies
+that stall for 60 seconds fail. See [dmz.md](dmz.md#streaming-through-the-internal-node-perf-02).
 
 Per-request memory dropped from up to ~16 MiB to roughly one h2
 flow-control window (~64 KiB) — about a 250× reduction. The retry

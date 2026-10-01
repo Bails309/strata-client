@@ -181,8 +181,13 @@ async fn handle_connection(
 
     // h2 client over the authenticated stream. The DMZ pushes requests
     // to the internal node; the internal node's serve_h2 hands them
-    // to its axum router (Phase 1g).
-    let (sender, connection) = h2::client::handshake(tls)
+    // to its axum router (Phase 1g). The receive windows bound how much
+    // response body may wait here for slow public clients: 1 MiB per
+    // stream, 16 MiB across the link.
+    let (sender, connection) = h2::client::Builder::new()
+        .initial_window_size(1024 * 1024)
+        .initial_connection_window_size(16 * 1024 * 1024)
+        .handshake::<_, bytes::Bytes>(tls)
         .await
         .context("h2 client handshake on link stream")?;
 

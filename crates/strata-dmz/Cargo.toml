@@ -30,7 +30,6 @@ bytes = { workspace = true }
 # Web framework (DMZ-side public + link servers)
 axum = { workspace = true }
 tower = { workspace = true }
-tower-http = { workspace = true }
 
 # Serde
 serde = { workspace = true }
@@ -70,3 +69,6 @@ sha1 = "0.11"
 
 # IDs
 uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

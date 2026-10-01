@@ -17,9 +17,7 @@
 use std::sync::Arc;
 
 use axum::{routing::get, Router};
-use http::StatusCode;
 use tower::limit::GlobalConcurrencyLimitLayer;
-use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -200,9 +198,9 @@ async fn main() -> anyhow::Result<()> {
             body_cap_policy,
             body_caps::body_cap_middleware,
         ))
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
+        .layer(axum::middleware::from_fn_with_state(
             request_timeout,
+            limits::request_deadline_middleware,
         ))
         .layer(GlobalConcurrencyLimitLayer::new(cfg.public_max_inflight))
         .layer(axum::middleware::from_fn_with_state(

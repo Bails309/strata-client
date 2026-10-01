@@ -136,9 +136,39 @@ directions honour h2 flow control:
   wires it into the public response.
 
 Pre-flight `Content-Length` checks still return `413` (request too
-large) and `507` (response too large) before any byte flows.
+large) before any byte flows.
 Per-request memory dropped from up to ~16 MiB to roughly one h2
 flow-control window (~64 KiB).
+
+### Streaming through the internal node (PERF-02)
+
+The internal node used to collect each request body (up to 8 MiB)
+before routing it and each response body (up to 8 MiB, else `507`)
+before sending it, so uploads and downloads above 8 MiB worked
+directly but failed through the DMZ. Both directions now stream:
+
+- **Requests** reach the router as soon as their headers arrive, so
+  authentication and each route's own body limit run before the body
+  is read. A route that answers early (`401`, `413`) resets the stream
+  instead of draining the body. Unread body is bounded by h2 flow
+  control — 1 MiB per stream and 16 MiB across the link — and window
+  is released only as the handler consumes it.
+- **Responses** are sent as the DMZ grants window and are not capped
+  by the link; the DMZ's link client uses the same 1 MiB / 16 MiB
+  windows so a slow public client slows the internal node instead of
+  filling memory.
+- **Limits.** Request bodies over 512 MiB (the largest route limit is
+  500 MiB) are refused: with `413` up front when `Content-Length`
+  says so, otherwise by resetting the stream as the limit is crossed.
+  `STRATA_DMZ_PUBLIC_BODY_LIMIT_BYTES` now defaults to the same
+  512 MiB; lower it, or use `STRATA_DMZ_PUBLIC_BODY_LIMITS_BY_IP`, to
+  restrict uploads at the edge.
+- **Deadlines.** A body that sends nothing for 60 seconds fails, and
+  a stream open for 30 minutes is reset, on both nodes. On the public
+  listener, `STRATA_DMZ_PUBLIC_HEADER_TIMEOUT_MS` (15 s) still bounds
+  requests without a body; a request with one is answered only after
+  the internal node has read it, so it gets the 30-minute deadline
+  instead.
 
 The DMZ public TLS listener is also pinned to **TLS 1.3 only** as of
 v1.10.5, and the `hyper-util` auto-builder for the public h2

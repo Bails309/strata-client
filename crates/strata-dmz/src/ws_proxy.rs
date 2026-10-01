@@ -39,7 +39,10 @@ use http::{Request as HttpRequest, Uri};
 use sha1::{Digest, Sha1};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use super::proxy::{ProxyState, MAX_PROXY_BODY_BYTES};
+use super::proxy::ProxyState;
+
+/// Largest single h2 DATA chunk relayed onto a public WebSocket.
+const MAX_WS_RELAY_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
 /// RFC 6455 magic GUID concatenated with `Sec-WebSocket-Key` before
 /// SHA-1 + base64 to form `Sec-WebSocket-Accept`.
@@ -415,7 +418,7 @@ async fn pump(
             // Cap how big a single frame we'll relay so a malicious
             // internal node can't make us buffer arbitrary memory in
             // userspace before write() drains.
-            if chunk.len() > MAX_PROXY_BODY_BYTES {
+            if chunk.len() > MAX_WS_RELAY_CHUNK_BYTES {
                 return Err(anyhow::anyhow!("oversized h2 frame on websocket bridge"));
             }
             match tokio::time::timeout(IO_TIMEOUT, tcp_w.write_all(&chunk)).await {

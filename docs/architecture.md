@@ -1653,9 +1653,8 @@ host's link port.
   `/api/tunnel/{connection_id}` axum handler runs unchanged. The
   connection to the target therefore originates from the **internal node's**
   IP, not the DMZ node's IP — exactly as a single-node deployment
-  behaves. WebSocket streams cannot be sized by the
-  `MAX_REQUEST_BODY_BYTES` / `MAX_PROXY_BODY_BYTES` buffers used on
-  the REST path because they are long-lived; instead we cap
+  behaves. WebSocket streams are not subject to the REST path's
+  request-body ceiling because they are long-lived; instead we cap
   individual h2 frame sizes at 8 MiB on the DMZ→public direction
   so a misbehaving internal node cannot make the DMZ buffer
   arbitrary memory before the public socket drains.

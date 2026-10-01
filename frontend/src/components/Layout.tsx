@@ -324,9 +324,11 @@ export default function Layout({
 
         {/* ── Single Primary Rail Sidebar (72px collapsed / 240px expanded) ── */}
         <aside
-          className={`strata-sidebar fixed top-0 left-0 bottom-0 z-50 flex flex-col justify-between overflow-visible transition-[width] duration-200 ease-out ${inSession ? "is-session" : ""}`}
+          className={`strata-sidebar fixed top-0 left-0 bottom-0 z-50 flex flex-col justify-between overflow-visible transition-[width,visibility] duration-200 ease-out ${inSession ? "is-session" : ""}`}
           style={{
             width: sidebarWidth,
+            // At width 0 the footer still overflows onto the session.
+            visibility: hidden ? "hidden" : "visible",
             pointerEvents: hidden ? "none" : "auto",
             padding: 0,
             background: inSession

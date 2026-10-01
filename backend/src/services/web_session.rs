@@ -311,8 +311,26 @@ pub fn parse_allowed_networks(raw: &str) -> Vec<IpNet> {
     raw.split(|c: char| c == ',' || c.is_whitespace())
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .filter_map(|s| s.parse::<IpNet>().ok())
+        .filter_map(parse_network)
         .collect()
+}
+
+fn parse_network(s: &str) -> Option<IpNet> {
+    s.parse::<IpNet>()
+        .ok()
+        .or_else(|| s.parse::<IpAddr>().ok().map(IpNet::from))
+}
+
+/// Strict counterpart of [`parse_allowed_networks`] for saving the setting:
+/// every entry must be a CIDR or bare IP.
+pub fn validate_allowed_networks(raw: &str) -> Result<(), String> {
+    raw.split(|c: char| c == ',' || c.is_whitespace())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .try_for_each(|s| match parse_network(s) {
+            Some(_) => Ok(()),
+            None => Err(format!("`{s}` is not a CIDR range or IP address")),
+        })
 }
 
 /// Returns `true` when `ip` falls inside any of the supplied networks.
@@ -795,6 +813,22 @@ mod tests {
         let raw = "10.0.0.0/8, not-a-cidr, 999.999.0.0/16, 192.168.0.0/16";
         let nets = parse_allowed_networks(raw);
         assert_eq!(nets.len(), 2);
+    }
+
+    #[test]
+    fn bare_ips_are_single_host_networks() {
+        let nets = parse_allowed_networks("203.0.113.7\n2001:db8::5");
+        assert!(is_ip_allowed_by_cidr("203.0.113.7".parse().unwrap(), &nets));
+        assert!(!is_ip_allowed_by_cidr("203.0.113.8".parse().unwrap(), &nets));
+        assert!(is_ip_allowed_by_cidr("2001:db8::5".parse().unwrap(), &nets));
+    }
+
+    #[test]
+    fn validate_allowed_networks_rejects_garbage() {
+        assert!(validate_allowed_networks("10.0.0.0/8\n192.168.1.5, ::/0").is_ok());
+        assert!(validate_allowed_networks("").is_ok());
+        assert!(validate_allowed_networks("10.0.0.0/8, intranet").is_err());
+        assert!(validate_allowed_networks("10.0.0.0/33").is_err());
     }
 
     #[test]

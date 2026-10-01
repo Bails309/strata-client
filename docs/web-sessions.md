@@ -140,9 +140,11 @@ backend allocates a localhost VNC display and attaches the VNC engine to it.
 ### Egress allow-list (system-wide)
 
 `system_settings.web_allowed_networks` is a newline- or comma-separated
-list of CIDR ranges. The allow-list is **fail-closed**: an empty list
-denies every outbound connection. Operators must explicitly opt in to
-`0.0.0.0/0` for unrestricted public-internet access.
+list of CIDR ranges or single IP addresses, edited under
+**Admin → Network → Web Browser Sessions**. Invalid entries are rejected
+on save. The allow-list is **fail-closed**: an empty list refuses every
+web session. Operators must explicitly opt in to `0.0.0.0/0` for
+unrestricted public-internet access.
 
 Example:
 

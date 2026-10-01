@@ -4,10 +4,11 @@ import userEvent from "@testing-library/user-event";
 
 vi.mock("../api", () => ({
   updateDns: vi.fn(),
+  updateSettings: vi.fn(),
 }));
 
 import NetworkTab from "../pages/admin/NetworkTab";
-import { updateDns } from "../api";
+import { updateDns, updateSettings } from "../api";
 
 beforeEach(() => {
   vi.mocked(updateDns).mockResolvedValue({
@@ -15,6 +16,7 @@ beforeEach(() => {
     restart_required: false,
     message: "",
   });
+  vi.mocked(updateSettings).mockResolvedValue({ status: "updated" } as never);
 });
 
 afterEach(() => {
@@ -111,5 +113,29 @@ describe("NetworkTab", () => {
     // operator gets that the value landed.
     expect(await screen.findByText(/Saved/i)).toBeInTheDocument();
     expect(screen.getByText(/10\.0\.0\.1/)).toBeInTheDocument();
+  });
+
+  it("saves web-session allowed networks only when they changed", async () => {
+    render(<NetworkTab settings={{ web_allowed_networks: "10.0.0.0/8" }} onSave={() => {}} />);
+    const field = screen.getByRole("textbox", { name: /Allowed Networks/i });
+    expect(field).toHaveValue("10.0.0.0/8");
+
+    await userEvent.click(screen.getByRole("button", { name: /Save Network Settings/ }));
+    await waitFor(() => expect(updateDns).toHaveBeenCalled());
+    expect(updateSettings).not.toHaveBeenCalled();
+
+    await userEvent.type(field, "\n192.168.1.5 ");
+    await userEvent.click(screen.getByRole("button", { name: /Save Network Settings/ }));
+    await waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith([
+        { key: "web_allowed_networks", value: "10.0.0.0/8\n192.168.1.5" },
+      ])
+    );
+  });
+
+  it("blocks saving a malformed allowed network", async () => {
+    render(<NetworkTab settings={{ web_allowed_networks: "intranet" }} onSave={() => {}} />);
+    expect(screen.getByText(/Invalid network/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Save Network Settings/ })).toBeDisabled();
   });
 });

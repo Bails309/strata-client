@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::config::{AppConfig, LocalVaultSecrets, VaultConfig, VaultMode};
+use crate::config::{AppConfig, VaultConfig, VaultMode};
 use crate::db::Database;
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
@@ -94,6 +94,10 @@ pub async fn initialize(
     db.migrate()
         .await
         .map_err(|e| AppError::Config(format!("Migration failed: {e}")))?;
+    let db = db
+        .into_runtime(&db_url, db_ssl_mode.as_deref(), db_ca_cert.as_deref())
+        .await
+        .map_err(|e| AppError::Config(format!("Database runtime role setup failed: {e}")))?;
 
     // Build Vault config based on mode
     let vault = match body.vault_mode.as_deref() {
@@ -104,38 +108,23 @@ pub async fn initialize(
                 .vault_transit_key
                 .unwrap_or_else(|| "guac-master-key".into());
 
-            // Provision the bundled Vault: init → unseal → transit → key
-            let result = vault_provisioning::provision(&address, &transit_key, None, None).await?;
-
-            let (token, unseal_key) = match result {
-                Some(init_result) => (init_result.root_token, Some(init_result.unseal_key)),
-                None => {
-                    return Err(AppError::Vault(
-                        "Bundled Vault is already initialized but no stored credentials exist. \
-                         Use external mode or reset the vault-data volume."
-                            .into(),
-                    ));
-                }
-            };
-
-            // Persist local vault secrets so they survive container restarts
-            if let Some(ref uk) = unseal_key {
-                if let Err(e) = (LocalVaultSecrets {
-                    token: token.clone(),
-                    unseal_key: uk.clone(),
-                })
-                .save()
-                {
-                    tracing::warn!("Failed to persist vault secrets: {e}");
-                }
-            }
+            // Provision the bundled Vault: init → unseal → transit → key,
+            // then swap root for a Transit-only runtime token.
+            let creds = vault_provisioning::provision(
+                &address,
+                &transit_key,
+                None,
+                None,
+                vault_provisioning::save_local_credentials,
+            )
+            .await?;
 
             Some(VaultConfig {
                 address,
-                token,
+                token: creds.token,
                 transit_key,
                 mode: VaultMode::Local,
-                unseal_key,
+                unseal_key: Some(creds.unseal_key),
             })
         }
         Some("external") => match (body.vault_address, body.vault_token, body.vault_transit_key) {

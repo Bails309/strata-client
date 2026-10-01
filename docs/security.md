@@ -1491,10 +1491,22 @@ The backend communicates with Vault over HTTP (bundled container on internal Doc
 
 The bundled Vault container runs on the internal Docker bridge network and is **not exposed to the host**:
 
-- **Unseal key** — stored in `config.toml` alongside the root token. Back up the `backend-config` volume; loss of the unseal key means Vault data cannot be recovered after a container restart.
+- **Unseal key** — stored with the runtime token in `vault-secrets.json` (mode `0600`) in the `backend-config` volume. Back the volume up; loss of the unseal key means Vault data cannot be recovered after a container restart.
+- **No root token at runtime (SEC-25)** — the backend uses root only while provisioning and then revokes it. It runs with an orphan, periodic (72 h, renewed hourly) token whose `strata-transit` policy allows only encrypt/decrypt on the configured key and renewing/looking up itself; it cannot read or change policies, mounts, other keys or tokens. Because the backend keeps the unseal key so restarts stay automatic, a full compromise of the backend can still regenerate root — the backend itself does this to reissue a lapsed runtime token. Operators who need that boundary should use an external Vault with auto-unseal.
 - **IPC_LOCK** — the container is granted `IPC_LOCK` capability; `disable_mlock = true` is set for container compatibility.
 - **File storage** — Vault data is persisted to the `vault-data` Docker volume. This volume should be backed up alongside database backups.
 - **Single key share** — the bundled Vault uses a single unseal key (1 key share, threshold of 1) for simplicity. For production deployments requiring Shamir's Secret Sharing, use an external Vault cluster.
+
+### Least-privilege database role (SEC-25)
+
+The backend migrates the schema with the credentials in `DATABASE_URL`, then serves every request through a separate role, `<owner>_runtime`. That role may select, insert, update and delete rows, but:
+
+- it owns nothing, so it cannot create, alter or drop tables, or drop or disable the audit triggers;
+- it has no `UPDATE`, `DELETE` or `TRUNCATE` on `audit_logs` or `audit_checkpoints`;
+- it can read but not change `_sqlx_migrations`;
+- it is `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`.
+
+The role's password is an HMAC of the owner's password, so every replica derives the same one without another stored secret; its grants are refreshed on every start. The owner must have `CREATEROLE` (the bundled Postgres user is a superuser). If it does not, or `DATABASE_URL` carries no password, or `STRATA_DB_RUNTIME_ROLE=off`, the backend logs a warning and keeps serving as the owner. The owner password remains in the backend's environment for migrations, so this separates what request-handling SQL can do rather than what a full process compromise can reach.
 - **UI disabled** — the Vault web UI is disabled in the bundled configuration.
 
 ---
@@ -2558,7 +2570,7 @@ variables.
 7. **Secret rotation** — rotate Vault tokens and database credentials periodically
 8. **Log forwarding** — forward the backend's structured JSON logs to a SIEM or log aggregation service
 9. **Container scanning** — scan the backend and frontend images for vulnerabilities in CI
-10. **Backup unseal key** — if using the bundled Vault, back up the `backend-config` volume containing the unseal key and root token
+10. **Backup unseal key** — if using the bundled Vault, back up the `backend-config` volume containing the unseal key and runtime token
 
 ---
 

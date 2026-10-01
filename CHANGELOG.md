@@ -175,6 +175,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drag-and-drop never sent the end of an upload, so the gateway could
   not tell a finished file from one still arriving. It needs to know
   now, because it scans the whole file before writing it.
+- **The backend no longer holds a Vault root token (SEC-25).** The bundled
+  Vault is provisioned with root, which is then revoked; the backend runs
+  with an orphan, periodic Transit-only token (encrypt/decrypt on its key,
+  renew and look up itself), renewed hourly. Existing installs swap their
+  stored root token for one on the first start. If the runtime token
+  lapses, the backend regenerates root from the unseal key, reissues it
+  and revokes root again. The unseal key stays with the backend so
+  restarts remain automatic; see the Vault runbook for getting a root
+  token by hand.
+- **Requests run under a least-privilege database role (SEC-25).** After
+  migrating as the `DATABASE_URL` owner, the backend serves requests as
+  `<owner>_runtime`, which can read and write rows but cannot change the
+  schema, drop or disable the audit triggers, or update, delete or
+  truncate audit history. Its password is derived from the owner's, so
+  nothing new needs configuring. If the owner cannot create roles, the
+  backend warns and keeps using the owner; `STRATA_DB_RUNTIME_ROLE=off`
+  opts out.
 
 ### Build
 

@@ -813,63 +813,30 @@ pub async fn update_vault(
             // Check if we already have local vault credentials stored
             let existing = {
                 let s = state.read().await;
-                s.config.as_ref().and_then(|c| c.vault.clone())
+                s.config
+                    .as_ref()
+                    .and_then(|c| c.vault.clone())
+                    .filter(|v| v.mode == VaultMode::Local)
             };
 
-            let (token, unseal_key) = if let Some(ref existing) = existing {
-                if existing.mode == VaultMode::Local {
-                    // Already local — re-provision (unseal if needed)
-                    let _ = crate::services::vault_provisioning::provision(
-                        &address,
-                        &transit_key,
-                        existing.unseal_key.as_deref(),
-                        Some(&existing.token),
-                    )
-                    .await?;
-                    (existing.token.clone(), existing.unseal_key.clone())
-                } else {
-                    // Switching from external to local — fresh init
-                    let result = crate::services::vault_provisioning::provision(
-                        &address,
-                        &transit_key,
-                        None,
-                        None,
-                    )
-                    .await?;
-                    match result {
-                        Some(init_result) => (init_result.root_token, Some(init_result.unseal_key)),
-                        None => {
-                            return Err(AppError::Vault(
-                                "Bundled Vault is already initialized. Provide stored credentials or reset vault-data volume.".into(),
-                            ));
-                        }
-                    }
-                }
-            } else {
-                // No existing vault config — fresh init
-                let result = crate::services::vault_provisioning::provision(
-                    &address,
-                    &transit_key,
-                    None,
-                    None,
-                )
-                .await?;
-                match result {
-                    Some(init_result) => (init_result.root_token, Some(init_result.unseal_key)),
-                    None => {
-                        return Err(AppError::Vault(
-                            "Bundled Vault already initialized but no credentials stored.".into(),
-                        ));
-                    }
-                }
-            };
+            // Re-provisions (unseals) an existing bundled Vault, or
+            // initialises a fresh one; either way the backend ends up with
+            // a Transit-only token and no root.
+            let creds = crate::services::vault_provisioning::provision(
+                &address,
+                &transit_key,
+                existing.as_ref().and_then(|v| v.unseal_key.as_deref()),
+                existing.as_ref().map(|v| v.token.as_str()),
+                crate::services::vault_provisioning::save_local_credentials,
+            )
+            .await?;
 
             VaultConfig {
                 address,
-                token,
+                token: creds.token,
                 transit_key,
                 mode: VaultMode::Local,
-                unseal_key,
+                unseal_key: Some(creds.unseal_key),
             }
         }
         "external" => {
@@ -899,20 +866,6 @@ pub async fn update_vault(
     };
 
     let audit_address = vault_cfg.address.clone();
-
-    // Persist local vault secrets so they survive container restarts
-    if vault_cfg.mode == VaultMode::Local {
-        if let Some(ref uk) = vault_cfg.unseal_key {
-            if let Err(e) = (crate::config::LocalVaultSecrets {
-                token: vault_cfg.token.clone(),
-                unseal_key: uk.clone(),
-            })
-            .save()
-            {
-                tracing::warn!("Failed to persist vault secrets: {e}");
-            }
-        }
-    }
 
     // Update config and persist
     {

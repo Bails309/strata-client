@@ -18,7 +18,29 @@ encryption key, and rekey the Shamir shards.
 - The quorum of **unseal-key shards** — typically 3 of 5. If you don't have
   the quorum, this runbook cannot help you; see
   [disaster-recovery.md](disaster-recovery.md) for the "lost keys" path.
-- The Vault root token (for rekey / rotate).
+- The Vault root token (for rekey / rotate). The bundled Vault keeps no
+  root token; generate one as below.
+
+## Root token for the bundled Vault
+
+The backend revokes root after provisioning (SEC-25). To get one for an
+administrative task, generate it with the unseal key from
+`vault-secrets.json` in the `backend-config` volume, and revoke it when
+done:
+
+```bash
+docker compose exec vault vault operator generate-root -init
+# note the Nonce and OTP
+docker compose exec vault vault operator generate-root -nonce=<nonce> <unseal-key>
+# note the Encoded Token
+docker compose exec vault vault operator generate-root -decode=<encoded-token> -otp=<otp>
+# ...use the printed root token, then:
+docker compose exec -e VAULT_TOKEN=<root-token> vault vault token revoke -self
+```
+
+The backend's own token is unaffected. If that token is ever lost or
+lapses, the backend regenerates root the same way on its next start or
+hourly renewal, issues a new Transit-only token and revokes root again.
 
 ## Safety checks
 

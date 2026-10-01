@@ -24,13 +24,18 @@ use std::time::Duration;
 static DEFAULT: OnceLock<reqwest::Client> = OnceLock::new();
 static OIDC: OnceLock<reqwest::Client> = OnceLock::new();
 static AZURE: OnceLock<reqwest::Client> = OnceLock::new();
+static VAULT: OnceLock<reqwest::Client> = OnceLock::new();
 
-fn build(timeout: Duration, connect: Duration, https_only: bool) -> reqwest::Client {
+fn builder(timeout: Duration, connect: Duration, https_only: bool) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .timeout(timeout)
         .connect_timeout(connect)
         .https_only(https_only)
         .user_agent(concat!("strata-backend/", env!("CARGO_PKG_VERSION")))
+}
+
+fn build(timeout: Duration, connect: Duration, https_only: bool) -> reqwest::Client {
+    builder(timeout, connect, https_only)
         .build()
         .expect("reqwest client builder must succeed with static config")
 }
@@ -48,6 +53,38 @@ pub fn oidc_client() -> &'static reqwest::Client {
 /// HTTPS-only client for Azure Blob Storage.
 pub fn azure_client() -> &'static reqwest::Client {
     AZURE.get_or_init(|| build(Duration::from_secs(60), Duration::from_secs(5), true))
+}
+
+/// Client for Vault: the default limits, also trusting the CA certificates
+/// in `VAULT_CACERT` (the bundled Vault's private CA).
+pub fn vault_client() -> &'static reqwest::Client {
+    VAULT.get_or_init(|| {
+        let mut b = builder(Duration::from_secs(30), Duration::from_secs(5), false);
+        match vault_ca_certs() {
+            Ok(certs) => {
+                for cert in certs {
+                    b = b.add_root_certificate(cert);
+                }
+            }
+            // Without the CA the bundled Vault's certificate is refused, so this fails closed.
+            Err(e) => tracing::error!("VAULT_CACERT not loaded, Vault calls will fail TLS: {e}"),
+        }
+        b.build()
+            .expect("reqwest client builder must succeed with static config")
+    })
+}
+
+fn vault_ca_certs() -> anyhow::Result<Vec<reqwest::Certificate>> {
+    let Some(path) = std::env::var("VAULT_CACERT")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+    else {
+        return Ok(Vec::new());
+    };
+    let pem = std::fs::read(&path).map_err(|e| anyhow::anyhow!("{path}: {e}"))?;
+    let certs = reqwest::Certificate::from_pem_bundle(&pem)?;
+    anyhow::ensure!(!certs.is_empty(), "{path} holds no certificates");
+    Ok(certs)
 }
 
 #[cfg(test)]

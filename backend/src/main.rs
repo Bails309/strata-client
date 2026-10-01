@@ -19,6 +19,20 @@ use crate::services::app_state::{AppState, BootPhase};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("vault-tls-init") {
+        let [tls_dir, ca_dir] = [args.get(2), args.get(3)].map(|a| a.map(std::path::Path::new));
+        let (Some(tls_dir), Some(ca_dir)) = (tls_dir, ca_dir) else {
+            anyhow::bail!("usage: strata-backend vault-tls-init <tls-dir> <ca-dir>");
+        };
+        services::vault_tls::run(tls_dir, ca_dir)?;
+        println!(
+            "vault-tls-init: certificates ready in {}",
+            tls_dir.display()
+        );
+        return Ok(());
+    }
+
     // Initialise tracing
     fmt()
         .with_env_filter(EnvFilter::from_default_env())
@@ -598,6 +612,13 @@ fn resolve_vault_config(persisted: &Option<AppConfig>) -> Option<VaultConfig> {
                     }
                     if let Ok(uk) = std::env::var("VAULT_UNSEAL_KEY") {
                         v.unseal_key = Some(uk);
+                    }
+                    // The bundled Vault's address is the deployment's, so an
+                    // install set up over http moves to https with compose.
+                    if v.mode == VaultMode::Local {
+                        if let Ok(a) = std::env::var("VAULT_ADDR") {
+                            v.address = a;
+                        }
                     }
 
                     // For local vault mode, fill in missing token/unseal_key from

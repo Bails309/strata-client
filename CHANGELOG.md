@@ -216,6 +216,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `strata-transit-v2`; existing installs swap to it automatically on the
   first start. `GET /api/admin/audit-status` reports the verifier's last
   result and the newest anchor.
+- **The backend talks to the bundled Vault over verified TLS.** Vault's
+  listener had TLS disabled, so anyone on the compose network could read
+  decrypted credentials, the runtime token and the unseal key in
+  transit. A one-shot `vault-tls-init` service now issues Vault's
+  certificate from a private CA (renewed within 30 days of expiry); Vault
+  gets the key, the backend gets only the CA certificate
+  (`VAULT_CACERT`, trusted for Vault calls alone) and refuses a Vault it
+  cannot verify. Existing installs switch to `https://vault:8200` on the
+  next `docker compose up`, with no setup to redo.
 
 ### Build
 

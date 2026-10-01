@@ -34,6 +34,8 @@ services:
       - SETUID
     volumes:
       - backend-config:/app/config
+      # The bundled Vault's CA certificate only; its keys stay in vault-tls.
+      - vault-ca:/etc/strata/vault-ca:ro
       # Append-only record of signed audit checkpoints. Kept apart from
       # the database so rewriting the audit table cannot also rewrite the
       # anchors; ship it to write-once storage for stronger guarantees.
@@ -58,6 +60,8 @@ services:
       - ./certs:/etc/strata/certs:ro
     environment:
       - RUST_LOG=${RUST_LOG:-info}
+      - VAULT_ADDR=${VAULT_ADDR:-https://vault:8200}
+      - VAULT_CACERT=${VAULT_CACERT:-/etc/strata/vault-ca/ca.crt}
       - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-strata}:${POSTGRES_PASSWORD:-strata_default}@postgres-local:5432/${POSTGRES_DB:-strata}}
       - STRATA_AUDIT_ANCHOR_PATH=${STRATA_AUDIT_ANCHOR_PATH:-/app/audit-anchor/checkpoints.jsonl}
       # ── Session engine ──
@@ -211,6 +215,26 @@ services:
       timeout: 5s
       retries: 5
 
+  # Issues the bundled Vault's TLS certificate from a private CA on first
+  # start (and renews it within 30 days of expiry), then exits. Vault gets
+  # the key and certificate; the backend gets only the CA certificate.
+  vault-tls-init:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: strata/backend:latest
+    entrypoint: ["strata-backend", "vault-tls-init", "/vault/tls", "/vault-ca"]
+    restart: "no"
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - vault-tls:/vault/tls
+      - vault-ca:/vault-ca
+
   # ── 6. Bundled HashiCorp Vault ──────────────────────────────────────
   vault:
     image: hashicorp/vault:1.19@sha256:c4298db7f9b2ea8cab452cbff5877749087913aa035fcae62026cf16132929f5
@@ -230,9 +254,14 @@ services:
       - SETUID
     volumes:
       - vault-data:/vault/data
+      - vault-tls:/vault/tls:ro
+    depends_on:
+      vault-tls-init:
+        condition: service_completed_successfully
     environment:
-      VAULT_ADDR: "http://127.0.0.1:8200"
-      VAULT_API_ADDR: "http://vault:8200"
+      VAULT_ADDR: "https://127.0.0.1:8200"
+      VAULT_CACERT: "/vault/tls/ca.crt"
+      VAULT_API_ADDR: "https://vault:8200"
     entrypoint: /bin/sh
     command:
       - -c
@@ -243,17 +272,14 @@ services:
           path = "/vault/data"
         }
         listener "tcp" {
-          address     = "0.0.0.0:8200"
-          # NOTE: tls_disable=1 is appropriate ONLY because Vault is on
-          # the private compose network and never exposed to the host
-          # (no `ports:` mapping). Operators publishing Vault on a
-          # routable address MUST switch this to a TLS-terminated
-          # listener with `tls_cert_file` / `tls_key_file` and mount
-          # the certs into /vault/config. See docs/security.md.
-          tls_disable = 1
+          address       = "0.0.0.0:8200"
+          # Certificates from vault-tls-init; the backend trusts the CA alone.
+          tls_cert_file = "/vault/tls/server.crt"
+          tls_key_file  = "/vault/tls/server.key"
+          tls_min_version = "tls12"
         }
-        api_addr     = "http://vault:8200"
-        cluster_addr = "http://vault:8201"
+        api_addr     = "https://vault:8200"
+        cluster_addr = "https://vault:8201"
         ui           = false
         # mlock is enabled by default. The container is granted IPC_LOCK
         # above precisely so Vault can lock its secret pages out of
@@ -261,7 +287,7 @@ services:
         EOF
         vault server -config=/vault/config/vault.hcl
     healthcheck:
-      test: ["CMD-SHELL", "vault status -address=http://127.0.0.1:8200 2>&1 | grep -qE 'Sealed|initialized' || wget -qO- http://127.0.0.1:8200/v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200 > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "vault status 2>&1 | grep -qE 'Sealed|initialized'"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -366,6 +392,12 @@ volumes:
   audit-anchor:
     driver: local
   vault-data:
+    driver: local
+  # Vault's TLS key, certificate and private CA (Vault only).
+  vault-tls:
+    driver: local
+  # The CA certificate alone, for the backend.
+  vault-ca:
     driver: local
   clamav-db:
     driver: local

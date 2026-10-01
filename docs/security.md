@@ -1514,12 +1514,13 @@ All containers communicate over an internal Docker bridge network (`guac-interna
 
 ### Vault Communication
 
-The backend communicates with Vault over HTTP (bundled container on internal Docker network) or HTTPS (recommended for external Vault). The Vault token is stored in `config.toml` inside the `backend-config` Docker volume.
+The backend always talks to Vault over HTTPS under compose. The bundled Vault's certificate comes from a private CA (see below); for an external Vault, set `VAULT_ADDR` to its `https://` address and, if its CA is not publicly trusted, `VAULT_CACERT` to a PEM bundle the backend should trust for Vault calls only. `VAULT_CACERT` adds to the system roots; it is not used for any other outbound call. The runtime token lives in `vault-secrets.json` in the `backend-config` volume.
 
 ### Bundled Vault Security
 
 The bundled Vault container runs on the internal Docker bridge network and is **not exposed to the host**:
 
+- **TLS** — before Vault starts, the one-shot `vault-tls-init` container (the backend image, no network, read-only root) creates a private CA and issues Vault's server certificate for `vault`, `localhost` and `127.0.0.1` (ECDSA P-256; CA 10 years, server 2 years, reissued within 30 days of expiry on the next start). The CA key and server key stay in the `vault-tls` volume, which only Vault mounts. The backend mounts `vault-ca` read-only, which holds the CA certificate alone, and verifies Vault against it: someone on the compose network can no longer read the transit plaintext, the runtime token or the unseal key in transit, or impersonate Vault without that CA's key. If `VAULT_CACERT` cannot be read, Vault calls fail rather than falling back to an unverified connection.
 - **Unseal key** — stored with the runtime token in `vault-secrets.json` (mode `0600`) in the `backend-config` volume. Back the volume up; loss of the unseal key means Vault data cannot be recovered after a container restart.
 - **No root token at runtime (SEC-25)** — the backend uses root only while provisioning and then revokes it. It runs with an orphan, periodic (72 h, renewed hourly) token whose `strata-transit-v2` policy allows only encrypt/decrypt on the configured key, sign/verify on the `strata-audit` key, and renewing/looking up itself; it cannot read or change policies, mounts, other keys or tokens. Because the backend keeps the unseal key so restarts stay automatic, a full compromise of the backend can still regenerate root — the backend itself does this to reissue a lapsed runtime token. Operators who need that boundary should use an external Vault with auto-unseal.
 - **IPC_LOCK** — the container is granted `IPC_LOCK` capability; `disable_mlock = true` is set for container compatibility.

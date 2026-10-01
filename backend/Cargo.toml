@@ -103,6 +103,10 @@ rustls-native-certs = "0.8"
 # for the admin UI list view, so the kiosk launcher doesn't have to
 # reparse PEMs on every session start.
 x509-parser = "0.18"
+# rcgen — issues the bundled Vault's private CA and listener certificate
+# (`strata-backend vault-tls-init`); ring only, like the rest of the TLS stack.
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+time = "0.3"
 
 # Misc
 uuid = { version = "1", features = ["v4", "serde"] }

@@ -13,7 +13,8 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
-use crate::services::http_client::default_client;
+// Every request in this module goes to Vault, so all use the client that trusts VAULT_CACERT.
+use crate::services::http_client::vault_client as default_client;
 
 /// Policy attached to the runtime token. Bumped when it gains a path, so
 /// tokens issued under an older one are replaced.

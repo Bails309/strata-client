@@ -57,6 +57,7 @@ pub mod user_tags;
 pub mod users;
 pub mod vault;
 pub mod vault_provisioning;
+pub mod vault_tls;
 pub mod vdi;
 pub mod vdi_docker;
 pub mod web_autofill;

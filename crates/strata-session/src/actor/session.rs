@@ -15,7 +15,7 @@
 //! ```
 
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -24,7 +24,9 @@ use bytes::{Bytes, BytesMut};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::actor::audit::{AuditRecord, AuditSink};
-use crate::engine::{DisconnectCause, FileRequest, InputEvent, ProtocolEngine, TargetEvent};
+use crate::engine::{
+    DisconnectCause, FileEvent, FileRequest, InputEvent, ProtocolEngine, TargetEvent,
+};
 use crate::error::{EngineError, SessionError};
 use crate::protocol::guacamole::encode_instruction;
 use crate::protocol::ClientInstruction;
@@ -47,6 +49,26 @@ const CLOSE_REASON_GRACE: Duration = Duration::from_secs(1);
 
 /// Largest clipboard payload accepted from the client.
 pub const MAX_CLIPBOARD_BYTES: usize = 8 * 1024 * 1024;
+
+/// Clipboard streams a client may have open at once (SEC-15). The browser
+/// sends one at a time; the rest is headroom.
+pub const MAX_CLIPBOARD_STREAMS: usize = 4;
+
+/// Bytes all of a session's open clipboard streams may hold between them.
+pub const MAX_CLIPBOARD_SESSION_BYTES: usize = 2 * MAX_CLIPBOARD_BYTES;
+
+/// Upload streams a client may have open at once. The SFTP engine runs at
+/// most 8 transfers and refuses the rest, which frees their ids here.
+pub const MAX_UPLOAD_STREAMS: usize = 16;
+
+/// A clipboard stream with no `blob` for this long is abandoned.
+const CLIPBOARD_IDLE: Duration = Duration::from_secs(30);
+
+/// A client clipboard stream still being received.
+struct PendingClipboard {
+    data: Vec<u8>,
+    touched: Instant,
+}
 
 /// A frame as it left the session, shared with observers and the audit
 /// sink.
@@ -195,7 +217,7 @@ pub struct SessionActor {
     seq: u64,
     dropped_frames: u64,
     /// Partially received client clipboard streams, keyed by stream index.
-    clipboard_streams: HashMap<i32, Vec<u8>>,
+    clipboard_streams: HashMap<i32, PendingClipboard>,
     /// Stream indices the client opened with `put`, so a `blob` on one
     /// is routed to the filesystem rather than to the clipboard.
     upload_streams: HashSet<i32>,
@@ -371,7 +393,7 @@ impl SessionActor {
                 // Only text crosses the clipboard boundary; anything
                 // else would need the audited file path instead.
                 if mimetype.starts_with("text/") {
-                    self.clipboard_streams.insert(stream, Vec::new());
+                    self.open_clipboard(stream);
                 }
                 return Ok(None);
             }
@@ -396,10 +418,10 @@ impl SessionActor {
                 if self.upload_streams.remove(&stream) {
                     InputEvent::File(FileRequest::End { stream })
                 } else {
-                    let Some(payload) = self.clipboard_streams.remove(&stream) else {
+                    let Some(pending) = self.clipboard_streams.remove(&stream) else {
                         return Ok(None);
                     };
-                    InputEvent::Clipboard(Bytes::from(payload))
+                    InputEvent::Clipboard(Bytes::from(pending.data))
                 }
             }
             ClientInstruction::Get { object, name } => {
@@ -411,6 +433,10 @@ impl SessionActor {
                 mimetype,
                 name,
             } => {
+                if self.stream_in_use(stream) || self.upload_streams.len() >= MAX_UPLOAD_STREAMS {
+                    tracing::warn!(session = %self.id, stream, "upload refused: stream limit or reused id");
+                    return Ok(None);
+                }
                 self.upload_streams.insert(stream);
                 InputEvent::File(FileRequest::Put {
                     object,
@@ -467,26 +493,65 @@ impl SessionActor {
         self.audit.record(record).await
     }
 
+    /// Whether a client stream index is already carrying something.
+    fn stream_in_use(&self, stream: i32) -> bool {
+        self.clipboard_streams.contains_key(&stream) || self.upload_streams.contains(&stream)
+    }
+
+    /// Start receiving a clipboard stream, within the session's limits.
+    fn open_clipboard(&mut self, stream: i32) {
+        self.clipboard_streams
+            .retain(|_, pending| pending.touched.elapsed() < CLIPBOARD_IDLE);
+        if self.stream_in_use(stream) {
+            tracing::warn!(session = %self.id, stream, "clipboard refused: stream id already in use");
+            return;
+        }
+        if self.clipboard_streams.len() >= MAX_CLIPBOARD_STREAMS {
+            tracing::warn!(session = %self.id, stream, "clipboard refused: too many open streams");
+            return;
+        }
+        self.clipboard_streams.insert(
+            stream,
+            PendingClipboard {
+                data: Vec::new(),
+                touched: Instant::now(),
+            },
+        );
+    }
+
     /// Accumulate one `blob` of an in-flight clipboard stream.
     fn append_clipboard(&mut self, stream: i32, data: &str) {
-        let Some(buffer) = self.clipboard_streams.get_mut(&stream) else {
+        let buffered: usize = self.clipboard_streams.values().map(|p| p.data.len()).sum();
+        let Some(pending) = self.clipboard_streams.get_mut(&stream) else {
             return;
         };
+        // Checked against the decoded size before decoding, so an
+        // oversize blob is never allocated.
+        let incoming = base64::decoded_len_estimate(data.len());
+        if pending.data.len() + incoming > MAX_CLIPBOARD_BYTES
+            || buffered + incoming > MAX_CLIPBOARD_SESSION_BYTES
+        {
+            tracing::warn!(session = %self.id, stream, "clipboard stream too large; discarded");
+            self.clipboard_streams.remove(&stream);
+            return;
+        }
         let Ok(decoded) = BASE64.decode(data) else {
             tracing::debug!(session = %self.id, stream, "discarding malformed clipboard blob");
             self.clipboard_streams.remove(&stream);
             return;
         };
-        // A peer that never sends `end` must not grow this without bound.
-        if buffer.len() + decoded.len() > MAX_CLIPBOARD_BYTES {
-            tracing::warn!(session = %self.id, stream, "clipboard stream too large; discarded");
-            self.clipboard_streams.remove(&stream);
-            return;
-        }
-        buffer.extend_from_slice(&decoded);
+        pending.data.extend_from_slice(&decoded);
+        pending.touched = Instant::now();
     }
 
     async fn on_target_event(&mut self, event: TargetEvent) -> Result<(), SessionError> {
+        // A refused upload is over: free its id so refusals cannot fill
+        // the upload limit.
+        if let TargetEvent::File(FileEvent::Ack { stream, status, .. }) = &event {
+            if *status != 0 {
+                self.upload_streams.remove(stream);
+            }
+        }
         // Only non-keyframe video may be sacrificed under backpressure;
         // dropping anything else desynchronises the client's canvas.
         let droppable = matches!(
@@ -971,6 +1036,75 @@ mod tests {
             tokio::task::yield_now().await;
         }
         inputs.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn a_client_cannot_hold_open_unlimited_clipboard_streams() {
+        let (handle, _frames, _events, inputs) = spawn_session();
+        let streams: Vec<i32> = (1..=i32::try_from(MAX_CLIPBOARD_STREAMS).unwrap() + 1).collect();
+        for &stream in &streams {
+            handle
+                .send(ClientInstruction::Clipboard {
+                    stream,
+                    mimetype: "text/plain".to_owned(),
+                })
+                .await
+                .unwrap();
+        }
+        for &stream in &streams {
+            handle
+                .send(ClientInstruction::Blob {
+                    stream,
+                    data: BASE64.encode(b"x"),
+                })
+                .await
+                .unwrap();
+            handle
+                .send(ClientInstruction::End { stream })
+                .await
+                .unwrap();
+        }
+
+        let recorded = wait_for_inputs(&inputs, streams.len()).await;
+        assert_eq!(
+            recorded.len(),
+            MAX_CLIPBOARD_STREAMS,
+            "the stream over the limit was accepted"
+        );
+    }
+
+    #[tokio::test]
+    async fn reopening_an_open_stream_id_does_not_reset_it() {
+        let (handle, _frames, _events, inputs) = spawn_session();
+        let open = || ClientInstruction::Clipboard {
+            stream: 2,
+            mimetype: "text/plain".to_owned(),
+        };
+        handle.send(open()).await.unwrap();
+        handle
+            .send(ClientInstruction::Blob {
+                stream: 2,
+                data: BASE64.encode(b"first "),
+            })
+            .await
+            .unwrap();
+        handle.send(open()).await.unwrap();
+        handle
+            .send(ClientInstruction::Blob {
+                stream: 2,
+                data: BASE64.encode(b"second"),
+            })
+            .await
+            .unwrap();
+        handle
+            .send(ClientInstruction::End { stream: 2 })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            wait_for_inputs(&inputs, 1).await,
+            vec![InputEvent::Clipboard(Bytes::from_static(b"first second"))]
+        );
     }
 
     #[tokio::test]

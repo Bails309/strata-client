@@ -229,7 +229,7 @@ mod tests {
     use crate::services::dmz_link::config::{LinkConfig, LinkEndpoint};
     use crate::services::dmz_link::connector::{BoxedStream, Connector};
     use async_trait::async_trait;
-    use bytes::Bytes;
+    use axum::body::Body;
     use http::{Request, Response, StatusCode};
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -242,10 +242,10 @@ mod tests {
     struct NullHandler;
     #[async_trait]
     impl RequestHandler for NullHandler {
-        async fn handle(&self, _: Request<Bytes>) -> Response<Bytes> {
+        async fn handle(&self, _: Request<Body>) -> Response<Body> {
             Response::builder()
                 .status(StatusCode::NO_CONTENT)
-                .body(Bytes::new())
+                .body(Body::empty())
                 .unwrap()
         }
     }

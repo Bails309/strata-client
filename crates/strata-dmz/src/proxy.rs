@@ -24,21 +24,21 @@
 //!    The pump is a spawned task so the response head can be awaited
 //!    concurrently (e.g. for early 4xx replies).
 //! 5. Read response headers, then stream body frames back to the
-//!    public client up to [`MAX_PROXY_BODY_BYTES`]; trailers are
+//!    public client; trailers are
 //!    dropped (axum can't stream HTTP/1.1 trailers reliably to all
 //!    clients and this proxy is HTTP/1.1 + h2 to public).
 //!
 //! ## Body caps
 //!
 //! Neither direction is buffered in full. Per-request memory is
-//! bounded by the negotiated h2 flow-control windows (typically ~64
-//! KiB) rather than [`MAX_PROXY_BODY_BYTES`]. The cap is still
-//! enforced byte-by-byte as data flows; over-cap requests are
-//! refused upfront when `Content-Length` is present and the upstream
-//! stream is reset mid-transfer otherwise. Over-cap responses are
-//! refused upfront when upstream advertises `Content-Length`;
-//! mid-stream overshoot truncates the response and the public
-//! connection is closed by the body stream returning an error.
+//! bounded by the negotiated h2 flow-control windows rather than by
+//! body size. Request bodies are capped at
+//! [`ProxyState::max_request_body`] (default
+//! [`MAX_PROXY_REQUEST_BODY_BYTES`]) on top of the per-IP public cap:
+//! over-cap requests are refused upfront when `Content-Length` is
+//! present and the upstream stream is reset mid-transfer otherwise.
+//! Response bodies are not capped here; the internal node decides what
+//! it sends (PERF-02).
 //!
 //! ## Hop-by-hop headers
 //!
@@ -64,10 +64,9 @@ use http::{Request as HttpRequest, Uri};
 
 use crate::link_server::LinkSessionRegistry;
 
-/// Maximum total bytes the proxy will buffer / forward in either
-/// direction per request. Symmetric on the request body and response
-/// body so neither direction can be used to amplify the other.
-pub const MAX_PROXY_BODY_BYTES: usize = 8 * 1024 * 1024;
+/// Largest request body the proxy forwards, whatever the per-IP public
+/// cap allows. Matches the internal link's limit.
+pub const MAX_PROXY_REQUEST_BODY_BYTES: usize = 512 * 1024 * 1024;
 
 /// Hop-by-hop header names that must be stripped before forwarding
 /// the request through the link, per RFC 7230 §6.1. `host` is also
@@ -124,11 +123,17 @@ impl EdgeSigner for NoopEdgeSigner {
 pub struct ProxyState {
     pub registry: LinkSessionRegistry,
     pub signer: Arc<dyn EdgeSigner>,
+    /// Request body ceiling; see [`MAX_PROXY_REQUEST_BODY_BYTES`].
+    pub max_request_body: usize,
 }
 
 impl ProxyState {
     pub fn new(registry: LinkSessionRegistry, signer: Arc<dyn EdgeSigner>) -> Self {
-        Self { registry, signer }
+        Self {
+            registry,
+            signer,
+            max_request_body: MAX_PROXY_REQUEST_BODY_BYTES,
+        }
     }
 }
 
@@ -166,7 +171,6 @@ enum ProxyError {
     LinkSendUnavailable,
     UpstreamHandshake,
     UpstreamProtocol,
-    UpstreamTooLarge,
     InvalidRequestUri,
 }
 
@@ -186,10 +190,6 @@ impl IntoResponse for ProxyError {
             ProxyError::UpstreamProtocol => {
                 (StatusCode::BAD_GATEWAY, "upstream link protocol error")
             }
-            ProxyError::UpstreamTooLarge => (
-                StatusCode::INSUFFICIENT_STORAGE,
-                "upstream response exceeded proxy body limit",
-            ),
             ProxyError::InvalidRequestUri => (StatusCode::BAD_REQUEST, "invalid request uri"),
         };
         let mut resp = (status, msg).into_response();
@@ -257,7 +257,7 @@ async fn proxy(state: ProxyState, req: AxumRequest) -> Result<Response, ProxyErr
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse::<u64>().ok())
     {
-        if declared > MAX_PROXY_BODY_BYTES as u64 {
+        if declared > state.max_request_body as u64 {
             return Ok((StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response());
         }
     }
@@ -295,7 +295,16 @@ async fn proxy(state: ProxyState, req: AxumRequest) -> Result<Response, ProxyErr
         None => return Err(last_err.unwrap_or(ProxyError::LinkSendUnavailable)),
     };
 
-    match forward_streaming(sender, &method, &upstream_uri, &headers, body).await {
+    match forward_streaming(
+        sender,
+        &method,
+        &upstream_uri,
+        &headers,
+        body,
+        state.max_request_body,
+    )
+    .await
+    {
         Ok(resp) => {
             tracing::debug!(
                 link_id = %info.link_id,
@@ -327,6 +336,7 @@ async fn forward_streaming(
     upstream_uri: &Uri,
     headers: &HeaderMap,
     body: Body,
+    max_request_body: usize,
 ) -> Result<Response, ProxyError> {
     // Build the upstream request.
     let mut up_req = HttpRequest::builder()
@@ -389,7 +399,11 @@ async fn forward_streaming(
     // server then sees a body read error and (in the test fakes)
     // drops the connection, which propagates through the h2
     // connection task to make resp_fut error out.
-    let pump = tokio::spawn(pump_request_body_upstream(body, send_stream));
+    let pump = tokio::spawn(pump_request_body_upstream(
+        body,
+        send_stream,
+        max_request_body,
+    ));
 
     let resp = match resp_fut.await {
         Ok(r) => r,
@@ -414,32 +428,12 @@ fn build_public_response_with_pump(
     pump: Option<tokio::task::JoinHandle<Result<(), PumpFail>>>,
 ) -> Result<Response, ProxyError> {
     let (head, recv) = resp.into_parts();
-
-    // Pre-flight: if upstream advertised an over-cap Content-Length,
-    // refuse before forwarding any bytes to the public client.
-    // Mid-stream overshoot is handled by the body stream below.
-    if let Some(declared) = head
-        .headers
-        .get(http::header::CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<u64>().ok())
-    {
-        if declared > MAX_PROXY_BODY_BYTES as u64 {
-            if let Some(pump) = pump {
-                pump.abort();
-            }
-            // Dropping `recv` will close the response stream.
-            drop(recv);
-            return Err(ProxyError::UpstreamTooLarge);
-        }
-    }
     // Pump (if any) owns its own lifetime past this point.
     drop(pump);
 
     // Build the public response with the upstream status + headers,
     // minus hop-by-hop fields. The body is a streaming adapter over
-    // the h2 RecvStream that releases flow-control window per chunk
-    // and enforces the byte cap as data flows.
+    // the h2 RecvStream that releases flow-control window per chunk.
     let mut public = Response::builder().status(head.status);
     {
         let h = public.headers_mut().expect("fresh builder has headers map");
@@ -449,10 +443,7 @@ fn build_public_response_with_pump(
             }
         }
     }
-    let stream_body = RecvStreamBody {
-        recv,
-        remaining: MAX_PROXY_BODY_BYTES,
-    };
+    let stream_body = RecvStreamBody { recv };
     public.body(Body::from_stream(stream_body)).map_err(|e| {
         tracing::warn!(error = %e, "failed to build public response");
         ProxyError::UpstreamProtocol
@@ -478,6 +469,7 @@ enum PumpFail {
 async fn pump_request_body_upstream(
     body: Body,
     mut send: SendStream<Bytes>,
+    cap: usize,
 ) -> Result<(), PumpFail> {
     use http_body_util::BodyDataStream;
     let mut stream = BodyDataStream::new(body);
@@ -491,11 +483,11 @@ async fn pump_request_body_upstream(
                 return Err(PumpFail::BodyReadError);
             }
         };
-        if total.saturating_add(chunk.len()) > MAX_PROXY_BODY_BYTES {
+        if total.saturating_add(chunk.len()) > cap {
             tracing::debug!(
                 total,
                 chunk_len = chunk.len(),
-                cap = MAX_PROXY_BODY_BYTES,
+                cap,
                 "request body exceeded cap mid-stream"
             );
             send.send_reset(h2::Reason::CANCEL);
@@ -536,12 +528,11 @@ async fn pump_request_body_upstream(
 }
 
 /// Axum response body adapter over an h2 [`RecvStream`]. Releases
-/// flow-control window per chunk and enforces the proxy body cap.
-/// On cap overshoot or upstream error, yields an `Err` which axum
-/// converts into a premature connection close on the public side.
+/// flow-control window per chunk as the public client takes it. On an
+/// upstream error, yields an `Err` which axum converts into a premature
+/// connection close on the public side.
 struct RecvStreamBody {
     recv: RecvStream,
-    remaining: usize,
 }
 
 impl Stream for RecvStreamBody {
@@ -560,17 +551,6 @@ impl Stream for RecvStreamBody {
             }
             Poll::Ready(Some(Ok(chunk))) => {
                 let len = chunk.len();
-                if len > this.remaining {
-                    tracing::debug!(
-                        len,
-                        remaining = this.remaining,
-                        "upstream response exceeded proxy body cap mid-stream"
-                    );
-                    return Poll::Ready(Some(Err(std::io::Error::other(
-                        "upstream response exceeded proxy body cap",
-                    ))));
-                }
-                this.remaining -= len;
                 if let Err(e) = this.recv.flow_control().release_capacity(len) {
                     tracing::debug!(error = %e, "release_capacity failed");
                 }
@@ -626,12 +606,6 @@ mod tests {
     fn link_send_unavailable_returns_502() {
         let err = ProxyError::LinkSendUnavailable.into_response();
         assert_eq!(err.status(), StatusCode::BAD_GATEWAY);
-    }
-
-    #[test]
-    fn upstream_too_large_returns_507() {
-        let err = ProxyError::UpstreamTooLarge.into_response();
-        assert_eq!(err.status(), StatusCode::INSUFFICIENT_STORAGE);
     }
 
     #[test]
@@ -801,7 +775,7 @@ mod tests {
         let resp = proxy(state, req).await.expect("proxy ok");
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), MAX_PROXY_BODY_BYTES)
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("collect body");
         assert_eq!(&body[..], b"hello from internal");
@@ -1077,14 +1051,14 @@ mod tests {
 
     #[tokio::test]
     async fn request_oversized_content_length_returns_413_before_pick() {
-        // A request advertising a Content-Length larger than
-        // MAX_PROXY_BODY_BYTES must be refused with 413 *before* the
+        // A request advertising a Content-Length larger than the
+        // ceiling must be refused with 413 *before* the
         // proxy picks a link. Proof: the registry is empty — if the
         // pre-flight didn't trigger, the next step would be NoLinkUp
         // (503), not 413.
         let state = empty_registry_state();
 
-        let too_big = (MAX_PROXY_BODY_BYTES as u64) + 1;
+        let too_big = (MAX_PROXY_REQUEST_BODY_BYTES as u64) + 1;
         let req = http::Request::builder()
             .method("POST")
             .uri("/api/upload")
@@ -1192,7 +1166,7 @@ mod tests {
             .expect("proxy ok");
         assert_eq!(resp.status(), StatusCode::OK);
         // Drain the (empty) response body to let upstream finish.
-        let _ = axum::body::to_bytes(resp.into_body(), MAX_PROXY_BODY_BYTES).await;
+        let _ = axum::body::to_bytes(resp.into_body(), usize::MAX).await;
 
         let upstream_body = body_rx.await.expect("upstream captured body");
         assert_eq!(
@@ -1277,7 +1251,8 @@ mod tests {
             "test-node".into(),
             &[],
         );
-        let state = ProxyState::new(registry, Arc::new(signer));
+        let mut state = ProxyState::new(registry, Arc::new(signer));
+        state.max_request_body = 8 * 1024 * 1024;
 
         // 9 MiB body (cap is 8 MiB), no Content-Length, in 9 chunks
         // of 1 MiB. Pre-flight cannot save us; the pump must.
@@ -1325,42 +1300,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upstream_response_oversize_content_length_returns_507() {
-        // Upstream advertises an over-cap Content-Length on the
-        // response. The proxy must refuse with 507 before forwarding
-        // any body bytes to the public client. The server intentionally
-        // never sends a body matching the declared CL — it just sends
-        // the response head and leaves the stream open. The proxy's
-        // preflight check on CL fires before any body bytes are read,
-        // so the lying CL is sufficient to trigger the 507 path.
+    async fn large_upstream_responses_stream_through() {
+        // Responses are not capped by the proxy: a body larger than the
+        // old 8 MiB buffer reaches the public client intact.
         let (server_io, client_io) = duplex(64 * 1024);
-
-        let too_big = (MAX_PROXY_BODY_BYTES as u64) + 1;
+        const SIZE: usize = 9 * 1024 * 1024;
         let server_task = tokio::spawn(async move {
             let mut conn = H2ServerBuilder::new()
                 .handshake::<_, Bytes>(server_io)
                 .await
                 .expect("h2 server handshake");
             if let Some(item) = conn.accept().await {
-                let (request, mut respond) = item.expect("h2 accept");
-                let (_p, mut body) = request.into_parts();
-                while let Some(chunk) = body.data().await {
-                    if let Ok(c) = chunk {
-                        let _ = body.flow_control().release_capacity(c.len());
-                    }
-                }
+                let (_request, mut respond) = item.expect("h2 accept");
                 let resp = HttpResponse::builder()
                     .status(200)
-                    .header("content-length", too_big.to_string())
+                    .header("content-length", SIZE.to_string())
                     .body(())
                     .unwrap();
-                // Send response WITHOUT END_STREAM. h2 rejects a
-                // CL+EOS-on-headers mismatch as a malformed message,
-                // so we leave the stream open. The proxy's preflight
-                // sees the over-cap CL and aborts — we never need to
-                // actually transmit the body. The cleanup abort()
-                // below tears down the dangling stream.
-                let _ = respond.send_response(resp, false);
+                let mut send = respond.send_response(resp, false).unwrap();
+                for i in 0..9 {
+                    send.send_data(Bytes::from(vec![i as u8; 1024 * 1024]), i == 8)
+                        .unwrap();
+                }
             }
             while conn.accept().await.is_some() {}
         });
@@ -1399,19 +1360,13 @@ mod tests {
             .body(Body::empty())
             .unwrap();
 
-        // `proxy` maps UpstreamTooLarge → 507. But because the
-        // handler in tests calls `proxy(...)` directly (not
-        // proxy_handler), we receive the raw error.
-        let err = proxy(state, req).await.expect_err("expected error");
-        assert!(
-            matches!(err, ProxyError::UpstreamTooLarge),
-            "unexpected error variant: {err:?}"
-        );
-        // Sanity: IntoResponse maps it to 507.
-        assert_eq!(
-            err.into_response().status(),
-            StatusCode::INSUFFICIENT_STORAGE
-        );
+        let resp = proxy(state, req).await.expect("proxied");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("whole body");
+        assert_eq!(body.len(), SIZE);
+        assert!(body[SIZE - 1] == 8 && body[0] == 0);
 
         server_task.abort();
         conn_task.abort();

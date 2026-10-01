@@ -291,6 +291,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`STRATA_FILE_CRYPTO_CONCURRENCY`), and a failed submission leaves no
   ciphertext behind. Shares staged before the upgrade still download
   (migration 100 records each blob's format).
+- **Large uploads and downloads work through the DMZ (PERF-02).** The
+  internal end of the DMZ link collected every request and response
+  body, capped at 8 MiB, so Quick Share uploads and recording or share
+  downloads above that failed through the DMZ while working directly.
+  Bodies now stream in both directions: a request reaches the router,
+  and its authentication and route limits, before its body is read;
+  unread body is bounded by h2 flow control (1 MiB per stream, 16 MiB
+  per link); responses are sent as the DMZ takes them and are no longer
+  capped by the link or the DMZ. Request bodies over 512 MiB are
+  refused, and a body that stalls for 60 seconds or a request open for
+  30 minutes is cut off.
+  **Behaviour changes for DMZ operators:**
+  `STRATA_DMZ_PUBLIC_BODY_LIMIT_BYTES` now defaults to 512 MiB (was
+  8 MiB); set it lower to keep restricting uploads at the edge. On the
+  public listener `STRATA_DMZ_PUBLIC_HEADER_TIMEOUT_MS` now applies only
+  to requests without a body. Responses over 8 MiB no longer get `507`.
 
 ## [2.2.0] — 2026-09-25
 

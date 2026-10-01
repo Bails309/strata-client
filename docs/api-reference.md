@@ -1045,6 +1045,12 @@ Paginated audit log entries (newest first).
 | ---------- | ------- | ------- | --- |
 | `page`     | integer | 1       | —   |
 | `per_page` | integer | 50      | 200 |
+| `before`   | integer | —       | —   |
+
+`before` returns entries with an `id` below it and takes precedence over
+`page`. Pass the last `id` of one page to get the next; deep pages then
+cost the same as the first. Filters: `action_type`, `action_prefix`,
+`username`, `from`, `to`, `search`.
 
 **Response** `200 OK`
 

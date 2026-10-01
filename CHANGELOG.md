@@ -29,6 +29,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   be open at once. A stream id already in use cannot be reopened, and an
   upload the target refuses frees its id. Clipboard size is checked before
   a blob is decoded.
+- **The audit chain covers who and when, and is checked (SEC-17).** New
+  entries hash their id, timestamp, user, action, details and the previous
+  digest (migration 098); entries written before it keep their old hashes.
+  `audit_logs` refuses updates, deletes and truncation. A background job
+  verifies new entries every 10 minutes and the whole chain daily, raises
+  `audit.integrity_failed` and an error log on any break, and records a
+  keyed checkpoint of the head, which is also logged so a copy can live
+  outside the database. Set `STRATA_AUDIT_CHECKPOINT_KEY` to keep the
+  checkpoint key apart from the JWT secret it is otherwise derived from.
+  Deleting a user no longer rewrites their audit entries. See
+  docs/security.md for what this does and does not protect against.
 - **Files too large to scan are refused in block mode (SEC-13).**
   `Skipped { reason: "oversize" }` now follows `STRATA_AV_FAIL_MODE` like an
   engine error. The Compose default `STRATA_AV_MAX_SCAN_SIZE` was 100 MiB
@@ -229,6 +240,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`STRATA_NVR_MEMORY_BUDGET_MB`); each holds up to an equal share of it,
   never more than the previous per-session limits. With many sessions open
   each keeps less history for observers to replay.
+- **Audit writes take one round trip (PERF-12).** Locking the chain,
+  reading its head, hashing and inserting now happen in one database call
+  instead of five, still serialised.
+- **Audit log pages by id (PERF-11).** The Audit Logs and AV-blocked pages
+  fetch the next page by the last id shown (`before`) instead of skipping
+  rows, so deep pages cost the same as the first. Only the filters in use
+  reach the query. Free-text search is indexed with trigrams when the
+  database allows `pg_trgm`, and works unindexed otherwise.
 
 ## [2.2.0] — 2026-09-25
 

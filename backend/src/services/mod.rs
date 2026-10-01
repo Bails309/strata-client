@@ -4,6 +4,7 @@ pub mod ad_sync_admin;
 pub mod admin_tags;
 pub mod app_state;
 pub mod audit;
+pub mod audit_verify;
 pub mod auth;
 pub mod av;
 pub mod checkouts;

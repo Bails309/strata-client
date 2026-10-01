@@ -1553,6 +1553,8 @@ export interface AuditLogFilters {
   from?: string; // RFC3339
   to?: string; // RFC3339
   search?: string;
+  /** Keyset cursor: rows older than this id. Takes precedence over `page`. */
+  before?: number;
 }
 
 export const getAuditLogs = (page = 1, per_page = 50, filters: AuditLogFilters = {}) => {

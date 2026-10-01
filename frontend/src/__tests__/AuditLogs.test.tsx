@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { getAuditLogs } from "../api";
 
@@ -116,6 +116,29 @@ describe("AuditLogs", () => {
     await screen.findAllByText("auth.login");
     await user.click(screen.getByText("Next"));
     expect(screen.getByText("Page 2")).toBeInTheDocument();
+  });
+
+  it("fetches the next page by the last id shown, not by offset", async () => {
+    const fullPage = Array.from({ length: 50 }, (_, i) => ({
+      id: 100 - i,
+      created_at: "2026-01-15T10:30:00Z",
+      action_type: "auth.login",
+      user_id: "abc-123",
+      username: "admin",
+      details: {},
+      current_hash: "abcdef1234567890abcdef1234567890",
+    }));
+    vi.mocked(getAuditLogs).mockResolvedValue(fullPage);
+
+    const user = userEvent.setup();
+    render(<AuditLogs />);
+    await screen.findAllByText("auth.login");
+    await user.click(screen.getByText("Next"));
+
+    await waitFor(() =>
+      expect(vi.mocked(getAuditLogs).mock.lastCall?.[2]).toMatchObject({ before: 51 })
+    );
+    expect(vi.mocked(getAuditLogs).mock.lastCall?.[0]).toBe(1);
   });
 
   it("Previous button navigates back to page 1", async () => {

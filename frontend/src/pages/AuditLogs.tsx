@@ -273,6 +273,9 @@ function shortId(v: unknown): React.ReactNode {
 export default function AuditLogs() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [page, setPage] = useState(1);
+  // cursors[n] is the last id shown on page n + 1, so deep pages are fetched
+  // by id rather than by skipping rows.
+  const [cursors, setCursors] = useState<number[]>([]);
   const { formatDateTime } = useSettings();
 
   // Filter inputs. Free-text fields are debounced via a 300ms effect
@@ -317,13 +320,28 @@ export default function AuditLogs() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setPage(1);
+    setCursors([]);
   }, [filters]);
 
+  const before = page > 1 ? cursors[page - 2] : undefined;
   useEffect(() => {
-    getAuditLogs(page, 50, filters)
-      .then(setLogs)
+    let current = true;
+    getAuditLogs(1, 50, { ...filters, before })
+      .then((rows) => {
+        if (current) setLogs(rows);
+      })
       .catch(() => {});
-  }, [page, filters]);
+    return () => {
+      current = false;
+    };
+  }, [before, filters]);
+
+  const nextPage = () => {
+    const last = logs[logs.length - 1];
+    if (!last) return;
+    setCursors((c) => [...c.slice(0, page - 1), last.id]);
+    setPage(page + 1);
+  };
 
   const filtersActive = !!actionPrefix || !!username || !!search || !!from || !!to;
   const resetFilters = () => {
@@ -452,7 +470,7 @@ export default function AuditLogs() {
             Previous
           </button>
           <span className="py-2 px-2 text-txt-secondary">Page {page}</span>
-          <button className="btn" onClick={() => setPage(page + 1)} disabled={logs.length < 50}>
+          <button className="btn" onClick={nextPage} disabled={logs.length < 50}>
             Next
           </button>
         </div>

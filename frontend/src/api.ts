@@ -1666,6 +1666,8 @@ export const linkCheckoutToProfile = (profileId: string, checkoutId: string | nu
 
 export interface ConnectionInfo {
   name?: string;
+  /** The connection sets its own domain, so the prompt does not ask for one. */
+  has_domain?: boolean;
   protocol: string;
   has_credentials: boolean;
   ignore_cert?: boolean;
@@ -1729,6 +1731,8 @@ export interface CreateTunnelTicketRequest {
   connection_id: string;
   username?: string;
   password?: string;
+  /** Used only when the connection has no domain of its own. */
+  domain?: string;
   credential_profile_id?: string;
   width?: number;
   height?: number;

@@ -946,16 +946,17 @@ pub async fn delete_folder(
 }
 
 /// Minimal fields used by `connection_info` to decide client-side auth prompts.
-/// Tuple shape: (protocol, extra, watermark, name).
-pub type ConnectionSessionInfo = (String, Option<serde_json::Value>, String, String);
+/// Tuple shape: (protocol, extra, watermark, name, has_domain).
+pub type ConnectionSessionInfo = (String, Option<serde_json::Value>, String, String, bool);
 
-/// Fetch protocol/extra/watermark/name for a non-soft-deleted connection.
+/// Fetch protocol/extra/watermark/name/has_domain for a non-soft-deleted connection.
 pub async fn get_session_info(
     pool: &Pool<Postgres>,
     id: Uuid,
 ) -> Result<Option<ConnectionSessionInfo>, AppError> {
     let row = sqlx::query_as(
-        "SELECT protocol, extra, watermark, name FROM connections WHERE id = $1 AND soft_deleted_at IS NULL",
+        "SELECT protocol, extra, watermark, name, COALESCE(btrim(domain), '') <> ''
+         FROM connections WHERE id = $1 AND soft_deleted_at IS NULL",
     )
     .bind(id)
     .fetch_optional(pool)

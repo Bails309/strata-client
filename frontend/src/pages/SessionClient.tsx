@@ -99,6 +99,7 @@ export default function SessionClient() {
   // Keyed by message so a later setError() never inherits a stale code.
   const [errorStatus, setErrorStatus] = useState<{ message: string; code: number } | null>(null);
   const [sshRequired, setSshRequired] = useState<string[] | null>(null);
+  const [hasDomain, setHasDomain] = useState(false);
   const [ignoreCert, setIgnoreCert] = useState(false);
   const [connectionWatermark, setConnectionWatermark] = useState<string>("inherit");
   const [fileTransferEnabled, setFileTransferEnabled] = useState(false);
@@ -114,6 +115,7 @@ export default function SessionClient() {
   const pendingCredsRef = useRef<{
     username: string;
     password: string;
+    domain?: string;
     credential_profile_id?: string;
   }>({ username: "", password: "" });
 
@@ -378,6 +380,7 @@ export default function SessionClient() {
         if (cancelled) return;
         setProtocol(info.protocol);
         setConnectionName(info.name || info.protocol.toUpperCase());
+        setHasDomain(!!info.has_domain);
         setIgnoreCert(!!info.ignore_cert);
         setConnectionWatermark(info.watermark || "inherit");
         setFileTransferEnabled(!!info.file_transfer_enabled);
@@ -429,7 +432,11 @@ export default function SessionClient() {
   const handlePreConnectSubmit = useCallback(() => {
     pendingCredsRef.current = selectedProfileId
       ? { username: "", password: "", credential_profile_id: selectedProfileId }
-      : { username: credForm.username || "", password: credForm.password || "" };
+      : {
+          username: credForm.username || "",
+          password: credForm.password || "",
+          domain: credForm.domain || "",
+        };
     setPhase("connected");
   }, [credForm, selectedProfileId]);
 
@@ -821,6 +828,7 @@ export default function SessionClient() {
           connection_id: connectionId,
           username: creds.username || undefined,
           password: creds.password || undefined,
+          domain: creds.domain?.trim() || undefined,
           credential_profile_id: creds.credential_profile_id || undefined,
           width: metrics.width,
           height: metrics.height,
@@ -1298,7 +1306,7 @@ export default function SessionClient() {
     domain: "Domain",
   };
   const preConnectFields =
-    protocol === "rdp" || protocol === "vdi"
+    (protocol === "rdp" || protocol === "vdi") && !hasDomain
       ? ["username", "password", "domain"]
       : ["username", "password"];
 

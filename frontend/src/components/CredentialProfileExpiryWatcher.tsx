@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { bulkSafeguardCheckout, getCredentialProfiles, type CredentialProfile } from "../api";
 import { useToast } from "./ToastProvider";
+import { pollWhileVisible } from "./pollWhileVisible";
 import LeaseBatchBody, { type LeaseItem } from "./LeaseBatchBody";
 import {
   canRenewInPlace,
@@ -367,19 +368,10 @@ export default function CredentialProfileExpiryWatcher({
 
     const unregister = registerLeaseRefresher(evaluate);
 
-    // Run once on mount, then on a steady cadence. The initial call lets a
-    // freshly-opened tab discover an already-expired profile right away.
-    void evaluate();
-    const id = setInterval(() => void evaluate(), pollIntervalMs);
-
-    // Re-evaluate immediately when the tab regains focus or visibility so
-    // sleeping for hours doesn't suppress an "expired" toast that should
-    // already have fired.
-    function onWake() {
-      void evaluate();
-    }
-    window.addEventListener("focus", onWake);
-    document.addEventListener("visibilitychange", onWake);
+    // Runs at once, so a freshly-opened tab discovers an already-expired
+    // profile; pauses while hidden and catches up when shown, so a tab that
+    // slept for hours still raises the "expired" toast.
+    const stopPolling = pollWhileVisible(evaluate, pollIntervalMs);
 
     // Cross-tab dedupe: when another tab writes to the storage key, reload
     // it on the next tick so this tab's in-memory view stays consistent
@@ -392,9 +384,7 @@ export default function CredentialProfileExpiryWatcher({
     return () => {
       cancelled = true;
       unregister();
-      clearInterval(id);
-      window.removeEventListener("focus", onWake);
-      document.removeEventListener("visibilitychange", onWake);
+      stopPolling();
       window.removeEventListener("storage", onStorage);
     };
   }, [toast, pollIntervalMs]);

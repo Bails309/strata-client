@@ -2,25 +2,16 @@
    react-hooks v7 compiler-strict suppressions: legitimate prop->state sync, session
    decoration, or render-time time/derivation patterns. See
    eslint.config.js W4-1 commentary. */
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, lazy, Suspense } from "react";
 import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
-import Credentials from "./pages/Credentials";
-import AdminSettings from "./pages/AdminSettings";
 import SessionClient from "./pages/SessionClient";
 import TiledView from "./pages/TiledView";
-import SharedViewer from "./pages/SharedViewer";
-import AuditLogs from "./pages/AuditLogs";
-import NvrPlayer from "./pages/NvrPlayer";
-import Documentation from "./pages/Documentation";
-import Sessions from "./pages/Sessions";
-import Approvals from "./pages/Approvals";
 import Layout from "./components/Layout";
-import Profile from "./pages/Profile";
 import { SessionManagerProvider, closeAllSessionsExternal } from "./components/SessionManager";
 import SessionBar from "./components/SessionBar";
-import WhatsNewModal from "./components/WhatsNewModal";
+import { whatsNewPending } from "./components/whatsNewState";
 import DisclaimerModal, { TERMS_VERSION } from "./components/DisclaimerModal";
 import SessionTimeoutWarning from "./components/SessionTimeoutWarning";
 import ToastProvider from "./components/ToastProvider";
@@ -31,6 +22,19 @@ import { checkAuthStatus, logout as apiLogout, MeResponse } from "./api";
 import { SettingsProvider } from "./contexts/SettingsContext";
 import { UserPreferencesProvider } from "./components/UserPreferencesProvider";
 import CommandPaletteProvider from "./components/CommandPaletteProvider";
+
+// Pages most visits never open load on demand. The dashboard and session
+// views stay in the main bundle, so opening a session never waits on a chunk.
+const Credentials = lazy(() => import("./pages/Credentials"));
+const AdminSettings = lazy(() => import("./pages/AdminSettings"));
+const SharedViewer = lazy(() => import("./pages/SharedViewer"));
+const AuditLogs = lazy(() => import("./pages/AuditLogs"));
+const NvrPlayer = lazy(() => import("./pages/NvrPlayer"));
+const Documentation = lazy(() => import("./pages/Documentation"));
+const Sessions = lazy(() => import("./pages/Sessions"));
+const Approvals = lazy(() => import("./pages/Approvals"));
+const Profile = lazy(() => import("./pages/Profile"));
+const WhatsNewModal = lazy(() => import("./components/WhatsNewModal"));
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -127,11 +131,13 @@ export default function App() {
         outboundShareBypass={user?.outbound_share_requires_approval === false}
       >
         {!authenticated ? (
-          <Routes>
-            <Route path="/login" element={<Login onLogin={handleLogin} />} />
-            <Route path="/shared/:shareToken" element={<SharedViewer />} />
-            <Route path="*" element={<Navigate to="/login" replace />} />
-          </Routes>
+          <Suspense fallback={null}>
+            <Routes>
+              <Route path="/login" element={<Login onLogin={handleLogin} />} />
+              <Route path="/shared/:shareToken" element={<SharedViewer />} />
+              <Route path="*" element={<Navigate to="/login" replace />} />
+            </Routes>
+          </Suspense>
         ) : (
           <SettingsProvider>
             <UserPreferencesProvider>
@@ -152,111 +158,117 @@ export default function App() {
                 />
               ) : (
                 <CommandPaletteProvider>
-                  <Routes>
-                    <Route element={<Layout user={user} onLogout={handleLogout} />}>
-                      <Route path="/" element={<Dashboard />} />
-                      <Route
-                        path="/credentials"
-                        element={
-                          user?.vault_configured ? (
-                            <Credentials vaultConfigured={true} />
-                          ) : (
-                            <Navigate to="/" replace />
-                          )
-                        }
-                      />
-                      <Route
-                        path="/admin"
-                        element={
-                          user?.can_manage_system ||
-                          user?.can_manage_users ||
-                          user?.can_manage_connections ||
-                          user?.can_create_users ||
-                          user?.can_create_user_groups ||
-                          user?.can_create_connections ||
-                          user?.can_create_sharing_profiles ? (
-                            <AdminSettings user={user} />
-                          ) : (
-                            <Navigate to="/" replace />
-                          )
-                        }
-                      />
-                      <Route
-                        path="/admin/:tab"
-                        element={
-                          user?.can_manage_system ||
-                          user?.can_manage_users ||
-                          user?.can_manage_connections ||
-                          user?.can_create_users ||
-                          user?.can_create_user_groups ||
-                          user?.can_create_connections ||
-                          user?.can_create_sharing_profiles ? (
-                            <AdminSettings user={user} />
-                          ) : (
-                            <Navigate to="/" replace />
-                          )
-                        }
-                      />
-                      <Route path="/session/:connectionId" element={<SessionClient />} />
-                      <Route path="/tiled" element={<TiledView />} />
-                      <Route
-                        path="/observe/:sessionId"
-                        element={
-                          user?.can_manage_system ||
-                          user?.can_view_audit_logs ||
-                          user?.can_view_sessions ? (
-                            <NvrPlayer />
-                          ) : (
-                            <Navigate to="/" replace />
-                          )
-                        }
-                      />
-                      <Route
-                        path="/audit"
-                        element={
-                          user?.can_manage_system || user?.can_view_audit_logs ? (
-                            <AuditLogs />
-                          ) : (
-                            <Navigate to="/" replace />
-                          )
-                        }
-                      />
-                      <Route
-                        path="/sessions"
-                        element={
-                          user?.can_view_sessions ||
-                          user?.can_manage_system ||
-                          user?.can_view_audit_logs ? (
-                            <Sessions user={user} />
-                          ) : (
-                            <Navigate to="/" replace />
-                          )
-                        }
-                      />
-                      <Route
-                        path="/approvals"
-                        element={
-                          user?.vault_configured ? (
-                            <Approvals user={user} />
-                          ) : (
-                            <Navigate to="/" replace />
-                          )
-                        }
-                      />
-                      <Route path="/docs" element={<Documentation user={user} />} />
-                      <Route path="/profile" element={<Profile />} />
-                    </Route>
-                    <Route path="/shared/:shareToken" element={<SharedViewer />} />
-                    <Route path="/login" element={<Navigate to="/" replace />} />
-                    <Route path="*" element={<Navigate to="/" replace />} />
-                  </Routes>
+                  <Suspense fallback={null}>
+                    <Routes>
+                      <Route element={<Layout user={user} onLogout={handleLogout} />}>
+                        <Route path="/" element={<Dashboard />} />
+                        <Route
+                          path="/credentials"
+                          element={
+                            user?.vault_configured ? (
+                              <Credentials vaultConfigured={true} />
+                            ) : (
+                              <Navigate to="/" replace />
+                            )
+                          }
+                        />
+                        <Route
+                          path="/admin"
+                          element={
+                            user?.can_manage_system ||
+                            user?.can_manage_users ||
+                            user?.can_manage_connections ||
+                            user?.can_create_users ||
+                            user?.can_create_user_groups ||
+                            user?.can_create_connections ||
+                            user?.can_create_sharing_profiles ? (
+                              <AdminSettings user={user} />
+                            ) : (
+                              <Navigate to="/" replace />
+                            )
+                          }
+                        />
+                        <Route
+                          path="/admin/:tab"
+                          element={
+                            user?.can_manage_system ||
+                            user?.can_manage_users ||
+                            user?.can_manage_connections ||
+                            user?.can_create_users ||
+                            user?.can_create_user_groups ||
+                            user?.can_create_connections ||
+                            user?.can_create_sharing_profiles ? (
+                              <AdminSettings user={user} />
+                            ) : (
+                              <Navigate to="/" replace />
+                            )
+                          }
+                        />
+                        <Route path="/session/:connectionId" element={<SessionClient />} />
+                        <Route path="/tiled" element={<TiledView />} />
+                        <Route
+                          path="/observe/:sessionId"
+                          element={
+                            user?.can_manage_system ||
+                            user?.can_view_audit_logs ||
+                            user?.can_view_sessions ? (
+                              <NvrPlayer />
+                            ) : (
+                              <Navigate to="/" replace />
+                            )
+                          }
+                        />
+                        <Route
+                          path="/audit"
+                          element={
+                            user?.can_manage_system || user?.can_view_audit_logs ? (
+                              <AuditLogs />
+                            ) : (
+                              <Navigate to="/" replace />
+                            )
+                          }
+                        />
+                        <Route
+                          path="/sessions"
+                          element={
+                            user?.can_view_sessions ||
+                            user?.can_manage_system ||
+                            user?.can_view_audit_logs ? (
+                              <Sessions user={user} />
+                            ) : (
+                              <Navigate to="/" replace />
+                            )
+                          }
+                        />
+                        <Route
+                          path="/approvals"
+                          element={
+                            user?.vault_configured ? (
+                              <Approvals user={user} />
+                            ) : (
+                              <Navigate to="/" replace />
+                            )
+                          }
+                        />
+                        <Route path="/docs" element={<Documentation user={user} />} />
+                        <Route path="/profile" element={<Profile />} />
+                      </Route>
+                      <Route path="/shared/:shareToken" element={<SharedViewer />} />
+                      <Route path="/login" element={<Navigate to="/" replace />} />
+                      <Route path="*" element={<Navigate to="/" replace />} />
+                    </Routes>
+                  </Suspense>
                   <SessionBar />
                   <SessionTimeoutWarning onExpired={handleLogout} />
                   {user?.vault_configured && <CredentialProfileExpiryWatcher />}
                   {user && (user.is_approver || user.is_outbound_approver) && (
                     <PendingApprovalWatcher user={user} />
                   )}
-                  <WhatsNewModal userId={user?.id} />
+                  {whatsNewPending(user?.id) && (
+                    <Suspense fallback={null}>
+                      <WhatsNewModal userId={user?.id} />
+                    </Suspense>
+                  )}
                   <VersionWatcher />
                 </CommandPaletteProvider>
               )}

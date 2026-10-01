@@ -14,6 +14,7 @@ import {
 } from "../api";
 import { useToast, useToastHold, type ToastDetail, type ToastVariant } from "./ToastProvider";
 import { publishPendingApprovals } from "./approvalStore";
+import { pollWhileVisible } from "./pollWhileVisible";
 
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Tunables                                                                  */
@@ -280,27 +281,11 @@ export default function PendingApprovalWatcher({
     refreshRef.current = refresh;
   }, [refresh]);
 
-  // Mount/poll lifecycle. Mirrors CredentialProfileExpiryWatcher's wake-up
-  // strategy (focus + visibilitychange) so a tab that slept through several
-  // approvals catches up on resume.
+  // Mount/poll lifecycle: hidden tabs pause, and a tab that slept through
+  // several approvals catches up when it is shown again.
   useEffect(() => {
     if (!watchCheckouts && !watchOutbound) return;
-    let cancelled = false;
-    void refresh();
-    const id = setInterval(() => {
-      if (!cancelled) void refresh();
-    }, pollIntervalMs);
-    const onWake = () => {
-      if (!cancelled) void refresh();
-    };
-    window.addEventListener("focus", onWake);
-    document.addEventListener("visibilitychange", onWake);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-      window.removeEventListener("focus", onWake);
-      document.removeEventListener("visibilitychange", onWake);
-    };
+    return pollWhileVisible(refresh, pollIntervalMs);
   }, [refresh, pollIntervalMs, watchCheckouts, watchOutbound]);
 
   return null;

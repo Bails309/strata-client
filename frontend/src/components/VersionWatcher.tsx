@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { getStatus } from "../api";
 import { useToast } from "./ToastProvider";
+import { pollWhileVisible } from "./pollWhileVisible";
 
 const POLL_INTERVAL_MS = 60_000; // Poll every 60 seconds
 const STORAGE_KEY = "strata.lastNotifiedVersion.v1";
@@ -45,23 +46,11 @@ export default function VersionWatcher({ pollIntervalMs = POLL_INTERVAL_MS } = {
       }
     }
 
-    // Evaluate once on boot/mount
-    void evaluateVersion();
-
-    const intervalId = setInterval(() => void evaluateVersion(), pollIntervalMs);
-
-    // Re-evaluate when tab becomes active / focused to catch updates immediately upon return
-    function handleWake() {
-      void evaluateVersion();
-    }
-    window.addEventListener("focus", handleWake);
-    document.addEventListener("visibilitychange", handleWake);
+    const stopPolling = pollWhileVisible(evaluateVersion, pollIntervalMs);
 
     return () => {
       cancelled = true;
-      clearInterval(intervalId);
-      window.removeEventListener("focus", handleWake);
-      document.removeEventListener("visibilitychange", handleWake);
+      stopPolling();
     };
   }, [toast, pollIntervalMs]);
 

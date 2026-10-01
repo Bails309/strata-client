@@ -2,13 +2,22 @@
    react-hooks v7 compiler-strict suppressions: legitimate prop->state sync, session
    decoration, or render-time time/derivation patterns. See
    eslint.config.js W4-1 commentary. */
-import { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  Suspense,
+} from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { useTheme } from "./ThemeProvider";
 import { MeResponse } from "../api";
 import AdminMegaMenu from "./AdminMegaMenu";
 import GlobalHeader from "./GlobalHeader";
 import DashboardBackground from "./DashboardBackground";
+import PageLoadBoundary from "./PageLoadBoundary";
 import { SidebarFooter } from "./layout/sidebar/SidebarFooter";
 import SidebarNav from "./layout/sidebar/SidebarNav";
 import "./layout/sidebar/Sidebar.css";
@@ -406,7 +415,11 @@ export default function Layout({
             className="flex-1 w-full max-w-full animate-fade-in"
             style={{ padding: inSession ? 0 : "2rem 2.5rem" }}
           >
-            <Outlet />
+            <PageLoadBoundary key={location.pathname}>
+              <Suspense fallback={null}>
+                <Outlet />
+              </Suspense>
+            </PageLoadBoundary>
           </main>
         </div>
       </div>

@@ -3,9 +3,10 @@
    decoration, or render-time time/derivation patterns. See
    eslint.config.js W4-1 commentary. */
 import { useState, useEffect } from "react";
-
-const STORAGE_KEY = "strata-whats-new-dismissed";
-const WELCOME_KEY = "strata-welcome-dismissed";
+import {
+  WELCOME_STORAGE_KEY as WELCOME_KEY,
+  WHATS_NEW_STORAGE_KEY as STORAGE_KEY,
+} from "./whatsNewState";
 
 /** Current app version — sourced from package.json via Vite define. */
 export const WHATS_NEW_VERSION = __APP_VERSION__;

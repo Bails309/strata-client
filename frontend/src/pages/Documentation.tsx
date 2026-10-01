@@ -1,7 +1,6 @@
 import { useState, useMemo, useEffect, useRef, type ReactElement } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import mermaid from "mermaid";
 import { RELEASE_CARDS, WHATS_NEW_VERSION } from "../components/WhatsNewModal";
 import Select from "../components/Select";
 import {
@@ -220,19 +219,22 @@ const SECTIONS: DocSection[] = [
 
 marked.setOptions({ gfm: true, breaks: false });
 
-// Mermaid is initialised once. We disable startOnLoad and render manually
-// after each tab switch so we only process diagrams in the active section.
-// The dark theme matches the surrounding docs surface.
-let mermaidInitialised = false;
-function ensureMermaidInitialised() {
-  if (mermaidInitialised) return;
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: "dark",
-    securityLevel: "strict",
-    fontFamily: "inherit",
+// Mermaid is large and only some sections have diagrams, so it is loaded
+// and initialised on first use. startOnLoad is off: diagrams are rendered
+// manually after each tab switch, only in the active section.
+type Mermaid = typeof import("mermaid").default;
+let mermaidLoader: Promise<Mermaid> | null = null;
+function loadMermaid(): Promise<Mermaid> {
+  mermaidLoader ??= import("mermaid").then(({ default: mermaid }) => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "dark",
+      securityLevel: "strict",
+      fontFamily: "inherit",
+    });
+    return mermaid;
   });
-  mermaidInitialised = true;
+  return mermaidLoader;
 }
 
 /* ── Component ─────────────────────────────────────────────────────── */
@@ -272,10 +274,19 @@ export default function Documentation({ user }: { user?: MeResponse | null }) {
     if (active.content === null) return;
     const blocks = root.querySelectorAll<HTMLElement>("pre > code.language-mermaid");
     if (blocks.length === 0) return;
-    ensureMermaidInitialised();
     let cancelled = false;
     (async () => {
+      let mermaid: Mermaid;
+      try {
+        mermaid = await loadMermaid();
+      } catch (err) {
+        // Leave the diagram sources readable; a later visit retries.
+        console.error("mermaid failed to load", err);
+        mermaidLoader = null;
+        return;
+      }
       for (let i = 0; i < blocks.length; i++) {
+        if (cancelled) return;
         const code = blocks[i];
         const pre = code.parentElement;
         if (!pre) continue;

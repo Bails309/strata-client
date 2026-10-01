@@ -178,6 +178,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lease on the checkout row (migration 095), releases the connection,
   and gives up after 2 minutes. The lease expires after 5 minutes if
   the backend dies mid-activation.
+- **Smaller first load (PERF-06).** Admin, audit, recordings, sessions,
+  approvals, credentials, profile, shared-viewer and documentation pages
+  now load when first opened, as does the What's New modal (only when it
+  has something to show) and Mermaid (only when a page has a diagram).
+  The dashboard and session views stay in the main bundle so opening a
+  session never waits on a download. The main JavaScript bundle drops
+  from 2,620 kB (757 kB gzipped) to 718 kB (211 kB gzipped). A page that
+  fails to load, typically after an upgrade, shows a reload prompt
+  instead of a blank screen.
+- **Background polling pauses in hidden tabs (PERF-15).** The approval,
+  credential-expiry and version watchers no longer poll while their tab
+  is hidden, catch up as soon as it is shown, and never overlap a slow
+  request.
+- **Health checks are bounded (PERF-09).** At most 32 targets are probed
+  at once instead of every connection simultaneously, probes stop with
+  the pass instead of outliving it, results are written in one statement,
+  and hostnames resolve through the configured DNS servers, as sessions
+  do.
+- **MP4 conversions are single-flight (PERF-05).** Concurrent downloads of
+  the same recording share one conversion, at most two run at once, each
+  encoder run is stopped after 15 minutes, and a cached video is only ever
+  a complete one (it is published by rename). A cached video is found
+  without copying or reading the recording, the size probe reads only the
+  first 64 KiB, and converted videos are removed after 24 hours.
 
 ## [2.2.0] — 2026-09-25
 

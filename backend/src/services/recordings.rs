@@ -1257,157 +1257,209 @@ fn parse_size_instruction_body(hay: &[u8], start: usize) -> Option<(u32, u32)> {
 /// Quality tuning: guacenc defaults to a 640×480 canvas at 2 Mbps, which crushes
 /// modern desktop recordings into unreadable VGA. We probe the recording for its
 /// actual display dimensions and pass them via `-s`, and force a much higher
-/// bitrate via `-r`. The work-dir prefix is versioned (`strata-mp4-v2-`) so
-/// low-quality MP4s cached under the pre-tuning defaults are ignored on upgrade.
+/// bitrate via `-r`.
+///
+/// Conversions are single-flight per recording version and limited to
+/// [`MAX_CONVERSIONS`] at once (PERF-05). Each runs in its own scratch
+/// directory and its result is published by rename, so a cached output is
+/// only ever a complete one.
 pub async fn convert_guac_to_mp4(
     guac_path: &std::path::Path,
 ) -> Result<std::path::PathBuf, crate::error::AppError> {
-    if !guac_path.exists() {
-        return Err(crate::error::AppError::NotFound(
-            "Recording file not found on disk".into(),
-        ));
+    let meta = tokio::fs::metadata(guac_path)
+        .await
+        .map_err(|_| crate::error::AppError::NotFound("Recording file not found on disk".into()))?;
+    let cache_dir = std::env::temp_dir().join(mp4_cache_name(guac_path, &meta));
+    let output = cache_dir.join("recording.mp4");
+    if output.exists() {
+        return Ok(output);
     }
 
-    // Locate guacenc binary across standard system paths
-    let guacenc_bin = if std::path::Path::new("/usr/local/bin/guacenc").exists() {
-        "/usr/local/bin/guacenc"
-    } else if std::path::Path::new("/usr/bin/guacenc").exists() {
-        "/usr/bin/guacenc"
-    } else {
-        "guacenc"
-    };
+    let job = conversion_lock(&cache_dir);
+    let _single_flight = job.lock().await;
+    // Whoever held the lock before us may have produced it.
+    if output.exists() {
+        return Ok(output);
+    }
+    let _slot = CONVERSION_SLOTS
+        .acquire()
+        .await
+        .map_err(|_| crate::error::AppError::Internal("recording conversion unavailable".into()))?;
 
-    // Use a writable temp directory so directory permissions on /var/lib/guacamole/recordings don't block guacenc.
-    // The `-v2-` version tag invalidates the low-quality MP4 caches produced by v1.14.0's default settings.
-    let file_stem = guac_path
+    sweep_stale_mp4_caches().await;
+    tokio::fs::create_dir_all(&cache_dir).await.map_err(|e| {
+        crate::error::AppError::Internal(format!("Failed to create conversion directory: {e}"))
+    })?;
+    let scratch = tempfile::Builder::new()
+        .prefix("job-")
+        .tempdir_in(&cache_dir)
+        .map_err(|e| {
+            crate::error::AppError::Internal(format!("Failed to create conversion directory: {e}"))
+        })?;
+
+    let encoded = encode_mp4(guac_path, scratch.path()).await?;
+    tokio::fs::rename(&encoded, &output).await.map_err(|e| {
+        crate::error::AppError::Internal(format!("Failed to publish converted recording: {e}"))
+    })?;
+    Ok(output)
+}
+
+/// Conversions allowed to run at once; each is a CPU-heavy child process.
+const MAX_CONVERSIONS: usize = 2;
+/// Wall-clock limit on one encoder run.
+const ENCODE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+/// Converted recordings older than this are removed.
+const MP4_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+/// Bumped whenever encoder settings change, so older outputs are not reused.
+const MP4_CACHE_VERSION: &str = "v3";
+
+static CONVERSION_SLOTS: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(MAX_CONVERSIONS);
+
+type JobLocks = std::sync::Mutex<
+    std::collections::HashMap<std::path::PathBuf, std::sync::Weak<tokio::sync::Mutex<()>>>,
+>;
+static CONVERSION_JOBS: std::sync::LazyLock<JobLocks> = std::sync::LazyLock::new(Default::default);
+
+/// One lock per recording version, shared by every concurrent request for it.
+fn conversion_lock(key: &std::path::Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    let mut jobs = CONVERSION_JOBS.lock().unwrap_or_else(|e| e.into_inner());
+    jobs.retain(|_, weak| weak.strong_count() > 0);
+    if let Some(lock) = jobs.get(key).and_then(std::sync::Weak::upgrade) {
+        return lock;
+    }
+    let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+    jobs.insert(key.to_path_buf(), std::sync::Arc::downgrade(&lock));
+    lock
+}
+
+/// Cache directory name for one version of a recording: a recording that is
+/// still growing gets a new name rather than a stale video.
+fn mp4_cache_name(guac_path: &std::path::Path, meta: &std::fs::Metadata) -> String {
+    let stem = guac_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("recording");
-    let work_dir = std::env::temp_dir().join(format!("strata-mp4-v2-{}", file_stem));
-    tokio::fs::create_dir_all(&work_dir).await.ok();
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
+    format!(
+        "strata-mp4-{MP4_CACHE_VERSION}-{stem}-{}-{modified}",
+        meta.len()
+    )
+}
 
-    let temp_guac = work_dir.join("recording.guac");
-    if !temp_guac.exists() {
-        tokio::fs::copy(guac_path, &temp_guac).await.map_err(|e| {
-            crate::error::AppError::Internal(format!(
-                "Failed to stage recording file for conversion: {e}"
-            ))
-        })?;
+/// Remove converted recordings past [`MP4_CACHE_TTL`], including caches
+/// from older encoder versions. Best effort.
+async fn sweep_stale_mp4_caches() {
+    let Ok(mut entries) = tokio::fs::read_dir(std::env::temp_dir()).await else {
+        return;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with("strata-mp4-") {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .await
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > MP4_CACHE_TTL);
+        if stale {
+            let _ = tokio::fs::remove_dir_all(entry.path()).await;
+        }
     }
+}
+
+/// Run `cmd` to completion within [`ENCODE_DEADLINE`], killing it on timeout.
+async fn run_encoder(mut cmd: tokio::process::Command, what: &str) -> Option<std::process::Output> {
+    cmd.kill_on_drop(true);
+    match tokio::time::timeout(ENCODE_DEADLINE, cmd.output()).await {
+        Ok(Ok(out)) if out.status.success() => Some(out),
+        Ok(Ok(out)) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let stderr: String = stderr.chars().take(2000).collect();
+            tracing::warn!("{what} returned non-zero: {stderr}");
+            None
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("{what} could not be run: {e}");
+            None
+        }
+        Err(_) => {
+            tracing::warn!("{what} exceeded {ENCODE_DEADLINE:?} and was stopped");
+            None
+        }
+    }
+}
+
+/// Encode `guac_path` inside `scratch` and return the finished file.
+async fn encode_mp4(
+    guac_path: &std::path::Path,
+    scratch: &std::path::Path,
+) -> Result<std::path::PathBuf, crate::error::AppError> {
+    // guacenc writes next to its input, so it gets a private copy.
+    let temp_guac = scratch.join("recording.guac");
+    tokio::fs::copy(guac_path, &temp_guac).await.map_err(|e| {
+        crate::error::AppError::Internal(format!(
+            "Failed to stage recording file for conversion: {e}"
+        ))
+    })?;
 
     // Probe the recording for its actual display dimensions. Fall back to 1920×1080
     // (a common enterprise RDP size) if we can't find a size instruction — better to
     // slightly upscale/letterbox than to downscale everything to VGA.
-    let (width, height) = match tokio::fs::read(&temp_guac).await {
-        Ok(bytes) => read_recording_dimensions(&bytes).unwrap_or((1920, 1080)),
-        Err(_) => (1920, 1080),
-    };
+    let (width, height) = read_head(&temp_guac, DIMENSION_SCAN_BYTES)
+        .await
+        .and_then(|head| read_recording_dimensions(&head))
+        .unwrap_or((1920, 1080));
     // libavcodec's H.264 encoder rejects odd dimensions with yuv420p; round up to even.
     let width = width + (width & 1);
     let height = height + (height & 1);
-    let size_arg = format!("{}x{}", width, height);
-    // 12 Mbps handles crisp text at up to 1440p; overkill for VGA but the file size penalty is small.
-    let bitrate_arg = "12000000";
 
-    let possible_outputs = [
-        work_dir.join("recording.guac.m4v"),
-        work_dir.join("recording.guac.mp4"),
-        work_dir.join("recording.m4v"),
-        work_dir.join("recording.mp4"),
-        std::path::PathBuf::from(format!("{}.m4v", guac_path.display())),
-        std::path::PathBuf::from(format!("{}.mp4", guac_path.display())),
-        guac_path.with_extension("m4v"),
-        guac_path.with_extension("mp4"),
-    ];
-
-    // If already converted recently, return existing video path
-    for path in &possible_outputs {
-        if path.exists() {
-            if let Ok(meta) = tokio::fs::metadata(path).await {
-                if meta.len() > 0 {
-                    return Ok(path.clone());
-                }
-            }
-        }
-    }
-
-    // Run guacenc -s <WxH> -r <bitrate> -f <temp_guac>
-    let output = tokio::process::Command::new(guacenc_bin)
+    let guacenc_bin = first_existing(&["/usr/local/bin/guacenc", "/usr/bin/guacenc"], "guacenc");
+    let mut guacenc = tokio::process::Command::new(guacenc_bin);
+    guacenc
         .arg("-s")
-        .arg(&size_arg)
+        .arg(format!("{width}x{height}"))
+        // 12 Mbps handles crisp text at up to 1440p; overkill for VGA but the file size penalty is small.
         .arg("-r")
-        .arg(bitrate_arg)
+        .arg("12000000")
         .arg("-f")
-        .arg(&temp_guac)
-        .output()
-        .await;
-
-    if let Ok(ref res) = output {
-        if res.status.success() {
-            for path in &possible_outputs {
-                if path.exists() {
-                    if let Ok(meta) = tokio::fs::metadata(path).await {
-                        if meta.len() > 0 {
-                            return Ok(path.clone());
-                        }
-                    }
-                }
+        .arg(&temp_guac);
+    if run_encoder(guacenc, "guacenc").await.is_some() {
+        for name in ["recording.guac.m4v", "recording.guac.mp4"] {
+            let candidate = scratch.join(name);
+            if non_empty(&candidate).await {
+                return Ok(candidate);
             }
-        } else {
-            let stderr = String::from_utf8_lossy(&res.stderr);
-            tracing::warn!(
-                "guacenc conversion returned non-zero for {:?}: {}",
-                guac_path,
-                stderr
-            );
         }
-    } else if let Err(ref e) = output {
-        tracing::warn!("guacenc execution failed for {:?}: {}", guac_path, e);
     }
 
     // Tier 2 Fallback: ffmpeg + frame extraction
-    let ffmpeg_bin = if std::path::Path::new("/usr/local/bin/ffmpeg").exists() {
-        "/usr/local/bin/ffmpeg"
-    } else if std::path::Path::new("/usr/bin/ffmpeg").exists() {
-        "/usr/bin/ffmpeg"
-    } else {
-        "ffmpeg"
-    };
-
-    let ffmpeg_out = work_dir.join("recording_fallback.mp4");
-    if ffmpeg_out.exists() {
-        if let Ok(meta) = tokio::fs::metadata(&ffmpeg_out).await {
-            if meta.len() > 0 {
-                return Ok(ffmpeg_out);
-            }
-        }
-    }
-
+    let ffmpeg_out = scratch.join("recording_fallback.mp4");
     if let Ok(guac_bytes) = tokio::fs::read(&temp_guac).await {
-        let frame_count = extract_and_save_guac_frames(&guac_bytes, &work_dir).await;
-        if frame_count > 0 {
-            let ff_cmd = tokio::process::Command::new(ffmpeg_bin)
+        if extract_and_save_guac_frames(&guac_bytes, scratch).await > 0 {
+            let ffmpeg_bin =
+                first_existing(&["/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"], "ffmpeg");
+            let mut ffmpeg = tokio::process::Command::new(ffmpeg_bin);
+            ffmpeg
                 .arg("-y")
                 .arg("-framerate")
                 .arg("5")
                 .arg("-i")
-                .arg(work_dir.join("frame_%05d.png"))
+                .arg(scratch.join("frame_%05d.png"))
                 .arg("-c:v")
                 .arg("libx264")
                 .arg("-pix_fmt")
                 .arg("yuv420p")
-                .arg(&ffmpeg_out)
-                .output()
-                .await;
-
-            if let Ok(ff_res) = ff_cmd {
-                if ff_res.status.success() && ffmpeg_out.exists() {
-                    if let Ok(meta) = tokio::fs::metadata(&ffmpeg_out).await {
-                        if meta.len() > 0 {
-                            return Ok(ffmpeg_out);
-                        }
-                    }
-                }
+                .arg(&ffmpeg_out);
+            if run_encoder(ffmpeg, "ffmpeg").await.is_some() && non_empty(&ffmpeg_out).await {
+                return Ok(ffmpeg_out);
             }
         }
     }
@@ -1415,6 +1467,29 @@ pub async fn convert_guac_to_mp4(
     Err(crate::error::AppError::Internal(
         "Neither guacenc nor ffmpeg could convert the recording to MP4".into(),
     ))
+}
+
+/// Bytes scanned for the display size; [`read_recording_dimensions`] looks no further.
+const DIMENSION_SCAN_BYTES: u64 = 65_536;
+
+async fn read_head(path: &std::path::Path, limit: u64) -> Option<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let file = tokio::fs::File::open(path).await.ok()?;
+    let mut head = Vec::new();
+    file.take(limit).read_to_end(&mut head).await.ok()?;
+    Some(head)
+}
+
+async fn non_empty(path: &std::path::Path) -> bool {
+    tokio::fs::metadata(path).await.is_ok_and(|m| m.len() > 0)
+}
+
+fn first_existing(paths: &[&'static str], fallback: &'static str) -> &'static str {
+    paths
+        .iter()
+        .copied()
+        .find(|p| std::path::Path::new(p).exists())
+        .unwrap_or(fallback)
 }
 
 /// Prepare a recording file for download (either in `.mp4` format playable on Windows or raw `.guac` format).
@@ -1853,5 +1928,36 @@ mod tests {
         let missing = std::path::Path::new("/non/existent/recording.guac");
         let res = convert_guac_to_mp4(missing).await;
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn a_recording_that_grows_gets_a_new_cache_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("abc.guac");
+        std::fs::write(&path, b"4.sync,1.0;").unwrap();
+        let before = mp4_cache_name(&path, &std::fs::metadata(&path).unwrap());
+        std::fs::write(&path, b"4.sync,1.0;4.sync,1.1;").unwrap();
+        let after = mp4_cache_name(&path, &std::fs::metadata(&path).unwrap());
+        assert_ne!(before, after);
+        assert!(before.starts_with(&format!("strata-mp4-{MP4_CACHE_VERSION}-abc-")));
+    }
+
+    #[test]
+    fn concurrent_requests_for_one_recording_share_a_lock() {
+        let key = std::path::Path::new("/tmp/strata-mp4-test-shared");
+        let a = conversion_lock(key);
+        let b = conversion_lock(key);
+        assert!(std::sync::Arc::ptr_eq(&a, &b));
+        let other = conversion_lock(std::path::Path::new("/tmp/strata-mp4-test-other"));
+        assert!(!std::sync::Arc::ptr_eq(&a, &other));
+    }
+
+    #[tokio::test]
+    async fn only_the_head_is_read_for_dimensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.guac");
+        std::fs::write(&path, vec![b'x'; 200_000]).unwrap();
+        let head = read_head(&path, DIMENSION_SCAN_BYTES).await.unwrap();
+        assert_eq!(head.len() as u64, DIMENSION_SCAN_BYTES);
     }
 }

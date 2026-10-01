@@ -329,7 +329,7 @@ async fn main() -> anyhow::Result<()> {
         // ── Spawn outbound Quick-Share purge worker (hourly) ──
         services::outbound_shares::spawn_purge_worker(state.clone(), shutdown.clone()),
         // ── Spawn audit chain verifier (every 10 min, full daily) ──
-        services::audit_verify::spawn_verifier(db_pool.clone(), shutdown.clone()),
+        services::audit_verify::spawn_verifier(db_pool.clone(), state.clone(), shutdown.clone()),
         // ── Renew the bundled Vault's runtime token (hourly) ──
         services::vault_provisioning::spawn_token_renewal(state.clone(), shutdown.clone()),
     ];

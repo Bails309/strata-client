@@ -585,14 +585,43 @@ The `audit_logs` table is an append-only, tamper-evident log:
   (`strata::audit_checkpoint`). Rewriting history and recomputing every
   digest no longer matches the last checkpoint; deleting checkpoints is
   noticed by a running backend.
+- **Anchor (SEC-17):** each checkpoint is also signed with the Vault
+  Transit key `strata-audit` (ed25519) and appended to
+  `STRATA_AUDIT_ANCHOR_PATH` (`/app/audit-anchor/checkpoints.jsonl` in the
+  `audit-anchor` volume under compose). Each verifier run checks the newest
+  anchor's signature and that the database still holds a matching chain,
+  so rewriting or deleting checkpoints, or replacing the whole chain, is
+  caught across restarts too. Without Vault the anchor is MAC-only. The
+  result is visible at `GET /api/admin/audit-status`.
 
 **What this does not cover.** Someone who holds the database *and* the
-checkpoint key can rewrite the chain and forge checkpoints. Entries after
-the latest checkpoint (up to 10 minutes) can be truncated unnoticed. The
-independent record is the checkpoint log lines: ship them to a destination
-the database administrators cannot alter, and set
-`STRATA_AUDIT_CHECKPOINT_KEY` to a secret held apart from the database and
-the JWT secret. Changing the key starts a fresh checkpoint series.
+checkpoint key can forge checkpoints in the table, but not the Vault
+signature in the anchor. Someone who holds the backend itself can ask Vault
+to sign anything, and if they can also rewrite the anchor file they can
+roll it back. Entries after the latest checkpoint (up to 10 minutes) can be
+truncated unnoticed. To close these, keep the anchor on storage the backend
+can only append to (an append-only filesystem attribute, or a log shipper
+to write-once storage), ship the `strata::audit_checkpoint` log lines
+elsewhere too, and set `STRATA_AUDIT_CHECKPOINT_KEY` to a secret held apart
+from the database and the JWT secret. Changing the key starts a fresh
+checkpoint series.
+
+**Upgrading.** The runtime Vault token's policy is now `strata-transit-v2`,
+which adds sign and verify on `strata-audit`. On the first start after the
+upgrade the backend regenerates root with the stored unseal key, creates
+the signing key and new policy, issues a new runtime token, then revokes
+both root and the old token. No operator action is needed.
+
+**Write throughput (PERF-12).** Appends are serialised by the chain lock, so
+they are one at a time. Measured with 16 concurrent writers × 100 appends
+(`concurrent_appends_stay_chained`, Postgres 16 under Docker Desktop on
+Windows): 253 appends/s, about 4 ms each under the lock, a mean wait of
+63 ms and a worst case of 633 ms; the chain verified intact afterwards.
+Audit events come from logins, session starts and admin changes, well
+below that rate, so writes stay synchronous and no outbox is used.
+`GET /api/admin/audit-status` reports live mean and maximum latency and
+counts appends of 100 ms or more; if `slow` keeps climbing, rerun the test
+against the production database to measure before changing the design.
 
 ### Logged Events
 
@@ -1492,7 +1521,7 @@ The backend communicates with Vault over HTTP (bundled container on internal Doc
 The bundled Vault container runs on the internal Docker bridge network and is **not exposed to the host**:
 
 - **Unseal key** — stored with the runtime token in `vault-secrets.json` (mode `0600`) in the `backend-config` volume. Back the volume up; loss of the unseal key means Vault data cannot be recovered after a container restart.
-- **No root token at runtime (SEC-25)** — the backend uses root only while provisioning and then revokes it. It runs with an orphan, periodic (72 h, renewed hourly) token whose `strata-transit` policy allows only encrypt/decrypt on the configured key and renewing/looking up itself; it cannot read or change policies, mounts, other keys or tokens. Because the backend keeps the unseal key so restarts stay automatic, a full compromise of the backend can still regenerate root — the backend itself does this to reissue a lapsed runtime token. Operators who need that boundary should use an external Vault with auto-unseal.
+- **No root token at runtime (SEC-25)** — the backend uses root only while provisioning and then revokes it. It runs with an orphan, periodic (72 h, renewed hourly) token whose `strata-transit-v2` policy allows only encrypt/decrypt on the configured key, sign/verify on the `strata-audit` key, and renewing/looking up itself; it cannot read or change policies, mounts, other keys or tokens. Because the backend keeps the unseal key so restarts stay automatic, a full compromise of the backend can still regenerate root — the backend itself does this to reissue a lapsed runtime token. Operators who need that boundary should use an external Vault with auto-unseal.
 - **IPC_LOCK** — the container is granted `IPC_LOCK` capability; `disable_mlock = true` is set for container compatibility.
 - **File storage** — Vault data is persisted to the `vault-data` Docker volume. This volume should be backed up alongside database backups.
 - **Single key share** — the bundled Vault uses a single unseal key (1 key share, threshold of 1) for simplicity. For production deployments requiring Shamir's Secret Sharing, use an external Vault cluster.

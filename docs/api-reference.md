@@ -1160,6 +1160,44 @@ cost the same as the first. Filters: `action_type`, `action_prefix`,
 ]
 ```
 
+#### `GET /api/admin/audit-status`
+
+Audit write latency since the backend started, and the integrity
+verifier's last result. Needs the audit-log permission.
+
+**Response** `200 OK`
+
+```json
+{
+  "appends": {
+    "appends": 1200,
+    "failures": 0,
+    "slow": 0,
+    "mean_ms": 2.1,
+    "max_ms": 38.0
+  },
+  "verifier": {
+    "last_run": "2026-04-04T12:10:00Z",
+    "problems": [],
+    "anchor_path": "/app/audit-anchor/checkpoints.jsonl",
+    "last_anchor": {
+      "v": 1,
+      "at": "2026-04-04T12:10:00Z",
+      "last_id": 1200,
+      "last_hash": "a1b2c3...",
+      "first_v2_id": 1,
+      "key_id": "9f8e7d6c5b4a3921",
+      "mac": "...",
+      "signature": "vault:v1:..."
+    }
+  }
+}
+```
+
+`slow` counts appends that took 100 ms or more, waiting for the chain lock
+included. `problems` is empty when the chain, the latest checkpoint and the
+anchor all check out; `last_run` is null until the first verifier pass.
+
 ### Active Sessions (NVR)
 
 #### `GET /api/admin/sessions`

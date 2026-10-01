@@ -15,8 +15,12 @@ use serde::{Deserialize, Serialize};
 use crate::error::AppError;
 use crate::services::http_client::default_client;
 
-/// Policy attached to the runtime token.
-pub const RUNTIME_POLICY: &str = "strata-transit";
+/// Policy attached to the runtime token. Bumped when it gains a path, so
+/// tokens issued under an older one are replaced.
+pub const RUNTIME_POLICY: &str = "strata-transit-v2";
+
+/// Ed25519 Transit key that signs audit checkpoints (SEC-17).
+pub const AUDIT_SIGNING_KEY: &str = "strata-audit";
 
 /// The runtime token lapses unless renewed within this period.
 pub const RUNTIME_TOKEN_PERIOD: &str = "72h";
@@ -288,15 +292,23 @@ pub async fn provision(
             );
             with_root(address, transit_key, token, unseal_key, persist).await
         }
-        (Some(_), Some(token)) => Ok(LocalCredentials {
-            token: token.to_string(),
-            unseal_key,
-        }),
-        _ => {
+        (Some(policies), Some(token)) if policies.iter().any(|p| p == RUNTIME_POLICY) => {
+            Ok(LocalCredentials {
+                token: token.to_string(),
+                unseal_key,
+            })
+        }
+        (lookup, token) => {
             tracing::warn!(
                 "No usable Vault runtime token; regenerating root from the unseal key to issue one"
             );
             let root = generate_root(address, &unseal_key).await?;
+            // A token from an older policy still works until it lapses.
+            if let (Some(_), Some(old)) = (lookup, token) {
+                if let Err(e) = revoke_token(address, &root, old).await {
+                    tracing::warn!("Could not revoke the previous Vault runtime token: {e}");
+                }
+            }
             with_root(address, transit_key, &root, unseal_key, persist).await
         }
     }
@@ -313,6 +325,7 @@ async fn with_root(
 ) -> Result<LocalCredentials, AppError> {
     enable_transit(address, root).await?;
     create_transit_key(address, root, transit_key).await?;
+    create_signing_key(address, root).await?;
     put_runtime_policy(address, root, transit_key).await?;
     let token = create_runtime_token(address, root).await?;
     check_runtime_token(address, &token, transit_key).await?;
@@ -348,9 +361,41 @@ fn runtime_policy(transit_key: &str) -> String {
     format!(
         "path \"transit/encrypt/{transit_key}\" {{ capabilities = [\"update\"] }}\n\
          path \"transit/decrypt/{transit_key}\" {{ capabilities = [\"update\"] }}\n\
+         path \"transit/sign/{AUDIT_SIGNING_KEY}\" {{ capabilities = [\"update\"] }}\n\
+         path \"transit/verify/{AUDIT_SIGNING_KEY}\" {{ capabilities = [\"update\"] }}\n\
          path \"auth/token/renew-self\" {{ capabilities = [\"update\"] }}\n\
          path \"auth/token/lookup-self\" {{ capabilities = [\"read\"] }}\n"
     )
+}
+
+/// The non-exportable Ed25519 key for audit checkpoints (idempotent).
+async fn create_signing_key(address: &str, root: &str) -> Result<(), AppError> {
+    let resp = default_client()
+        .post(url(address, &format!("transit/keys/{AUDIT_SIGNING_KEY}")))
+        .header("X-Vault-Token", root)
+        .json(&serde_json::json!({ "type": "ed25519" }))
+        .send()
+        .await
+        .map_err(|e| AppError::Vault(format!("Vault signing key request failed: {e}")))?;
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    let body = resp.text().await.unwrap_or_default();
+    if body.contains("already exists") {
+        return Ok(());
+    }
+    Err(AppError::Vault(format!(
+        "Vault signing key create failed ({status}): {body}"
+    )))
+}
+
+async fn revoke_token(address: &str, root: &str, token: &str) -> Result<(), AppError> {
+    let req = default_client()
+        .post(url(address, "auth/token/revoke"))
+        .header("X-Vault-Token", root)
+        .json(&serde_json::json!({ "token": token }));
+    vault_call(req, "Vault token revoke").await.map(drop)
 }
 
 fn url(address: &str, path: &str) -> String {
@@ -883,6 +928,17 @@ mod tests {
                 }),
             )
             .route(
+                "/v1/auth/token/revoke",
+                post(
+                    |AxumState(s): AxumState<MockVault>, Json(body): Json<serde_json::Value>| async move {
+                        let token = body["token"].as_str().unwrap_or_default().to_string();
+                        s.tokens.lock().await.remove(&token);
+                        s.revoked.lock().await.push(token);
+                        StatusCode::NO_CONTENT
+                    },
+                ),
+            )
+            .route(
                 "/v1/sys/generate-root/attempt",
                 put(|| async { Json(json!({ "nonce": "n1", "otp": MOCK_OTP })) })
                     .delete(|| async { StatusCode::NO_CONTENT }),
@@ -1078,6 +1134,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_token_from_an_older_policy_is_replaced_and_revoked() {
+        let state = MockVault::default();
+        *state.initialized.lock().await = true;
+        state.add_token("hvs.old-runtime", "strata-transit").await;
+        let addr = start_mock_vault(state.clone()).await;
+        let creds = provision(
+            &format!("http://{addr}"),
+            "master-key",
+            Some("key"),
+            Some("hvs.old-runtime"),
+            no_persist,
+        )
+        .await
+        .unwrap();
+        assert_ne!(creds.token, "hvs.old-runtime");
+        assert_eq!(
+            *state.revoked.lock().await,
+            vec!["hvs.old-runtime", REGENERATED_ROOT]
+        );
+        let policy = state.policies.lock().await[RUNTIME_POLICY].clone();
+        assert!(policy.contains(&format!("transit/sign/{AUDIT_SIGNING_KEY}")));
+    }
+
+    #[tokio::test]
     async fn a_lapsed_runtime_token_is_reissued_with_a_regenerated_root() {
         let state = MockVault::default();
         *state.initialized.lock().await = true;
@@ -1163,6 +1243,22 @@ mod tests {
             Some(vec![RUNTIME_POLICY.to_string()])
         );
         renew_self(&addr, &creds.token).await.unwrap();
+
+        // It can sign audit checkpoints, and a signature does not verify
+        // for a different message.
+        let signature = crate::services::vault::sign_audit(&cfg, b"checkpoint")
+            .await
+            .unwrap();
+        assert!(
+            crate::services::vault::verify_audit(&cfg, b"checkpoint", &signature)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !crate::services::vault::verify_audit(&cfg, b"tampered", &signature)
+                .await
+                .unwrap()
+        );
 
         // The runtime token can do nothing else.
         let denied = default_client()

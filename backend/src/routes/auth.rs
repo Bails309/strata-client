@@ -359,13 +359,7 @@ pub async fn login(
         "access",
         ACCESS_TOKEN_TTL,
     )?;
-    let (refresh_token, _refresh_jti) = create_local_jwt(
-        user.id,
-        &user.username,
-        &user.role,
-        "refresh",
-        REFRESH_TOKEN_TTL,
-    )?;
+    let refresh_token = issue_refresh_token(&db.pool, user.id, &user.username, &user.role).await?;
 
     // Generate a fresh CSRF token bound to this session. The token is
     // returned both as a cookie and in the response body so the SPA can
@@ -520,11 +514,34 @@ fn create_local_jwt(
     token_type: &str,
     ttl_secs: usize,
 ) -> Result<(String, Uuid), AppError> {
-    mint_local_jwt(user_id, username, role, token_type, ttl_secs, None)
+    mint_local_jwt(user_id, username, role, token_type, ttl_secs, None, None)
+}
+
+/// Mint a refresh token that starts a new family, and record it.
+async fn issue_refresh_token(
+    pool: &sqlx::PgPool,
+    user_id: Uuid,
+    username: &str,
+    role: &str,
+) -> Result<String, AppError> {
+    let family = Uuid::new_v4();
+    let (token, jti) = mint_local_jwt(
+        user_id,
+        username,
+        role,
+        "refresh",
+        REFRESH_TOKEN_TTL,
+        None,
+        Some(family),
+    )?;
+    let expires_at = chrono::Utc::now() + chrono::Duration::seconds(REFRESH_TOKEN_TTL as i64);
+    crate::services::refresh_tokens::record_new(pool, jti, family, user_id, expires_at).await?;
+    Ok(token)
 }
 
 /// [`create_local_jwt`] for a session that began at `auth_time` (Unix
 /// seconds); `None` means it begins now. Refresh carries it forward.
+/// Refresh tokens name their rotation `family`.
 fn mint_local_jwt(
     user_id: Uuid,
     username: &str,
@@ -532,6 +549,7 @@ fn mint_local_jwt(
     token_type: &str,
     ttl_secs: usize,
     auth_time: Option<usize>,
+    family: Option<Uuid>,
 ) -> Result<(String, Uuid), AppError> {
     use jsonwebtoken::{encode, EncodingKey, Header};
     use serde::Serialize;
@@ -547,6 +565,8 @@ fn mint_local_jwt(
         auth_time: usize,
         jti: String,
         token_type: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fam: Option<String>,
     }
 
     let secret = crate::config::JWT_SECRET
@@ -570,6 +590,7 @@ fn mint_local_jwt(
         auth_time: auth_time.unwrap_or(now),
         jti: jti.to_string(),
         token_type: token_type.to_string(),
+        fam: family.map(|f| f.to_string()),
     };
 
     let token = encode(
@@ -613,6 +634,8 @@ pub async fn logout(
     #[derive(serde::Deserialize, Clone)]
     struct ExpClaims {
         exp: u64,
+        #[serde(default)]
+        jti: Option<Uuid>,
     }
 
     let secret = crate::config::JWT_SECRET.get().cloned().unwrap_or_default();
@@ -664,6 +687,13 @@ pub async fn logout(
                     refresh_exp,
                 )
                 .await;
+                if let Some(jti) = data.claims.jti {
+                    if let Err(e) =
+                        crate::services::refresh_tokens::revoke_family_of(pool, jti).await
+                    {
+                        tracing::error!(error = %e, "logout: could not revoke the refresh family");
+                    }
+                }
             }
         }
     }
@@ -1158,6 +1188,11 @@ pub async fn refresh(
         sub: String,
         token_type: String,
         iat: usize,
+        exp: i64,
+        jti: Uuid,
+        /// Absent on tokens minted before rotation was tracked.
+        #[serde(default)]
+        fam: Option<Uuid>,
         /// Absent on tokens minted before absolute expiry existed.
         #[serde(default)]
         auth_time: Option<usize>,
@@ -1224,37 +1259,54 @@ pub async fn refresh(
         ));
     }
 
-    // Rotate the refresh token: revoke the bearer we just consumed and
-    // mint a fresh one. Without rotation, a single stolen refresh cookie
-    // could be replayed for the full refresh-token lifetime. The old
-    // token is added to both the in-memory revocation cache and the
-    // persistent table so a replay survives a restart. The previous
-    // token's exp is taken from its JWT claims so we don't keep it in
-    // the revocation table any longer than its natural lifetime.
-    {
-        // Re-decode purely to extract `exp` for the revocation entry. We
-        // already validated signature/exp/issuer above so any failure
-        // here would be a logic bug \u2014 fall back to ACCESS_TOKEN_TTL+
-        // REFRESH_TOKEN_TTL to be safe.
-        #[derive(serde::Deserialize)]
-        struct ExpOnly {
-            exp: u64,
+    // Rotate: consume the presented token and record its successor in one
+    // transaction, so exactly one of two racing requests gets a successor.
+    let (new_refresh_token, new_refresh_jti) = mint_local_jwt(
+        user_id,
+        &username,
+        &role,
+        "refresh",
+        REFRESH_TOKEN_TTL,
+        Some(auth_time),
+        Some(claims.fam.unwrap_or_else(Uuid::new_v4)),
+    )?;
+    let rotation = crate::services::refresh_tokens::rotate(
+        &db.pool,
+        claims.jti,
+        user_id,
+        claims.fam,
+        chrono::DateTime::from_timestamp(claims.exp, 0).unwrap_or_else(chrono::Utc::now),
+        &crate::services::refresh_tokens::Successor {
+            jti: new_refresh_jti,
+            expires_at: chrono::Utc::now()
+                + chrono::Duration::seconds(REFRESH_TOKEN_TTL as i64),
+        },
+    )
+    .await?;
+    match rotation {
+        crate::services::refresh_tokens::Rotation::Rotated => {}
+        crate::services::refresh_tokens::Rotation::Concurrent => {
+            // Another tab of this browser has just rotated it; its new
+            // cookies are already on their way.
+            return axum::response::Response::builder()
+                .status(409)
+                .header("Content-Type", "application/json")
+                .body(axum::body::Body::from(r#"{"error":"refresh_in_progress"}"#))
+                .map_err(|e| AppError::Internal(format!("Response build error: {e}")));
         }
-        let exp = jsonwebtoken::decode::<ExpOnly>(
-            refresh_token,
-            &DecodingKey::from_secret(secret.as_bytes()),
-            &validation,
-        )
-        .map(|td| td.claims.exp)
-        .unwrap_or_else(|_| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                + REFRESH_TOKEN_TTL as u64
-        });
-        crate::services::token_revocation::revoke(refresh_token, exp);
-        crate::services::token_revocation::persist_revocation(&db.pool, refresh_token, exp).await;
+        crate::services::refresh_tokens::Rotation::Reused => {
+            let _ = audit::log(
+                &db.pool,
+                Some(user_id),
+                "auth.refresh_token_reused",
+                &json!({ "family_id": claims.fam }),
+            )
+            .await;
+            return Err(AppError::Auth("Refresh token has been revoked".into()));
+        }
+        crate::services::refresh_tokens::Rotation::Unknown => {
+            return Err(AppError::Auth("Invalid or expired refresh token".into()));
+        }
     }
 
     // Issue a new access token with the latest username/role
@@ -1265,14 +1317,7 @@ pub async fn refresh(
         "access",
         ACCESS_TOKEN_TTL,
         Some(auth_time),
-    )?;
-    let (new_refresh_token, _new_refresh_jti) = mint_local_jwt(
-        user_id,
-        &username,
-        &role,
-        "refresh",
-        REFRESH_TOKEN_TTL,
-        Some(auth_time),
+        None,
     )?;
 
     // Record the new access-token jti so the admin "active sessions" panel
@@ -1696,13 +1741,8 @@ pub async fn sso_callback(
         "access",
         ACCESS_TOKEN_TTL,
     )?;
-    let (refresh_token, _refresh_jti) = create_local_jwt(
-        row.id,
-        &row.username,
-        &row.role_name,
-        "refresh",
-        REFRESH_TOKEN_TTL,
-    )?;
+    let refresh_token =
+        issue_refresh_token(&db.pool, row.id, &row.username, &row.role_name).await?;
 
     audit::log(
         &db.pool,

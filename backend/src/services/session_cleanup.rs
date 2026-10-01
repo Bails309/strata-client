@@ -75,6 +75,11 @@ async fn run_once(pool: &Pool<Postgres>) -> anyhow::Result<()> {
         tracing::debug!("idempotency_keys sweep: {deleted_idem} expired rows deleted");
     }
 
+    let deleted_refresh = crate::services::refresh_tokens::prune_expired(pool).await?;
+    if deleted_refresh > 0 {
+        tracing::debug!("refresh_tokens sweep: {deleted_refresh} expired rows deleted");
+    }
+
     Ok(())
 }
 

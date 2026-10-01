@@ -196,13 +196,15 @@ The 60-second buffer on `csrf_token` and `session_expires` (implemented in v1.8.
 
 **Per-user session tracking:** Each login records an entry in the `active_sessions` table with the token's JTI (UUID), user ID, IP address, user agent, and expiry time. This provides visibility into how many active sessions a user has.
 
-#### Refresh-token semantics (clarified v1.6.1)
+#### Refresh-token semantics (clarified v1.6.1; rotation tracked since v2.2.x)
 
-The 8-hour refresh token is **not** rotated on `POST /api/auth/refresh` — the same cookie remains valid until its `exp`, and only the access token is reissued. The 8-hour value is therefore a hard ceiling on continuous session length, not a sliding window: at the 8-hour mark even the most active user is forced through a fresh login. This is intentional, aligns with the [ADR-0005](adr/ADR-0005-jwt-refresh-token-sessions.md) decision, and combined with the activity-driven access-token refresh below produces a session-timeout matrix that is straightforward to reason about for compliance reviews.
+The refresh token is rotated on every `POST /api/auth/refresh`, against a `refresh_tokens` row per issued token. Rotation consumes the presented token and records its successor in one transaction, so of two requests racing with the same token exactly one succeeds. Tokens descend from one sign-in as a family: presenting a token more than 30 seconds after it was consumed is treated as theft and revokes the family (audited as `auth.refresh_token_reused`); within 30 seconds the server answers `409`, which the SPA treats as "another tab already refreshed". Tabs serialise refreshes through the Web Locks API where available. Sign-out revokes the family.
+
+Refresh never extends a sign-in past 12 hours from the original authentication (`auth_time`). The 8-hour token lifetime still applies to each individual refresh token.
 
 | Scenario                                                                | Behaviour                                                                                                                                                                                                     |
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| User actively using the SPA or a session                                | Access token silently refreshes when it has < 10 min remaining and an activity event arrives, for up to **8 hours total** since login. At 8 h the refresh fails and the user is redirected to the login page. |
+| User actively using the SPA or a session                                | Access token silently refreshes when it has < 10 min remaining and an activity event arrives, for up to **12 hours total** since sign-in. At 12 h the refresh fails and the user is redirected to the login page. |
 | User idle (no DOM events, no Guacamole input)                           | Access token expires **20 min** after the most recent refresh. Warning toast appears at the 2-min mark with an explicit extend button.                                                                        |
 | Refresh token revoked server-side (e.g. admin signout, password change) | Next `POST /api/auth/refresh` returns 401; the WebSocket-tunnel auth watchdog (≤ 30 s tick) tears the active session down on the backend.                                                                     |
 
@@ -688,6 +690,8 @@ Password checkouts follow a strict lifecycle:
 5. **Activation** — on approval, self-approval, emergency bypass, or scheduled-time arrival, a new password is generated, the AD account password is reset via LDAP `unicodePwd` modify, and the new password is sealed in Vault
 6. **Expiry** — a background worker sweeps every 60 seconds and expires checkouts past their TTL (computed from activation time). The same worker also activates due `Scheduled` rows (indexed by a partial index on `scheduled_start_at`). On expiry, the password is rotated again so the checked-out password is no longer valid
 7. **Check-In** — users can voluntarily return an active checkout before expiry via a "Check In" action. Check-in immediately sets the status to `CheckedIn` and triggers password rotation, invalidating the previously issued credentials
+
+Activation, check-in, expiry and service-account rotation of one AD account are serialised by a lock on the account (`managed_account_locks`, keyed on the lower-cased DN), held as a row rather than a database session so no connection is kept across LDAP and Vault. An operation is bounded at 2 minutes and a lock left by a crashed backend lapses after 5. Checkouts are exclusive: a checkout cannot activate while another checkout of the same account is `Active`. The password an activation is about to set is sealed and stored on the checkout (`pending_secret`) before AD is changed and cleared when the checkout commits, so a failure in between does not lose the account's only known password.
 
 ### Emergency Approval Bypass (Break-Glass)
 

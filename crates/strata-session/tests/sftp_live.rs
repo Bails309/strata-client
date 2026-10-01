@@ -32,7 +32,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use secrecy::SecretString;
 use strata_session::engine::mock::MockEngine;
-use strata_session::engine::sftp::{SftpConfig, SftpEngine};
+use strata_session::engine::sftp::{SftpConfig, SftpEngine, TransferGate};
 use strata_session::engine::ssh::HostKeyPolicy;
 use strata_session::engine::{
     FileEvent, FileRequest, InputEvent, Protocol, ProtocolEngine, TargetEvent,
@@ -61,7 +61,10 @@ async fn connect_with(root: &str, mutate: impl FnOnce(&mut SftpConfig)) -> SftpE
     config.root = root.to_owned();
     mutate(&mut config);
 
-    let (inner, _events, _inputs) = MockEngine::new(Protocol::Ssh);
+    let (inner, events, _inputs) = MockEngine::new(Protocol::Ssh);
+    // Held open for the test's lifetime: a closed session ends the engine
+    // before background transfers can report.
+    std::mem::forget(events);
     SftpEngine::attach(Box::new(inner), Arc::new(config))
         .await
         .expect("opening the sftp subsystem")
@@ -90,6 +93,35 @@ async fn send(engine: &mut SftpEngine, request: FileRequest) {
         .await
         .expect("timed out handling a file request")
         .expect("file request failed");
+}
+
+/// Uploads finish in the background once the stream ends; wait for the
+/// notice that reports the outcome.
+async fn notice(engine: &mut SftpEngine) -> (String, bool) {
+    let deadline = tokio::time::Instant::now() + IO_TIMEOUT;
+    loop {
+        let event = tokio::time::timeout_at(deadline, engine.next_event())
+            .await
+            .expect("no transfer notice arrived")
+            .expect("engine failed")
+            .expect("engine ended");
+        if let TargetEvent::File(FileEvent::Notice { message, ok }) = event {
+            return (message, ok);
+        }
+    }
+}
+
+/// Refuses everything, the way a positive AV verdict would.
+struct Refuse;
+
+#[async_trait::async_trait]
+impl TransferGate for Refuse {
+    async fn admit_upload(&self, _: &std::path::Path, _: &str) -> Result<(), String> {
+        Err("infected".into())
+    }
+    async fn admit_download(&self, _: &std::path::Path, _: &str) -> Result<(), String> {
+        Err("held for approval".into())
+    }
 }
 
 #[tokio::test]
@@ -191,7 +223,8 @@ async fn a_file_survives_being_uploaded_and_read_back() {
         drain(&mut engine).await;
     }
     send(&mut engine, FileRequest::End { stream: 7 }).await;
-    drain(&mut engine).await;
+    let (message, ok) = notice(&mut engine).await;
+    assert!(ok, "upload failed: {message}");
 
     send(
         &mut engine,
@@ -373,6 +406,82 @@ async fn an_existing_file_can_be_replaced() {
         )
         .await;
         send(&mut engine, FileRequest::End { stream }).await;
-        drain(&mut engine).await;
+        let (message, ok) = notice(&mut engine).await;
+        assert!(ok, "upload {stream} failed: {message}");
     }
+}
+
+/// A refused upload never reaches the target, and the user is told why.
+#[tokio::test]
+#[ignore = "needs a live sshd"]
+async fn a_refused_upload_is_not_written() {
+    let mut engine = connect_with("/tmp", |c| c.gate = Some(Arc::new(Refuse))).await;
+    drain(&mut engine).await;
+
+    let name = "/strata-refused.bin";
+    put(&mut engine, 21, name).await;
+    send(
+        &mut engine,
+        FileRequest::Data {
+            stream: 21,
+            data: Bytes::from_static(b"EICAR"),
+        },
+    )
+    .await;
+    send(&mut engine, FileRequest::End { stream: 21 }).await;
+    let (message, ok) = notice(&mut engine).await;
+    assert!(!ok && message.contains("infected"), "{message}");
+
+    send(
+        &mut engine,
+        FileRequest::Get {
+            object: 1,
+            name: name.to_owned(),
+        },
+    )
+    .await;
+    let events = drain(&mut engine).await;
+    assert!(
+        !events.iter().any(|e| matches!(e, FileEvent::Body { .. })),
+        "refused upload reached the target: {events:?}"
+    );
+}
+
+/// A withheld download sends no bytes, only the reason.
+#[tokio::test]
+#[ignore = "needs a live sshd"]
+async fn a_withheld_download_sends_nothing() {
+    let mut engine = connect_with("/tmp", |_| {}).await;
+    drain(&mut engine).await;
+    put(&mut engine, 31, "/strata-withheld.bin").await;
+    send(
+        &mut engine,
+        FileRequest::Data {
+            stream: 31,
+            data: Bytes::from_static(b"secret"),
+        },
+    )
+    .await;
+    send(&mut engine, FileRequest::End { stream: 31 }).await;
+    assert!(notice(&mut engine).await.1);
+
+    let mut engine = connect_with("/tmp", |c| c.gate = Some(Arc::new(Refuse))).await;
+    drain(&mut engine).await;
+    send(
+        &mut engine,
+        FileRequest::Get {
+            object: 1,
+            name: "/strata-withheld.bin".to_owned(),
+        },
+    )
+    .await;
+    let (message, ok) = notice(&mut engine).await;
+    assert!(!ok && message.contains("approval"), "{message}");
+    let events = drain(&mut engine).await;
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, FileEvent::Body { .. } | FileEvent::Data { .. })),
+        "withheld download sent bytes: {events:?}"
+    );
 }

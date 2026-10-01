@@ -1242,6 +1242,7 @@ fn sftp_config(handshake: &HandshakeParams) -> Option<SftpConfig> {
     config.name = get("sftp-directory").unwrap_or_else(|| "Files".to_owned());
     config.host_keys =
         HostKeyPolicy::Fingerprints(sftp_host_key_fingerprints(handshake, &hostname));
+    config.gate = handshake.transfer_gate.clone();
     Some(config)
 }
 
@@ -1585,6 +1586,7 @@ mod tests {
             height: 768,
             dpi: 96,
             extra,
+            transfer_gate: None,
         }
     }
 

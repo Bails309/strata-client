@@ -1270,6 +1270,19 @@ pub async fn ws_tunnel(
         }
     };
 
+    let transfer_gate: Option<std::sync::Arc<dyn strata_session::engine::sftp::TransferGate>> = {
+        let s = state.read().await;
+        Some(std::sync::Arc::new(crate::services::transfer_gate::PolicyGate {
+            pool: db.pool.clone(),
+            vault: config.vault.clone(),
+            scanner: s.av_scanner.clone(),
+            fail_mode: s.av_fail_mode,
+            user_id,
+            connection_id,
+            session_id: nvr_session_id.clone(),
+        }))
+    };
+
     let handshake = HandshakeParams {
         protocol: wire_protocol,
         hostname: final_hostname,
@@ -1286,6 +1299,7 @@ pub async fn ws_tunnel(
         height: effective_height,
         dpi: effective_dpi,
         extra,
+        transfer_gate,
     };
 
     let audit_pool = db.pool.clone();

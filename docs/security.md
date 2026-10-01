@@ -931,6 +931,29 @@ single-use, 10-minute **ingest token**:
                       └────────────────────────────────────────────────────┘
 ```
 
+### Ingest path 3 — SFTP file browser (v2.2.x)
+
+The file browser talks to the native SFTP engine directly, so it never
+passes through `onfile`. Since SEC-10 the engine stages every transfer
+in a private temp file on the gateway (mode 0600, deleted when the
+transfer ends) and asks `services::transfer_gate::PolicyGate` before
+moving it:
+
+- **Uploads** are scanned like inbound Quick Share. Only a file the
+  verdict allows is written to the target, with the same no-follow
+  write as before. Audited as `file.sftp_uploaded`, or
+  `file.av_blocked` with source `sftp_upload`.
+- **Downloads** are scanned, then handed to the common pipeline below
+  with the justification `Downloaded from the session file browser:
+  <path>`. A pending share is not sent: the user is told it is waiting
+  for approval, and downloads it from the Outbound Share panel once it
+  is approved. An auto-approved share is sent at once and marked
+  `downloaded`, so its one-shot link cannot deliver it a second time.
+
+The gateway reports the outcome as a Guacamole `msg` instruction
+(code `0x5354`), which the client shows as a toast. Transfers are
+capped at 500 MiB, and a session may have at most 8 at once.
+
 ### Common pipeline (both paths)
 
 1. A fresh cryptographically random 256-bit **DEK** is generated.

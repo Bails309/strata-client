@@ -570,6 +570,24 @@ pub async fn consume_download_token(
     })
 }
 
+/// Record that an auto-approved share was handed straight to its requester
+/// over the session's file channel, so its one-shot link is spent too.
+pub async fn mark_delivered(pool: &Pool<Postgres>, id: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE outbound_shares
+         SET status = $2,
+             downloaded_at = NOW(),
+             download_token = NULL
+         WHERE id = $1 AND status = $3",
+    )
+    .bind(id)
+    .bind(OutboundShareStatus::Downloaded.as_str())
+    .bind(OutboundShareStatus::Approved.as_str())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 // ── Listings & lookups ───────────────────────────────────────────────
 
 /// All shares for a single requester, newest first.

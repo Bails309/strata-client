@@ -43,6 +43,7 @@ pub mod session_registry;
 pub mod settings;
 pub mod shares;
 pub mod token_revocation;
+pub mod transfer_gate;
 pub mod trusted_ca;
 pub mod tunnel_tickets;
 pub mod user_cleanup;

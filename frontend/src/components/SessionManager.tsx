@@ -268,6 +268,9 @@ export function closeAllSessionsExternal(): void {
   _closeAllSessionsHandler?.();
 }
 
+/** `msg` code the gateway uses to report a finished file transfer. */
+export const TRANSFER_NOTICE_MSG = 0x5354;
+
 // ── Byte-size formatter for upload progress toasts ──────────────────
 // Compact `1.2 MB` / `847 KB` style \u2014 not localised, because the
 // numbers appear inline in English progress copy and we want a
@@ -719,6 +722,15 @@ export function SessionManagerProvider({
     client.onfilesystem = (object: Guacamole.GuacObject, name: string) => {
       session.filesystems.push({ object, name });
       setSessions((prev) => [...prev]); // trigger re-render
+    };
+
+    // ── Transfer outcomes (SFTP scan / approval), reported after the stream closed ──
+    client.onmsg = (code: number, args: string[]) => {
+      if (code !== TRANSFER_NOTICE_MSG) return true;
+      const [level, message = ""] = args;
+      if (level === "ok") toast?.success({ title: message });
+      else toast?.warning({ title: message });
+      return false;
     };
 
     // ── File download (server-initiated) ──

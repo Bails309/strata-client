@@ -145,6 +145,11 @@ in the four new `outbound_shares.av_*` columns via the
 `SubmitInput { av_verdict, av_backend, .. }` shape so the audit
 trail is row-attached.
 
+SFTP transfers through the session file browser are scanned by the
+same scanner. The session engine stages each file on the gateway, and
+`services/transfer_gate.rs` scans the staged copy before any byte
+reaches the target (uploads) or the browser (downloads).
+
 ## The three backends
 
 ### `off` (default)
@@ -347,7 +352,7 @@ Two structured audit-event surfaces:
   "action": "file.av_blocked",
   "actor_user_id": "ee5f…",
   "details": {
-    "source":       "inbound",            // inbound | outbound_drive | outbound_token
+    "source":       "inbound",            // inbound | outbound_drive | outbound_token | sftp_upload | sftp_download
     "filename":     "eicar.com",
     "size":         68,
     "av_status":    "infected",           // infected | error
@@ -364,7 +369,11 @@ Written from `routes/files.rs::upload` (inbound) and from
 both the drive-channel `submit` and the token-auth
 `ingest_via_token` paths) after the temp file is unlinked,
 inside the same hash-chained audit pipeline as every other
-privileged action.
+privileged action. SFTP transfers through the session file browser
+are written from `services/transfer_gate.rs` with source
+`sftp_upload` or `sftp_download`, plus `session_id` and
+`connection_id`. An SFTP upload that passes is recorded as
+`file.sftp_uploaded`.
 
 The dedicated **Admin → Secrets & Security → AV-Blocked Files**
 tab is the operator-friendly view: it filters

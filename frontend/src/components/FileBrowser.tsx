@@ -140,6 +140,9 @@ export default function FileBrowser({ filesystem, onClose }: Props) {
         };
 
         writer.oncomplete = () => {
+          // Ending the stream is what hands the file to the gateway's scan;
+          // the outcome arrives later as a transfer notice.
+          writer.sendEnd();
           setUploads((prev) =>
             prev.map((u) => (u.name === file.name ? { ...u, progress: 100 } : u))
           );

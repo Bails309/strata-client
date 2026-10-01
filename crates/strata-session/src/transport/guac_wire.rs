@@ -280,6 +280,13 @@ impl GuacWireEncoder {
                 message: message.clone(),
                 status: *status,
             },
+            FileEvent::Notice { message, ok } => ServerInstruction::Msg {
+                code: crate::engine::TRANSFER_NOTICE_MSG,
+                args: vec![
+                    if *ok { "ok" } else { "warning" }.to_owned(),
+                    message.clone(),
+                ],
+            },
         };
         let mut buf = BytesMut::new();
         instruction.encode(&mut buf);

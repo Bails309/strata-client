@@ -128,6 +128,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checkout before AD is changed, so a failure after the reset does not
   lose it. The AD-sync lock can no longer be stranded on a pooled
   connection by a cancelled sync.
+- **SFTP transfers go through the Quick Share pipeline (SEC-10).** The
+  session file browser used to move files straight between the browser
+  and the target, bypassing antivirus scanning and outbound approval.
+  Every transfer is now staged on the gateway first. Uploads are scanned
+  like inbound Quick Share and only written to the target if the verdict
+  allows it. Downloads are scanned and submitted as an outbound share:
+  a user who needs approval (the default) gets a notice that the file
+  is waiting for approval, and downloads it from Outbound Quick Share
+  once it is approved. A user with the approval bypass receives the
+  file at once, and the share is recorded as delivered. Transfers are
+  capped at 500 MiB. New audit events: `file.sftp_uploaded`, and
+  `file.av_blocked` with source `sftp_upload` or `sftp_download`.
+  Results reach the browser as a toast, because the transfer stream
+  has already closed when the scan finishes.
+- **File browser uploads now end their stream.** The file browser and
+  drag-and-drop never sent the end of an upload, so the gateway could
+  not tell a finished file from one still arriving. It needs to know
+  now, because it scans the whole file before writing it.
 
 ### Build
 

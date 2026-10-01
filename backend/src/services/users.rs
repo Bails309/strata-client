@@ -102,6 +102,8 @@ pub struct UserPageQuery {
     /// Soft-deleted users instead of live ones.
     pub deleted: Option<bool>,
     pub role_id: Option<Uuid>,
+    /// `next` from the previous page; replaces `page`.
+    pub after: Option<String>,
 }
 
 /// One page of the admin user table.
@@ -132,17 +134,88 @@ pub async fn page(
 
     let mut q = QueryBuilder::new(format!("SELECT {SELECT_COLUMNS}"));
     push_where(&mut q);
+    let after = f.after.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if let Some(after) = after {
+        if deleted {
+            let (at, id): (chrono::DateTime<chrono::Utc>, Uuid) =
+                crate::services::connections::decode_cursor(after)?;
+            q.push(" AND (u.deleted_at < ")
+                .push_bind(at)
+                .push(" OR (u.deleted_at = ")
+                .push_bind(at)
+                .push(" AND u.id > ")
+                .push_bind(id)
+                .push("))");
+        } else {
+            let (email, id): (String, Uuid) = crate::services::connections::decode_cursor(after)?;
+            q.push(" AND (u.email, u.id) > (")
+                .push_bind(email)
+                .push(", ")
+                .push_bind(id)
+                .push(")");
+        }
+    }
     q.push(if deleted {
         " ORDER BY u.deleted_at DESC, u.id"
     } else {
         " ORDER BY u.email, u.id"
     });
-    q.push(" LIMIT ")
-        .push_bind(limit)
-        .push(" OFFSET ")
-        .push_bind(offset);
-    let items = q.build_query_as().fetch_all(pool).await?;
-    Ok(crate::services::connections::Page { items, total })
+    q.push(" LIMIT ").push_bind(limit);
+    if after.is_none() {
+        q.push(" OFFSET ").push_bind(offset);
+    }
+    let items: Vec<UserRow> = q.build_query_as().fetch_all(pool).await?;
+    let next = match items.last() {
+        Some(last) if items.len() as i64 == limit => Some(if deleted {
+            crate::services::connections::encode_cursor(&(last.deleted_at, last.id))
+        } else {
+            crate::services::connections::encode_cursor(&(&last.email, last.id))
+        }),
+        _ => None,
+    };
+    Ok(crate::services::connections::Page { items, total, next })
+}
+
+/// Enough of a user to name them or pick them.
+#[derive(Serialize, FromRow, Debug)]
+pub struct UserRef {
+    pub id: Uuid,
+    pub username: String,
+    pub email: String,
+    pub full_name: Option<String>,
+    pub deleted: bool,
+}
+
+#[derive(Deserialize, Debug, Default)]
+pub struct UserRefQuery {
+    /// Substring of username, email or full name; live users only.
+    pub search: Option<String>,
+    /// These users (comma-separated ids), deleted ones included.
+    pub ids: Option<String>,
+    pub limit: Option<i64>,
+}
+
+/// Users matching `search`, or named by `ids`, ordered by username.
+pub async fn refs(pool: &Pool<Postgres>, f: &UserRefQuery) -> Result<Vec<UserRef>, AppError> {
+    let mut q = QueryBuilder::new(
+        "SELECT u.id, u.username, u.email, u.full_name, u.deleted_at IS NOT NULL AS deleted
+         FROM users u WHERE ",
+    );
+    let ids = f.ids.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if let Some(ids) = ids {
+        q.push("u.id = ANY(")
+            .push_bind(crate::services::connections::parse_ids(ids)?)
+            .push(")");
+    } else {
+        q.push("u.deleted_at IS NULL");
+        if let Some(search) = f.search.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            q.push(" AND concat_ws(E'\\n', u.username, u.email, u.full_name) ILIKE ")
+                .push_bind(crate::services::connections::contains_pattern(search));
+        }
+        q.push(" ORDER BY u.username, u.id LIMIT ")
+            .push_bind(f.limit.unwrap_or(20).clamp(1, 50));
+    }
+    Ok(q.build_query_as().fetch_all(pool).await?)
 }
 
 /// Clear a soft-delete tombstone. Returns `true` if a row was restored.

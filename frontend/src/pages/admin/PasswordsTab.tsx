@@ -6,14 +6,16 @@ import { useCallback, useEffect, useState } from "react";
 import Select from "../../components/Select";
 import ConfirmModal from "../../components/ConfirmModal";
 import EnterpriseCheckbox from "../../components/EnterpriseCheckbox";
+import UserPicker from "../../components/UserPicker";
 import { useSettings } from "../../contexts/SettingsContext";
+import { useUserNames } from "../../hooks/useLookups";
 import {
   AdSyncConfig,
   ApprovalRole,
   CheckoutRequest,
   DiscoveredAccount,
-  User,
   UserAccountMapping,
+  UserRef,
   createAccountMapping,
   createApprovalRole,
   deleteAccountMapping,
@@ -47,11 +49,9 @@ function parseDN(dn: string): string {
 export { parseDN as __parseDN };
 
 export default function PasswordsTab({
-  users,
   adSyncConfigs,
   onSave,
 }: {
-  users: User[];
   adSyncConfigs: AdSyncConfig[];
   onSave: () => void;
 }) {
@@ -71,7 +71,6 @@ export default function PasswordsTab({
   const [expandedRole, setExpandedRole] = useState<string | null>(null);
   const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
   const [scopeSearch, setScopeSearch] = useState("");
-  const [approverSearch, setApproverSearch] = useState("");
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
 
   // ── Account mappings ──
@@ -84,9 +83,17 @@ export default function PasswordsTab({
   });
   const [unmapped, setUnmapped] = useState<DiscoveredAccount[]>([]);
   const [loadingUnmapped, setLoadingUnmapped] = useState(false);
+  const [mappingUser, setMappingUser] = useState<UserRef | null>(null);
 
   // ── Checkout requests ──
   const [requests, setRequests] = useState<CheckoutRequest[]>([]);
+
+  const names = useUserNames([
+    ...selectedUsers,
+    ...mappings.map((m) => m.user_id),
+    ...requests.flatMap((r) => [r.requester_user_id, r.approved_by_user_id]),
+  ]);
+  const nameOf = (id: string) => names.get(id)?.username || id;
 
   // ── Confirmation modal for destructive actions ──
   const [confirmModal, setConfirmModal] = useState<{
@@ -331,7 +338,6 @@ export default function PasswordsTab({
                         setSelectedUsers((roleAssignments[role.id] || []).map((a) => a.id));
                         setSelectedAccounts(roleAccountScopes[role.id] || []);
                         setScopeSearch("");
-                        setApproverSearch("");
                       }
                     }}
                   >
@@ -541,19 +547,10 @@ export default function PasswordsTab({
                       Approvals page.
                     </p>
                     {(() => {
-                      const availableUsers = users.filter((u) => !selectedUsers.includes(u.id));
                       const originalUsers = (roleAssignments[role.id] || []).map((a) => a.id);
                       const hasApproversChanged =
                         selectedUsers.length !== originalUsers.length ||
                         !selectedUsers.every((id) => originalUsers.includes(id));
-                      const aq = approverSearch.toLowerCase();
-                      const filteredUsers = aq
-                        ? availableUsers.filter(
-                            (u) =>
-                              u.username.toLowerCase().includes(aq) ||
-                              (u.email && u.email.toLowerCase().includes(aq))
-                          )
-                        : availableUsers;
 
                       return (
                         <>
@@ -561,19 +558,21 @@ export default function PasswordsTab({
                           {selectedUsers.length > 0 && (
                             <div className="flex flex-wrap gap-1.5 mb-2">
                               {selectedUsers.map((uid) => {
-                                const u = users.find((x) => x.id === uid);
+                                const label =
+                                  (roleAssignments[role.id] || []).find((a) => a.id === uid)
+                                    ?.username || nameOf(uid);
                                 return (
                                   <span
                                     key={uid}
                                     className="inline-flex items-center gap-1 bg-primary/20 text-primary text-xs rounded-full px-2.5 py-1"
                                   >
-                                    {u?.username || uid}
+                                    {label}
                                     <button
                                       className="hover:text-red-400 ml-0.5 font-bold leading-none"
                                       onClick={() =>
                                         setSelectedUsers(selectedUsers.filter((id) => id !== uid))
                                       }
-                                      aria-label={`Remove ${u?.username || uid}`}
+                                      aria-label={`Remove ${label}`}
                                     >
                                       &times;
                                     </button>
@@ -583,67 +582,13 @@ export default function PasswordsTab({
                             </div>
                           )}
 
-                          {/* Search + dropdown to add approvers */}
-                          <div className="relative mb-2">
-                            <input
-                              type="text"
-                              className="input input-sm w-full"
-                              placeholder={`Search ${availableUsers.length} available user${availableUsers.length !== 1 ? "s" : ""}...`}
-                              value={approverSearch}
-                              onChange={(e) => setApproverSearch(e.target.value)}
+                          <div className="mb-2">
+                            <UserPicker
+                              ariaLabel="Add approver"
+                              placeholder="Search users to add..."
+                              exclude={selectedUsers}
+                              onSelect={(u) => setSelectedUsers([...selectedUsers, u.id])}
                             />
-                            {approverSearch && filteredUsers.length > 0 && (
-                              <div
-                                className="absolute z-10 mt-1 w-full rounded-md shadow-lg max-h-64 overflow-y-auto p-1"
-                                style={{
-                                  background: "var(--color-surface-elevated)",
-                                  border: "1px solid var(--color-glass-border)",
-                                }}
-                              >
-                                {filteredUsers.slice(0, 50).map((u) => (
-                                  <button
-                                    key={u.id}
-                                    className="cs-option w-full text-left flex items-center justify-between gap-2"
-                                    onClick={() => {
-                                      setSelectedUsers([...selectedUsers, u.id]);
-                                      setApproverSearch("");
-                                    }}
-                                  >
-                                    <span style={{ color: "var(--color-txt-primary)" }}>
-                                      {u.username}
-                                    </span>
-                                    {u.email && u.email !== u.username && (
-                                      <span
-                                        className="text-xs truncate"
-                                        style={{ color: "var(--color-txt-tertiary)" }}
-                                      >
-                                        {u.email}
-                                      </span>
-                                    )}
-                                  </button>
-                                ))}
-                                {filteredUsers.length > 50 && (
-                                  <div
-                                    className="px-3 py-2 text-xs italic"
-                                    style={{ color: "var(--color-txt-tertiary)" }}
-                                  >
-                                    {filteredUsers.length - 50} more — refine your search
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                            {approverSearch && filteredUsers.length === 0 && (
-                              <div
-                                className="absolute z-10 mt-1 w-full rounded-md shadow-lg px-3 py-2 text-sm italic"
-                                style={{
-                                  background: "var(--color-surface-elevated)",
-                                  border: "1px solid var(--color-glass-border)",
-                                  color: "var(--color-txt-tertiary)",
-                                }}
-                              >
-                                No matching users
-                              </div>
-                            )}
                           </div>
 
                           <div className="flex items-center gap-2">
@@ -654,7 +599,8 @@ export default function PasswordsTab({
                               Save Approvers
                             </button>
                             <span className="text-txt-secondary text-xs">
-                              {selectedUsers.length} of {users.length} users selected
+                              {selectedUsers.length} user{selectedUsers.length !== 1 ? "s" : ""}{" "}
+                              selected
                             </span>
                           </div>
                         </>
@@ -718,12 +664,14 @@ export default function PasswordsTab({
                   {/* Step 2: Select Strata user */}
                   <div>
                     <span className="text-xs font-medium block mb-1">Strata User</span>
-                    <Select
-                      value={newMapping.user_id}
-                      onChange={(val) => setNewMapping({ ...newMapping, user_id: val })}
+                    <UserPicker
+                      ariaLabel="Strata user"
                       placeholder="Select user..."
-                      options={users.map((u) => ({ value: u.id, label: u.username }))}
-                      searchable={true}
+                      value={mappingUser?.id === newMapping.user_id ? mappingUser : null}
+                      onSelect={(u) => {
+                        setMappingUser(u);
+                        setNewMapping({ ...newMapping, user_id: u.id });
+                      }}
                     />
                   </div>
                 </div>
@@ -803,9 +751,7 @@ export default function PasswordsTab({
                     <tbody>
                       {mappings.map((m) => (
                         <tr key={m.id} className="border-b border-border/5">
-                          <td className="py-1">
-                            {users.find((u) => u.id === m.user_id)?.username || m.user_id}
-                          </td>
+                          <td className="py-1">{nameOf(m.user_id)}</td>
                           <td className="py-1">
                             <div className="text-sm font-medium">{m.friendly_name || "—"}</div>
                             <div
@@ -905,16 +851,12 @@ export default function PasswordsTab({
                       </span>
                     </td>
                     <td className="py-1">{r.requested_duration_mins}m</td>
-                    <td className="py-1">
-                      {users.find((u) => u.id === r.requester_user_id)?.username ||
-                        r.requester_user_id}
-                    </td>
+                    <td className="py-1">{nameOf(r.requester_user_id)}</td>
                     <td className="py-1 text-xs">
                       {r.approved_by_user_id
                         ? r.approved_by_user_id === r.requester_user_id
                           ? "Self Approved"
-                          : users.find((u) => u.id === r.approved_by_user_id)?.username ||
-                            r.approved_by_user_id
+                          : nameOf(r.approved_by_user_id)
                         : "—"}
                     </td>
                     <td className="py-1 text-xs max-w-[260px]">

@@ -2511,8 +2511,16 @@ pub async fn connection_info(
         (db, vault)
     };
 
+    // Without this any user could read another connection's name and settings by id.
+    if !user.can_access_all_connections()
+        && !crate::services::connections::user_has_role_access(&db.pool, user.id, connection_id)
+            .await?
+    {
+        return Err(AppError::Forbidden);
+    }
+
     // Fetch protocol, extra params, and watermark setting for this connection
-    let (protocol, extra, watermark) =
+    let (protocol, extra, watermark, name) =
         crate::services::connections::get_session_info(&db.pool, connection_id)
             .await?
             .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
@@ -2556,6 +2564,7 @@ pub async fn connection_info(
     let file_transfer_enabled = sftp_setting == Some("true");
 
     let mut resp = json!({
+        "name": name,
         "protocol": protocol,
         "has_credentials": has_vault_creds,
         "ignore_cert": ignore_cert,

@@ -201,6 +201,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing new needs configuring. If the owner cannot create roles, the
   backend warns and keeps using the owner; `STRATA_DB_RUNTIME_ROLE=off`
   opts out.
+- **Connection info checks access.** `GET /api/user/connections/:id/info`
+  answered for any connection id, so a signed-in user could read the
+  protocol, watermark and file-transfer setting of connections they had
+  no access to. It now returns `403` unless the caller's role grants the
+  connection, like the tunnel and tag routes.
 
 ### Build
 
@@ -312,6 +317,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them load small references on demand. The dashboard loads folder
   contents when a folder is opened, 200 rows at a time, and searches on
   the server (`/api/user/connections/page` and `/facets`).
+- **Nothing else loads every connection or user either (PERF-08).** The
+  command palette (main window and pop-out), the Credentials mapping
+  picker and the command-mapping editor search connections on the server
+  as you type; open sessions and saved mappings are fetched by id
+  (`ids=`). The session page takes the connection name from
+  `/api/user/connections/:id/info`. The Password Management and Outbound
+  Share tabs pick users by server search and name them by id
+  (`GET /api/admin/users/refs`). Connection search also matches folder,
+  protocol and tag names, as the palette always did.
+- **Paged lists continue with cursors (PERF-08).** `/api/user/connections/page`
+  and `/api/admin/users/page` return `next` on a full page; passing it as
+  `after` continues from the last row by its sort key rather than an
+  offset, so later pages never repeat or skip rows when others are added
+  or renamed, and deep pages cost the same as the first. The dashboard's
+  folder "Show more" uses them.
 - **Session statistics are cached for 60 seconds (PERF-10).** Concurrent
   requests share one computation, and the Sessions tab shows when the
   figures were computed (`generated_at`). Active sessions and the

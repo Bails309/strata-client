@@ -1961,7 +1961,7 @@ function ConnectionFolderTree(props: FolderTreeProps) {
               indentPx={indentPx + 16}
             />
           ))}
-          {rows && loaded.length < rows.total && (
+          {rows?.next && (
             <tr>
               <td />
               <td colSpan={7} className="!py-2">
@@ -1971,7 +1971,7 @@ function ConnectionFolderTree(props: FolderTreeProps) {
                   style={{ marginLeft: `${indentPx + 16}px` }}
                   onClick={() => props.onLoadMore(node.id)}
                 >
-                  Show more ({rows.total - loaded.length} more)
+                  Show more ({Math.max(0, rows.total - loaded.length)} more)
                 </button>
               </td>
             </tr>

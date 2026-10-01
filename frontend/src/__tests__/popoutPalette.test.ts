@@ -1,13 +1,13 @@
 // Copyright 2026 Strata Client Contributors
 // SPDX-License-Identifier: Apache-2.0
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the api module before importing the unit under test.
 // `vi.hoisted` keeps the mock fn instance available inside the hoisted
 // `vi.mock(...)` factory.
-const { getMyConnections } = vi.hoisted(() => ({ getMyConnections: vi.fn() }));
+const { getMyConnectionsPage } = vi.hoisted(() => ({ getMyConnectionsPage: vi.fn() }));
 vi.mock("../api", () => ({
-  getMyConnections,
+  getMyConnectionsPage,
 }));
 
 import { createPopoutPalette } from "../utils/popoutPalette";
@@ -18,12 +18,22 @@ const sampleConnections = [
   { id: "c3", name: "Gamma DB", protocol: "rdp", hostname: "gamma.example", port: 3389 },
 ];
 
+/** Answer searches the way the server does, from `list`. */
+function serve(list: typeof sampleConnections) {
+  getMyConnectionsPage
+    .mockReset()
+    .mockImplementation(async (_page: number, _per: number, f: { search?: string }) => {
+      const q = (f?.search ?? "").toLowerCase();
+      const items = list.filter(
+        (c) => !q || [c.name, c.hostname, c.protocol].some((s) => s.toLowerCase().includes(q))
+      );
+      return { items, total: items.length };
+    });
+}
+
 async function flush(): Promise<void> {
-  // The palette chains: getMyConnections().then().catch().finally().then(render).
-  // Drain a generous number of microtasks so renders complete in tests.
-  for (let i = 0; i < 10; i++) {
-    await Promise.resolve();
-  }
+  // Past the search debounce, draining the promise chain behind it.
+  await vi.advanceTimersByTimeAsync(250);
 }
 
 describe("popoutPalette", () => {
@@ -31,8 +41,9 @@ describe("popoutPalette", () => {
   let opener: Window;
 
   beforeEach(() => {
+    vi.useFakeTimers();
     document.body.innerHTML = "";
-    getMyConnections.mockReset().mockResolvedValue(sampleConnections);
+    serve(sampleConnections);
     // The popup is "about:blank" same-origin so document/body work; using
     // jsdom's window/document avoids cross-realm contortions.
     popup = window;
@@ -43,6 +54,10 @@ describe("popoutPalette", () => {
       location: { origin: "https://opener.example" },
     } as unknown as Window;
     Object.defineProperty(popup, "closed", { value: false, configurable: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("opens once and is idempotent", () => {
@@ -71,55 +86,56 @@ describe("popoutPalette", () => {
     expect(rows[1].textContent).toContain("Beta Server");
   });
 
-  it("filters by typing into the input", async () => {
+  it("searches the server as you type", async () => {
     const p = createPopoutPalette(popup, opener);
     p.open();
     await flush();
     const input = document.querySelector("input") as HTMLInputElement;
     input.value = "beta";
     input.dispatchEvent(new Event("input", { bubbles: true }));
+    await flush();
+    expect(getMyConnectionsPage).toHaveBeenLastCalledWith(1, 50, { search: "beta" });
     const rows = document.querySelectorAll("[data-index]");
     expect(rows.length).toBe(1);
     expect(rows[0].textContent).toContain("Beta Server");
   });
 
-  it("filters by hostname and protocol too", async () => {
+  it("only the last of several quick keystrokes is searched", async () => {
     const p = createPopoutPalette(popup, opener);
     p.open();
     await flush();
+    getMyConnectionsPage.mockClear();
     const input = document.querySelector("input") as HTMLInputElement;
-    input.value = "ssh";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(document.querySelectorAll("[data-index]").length).toBe(1);
-    input.value = "gamma.example";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    for (const v of ["g", "ga", "gamma.example"]) {
+      input.value = v;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    await flush();
+    expect(getMyConnectionsPage).toHaveBeenCalledTimes(1);
     expect(document.querySelectorAll("[data-index]").length).toBe(1);
     expect(document.querySelector("[data-index]")?.textContent).toContain("Gamma DB");
   });
 
   it("shows Loading… before connections arrive and No connections. when empty", async () => {
-    let resolveFn: (v: typeof sampleConnections) => void = () => {};
-    getMyConnections.mockReset().mockReturnValue(
-      new Promise<typeof sampleConnections>((r) => {
+    let resolveFn: (v: { items: typeof sampleConnections; total: number }) => void = () => {};
+    getMyConnectionsPage.mockReset().mockReturnValue(
+      new Promise((r) => {
         resolveFn = r;
       })
     );
     const p = createPopoutPalette(popup, opener);
     p.open();
     expect(document.body.textContent).toContain("Loading…");
-    resolveFn([]);
+    resolveFn({ items: [], total: 0 });
     await flush();
     expect(document.body.textContent).toContain("No connections.");
   });
 
   it("does not crash when fetch rejects", async () => {
-    getMyConnections.mockReset().mockRejectedValue(new Error("boom"));
+    getMyConnectionsPage.mockReset().mockRejectedValue(new Error("boom"));
     const p = createPopoutPalette(popup, opener);
     p.open();
     await flush();
-    // After rejection the source intentionally leaves the palette in its
-    // "Loading…" state (no error UI) and does not throw. The overlay is
-    // still mounted and Escape still closes cleanly.
     expect(p.isOpen()).toBe(true);
     expect(document.querySelectorAll("[data-index]").length).toBe(0);
   });
@@ -225,7 +241,7 @@ describe("popoutPalette", () => {
   });
 
   it("Enter with no rows is consumed without posting", async () => {
-    getMyConnections.mockReset().mockResolvedValue([]);
+    serve([]);
     const p = createPopoutPalette(popup, opener);
     p.open();
     await flush();
@@ -235,7 +251,7 @@ describe("popoutPalette", () => {
   });
 
   it("Arrow keys with no rows are consumed without crashing", async () => {
-    getMyConnections.mockReset().mockResolvedValue([]);
+    serve([]);
     const p = createPopoutPalette(popup, opener);
     p.open();
     await flush();
@@ -244,7 +260,7 @@ describe("popoutPalette", () => {
   });
 
   it("escapes HTML in connection metadata to avoid injection", async () => {
-    getMyConnections.mockReset().mockResolvedValue([
+    serve([
       {
         id: "x1",
         name: "<script>alert(1)</script>",

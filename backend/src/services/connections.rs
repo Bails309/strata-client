@@ -281,6 +281,42 @@ pub async fn list_for_user(
 pub struct Page<T> {
     pub items: Vec<T>,
     pub total: i64,
+    /// Pass as `after` for the rows following this page; absent on the last.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+}
+
+/// Opaque continuation token holding the sort key of the last row sent.
+pub fn encode_cursor<T: Serialize>(key: &T) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(key).unwrap_or_default())
+}
+
+pub fn decode_cursor<T: serde::de::DeserializeOwned>(s: &str) -> Result<T, AppError> {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .ok_or_else(|| AppError::Validation("after is not a cursor from this listing".into()))
+}
+
+/// Comma-separated ids, at most 200.
+pub fn parse_ids(s: &str) -> Result<Vec<Uuid>, AppError> {
+    let ids = s
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.parse()
+                .map_err(|_| AppError::Validation("ids must be comma-separated ids".into()))
+        })
+        .collect::<Result<Vec<Uuid>, _>>()?;
+    if ids.len() > 200 {
+        return Err(AppError::Validation("at most 200 ids".into()));
+    }
+    Ok(ids)
 }
 
 /// `ILIKE` pattern matching `s` anywhere, with its wildcards taken literally.
@@ -384,7 +420,11 @@ pub async fn admin_page(
         .push(" OFFSET ")
         .push_bind(offset);
     let items = q.build_query_as().fetch_all(pool).await?;
-    Ok(Page { items, total })
+    Ok(Page {
+        items,
+        total,
+        next: None,
+    })
 }
 
 /// Enough of a connection to name it in a picker or a bulk action.
@@ -503,6 +543,10 @@ pub struct UserConnectionQuery {
     pub folder: Option<String>,
     /// `recent`: most recently opened first, opened ones only.
     pub sort: Option<String>,
+    /// `next` from the previous page; replaces `page`.
+    pub after: Option<String>,
+    /// Only these connections (comma-separated ids).
+    pub ids: Option<String>,
 }
 
 /// `FROM`/`WHERE` for the connections `user_id` may open.
@@ -530,15 +574,32 @@ fn push_user_base(q: &mut QueryBuilder<'_, Postgres>, user_id: Uuid, see_all: bo
     }
 }
 
-fn push_user_search(q: &mut QueryBuilder<'_, Postgres>, search: &str) {
-    q.push(" AND concat_ws(E'\\n', c.name, c.hostname, c.description) ILIKE ")
-        .push_bind(contains_pattern(search));
+/// Name, host, description, folder, protocol, or a tag the user sees on it.
+fn push_user_search(q: &mut QueryBuilder<'_, Postgres>, user_id: Uuid, search: &str) {
+    let pattern = contains_pattern(search);
+    q.push(
+        " AND (concat_ws(E'\\n', c.name, c.hostname, c.description, cf.name, c.protocol) ILIKE ",
+    )
+    .push_bind(pattern.clone())
+    .push(
+        " OR EXISTS (SELECT 1 FROM user_connection_tags t JOIN user_tags ut ON ut.id = t.tag_id
+                        WHERE t.connection_id = c.id AND t.user_id = ",
+    )
+    .push_bind(user_id)
+    .push(" AND ut.name ILIKE ")
+    .push_bind(pattern.clone())
+    .push(
+        ") OR EXISTS (SELECT 1 FROM admin_connection_tags t JOIN admin_tags at ON at.id = t.tag_id
+                         WHERE t.connection_id = c.id AND at.name ILIKE ",
+    )
+    .push_bind(pattern)
+    .push("))");
 }
 
 /// Every filter but the folder.
 fn push_user_filters(q: &mut QueryBuilder<'_, Postgres>, user_id: Uuid, f: &UserConnectionQuery) {
     if let Some(search) = non_empty(&f.search) {
-        push_user_search(q, search);
+        push_user_search(q, user_id, search);
     }
     if let Some(protocol) = non_empty(&f.protocol) {
         q.push(" AND lower(c.protocol) = lower(")
@@ -575,6 +636,7 @@ pub async fn user_page(
         Some("recent") => true,
         Some(_) => return Err(AppError::Validation("sort must be `recent`".into())),
     };
+    let ids = non_empty(&f.ids).map(parse_ids).transpose()?;
     let push_where = |q: &mut QueryBuilder<'_, Postgres>| -> Result<(), AppError> {
         push_user_base(q, user_id, see_all);
         push_user_filters(q, user_id, f);
@@ -589,6 +651,9 @@ pub async fn user_page(
                 })?;
                 q.push(" AND c.folder_id = ").push_bind(id);
             }
+        }
+        if let Some(ids) = &ids {
+            q.push(" AND c.id = ANY(").push_bind(ids.clone()).push(")");
         }
         if recent {
             q.push(" AND uca.last_accessed IS NOT NULL");
@@ -606,17 +671,48 @@ pub async fn user_page(
                 c.health_status, c.health_checked_at",
     );
     push_where(&mut q)?;
+    let after = non_empty(&f.after);
+    if let Some(after) = after {
+        if recent {
+            let (at, name, id): (chrono::DateTime<chrono::Utc>, String, Uuid) =
+                decode_cursor(after)?;
+            q.push(" AND (uca.last_accessed < ")
+                .push_bind(at)
+                .push(" OR (uca.last_accessed = ")
+                .push_bind(at)
+                .push(" AND (c.name, c.id) > (")
+                .push_bind(name)
+                .push(", ")
+                .push_bind(id)
+                .push(")))");
+        } else {
+            let (name, id): (String, Uuid) = decode_cursor(after)?;
+            q.push(" AND (c.name, c.id) > (")
+                .push_bind(name)
+                .push(", ")
+                .push_bind(id)
+                .push(")");
+        }
+    }
     q.push(if recent {
         " ORDER BY uca.last_accessed DESC, c.name, c.id"
     } else {
         " ORDER BY c.name, c.id"
     });
-    q.push(" LIMIT ")
-        .push_bind(limit)
-        .push(" OFFSET ")
-        .push_bind(offset);
-    let items = q.build_query_as().fetch_all(pool).await?;
-    Ok(Page { items, total })
+    q.push(" LIMIT ").push_bind(limit);
+    if after.is_none() {
+        q.push(" OFFSET ").push_bind(offset);
+    }
+    let items: Vec<UserConnectionRow> = q.build_query_as().fetch_all(pool).await?;
+    let next = match items.last() {
+        Some(last) if items.len() as i64 == limit => Some(if recent {
+            encode_cursor(&(last.last_accessed, &last.name, last.id))
+        } else {
+            encode_cursor(&(&last.name, last.id))
+        }),
+        _ => None,
+    };
+    Ok(Page { items, total, next })
 }
 
 #[derive(Serialize, FromRow, Debug)]
@@ -656,7 +752,7 @@ pub async fn user_facets(
 
     let mut q = QueryBuilder::new("SELECT COUNT(*), COUNT(*) FILTER (WHERE TRUE");
     if let Some(search) = non_empty(&f.search) {
-        push_user_search(&mut q, search);
+        push_user_search(&mut q, user_id, search);
     }
     q.push(
         "), COALESCE(array_agg(DISTINCT c.protocol) FILTER (WHERE c.protocol IS NOT NULL), '{}')",
@@ -850,16 +946,16 @@ pub async fn delete_folder(
 }
 
 /// Minimal fields used by `connection_info` to decide client-side auth prompts.
-/// Tuple shape: (protocol, extra, watermark).
-pub type ConnectionSessionInfo = (String, Option<serde_json::Value>, String);
+/// Tuple shape: (protocol, extra, watermark, name).
+pub type ConnectionSessionInfo = (String, Option<serde_json::Value>, String, String);
 
-/// Fetch protocol/extra/watermark for a non-soft-deleted connection.
+/// Fetch protocol/extra/watermark/name for a non-soft-deleted connection.
 pub async fn get_session_info(
     pool: &Pool<Postgres>,
     id: Uuid,
 ) -> Result<Option<ConnectionSessionInfo>, AppError> {
     let row = sqlx::query_as(
-        "SELECT protocol, extra, watermark FROM connections WHERE id = $1 AND soft_deleted_at IS NULL",
+        "SELECT protocol, extra, watermark, name FROM connections WHERE id = $1 AND soft_deleted_at IS NULL",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -1140,6 +1236,167 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(user_q(favs).await, (1, vec![c3]));
+
+        // Walking with cursors returns each row once, even if one is renamed mid-walk.
+        let first = user_page(&pool, user, false, &UserConnectionQuery::default(), 1, 0)
+            .await
+            .unwrap();
+        assert_eq!(first.items[0].id, c1);
+        sqlx::query("UPDATE connections SET name = $1 WHERE id = $2")
+            .bind(format!("{tag}-c0"))
+            .bind(c1)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let after = |next: Option<String>| UserConnectionQuery {
+            after: next,
+            ..Default::default()
+        };
+        let second = user_page(&pool, user, false, &after(first.next), 1, 0)
+            .await
+            .unwrap();
+        assert_eq!(second.items[0].id, c3);
+        let third = user_page(&pool, user, false, &after(second.next), 1, 0)
+            .await
+            .unwrap();
+        assert!(third.items.is_empty() && third.next.is_none());
+        sqlx::query("UPDATE connections SET name = $1 WHERE id = $2")
+            .bind(format!("{tag}-c1"))
+            .bind(c1)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(user_page(
+            &pool,
+            user,
+            false,
+            &after(Some("not-a-cursor".into())),
+            1,
+            0
+        )
+        .await
+        .is_err());
+
+        let only = |ids: String| UserConnectionQuery {
+            ids: Some(ids),
+            ..Default::default()
+        };
+        assert_eq!(
+            user_q(only(format!("{c3},{c2}"))).await,
+            (1, vec![c3]),
+            "ids never widen access"
+        );
+
+        let label: Uuid =
+            sqlx::query_scalar("INSERT INTO admin_tags (name) VALUES ($1) RETURNING id")
+                .bind(format!("t{tag}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        sqlx::query("INSERT INTO admin_connection_tags (tag_id, connection_id) VALUES ($1, $2)")
+            .bind(label)
+            .bind(c3)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let by_tag = UserConnectionQuery {
+            search: Some(format!("t{tag}")),
+            ..Default::default()
+        };
+        assert_eq!(
+            user_q(by_tag).await,
+            (1, vec![c3]),
+            "tag names are searched"
+        );
+        sqlx::query("DELETE FROM admin_tags WHERE id = $1")
+            .bind(label)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let only = UserConnectionQuery {
+            ids: Some(format!("{c3},{c2}")),
+            ..Default::default()
+        };
+        assert_eq!(user_q(only).await, (1, vec![c3]), "ids stay authorised");
+
+        let user_tag: Uuid = sqlx::query_scalar(
+            "INSERT INTO user_tags (user_id, name) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(user)
+        .bind(format!("ut-{tag}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO user_connection_tags (user_id, connection_id, tag_id) VALUES ($1, $2, $3)",
+        )
+        .bind(user)
+        .bind(c1)
+        .bind(user_tag)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let admin_tag: Uuid =
+            sqlx::query_scalar("INSERT INTO admin_tags (name) VALUES ($1) RETURNING id")
+                .bind(format!("at-{tag}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        sqlx::query("INSERT INTO admin_connection_tags (tag_id, connection_id) VALUES ($1, $2)")
+            .bind(admin_tag)
+            .bind(c3)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let search = |s: String| UserConnectionQuery {
+            search: Some(s),
+            ..Default::default()
+        };
+        assert_eq!(user_q(search(format!("ut-{tag}"))).await, (1, vec![c1]));
+        assert_eq!(user_q(search(format!("at-{tag}"))).await, (1, vec![c3]));
+
+        // Same last-opened time, so the cursor has to break the tie by name.
+        sqlx::query(
+            "INSERT INTO user_connection_access (user_id, connection_id, last_accessed)
+             SELECT $1, unnest($2::uuid[]), now()",
+        )
+        .bind(user)
+        .bind(vec![c1, c3])
+        .execute(&pool)
+        .await
+        .unwrap();
+        for sort in [None, Some("recent".to_owned())] {
+            let mut seen = Vec::new();
+            let mut after = None;
+            loop {
+                let f = UserConnectionQuery {
+                    sort: sort.clone(),
+                    after: after.take(),
+                    ..Default::default()
+                };
+                let page = user_page(&pool, user, false, &f, 1, 0).await.unwrap();
+                assert_eq!(page.total, 2);
+                seen.extend(page.items.iter().map(|c| c.id));
+                match page.next {
+                    Some(n) => after = Some(n),
+                    None => break,
+                }
+            }
+            assert_eq!(seen, vec![c1, c3], "{sort:?}");
+        }
+        assert!(user_page(
+            &pool,
+            user,
+            false,
+            &UserConnectionQuery {
+                after: Some("not-a-cursor".into()),
+                ..Default::default()
+            },
+            1,
+            0,
+        )
+        .await
+        .is_err());
         let facets = user_facets(
             &pool,
             user,
@@ -1173,6 +1430,52 @@ mod tests {
         .await
         .unwrap();
         assert_eq!((users.total, users.items[0].id), (1, user));
+        let by_tag = |after: Option<String>| crate::services::users::UserPageQuery {
+            search: Some(tag.clone()),
+            after,
+            ..Default::default()
+        };
+        let first = crate::services::users::page(&pool, &by_tag(None), 1, 0)
+            .await
+            .unwrap();
+        assert_eq!(first.items[0].id, user);
+        let rest = crate::services::users::page(&pool, &by_tag(first.next), 1, 0)
+            .await
+            .unwrap();
+        assert!(rest.items.is_empty() && rest.next.is_none());
+        let refs = |f: crate::services::users::UserRefQuery| {
+            let pool = pool.clone();
+            async move {
+                crate::services::users::refs(&pool, &f)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|u| u.id)
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(
+            refs(crate::services::users::UserRefQuery {
+                search: Some(tag.clone()),
+                ..Default::default()
+            })
+            .await,
+            vec![user]
+        );
+        assert_eq!(
+            refs(crate::services::users::UserRefQuery {
+                ids: Some(user.to_string()),
+                ..Default::default()
+            })
+            .await,
+            vec![user]
+        );
+
+        sqlx::query("DELETE FROM admin_tags WHERE id = $1")
+            .bind(admin_tag)
+            .execute(&pool)
+            .await
+            .unwrap();
 
         for id in [c1, c2, c3, c4] {
             sqlx::query("DELETE FROM connections WHERE id = $1")

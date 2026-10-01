@@ -49,6 +49,7 @@ vi.mock("../api", () => ({
   deleteConnectionFolder: vi.fn(),
   getUsers: vi.fn(),
   getUsersPage: vi.fn(),
+  getUserRefs: vi.fn().mockResolvedValue([]),
   updateUser: vi.fn(),
   getActiveSessions: vi.fn(),
   killSessions: vi.fn(),

@@ -8,7 +8,6 @@ import { useParams, useNavigate, useLocation } from "react-router-dom";
 import Guacamole from "guacamole-common-js";
 import {
   getConnectionInfo,
-  getMyConnections,
   createTunnelTicket,
   getCredentialProfiles,
   updateCredentialProfile,
@@ -100,7 +99,6 @@ export default function SessionClient() {
   // Keyed by message so a later setError() never inherits a stale code.
   const [errorStatus, setErrorStatus] = useState<{ message: string; code: number } | null>(null);
   const [sshRequired, setSshRequired] = useState<string[] | null>(null);
-  const [hasDomain, setHasDomain] = useState(false);
   const [ignoreCert, setIgnoreCert] = useState(false);
   const [connectionWatermark, setConnectionWatermark] = useState<string>("inherit");
   const [fileTransferEnabled, setFileTransferEnabled] = useState(false);
@@ -375,21 +373,11 @@ export default function SessionClient() {
     if (errorRef.current) return;
 
     let cancelled = false;
-    Promise.all([
-      getConnectionInfo(connectionId),
-      // Use the user-scoped endpoint here: /admin/connections requires
-      // can_manage_connections (v1.12.7), so delegated users without that
-      // flag would 403 and fall through to the protocol name. /user/connections
-      // is filtered to what the user can actually reach.
-      getMyConnections()
-        .then((conns) => conns.find((c) => c.id === connectionId))
-        .catch(() => undefined),
-    ])
-      .then(([info, connDetail]) => {
+    getConnectionInfo(connectionId)
+      .then((info) => {
         if (cancelled) return;
         setProtocol(info.protocol);
-        setConnectionName(connDetail?.name || info.protocol.toUpperCase());
-        setHasDomain(!!connDetail?.domain);
+        setConnectionName(info.name || info.protocol.toUpperCase());
         setIgnoreCert(!!info.ignore_cert);
         setConnectionWatermark(info.watermark || "inherit");
         setFileTransferEnabled(!!info.file_transfer_enabled);
@@ -1311,9 +1299,7 @@ export default function SessionClient() {
   };
   const preConnectFields =
     protocol === "rdp" || protocol === "vdi"
-      ? hasDomain
-        ? ["username", "password"]
-        : ["username", "password", "domain"]
+      ? ["username", "password", "domain"]
       : ["username", "password"];
 
   // ── Register pop-out actions with SessionManager ──

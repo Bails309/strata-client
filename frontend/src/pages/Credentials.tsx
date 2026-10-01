@@ -10,6 +10,7 @@ import RequestCheckoutForm from "./credentials/RequestCheckoutForm";
 import ProfileEditor, { type EditingProfile } from "./credentials/ProfileEditor";
 import SafeguardSigninCard from "./credentials/SafeguardSigninCard";
 import SafeguardBulkCheckoutCard from "./credentials/SafeguardBulkCheckoutCard";
+import { useConnectionSearch } from "../hooks/useLookups";
 import {
   getCredentialProfiles,
   createCredentialProfile,
@@ -18,7 +19,6 @@ import {
   getMyCredentialMappings,
   setCredentialMapping,
   removeCredentialMapping,
-  getMyConnections,
   getMyCheckouts,
   getMyManagedAccounts,
   requestCheckout,
@@ -39,7 +39,6 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
   const [tab, setTab] = useState<Tab>("profiles");
   const [profiles, setProfiles] = useState<CredentialProfile[]>([]);
   const { formatDateTime } = useSettings();
-  const [connections, setConnections] = useState<Connection[]>([]);
   const [mappings, setMappings] = useState<Record<string, CredentialMapping[]>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditingProfile | null>(null);
@@ -53,6 +52,9 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
   const [mappingConnectionIds, setMappingConnectionIds] = useState<string[]>([]);
   const [mappingSearch, setMappingSearch] = useState("");
   const [mappingDropdownOpen, setMappingDropdownOpen] = useState(false);
+  // Picked connections by id, so their chips keep a name after the search moves on.
+  const [mappingPicked, setMappingPicked] = useState<Record<string, Connection>>({});
+  const { items: mappingResults } = useConnectionSearch(mappingSearch, mappingDropdownOpen);
   const mappingDropdownRef = useRef<HTMLDivElement>(null);
   const mappingTriggerRef = useRef<HTMLDivElement>(null);
   const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
@@ -114,9 +116,8 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
 
   const load = useCallback(async () => {
     try {
-      const [profs, conns] = await Promise.all([getCredentialProfiles(), getMyConnections()]);
+      const profs = await getCredentialProfiles();
       setProfiles(profs);
-      setConnections(conns);
 
       // Load active checkouts
       getMyCheckouts()
@@ -466,18 +467,14 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
       .map((m) => m.connection_id)
   );
 
-  const availableConnections = connections.filter((c) => !mappedConnectionIds.has(c.id));
+  const filteredAvailable = mappingResults.filter((c) => !mappedConnectionIds.has(c.id));
 
-  const filteredAvailable = availableConnections.filter((c) => {
-    if (!mappingSearch) return true;
-    const q = mappingSearch.toLowerCase();
-    return (
-      c.name.toLowerCase().includes(q) ||
-      c.hostname.toLowerCase().includes(q) ||
-      (c.description || "").toLowerCase().includes(q) ||
-      c.protocol.toLowerCase().includes(q)
+  const toggleMappingConnection = (c: Connection) => {
+    setMappingPicked((p) => ({ ...p, [c.id]: c }));
+    setMappingConnectionIds((ids) =>
+      ids.includes(c.id) ? ids.filter((id) => id !== c.id) : [...ids, c.id]
     );
-  });
+  };
 
   if (!vaultConfigured) {
     return (
@@ -1202,7 +1199,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                                   }}
                                 >
                                   {mappingConnectionIds.map((cid) => {
-                                    const conn = connections.find((c) => c.id === cid);
+                                    const conn = mappingPicked[cid];
                                     return conn ? (
                                       <span
                                         key={cid}
@@ -1292,24 +1289,12 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                                               className="cs-option flex items-center gap-2 cursor-pointer"
                                               onClick={(e) => {
                                                 e.stopPropagation();
-                                                setMappingConnectionIds(
-                                                  isSelected
-                                                    ? mappingConnectionIds.filter(
-                                                        (id) => id !== c.id
-                                                      )
-                                                    : [...mappingConnectionIds, c.id]
-                                                );
+                                                toggleMappingConnection(c);
                                               }}
                                               onKeyDown={(e) => {
                                                 if (e.key === "Enter" || e.key === " ") {
                                                   e.preventDefault();
-                                                  setMappingConnectionIds(
-                                                    isSelected
-                                                      ? mappingConnectionIds.filter(
-                                                          (id) => id !== c.id
-                                                        )
-                                                      : [...mappingConnectionIds, c.id]
-                                                  );
+                                                  toggleMappingConnection(c);
                                                 }
                                               }}
                                             >

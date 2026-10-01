@@ -61,7 +61,7 @@ beforeEach(() => {
 const renderTab = () =>
   render(
     <SettingsProvider>
-      <PasswordsTab users={[]} adSyncConfigs={[]} onSave={vi.fn()} />
+      <PasswordsTab adSyncConfigs={[]} onSave={vi.fn()} />
     </SettingsProvider>
   );
 

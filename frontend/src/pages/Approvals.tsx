@@ -178,7 +178,6 @@ export default function Approvals({ user }: { user: MeResponse }) {
 
       {activeTab === "outbound" && showOutbound && (
         <OutboundSharesTab
-          users={[]}
           isSuperAdmin={!!user.can_manage_system}
           onSave={() => flash("Outbound share updated")}
           variant="queue-only"

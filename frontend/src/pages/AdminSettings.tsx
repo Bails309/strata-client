@@ -9,13 +9,11 @@ import {
   getRoles,
   getConnectionFolders,
   getConnectionRefs,
-  getUsers,
   getAdSyncConfigs,
   AdSyncConfig,
   Role,
   ConnectionFolder,
   ConnectionRef,
-  User,
   MeResponse,
 } from "../api";
 import SecurityTab from "./admin/SecurityTab";
@@ -143,9 +141,8 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [roles, setRoles] = useState<Role[]>([]);
   const [folders, setFolders] = useState<ConnectionFolder[]>([]);
-  // Loaded only by the tabs that list every connection or user.
+  // Loaded only by the tab that lists every connection.
   const [connectionRefs, setConnectionRefs] = useState<ConnectionRef[] | null>(null);
-  const [users, setUsers] = useState<User[] | null>(null);
   const [adSyncConfigs, setAdSyncConfigs] = useState<AdSyncConfig[]>([]);
   const [msg, setMsg] = useState("");
   const [loadError, setLoadError] = useState("");
@@ -175,12 +172,7 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
         .then(setConnectionRefs)
         .catch(() => setConnectionRefs([]));
     }
-    if ((tab === "passwords" || tab === "outbound-shares") && users === null) {
-      getUsers()
-        .then(setUsers)
-        .catch(() => setUsers([]));
-    }
-  }, [tab, connectionRefs, users]);
+  }, [tab, connectionRefs]);
 
   function flash(text: string) {
     setMsg(text);
@@ -302,7 +294,6 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
         {/* ── Password Management ── */}
         {tab === "passwords" && (
           <PasswordsTab
-            users={users ?? []}
             adSyncConfigs={adSyncConfigs}
             onSave={() => flash("Password management updated")}
           />
@@ -338,7 +329,6 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
         {/* ── Outbound Share Policy ── */}
         {tab === "outbound-shares" && (
           <OutboundSharesTab
-            users={users ?? []}
             isSuperAdmin={!!user.can_manage_system}
             onSave={() => flash("Outbound share policy updated")}
             variant="policy-only"

@@ -16,7 +16,7 @@
  *
  * The popup is `about:blank`, opened by `window.open()` from the same
  * origin, so it shares the opener's JS realm and cookies. We can call
- * the opener's `getMyConnections()` directly.
+ * the opener's API client directly to search connections.
  *
  * Keyboard handling: this palette intentionally does NOT register its own
  * document keydown listener. Doing so would race against Guacamole's own
@@ -25,7 +25,7 @@
  * BEFORE Guacamole.Keyboard) calls `handleKeyDown(e)` while the palette
  * is open and stops propagation so Guacamole never sees palette keys.
  */
-import { Connection, getMyConnections } from "../api";
+import { Connection, getMyConnectionsPage } from "../api";
 
 export interface PopoutPalette {
   /** Open the palette (idempotent). */
@@ -53,32 +53,38 @@ const escapeHtml = (s: string): string =>
 
 export function createPopoutPalette(popup: Window, opener: Window): PopoutPalette {
   let overlay: HTMLDivElement | null = null;
-  let connections: Connection[] = [];
-  let connectionsLoaded = false;
-  let connectionsLoading: Promise<void> | null = null;
   let selectedIndex = 0;
   let filtered: Connection[] = [];
+  /** The query `filtered` answers; `null` until the first results arrive. */
+  let resultsFor: string | null = null;
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let searchSeq = 0;
   let renderFn: (() => void) | null = null;
   let inputEl: HTMLInputElement | null = null;
 
-  const ensureConnections = (): Promise<void> => {
-    if (connectionsLoaded) return Promise.resolve();
-    if (connectionsLoading) return connectionsLoading;
-    connectionsLoading = getMyConnections()
-      .then((list) => {
-        connections = list;
-        connectionsLoaded = true;
-      })
-      .catch(() => {
-        connections = [];
-      })
-      .finally(() => {
-        connectionsLoading = null;
-      });
-    return connectionsLoading;
+  const search = (q: string) => {
+    if (searchTimer) clearTimeout(searchTimer);
+    const seq = ++searchSeq;
+    searchTimer = setTimeout(
+      () => {
+        getMyConnectionsPage(1, 50, { search: q })
+          .then((p) => p.items)
+          .catch(() => [] as Connection[])
+          .then((items) => {
+            if (seq !== searchSeq || !overlay) return;
+            filtered = items;
+            resultsFor = q;
+            if (selectedIndex >= filtered.length) selectedIndex = 0;
+            renderFn?.();
+          });
+      },
+      q ? 200 : 0
+    );
   };
 
   const close = () => {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchSeq++;
     if (!overlay) return;
     try {
       overlay.remove();
@@ -181,21 +187,12 @@ export function createPopoutPalette(popup: Window, opener: Window): PopoutPalett
     doc.body.appendChild(overlay);
 
     const render = () => {
-      const q = input.value.trim().toLowerCase();
-      filtered = q
-        ? connections.filter(
-            (c) =>
-              c.name.toLowerCase().includes(q) ||
-              c.hostname.toLowerCase().includes(q) ||
-              c.protocol.toLowerCase().includes(q)
-          )
-        : connections.slice();
       if (selectedIndex >= filtered.length) selectedIndex = 0;
 
       list.innerHTML = "";
       if (filtered.length === 0) {
         const empty = doc.createElement("div");
-        empty.textContent = connectionsLoaded ? "No connections." : "Loading…";
+        empty.textContent = resultsFor === input.value.trim() ? "No connections." : "Loading…";
         empty.style.cssText = "padding:18px 16px;color:#9ca3af;font-size:13px;";
         list.appendChild(empty);
         return;
@@ -261,15 +258,16 @@ export function createPopoutPalette(popup: Window, opener: Window): PopoutPalett
 
     input.addEventListener("input", () => {
       selectedIndex = 0;
+      search(input.value.trim());
       render();
     });
 
     renderFn = render;
     inputEl = input;
+    filtered = [];
+    resultsFor = null;
     render();
-    void ensureConnections().then(() => {
-      if (overlay) render();
-    });
+    search("");
 
     // Focus the input on the next frame — focusing immediately can race
     // with the popup's own focus management.

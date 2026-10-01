@@ -380,49 +380,34 @@ async fn handle_recording_stream(
         (paused, speed)
     }
 
-    let mut reader = if recording.storage_type == "local" {
-        let path = format!("/var/lib/guacamole/recordings/{}", recording.storage_path);
-        tracing::info!(
-            "Opening local recording: id={}, path={}",
-            recording.id,
-            path
-        );
-        let file = tokio::fs::File::open(&path).await.map_err(|e| {
-            tracing::error!(
-                "Failed to open recording file: id={}, path={}, err={}",
-                recording.id,
-                path,
-                e
-            );
-            e
-        })?;
-        Box::new(tokio::io::BufReader::new(file)) as Box<dyn tokio::io::AsyncRead + Unpin + Send>
-    } else {
-        // Azure storage stream
-        let azure = {
-            let s = state.read().await;
-            let pool =
-                s.db.as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("DB not connected"))?
-                    .pool
-                    .clone();
-            let vault = s.config.as_ref().and_then(|c| c.vault.as_ref()).cloned();
-            crate::services::recordings::get_azure_config(&pool, vault.as_ref()).await?
-        };
-        if let Some(azure) = azure {
-            let stream = crate::services::recordings::download_stream_from_azure(
-                &azure,
-                &recording.storage_path,
-            )
-            .await?;
-            let reader = tokio_util::io::StreamReader::new(
-                stream.map(|res: reqwest::Result<bytes::Bytes>| res.map_err(std::io::Error::other)),
-            );
-            Box::new(tokio::io::BufReader::new(reader))
-                as Box<dyn tokio::io::AsyncRead + Unpin + Send>
-        } else {
-            anyhow::bail!("Azure storage not configured");
+    crate::services::recording_index::ensure(&recording, state.clone());
+
+    // Resume from the nearest checkpoint when the index matches this recording.
+    let mut resume = None;
+    if seek_ms > 0 {
+        if let Some(index) = crate::services::recording_index::load(recording.id).await {
+            if let Some(cp) = index.nearest(seek_ms).cloned() {
+                if let Ok(prelude) =
+                    crate::services::recording_index::read_prelude(recording.id, &cp).await
+                {
+                    resume = Some((cp, prelude, index.source_len, index.first_ts));
+                }
+            }
         }
+    }
+    let (mut reader, prelude, resumed_first_ts) = match resume {
+        Some((cp, prelude, source_len, first_ts)) => {
+            match open_recording(&state, &recording, cp.offset).await {
+                Ok((reader, Some(total))) if total == source_len => {
+                    (reader, Some(prelude), first_ts)
+                }
+                _ => {
+                    tracing::info!(recording = %recording.id, "recording index is stale, replaying from the start");
+                    (open_recording(&state, &recording, 0).await?.0, None, None)
+                }
+            }
+        }
+        None => (open_recording(&state, &recording, 0).await?.0, None, None),
     };
 
     // Send NVR header with total duration
@@ -436,8 +421,9 @@ async fn handle_recording_stream(
     let mut parser = GuacamoleParser::new();
     // Instructions waiting to go out as one message. Flushed before every
     // control message and pacing wait so ordering and timing hold.
-    let mut outbox = String::new();
-    let mut first_guac_ts: Option<u64> = None; // never changes — for absolute progress
+    let mut outbox = prelude.unwrap_or_default();
+    // Never changes once set — for absolute progress; known up front when resuming.
+    let mut first_guac_ts: Option<u64> = resumed_first_ts;
     let mut base_guac_ts: Option<u64> = None; // reset on speed change — for pacing
     let mut base_real_ts: Option<std::time::Instant> = None;
     let mut last_progress_sent = std::time::Instant::now();
@@ -459,7 +445,7 @@ async fn handle_recording_stream(
                     if let Ok(ts) = ts_str.parse::<u64>() {
                         match (base_guac_ts, base_real_ts) {
                             (None, None) => {
-                                first_guac_ts = Some(ts);
+                                first_guac_ts.get_or_insert(ts);
                                 base_guac_ts = Some(ts);
                                 base_real_ts = Some(std::time::Instant::now());
                             }
@@ -662,6 +648,60 @@ async fn handle_recording_stream(
 
 /// Batched playback messages are sent once they reach this size.
 const OUTBOX_BYTES: usize = 64 * 1024;
+
+type RecordingReader = Box<dyn tokio::io::AsyncRead + Unpin + Send>;
+
+/// Read the recording from byte `from`, with its total length when known.
+async fn open_recording(
+    state: &SharedState,
+    recording: &Recording,
+    from: u64,
+) -> anyhow::Result<(RecordingReader, Option<u64>)> {
+    use tokio::io::AsyncSeekExt;
+    if recording.storage_type == "local" {
+        let path = std::path::Path::new(crate::services::recording_index::RECORDINGS_DIR)
+            .join(&recording.storage_path);
+        tracing::info!(
+            "Opening local recording: id={}, path={}, from={from}",
+            recording.id,
+            path.display()
+        );
+        let mut file = tokio::fs::File::open(&path).await.map_err(|e| {
+            tracing::error!(
+                "Failed to open recording file: id={}, path={}, err={}",
+                recording.id,
+                path.display(),
+                e
+            );
+            e
+        })?;
+        let total = file.metadata().await?.len();
+        file.seek(std::io::SeekFrom::Start(from)).await?;
+        return Ok((Box::new(tokio::io::BufReader::new(file)), Some(total)));
+    }
+    let azure = {
+        let s = state.read().await;
+        let pool =
+            s.db.as_ref()
+                .ok_or_else(|| anyhow::anyhow!("DB not connected"))?
+                .pool
+                .clone();
+        let vault = s.config.as_ref().and_then(|c| c.vault.as_ref()).cloned();
+        crate::services::recordings::get_azure_config(&pool, vault.as_ref())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Azure storage not configured"))?
+    };
+    let (stream, total) = crate::services::recordings::download_stream_from_azure(
+        &azure,
+        &recording.storage_path,
+        from,
+    )
+    .await?;
+    let reader = tokio_util::io::StreamReader::new(
+        stream.map(|res: reqwest::Result<bytes::Bytes>| res.map_err(std::io::Error::other)),
+    );
+    Ok((Box::new(tokio::io::BufReader::new(reader)), total))
+}
 
 /// Send the batched instructions as one message. The client's tunnel
 /// parses every instruction in a message, so batches split only between

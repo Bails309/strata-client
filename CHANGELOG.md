@@ -338,6 +338,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copying a string, and no longer corrupts a character split across two
   reads. Instructions go out in batches of up to 64 KiB instead of one
   WebSocket message each, which matters most when seeking.
+- **Seeking a long recording no longer replays it from the start
+  (PERF-13).** The first time a finished recording is played, a
+  background task builds a seek index under `recordings/.index/<id>/`.
+  Every 8 MiB or so, at a frame boundary where nothing is half-drawn, it
+  saves the whole screen state: each layer as a PNG, plus the cursor,
+  mouse position and open audio streams. A seek sends the nearest saved
+  state before the target, then reads the recording from that byte offset
+  on (an HTTP range read for Azure recordings), so seeking near the end of
+  a 1 GiB recording no longer reads 1 GiB. H.264 recordings take
+  snapshots only at keyframes that cover the whole screen. Playback falls
+  back to a full replay when there is no index yet, when the recording
+  uses a drawing instruction the index does not understand, or when the
+  file has changed since the index was built. One index is built at a
+  time, and index folders are removed by the retention sweep.
 - **Admin tables and the dashboard page on the server (PERF-08).** The
   admin connections and users tables fetch one page at a time, with
   search, filters and counts done in the database

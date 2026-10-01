@@ -335,34 +335,57 @@ async fn download_from_azure_once(cfg: &AzureBlobConfig, blob: &str) -> anyhow::
     Ok(resp.bytes().await?.to_vec())
 }
 
+/// Stream a blob from byte `from` onwards (0 for the whole blob). Also
+/// returns the blob's total length when the service reports it.
 pub async fn download_stream_from_azure(
     cfg: &AzureBlobConfig,
     blob: &str,
-) -> anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>> {
+    from: u64,
+) -> anyhow::Result<(
+    impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>,
+    Option<u64>,
+)> {
     let url = cfg.blob_url(blob)?;
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
-    let x_headers = format!("x-ms-date:{date}\nx-ms-version:2023-11-03");
+    let range = (from > 0).then(|| format!("bytes={from}-"));
+    let x_headers = match &range {
+        Some(r) => format!("x-ms-date:{date}\nx-ms-range:{r}\nx-ms-version:2023-11-03"),
+        None => format!("x-ms-date:{date}\nx-ms-version:2023-11-03"),
+    };
     let resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
     let auth = cfg.sign("GET", 0, "", &x_headers, &resource)?;
 
     let client = crate::services::http_client::azure_client();
-    let resp = client
+    let mut req = client
         .get(url)
         .header("Authorization", auth)
         .header("x-ms-date", &date)
-        .header("x-ms-version", "2023-11-03")
-        .send()
-        .await?;
+        .header("x-ms-version", "2023-11-03");
+    if let Some(r) = &range {
+        req = req.header("x-ms-range", r);
+    }
+    let resp = req.send().await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         anyhow::bail!("Azure Blob download failed ({status}): {body}");
     }
+    if from > 0 && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        anyhow::bail!("Azure Blob ignored the range request");
+    }
+    // `Content-Range: bytes <from>-<last>/<total>` on a range, else the body length.
+    let total = resp
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.rsplit('/').next())
+        .and_then(|t| t.parse().ok())
+        .or_else(|| (from == 0).then(|| resp.content_length()).flatten());
 
-    Ok(resp.bytes_stream())
+    Ok((resp.bytes_stream(), total))
 }
 
 // ── Background sync task ───────────────────────────────────────────────
@@ -646,6 +669,22 @@ async fn sync_pass(
                 "Skipped {ro_fs_count} expired recording(s): recordings directory \
                  is on a read-only filesystem ({dir})"
             );
+        }
+
+        // Seek indexes age out with the recordings they describe.
+        if let Ok(mut indexes) = tokio::fs::read_dir(format!("{dir}/.index")).await {
+            while let Ok(Some(entry)) = indexes.next_entry().await {
+                let expired = entry
+                    .metadata()
+                    .await
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.elapsed().ok())
+                    .is_some_and(|age| age > max_age);
+                if expired {
+                    let _ = tokio::fs::remove_dir_all(entry.path()).await;
+                }
+            }
         }
 
         // W5-1: DB + Azure blob purge for rows older than retention.

@@ -169,6 +169,23 @@ describe("EditRoleModal", () => {
     expect(props.onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: "r1" }), false);
   });
 
+  it("sets and clears the per-member session limit", async () => {
+    const user = userEvent.setup();
+    open({ ...HELPDESK, max_concurrent_sessions: 4 });
+    const limit = await screen.findByLabelText("Concurrent sessions per member");
+    expect(limit).toHaveValue(4);
+
+    await user.clear(limit);
+    expect(screen.getByText("1 unsaved change")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() =>
+      expect(updateRole).toHaveBeenCalledWith(
+        "r1",
+        expect.objectContaining({ max_concurrent_sessions: 0 })
+      )
+    );
+  });
+
   it("marks only a folder's own connections as inherited", async () => {
     const user = userEvent.setup();
     open(HELPDESK);

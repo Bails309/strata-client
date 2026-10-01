@@ -302,6 +302,23 @@ pub async fn ws_tunnel(
             .await?
             .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
+    // Admission (PERF-04): before any checkout, container or connection,
+    // reserve this session's memory and count it against the user's
+    // limit. Held until the session ends.
+    let role_limit: Option<i32> = sqlx::query_scalar(
+        "SELECT r.max_concurrent_sessions FROM users u JOIN roles r ON r.id = u.role_id
+          WHERE u.id = $1",
+    )
+    .bind(user.id)
+    .fetch_optional(&db.pool)
+    .await?
+    .flatten();
+    let admission = crate::services::admission::admit(
+        user.id,
+        crate::services::admission::user_limit(role_limit),
+        crate::services::admission::estimate(&protocol, query.width, query.height),
+    )?;
+
     // Parse extra JSONB into a HashMap of connection parameters
     let mut extra = crate::tunnel::json_to_string_map(&extra_json);
     crate::services::connections::unseal_secret_extras(config.vault.as_ref(), &mut extra).await?;
@@ -1355,6 +1372,7 @@ pub async fn ws_tunnel(
         .protocols(["guacamole"])
         .max_message_size(1024 * 1024)
         .on_upgrade(move |socket| async move {
+            let _admission = admission;
             let nvr = NvrContext {
                 registry: session_registry,
                 session_id: nvr_session_id,

@@ -133,7 +133,11 @@ export const ROLE_FLAGS: RoleFlag[] = PERMISSION_CATEGORIES.flatMap((c) =>
   c.permissions.map((p) => p.flag)
 );
 
-export type RoleDraft = { name: string; description: string } & Record<RoleFlag, boolean>;
+/** `sessionLimit` 0 means no per-role limit. */
+export type RoleDraft = { name: string; description: string; sessionLimit: number } & Record<
+  RoleFlag,
+  boolean
+>;
 
 /** The built-in roles; the backend refuses to delete them. */
 export const isSystemRole = (role: Pick<Role, "name"> | null) =>
@@ -147,7 +151,11 @@ export const impliedBySystem = (flag: RoleFlag) =>
   flag !== "can_manage_system" && flag !== "can_use_quick_share_outbound";
 
 export function draftFromRole(role: Role | null): RoleDraft {
-  const draft = { name: role?.name ?? "", description: role?.description ?? "" } as RoleDraft;
+  const draft = {
+    name: role?.name ?? "",
+    description: role?.description ?? "",
+    sessionLimit: role?.max_concurrent_sessions ?? 0,
+  } as RoleDraft;
   for (const flag of ROLE_FLAGS) draft[flag] = role ? !!role[flag] : false;
   return draft;
 }

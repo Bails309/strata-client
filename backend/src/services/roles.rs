@@ -31,6 +31,9 @@ pub struct RoleRow {
     /// Whether members of this role may submit outbound (session→endpoint)
     /// quick-share files for approval.  Added in migration 073.
     pub can_use_quick_share_outbound: bool,
+    /// Concurrent sessions a member may hold; `None` is no per-role limit.
+    /// Added in migration 101.
+    pub max_concurrent_sessions: Option<i32>,
 }
 
 impl RoleRow {
@@ -78,6 +81,8 @@ pub struct CreateRoleRequest {
     pub can_view_sessions: Option<bool>,
     pub can_use_quick_share: Option<bool>,
     pub can_use_quick_share_outbound: Option<bool>,
+    /// 0 or absent means no per-role limit.
+    pub max_concurrent_sessions: Option<i32>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -95,6 +100,8 @@ pub struct UpdateRoleRequest {
     pub can_view_sessions: Option<bool>,
     pub can_use_quick_share: Option<bool>,
     pub can_use_quick_share_outbound: Option<bool>,
+    /// 0 clears the limit; absent leaves it unchanged.
+    pub max_concurrent_sessions: Option<i32>,
 }
 
 /// Longest description accepted, in characters.
@@ -112,11 +119,20 @@ pub fn normalize_description(raw: Option<&str>) -> Result<Option<String>, AppErr
     Ok(Some(trimmed.to_string()))
 }
 
+fn check_session_limit(limit: Option<i32>) -> Result<(), AppError> {
+    match limit {
+        Some(n) if !(0..=10_000).contains(&n) => Err(AppError::Validation(
+            "Concurrent session limit must be between 0 (no limit) and 10000".into(),
+        )),
+        _ => Ok(()),
+    }
+}
+
 const SELECT_COLUMNS: &str =
     "id, name, description, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, \
      can_create_users, can_create_user_groups, can_create_connections, \
      can_create_sharing_profiles, can_view_sessions, can_use_quick_share, \
-     can_use_quick_share_outbound";
+     can_use_quick_share_outbound, max_concurrent_sessions";
 
 pub async fn list_all(pool: &Pool<Postgres>) -> Result<Vec<RoleRow>, AppError> {
     let rows: Vec<RoleRow> =
@@ -128,12 +144,13 @@ pub async fn list_all(pool: &Pool<Postgres>) -> Result<Vec<RoleRow>, AppError> {
 
 pub async fn create(pool: &Pool<Postgres>, body: &CreateRoleRequest) -> Result<RoleRow, AppError> {
     let description = normalize_description(body.description.as_deref())?.unwrap_or_default();
+    check_session_limit(body.max_concurrent_sessions)?;
     let row: RoleRow = sqlx::query_as(&format!(
         "INSERT INTO roles (name, can_manage_system, can_manage_users, can_manage_connections, \
          can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, \
          can_create_sharing_profiles, can_view_sessions, can_use_quick_share, \
-         can_use_quick_share_outbound, description) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+         can_use_quick_share_outbound, description, max_concurrent_sessions) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULLIF($14, 0)) \
          RETURNING {SELECT_COLUMNS}"
     ))
     .bind(&body.name)
@@ -149,6 +166,7 @@ pub async fn create(pool: &Pool<Postgres>, body: &CreateRoleRequest) -> Result<R
     .bind(body.can_use_quick_share.unwrap_or(false))
     .bind(body.can_use_quick_share_outbound.unwrap_or(false))
     .bind(description)
+    .bind(body.max_concurrent_sessions)
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -160,6 +178,7 @@ pub async fn update(
     body: &UpdateRoleRequest,
 ) -> Result<RoleRow, AppError> {
     let description = normalize_description(body.description.as_deref())?;
+    check_session_limit(body.max_concurrent_sessions)?;
     let row: RoleRow = sqlx::query_as(&format!(
         "UPDATE roles SET
             name = COALESCE($2, name),
@@ -174,7 +193,11 @@ pub async fn update(
             can_view_sessions = COALESCE($11, can_view_sessions),
             can_use_quick_share = COALESCE($12, can_use_quick_share),
             can_use_quick_share_outbound = COALESCE($13, can_use_quick_share_outbound),
-            description = COALESCE($14, description)
+            description = COALESCE($14, description),
+            max_concurrent_sessions = CASE
+                WHEN $15::int IS NULL THEN max_concurrent_sessions
+                ELSE NULLIF($15, 0)
+            END
          WHERE id = $1
          RETURNING {SELECT_COLUMNS}"
     ))
@@ -192,6 +215,7 @@ pub async fn update(
     .bind(body.can_use_quick_share)
     .bind(body.can_use_quick_share_outbound)
     .bind(description)
+    .bind(body.max_concurrent_sessions)
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -324,6 +348,7 @@ mod tests {
             can_view_sessions: true,
             can_use_quick_share: true,
             can_use_quick_share_outbound: true,
+            max_concurrent_sessions: None,
         };
         let v = serde_json::to_value(&row).unwrap();
         // Every permission flag must be a top-level boolean in the JSON
@@ -363,6 +388,7 @@ mod tests {
             can_view_sessions: false,
             can_use_quick_share: false,
             can_use_quick_share_outbound: false,
+            max_concurrent_sessions: None,
         }
     }
 
@@ -515,5 +541,39 @@ mod tests {
                 "SELECT_COLUMNS missing `{col}`"
             );
         }
+    }
+
+    /// Needs `TEST_DATABASE_URL` pointing at a migrated database.
+    #[tokio::test]
+    async fn a_session_limit_can_be_set_kept_and_cleared() {
+        let Some(pool) = std::env::var("TEST_DATABASE_URL")
+            .ok()
+            .and_then(|url| sqlx::PgPool::connect_lazy(&url).ok())
+        else {
+            eprintln!("TEST_DATABASE_URL unset, skipping");
+            return;
+        };
+        let create: CreateRoleRequest = serde_json::from_value(serde_json::json!({
+            "name": format!("limit-{}", Uuid::new_v4().simple()),
+            "max_concurrent_sessions": 3,
+        }))
+        .unwrap();
+        let role = super::create(&pool, &create).await.unwrap();
+        assert_eq!(role.max_concurrent_sessions, Some(3));
+
+        let rename: UpdateRoleRequest =
+            serde_json::from_value(serde_json::json!({ "description": "kept" })).unwrap();
+        let role = update(&pool, role.id, &rename).await.unwrap();
+        assert_eq!(role.max_concurrent_sessions, Some(3));
+
+        let clear: UpdateRoleRequest =
+            serde_json::from_value(serde_json::json!({ "max_concurrent_sessions": 0 })).unwrap();
+        let role = update(&pool, role.id, &clear).await.unwrap();
+        assert_eq!(role.max_concurrent_sessions, None);
+
+        let bad: UpdateRoleRequest =
+            serde_json::from_value(serde_json::json!({ "max_concurrent_sessions": -1 })).unwrap();
+        assert!(update(&pool, role.id, &bad).await.is_err());
+        delete_by_id(&pool, role.id).await.unwrap();
     }
 }

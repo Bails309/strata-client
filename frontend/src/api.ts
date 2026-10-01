@@ -1134,6 +1134,8 @@ export interface Role {
   can_use_quick_share_outbound: boolean;
   can_create_sharing_profiles: boolean;
   can_view_sessions: boolean;
+  /** Concurrent sessions a member may hold; null or absent means no limit. On save, 0 clears it. */
+  max_concurrent_sessions?: number | null;
 }
 
 export const getRoles = () => request<Role[]>("/admin/roles");

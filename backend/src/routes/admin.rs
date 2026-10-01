@@ -4814,6 +4814,7 @@ mod tests {
             can_use_quick_share_outbound: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
+            max_concurrent_sessions: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["name"], "admin");
@@ -5626,6 +5627,7 @@ mod tests {
             can_use_quick_share_outbound: true,
             can_create_sharing_profiles: true,
             can_view_sessions: true,
+            max_concurrent_sessions: Some(5),
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["can_manage_system"], true);

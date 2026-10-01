@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   be open at once. A stream id already in use cannot be reopened, and an
   upload the target refuses frees its id. Clipboard size is checked before
   a blob is decoded.
+  Refused clipboard and upload streams now get an error `ack` so the
+  browser stops sending; opening streams and file requests is limited to
+  a burst of 32 and 8 a second; and all sessions together may hold at
+  most 256 MiB of incoming clipboard data. A shared-control guest can
+  only send input and use its own clipboard streams — it can no longer
+  write into, end or acknowledge the operator's streams or start file
+  transfers — and a malformed guest frame is dropped instead of ending
+  the operator's session. File transfers were already capped at 8 per
+  session.
 - **The audit chain covers who and when, and is checked (SEC-17).** New
   entries hash their id, timestamp, user, action, details and the previous
   digest (migration 098); entries written before it keep their old hashes.
@@ -269,6 +278,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`STRATA_NVR_MEMORY_BUDGET_MB`); each holds up to an equal share of it,
   never more than the previous per-session limits. With many sessions open
   each keeps less history for observers to replay.
+- **New sessions are admitted against a memory budget (PERF-04).** Before
+  a session checks out a credential, starts a container or browser, or
+  connects, it reserves an estimate of its memory (by protocol and display
+  size; a web session counts its browser) against a process-wide budget —
+  by default three quarters of the container memory limit less the replay
+  budget, or `STRATA_SESSION_MEMORY_BUDGET_MB`. Roles can cap concurrent
+  sessions per member (migration 101, role editor), with
+  `STRATA_MAX_SESSIONS_PER_USER` as the default. A session over either is
+  refused with `429` before anything is opened. Reserved, used and limit
+  bytes for sessions, replay history and clipboard data are reported under
+  `memory` in `GET /api/admin/metrics`.
 - **Audit writes take one round trip (PERF-12).** Locking the chain,
   reading its head, hashing and inserting now happen in one database call
   instead of five, still serialised.

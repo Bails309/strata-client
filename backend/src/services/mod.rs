@@ -2,6 +2,7 @@ pub mod active_sessions;
 pub mod ad_sync;
 pub mod ad_sync_admin;
 pub mod admin_tags;
+pub mod admission;
 pub mod app_state;
 pub mod audit;
 pub mod audit_verify;

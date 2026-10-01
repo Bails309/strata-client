@@ -1043,10 +1043,8 @@ pub async fn run_native(
                     None => std::future::pending().await,
                 }
             } => {
-                let mut injected_decoder = GuacDecoder::default();
-                injected_decoder.extend(injected.as_bytes());
-                if let Err(why) = forward_instructions(&mut injected_decoder, &handle).await {
-                    break why;
+                if forward_guest_instructions(&injected, &handle).await.is_err() {
+                    break "session ended";
                 }
             }
         }
@@ -1342,6 +1340,24 @@ async fn forward_instructions(
             Err(err) => {
                 tracing::warn!(error = %err, "client sent malformed guacamole input");
                 return Err("malformed client input");
+            }
+        }
+    }
+}
+
+/// Forward a shared-control guest's frame. The actor confines it to input
+/// and the guest's own clipboard; a malformed frame is dropped rather than
+/// ending the operator's session.
+async fn forward_guest_instructions(frame: &str, handle: &SessionHandle) -> Result<(), ()> {
+    let mut decoder = GuacDecoder::default();
+    decoder.extend(frame.as_bytes());
+    loop {
+        match decoder.next_instruction() {
+            Ok(Some(instruction)) => handle.send_guest(instruction).await.map_err(drop)?,
+            Ok(None) => return Ok(()),
+            Err(err) => {
+                tracing::warn!(error = %err, "dropped malformed input from a shared viewer");
+                return Ok(());
             }
         }
     }

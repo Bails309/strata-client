@@ -39,6 +39,10 @@ export function useRoleEditor(
     setDraft((d) => ({ ...d, [field]: value }));
   }, []);
 
+  const setSessionLimit = useCallback((limit: number) => {
+    setDraft((d) => ({ ...d, sessionLimit: limit }));
+  }, []);
+
   const toggleFlag = useCallback((flag: RoleFlag) => {
     setDraft((d) => ({ ...d, [flag]: !d[flag] }));
   }, []);
@@ -55,6 +59,7 @@ export function useRoleEditor(
   const changeCount =
     (draft.name.trim() !== initial.draft.name.trim() ? 1 : 0) +
     (draft.description.trim() !== initial.draft.description.trim() ? 1 : 0) +
+    (draft.sessionLimit !== initial.draft.sessionLimit ? 1 : 0) +
     permissionChanges +
     folderChanges +
     connectionChanges;
@@ -62,6 +67,7 @@ export function useRoleEditor(
   return {
     draft,
     setField,
+    setSessionLimit,
     toggleFlag,
     folderIds,
     toggleFolder,

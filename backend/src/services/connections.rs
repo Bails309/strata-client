@@ -1145,7 +1145,8 @@ mod tests {
             user,
             false,
             &UserConnectionQuery {
-                search: Some("c1".into()),
+                // The dash keeps it from matching inside the random hex tag.
+                search: Some("-c1".into()),
                 ..Default::default()
             },
         )

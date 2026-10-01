@@ -1478,6 +1478,14 @@ export const deleteCredentialProfile = (profileId: string) =>
 export const getProfileMappings = (profileId: string) =>
   request<CredentialMapping[]>(`/user/credential-profiles/${profileId}/mappings`);
 
+export interface UserCredentialMapping extends CredentialMapping {
+  profile_id: string;
+}
+
+/** Every mapping on every profile the caller owns, in one request. */
+export const getMyCredentialMappings = () =>
+  request<UserCredentialMapping[]>("/user/credential-mappings");
+
 export const setCredentialMapping = (profile_id: string, connection_id: string) =>
   request<{ status: string }>("/user/credential-mappings", {
     method: "PUT",

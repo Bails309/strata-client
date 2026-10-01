@@ -317,19 +317,6 @@ pub async fn login(
             .ok_or(AppError::Internal("Database not available".into()))?
     };
 
-    /// Pre-computed Argon2 hash of a dummy password used to make the
-    /// user-not-found path take the same time as the wrong-password path,
-    /// preventing timing-based username enumeration.
-    static DUMMY_HASH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-        use argon2::PasswordHasher;
-        let salt = argon2::password_hash::SaltString::from_b64("c29tZXNhbHRzb21lc2FsdA")
-            .expect("valid static salt");
-        argon2::Argon2::default()
-            .hash_password(b"dummy-password-for-timing-equalisation", &salt)
-            .expect("argon2 hash")
-            .to_string()
-    });
-
     let row = crate::services::users::find_local_by_username_or_email(&db.pool, &body.username)
         .await
         .map_err(|e| match e {
@@ -337,28 +324,21 @@ pub async fn login(
             other => other,
         })?;
 
-    let user = row.ok_or_else(|| {
-        // Perform a dummy Argon2 verification so the response time is
-        // indistinguishable from the wrong-password path.
-        use argon2::{Argon2, PasswordHash, PasswordVerifier};
-        if let Ok(parsed) = PasswordHash::new(&DUMMY_HASH) {
-            let _ = Argon2::default().verify_password(body.password.as_bytes(), &parsed);
-        }
-        AppError::Auth("Invalid username or password".into())
-    })?;
+    let Some(user) = row else {
+        // Same work as the wrong-password path, so timing does not reveal
+        // which usernames exist.
+        crate::services::password::verify_dummy(body.password.clone()).await?;
+        return Err(AppError::Auth("Invalid username or password".into()));
+    };
 
     // Use generic error message regardless of auth_type to prevent account type enumeration
     let hash = user
         .password_hash
         .ok_or_else(|| AppError::Auth("Invalid username or password".into()))?;
 
-    // Verify password with Argon2
-    use argon2::{Argon2, PasswordHash, PasswordVerifier};
-    let parsed_hash = PasswordHash::new(&hash)
-        .map_err(|_| AppError::Auth("Invalid username or password".into()))?;
-    Argon2::default()
-        .verify_password(body.password.as_bytes(), &parsed_hash)
-        .map_err(|_| AppError::Auth("Invalid username or password".into()))?;
+    if !crate::services::password::verify(body.password.clone(), hash).await? {
+        return Err(AppError::Auth("Invalid username or password".into()));
+    }
 
     // Successful login — release this request's reservations.
     {
@@ -911,21 +891,14 @@ pub async fn change_password(
     })?;
 
     // Verify current password
-    use argon2::{Argon2, PasswordHash, PasswordVerifier};
-    let parsed_hash = PasswordHash::new(&hash)
-        .map_err(|_| AppError::Internal("Invalid stored password hash".into()))?;
-    Argon2::default()
-        .verify_password(body.current_password.as_bytes(), &parsed_hash)
-        .map_err(|_| AppError::Auth("Current password is incorrect".into()))?;
+    if argon2::PasswordHash::new(&hash).is_err() {
+        return Err(AppError::Internal("Invalid stored password hash".into()));
+    }
+    if !crate::services::password::verify(body.current_password.clone(), hash).await? {
+        return Err(AppError::Auth("Current password is incorrect".into()));
+    }
 
-    // Hash new password
-    use argon2::password_hash::SaltString;
-    use argon2::PasswordHasher;
-    let salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
-    let new_hash = crate::services::password::pinned_argon2()
-        .hash_password(body.new_password.as_bytes(), &salt)
-        .map_err(|e| AppError::Internal(format!("Argon2 error: {e}")))?
-        .to_string();
+    let new_hash = crate::services::password::hash(body.new_password.clone()).await?;
 
     crate::services::users::set_password_hash(&db.pool, user.id, &new_hash)
         .await

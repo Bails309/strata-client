@@ -90,7 +90,6 @@ pub const SETTING_WEB_ALLOWED_NETWORKS: &str = "web_allowed_networks";
 /// Per-replica concurrency cap on simultaneous web sessions. Capped by
 /// [`WebDisplayAllocator::capacity`] regardless. Stored as a stringified
 /// `u32`; missing or unparseable ⇒ falls back to the allocator capacity.
-#[allow(dead_code)]
 pub const SETTING_MAX_WEB_SESSIONS: &str = "max_web_sessions";
 
 // ── Operator-tunable runtime paths (rustguac parity item B12) ──────

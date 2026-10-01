@@ -921,6 +921,7 @@ pub async fn ws_tunnel(
     // is unset), `ensure_container` returns `DriverUnavailable` and we
     // surface it as a 503 — the connection editor was able to save the
     // row but this replica isn't configured to spawn it.
+    let mut web_lease: Option<crate::services::web_runtime::WebLease> = None;
     let (final_hostname, final_safe_port) = if protocol == "vdi" {
         let cfg = crate::services::vdi::VdiConfig::from_extra(&extra_json);
         let image = cfg.image.clone().unwrap_or_default();
@@ -1100,6 +1101,13 @@ pub async fn ws_tunnel(
             },
             trusted_ca_pem,
             trusted_ca_label,
+            max_sessions: crate::services::settings::get(
+                &db.pool,
+                crate::services::web_session::SETTING_MAX_WEB_SESSIONS,
+            )
+            .await?
+            .and_then(|v| v.trim().parse().ok())
+            .filter(|n: &usize| *n > 0),
         };
 
         let runtime = {
@@ -1119,6 +1127,9 @@ pub async fn ws_tunnel(
             .map_err(|e| {
                 use crate::services::web_runtime::WebRuntimeError as WE;
                 match e {
+                    WE::CapacityReached(_) => AppError::RateLimited(
+                        "All web browser sessions are in use. Try again shortly.".into(),
+                    ),
                     WE::DisplayExhausted | WE::CdpPortExhausted => {
                         AppError::Internal(format!("web session capacity exhausted: {e}"))
                     }
@@ -1153,7 +1164,9 @@ pub async fn ws_tunnel(
         )
         .await;
 
-        (handle.endpoint.host.to_string(), handle.endpoint.port)
+        let endpoint = (handle.endpoint.host.to_string(), handle.endpoint.port);
+        web_lease = Some(handle);
+        endpoint
     } else {
         (hostname, safe_port)
     };
@@ -1305,20 +1318,6 @@ pub async fn ws_tunnel(
     };
 
     let audit_pool = db.pool.clone();
-    // Capture for the web-kiosk eviction after the WebSocket closes.
-    // When the user closes their browser tab the upgraded WebSocket
-    // half-closes; without explicit eviction the kiosk handle stays
-    // in `WebRuntimeRegistry`, holding the Chromium + Xvnc children
-    // alive. The next `ensure()` would then return that stale handle
-    // and the user sees the abandoned tab in whatever state it was
-    // left in (often a closed/blank window). Evicting on disconnect
-    // drops the Arc → kills both children → removes the profile dir,
-    // so the *next* reopen spawns a fresh kiosk.
-    let web_runtime = if protocol == "web" {
-        Some(state.read().await.web_runtime.clone())
-    } else {
-        None
-    };
     let web_user_id = user_id;
     // Capture Safeguard checkout state for auto-checkin on disconnect.
     // The vault config is needed at checkin time to unseal A2A secrets;
@@ -1385,19 +1384,12 @@ pub async fn ws_tunnel(
                 .await;
             }
 
-            // Web kiosk teardown on disconnect. Runs whether the
-            // tunnel proxy returned Ok or Err — both mean the
-            // browser-side WebSocket is gone and there's no point
-            // keeping Chromium + Xvnc burning a display slot. The
-            // `evict` call drops the registry's `Arc` reference; if
-            // no other tab is currently holding the same handle the
-            // refcount hits zero, `WebSessionHandle::Drop` runs, and
-            // the children are SIGKILL'd via `kill_on_drop(true)` and
-            // the profile tempdir is removed. Eviction is also a
-            // no-op when the entry was already removed (e.g. by an
-            // admin force-close), so it's safe to always call.
-            if let Some(rt) = web_runtime {
-                let _ = rt.evict(connection_id, web_user_id).await;
+            // Web kiosk teardown on disconnect, Ok or Err alike. Dropping
+            // this tunnel's lease stops Chromium and Xvnc only when no
+            // other tab of the same user is still attached; the next open
+            // after that spawns a fresh kiosk.
+            if let Some(lease) = web_lease {
+                drop(lease);
                 let _ = crate::services::audit::log(
                     &audit_pool,
                     Some(web_user_id),

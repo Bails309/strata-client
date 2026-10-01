@@ -24,6 +24,7 @@ pub mod http_client;
 pub mod idempotency;
 pub mod kerberos;
 pub mod kerberos_realms;
+pub mod keyed_lock;
 pub mod kubernetes;
 pub mod middleware;
 pub mod notifications;

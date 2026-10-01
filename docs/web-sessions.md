@@ -260,15 +260,21 @@ contacted, so operators can correlate against the egress allow-list.
 
 ## Lifecycle (kiosk teardown)
 
-The kiosk is held alive by an `Arc<WebSessionHandle>` stored in
-`WebRuntimeRegistry`'s in-memory map. Three things drop that Arc and
-let the handle's `Drop` impl run (which SIGKILLs both children,
-releases the display + CDP slot, and removes the profile tempdir):
+One kiosk runs per connection and user. Starting it is single-flight:
+a second tab opened while the first is still launching waits and joins
+the same kiosk. Every attached tunnel holds a lease on it; the kiosk's
+`Drop` impl (which SIGKILLs both children, releases the display + CDP
+slot, and removes the profile tempdir) runs when the last lease goes.
 
-1. **Tunnel disconnect (v1.3.0+).** The route handler calls
-   `web_runtime.evict(connection_id, user_id)` after `tunnel::proxy`
-   returns. This is the dominant path; closing the browser tab is the
-   normal user-visible trigger. Writes
+`max_web_sessions` in `system_settings` caps the kiosks one backend runs
+at once. When it is reached, opening a new web session returns `429`
+before anything is launched; joining an existing kiosk is still allowed.
+Unset, the display range (100 displays) is the only limit.
+
+1. **Tunnel disconnect (v1.3.0+).** When `tunnel::proxy` returns, the
+   tunnel drops its lease. Closing the last tab attached to the kiosk is
+   the normal user-visible trigger; closing one of several leaves the
+   kiosk running for the others. Writes
    `web.session.end / reason: "tunnel_disconnect"`.
 2. **Idle reaper.** The background reaper task evicts handles whose
    last activity is older than the idle threshold.

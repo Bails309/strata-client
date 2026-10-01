@@ -1,7 +1,10 @@
 use sqlx::{Pool, Postgres};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
+
+use crate::services::keyed_lock::KeyedLocks;
 
 /// Cache TTL — settings are re-read from the DB after this period.
 /// NOTE: This cache is process-local. In multi-replica deployments, a write
@@ -23,39 +26,54 @@ struct CacheEntry {
 static CACHE: LazyLock<Mutex<HashMap<String, CacheEntry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// One database read per key at a time; concurrent misses wait for it.
+static IN_FLIGHT: LazyLock<KeyedLocks> = LazyLock::new(KeyedLocks::default);
+
+/// Bumped by every write. A read that started before a write must not
+/// cache what it read, or it could restore the value the write replaced.
+static WRITE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn cached(key: &str) -> Option<Option<String>> {
+    let cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    cache
+        .get(key)
+        .filter(|entry| entry.fetched_at.elapsed() < CACHE_TTL)
+        .map(|entry| entry.value.clone())
+}
+
 /// Read a setting value, returning a cached copy if available and fresh.
 pub async fn get(pool: &Pool<Postgres>, key: &str) -> anyhow::Result<Option<String>> {
-    // Check cache first
-    {
-        let cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = cache.get(key) {
-            if entry.fetched_at.elapsed() < CACHE_TTL {
-                return Ok(entry.value.clone());
-            }
-        }
+    if let Some(value) = cached(key) {
+        return Ok(value);
+    }
+    let lock = IN_FLIGHT.get(key);
+    let _guard = lock.lock().await;
+    if let Some(value) = cached(key) {
+        return Ok(value);
     }
 
-    // Cache miss or stale — query the DB
+    let generation = WRITE_GENERATION.load(Ordering::Acquire);
     let row: Option<String> =
         sqlx::query_scalar("SELECT value FROM system_settings WHERE key = $1")
             .bind(key)
             .fetch_optional(pool)
             .await?;
 
-    // Update cache
     {
         let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        // Prune stale entries if the cache grows too large
-        if cache.len() > 500 {
-            cache.retain(|_, v| v.fetched_at.elapsed() < CACHE_TTL);
+        // Checked under the cache lock, which `set` also takes to invalidate.
+        if WRITE_GENERATION.load(Ordering::Acquire) == generation {
+            if cache.len() > 500 {
+                cache.retain(|_, v| v.fetched_at.elapsed() < CACHE_TTL);
+            }
+            cache.insert(
+                key.to_string(),
+                CacheEntry {
+                    value: row.clone(),
+                    fetched_at: Instant::now(),
+                },
+            );
         }
-        cache.insert(
-            key.to_string(),
-            CacheEntry {
-                value: row.clone(),
-                fetched_at: Instant::now(),
-            },
-        );
     }
 
     Ok(row)
@@ -76,6 +94,7 @@ pub async fn set(pool: &Pool<Postgres>, key: &str, value: &str) -> anyhow::Resul
     // Invalidate cache for this key
     {
         let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        WRITE_GENERATION.fetch_add(1, Ordering::AcqRel);
         cache.remove(key);
     }
 
@@ -112,6 +131,7 @@ pub async fn tenant_base_url(pool: &Pool<Postgres>) -> String {
 
 /// Read all settings as key-value pairs.
 pub async fn get_all(pool: &Pool<Postgres>) -> anyhow::Result<Vec<(String, String)>> {
+    let generation = WRITE_GENERATION.load(Ordering::Acquire);
     let rows: Vec<(String, String)> =
         sqlx::query_as("SELECT key, value FROM system_settings ORDER BY key")
             .fetch_all(pool)
@@ -120,6 +140,9 @@ pub async fn get_all(pool: &Pool<Postgres>) -> anyhow::Result<Vec<(String, Strin
     // Populate cache with fresh values
     {
         let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if WRITE_GENERATION.load(Ordering::Acquire) != generation {
+            return Ok(rows);
+        }
         let now = Instant::now();
         for (k, v) in &rows {
             cache.insert(

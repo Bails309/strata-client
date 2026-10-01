@@ -202,6 +202,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a complete one (it is published by rename). A cached video is found
   without copying or reading the recording, the size probe reads only the
   first 64 KiB, and converted videos are removed after 24 hours.
+- **Settings and SSO key caches coalesce misses (PERF-14).** When a cached
+  setting, OIDC discovery document or JWKS expires, concurrent requests
+  now wait for one fetch instead of all fetching. A settings read that
+  overlaps a settings write no longer caches the old value. SSO tokens
+  are rejected for a malformed header before any request to the identity
+  provider, and a token signed with a key the cached JWKS does not hold
+  triggers one refetch (at most once a minute), so a key rotation at the
+  identity provider no longer locks users out for up to 10 minutes.
+- **One browser per web session, shared by its tabs (PERF-16).** Opening a
+  web connection in two tabs at once used to launch two Chromium and Xvnc
+  pairs, and closing one tab stopped the browser the other was still
+  using. Startup is now single-flight per connection and user, each tab
+  holds the browser open, and it stops when the last tab closes. The
+  `max_web_sessions` setting is now enforced: once reached, new web
+  sessions are refused with 429 before anything is launched.
 
 ## [2.2.0] — 2026-09-25
 

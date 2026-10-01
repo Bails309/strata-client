@@ -2370,6 +2370,18 @@ pub struct AuditLogQuery {
     pub search: Option<String>,
 }
 
+/// `GET /api/admin/audit-status` — audit append latency (PERF-12) and the
+/// chain verifier's last result and newest anchor (SEC-17).
+pub async fn audit_status(
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_audit_permission(&user)?;
+    Ok(Json(json!({
+        "appends": crate::services::audit::append_stats(),
+        "verifier": crate::services::audit_verify::status(),
+    })))
+}
+
 pub async fn list_audit_logs(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,

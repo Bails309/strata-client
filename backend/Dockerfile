@@ -229,7 +229,7 @@ RUN mkdir -p /etc/chromium/policies/managed
 COPY backend/chromium-policies/strata.json /etc/chromium/policies/managed/strata.json
 RUN chmod 0644 /etc/chromium/policies/managed/strata.json
 
-RUN mkdir -p /app/config /app/migrations
+RUN mkdir -p /app/config /app/migrations /app/audit-anchor
 COPY backend/migrations /app/migrations
 
 # Non-root user. The entrypoint fixes ownership on Docker volumes then

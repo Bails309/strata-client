@@ -221,6 +221,7 @@ pub fn build_router(state: SharedState) -> Router {
             post(admin::reset_user_password),
         )
         .route("/api/admin/audit-logs", get(admin::list_audit_logs))
+        .route("/api/admin/audit-status", get(admin::audit_status))
         .route("/api/admin/sessions", get(admin::list_active_sessions))
         .route("/api/admin/sessions/kill", post(admin::kill_sessions))
         .route(

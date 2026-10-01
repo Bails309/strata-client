@@ -206,6 +206,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   protocol, watermark and file-transfer setting of connections they had
   no access to. It now returns `403` unless the caller's role grants the
   connection, like the tunnel and tag routes.
+- **Audit checkpoints are anchored outside the database (SEC-17).** Each
+  checkpoint is signed with a new Vault Transit ed25519 key
+  (`strata-audit`) and appended to `STRATA_AUDIT_ANCHOR_PATH` (the new
+  `audit-anchor` volume under compose). Every verifier run checks the
+  newest anchor's signature against a chain still in the database, so
+  rewriting or deleting checkpoints, or replacing the whole chain, is
+  caught after a restart as well. The runtime token's policy becomes
+  `strata-transit-v2`; existing installs swap to it automatically on the
+  first start. `GET /api/admin/audit-status` reports the verifier's last
+  result and the newest anchor.
 
 ### Build
 
@@ -297,6 +307,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Audit writes take one round trip (PERF-12).** Locking the chain,
   reading its head, hashing and inserting now happen in one database call
   instead of five, still serialised.
+- **Audit write latency is measured, not hidden behind a queue (PERF-12).**
+  16 concurrent writers reached 253 appends/s (about 4 ms each under the
+  chain lock, worst wait 633 ms) on a development host, far above the
+  rate audit events arrive, so writes stay synchronous.
+  `GET /api/admin/audit-status` reports live append latency and slow
+  appends.
 - **Audit log pages by id (PERF-11).** The Audit Logs and AV-blocked pages
   fetch the next page by the last id shown (`before`) instead of skipping
   rows, so deep pages cost the same as the first. Only the filters in use

@@ -5,13 +5,26 @@
 //! MAC under a key the database never holds and are also written to the log,
 //! so such a rewrite fails against the last checkpoint. Rows appended since
 //! that checkpoint are protected by the chain alone.
+//!
+//! Each checkpoint is also signed with a Vault Transit key the database
+//! never sees and appended to an anchor file outside it
+//! (`STRATA_AUDIT_ANCHOR_PATH`). The newest anchor is checked on every
+//! run, so rewriting or deleting checkpoints in the database, or replacing
+//! the whole chain, is caught even across restarts. Not covered: whoever
+//! holds the backend itself can sign anchors too, and one who can also
+//! rewrite the anchor file can roll it back; keep the file on storage the
+//! backend cannot rewrite (append-only, or shipped elsewhere) to close that.
 
 use crate::services::worker::{spawn_periodic, PeriodicConfig};
+use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, Pool, Postgres};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -157,15 +170,7 @@ impl CheckpointKey {
 
     fn mac(&self, cp: &Checkpoint) -> Hmac<Sha256> {
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.key).expect("HMAC takes any key length");
-        mac.update(
-            format!(
-                "strata-audit-checkpoint-v1\n{}\n{}\n{}",
-                cp.head.id,
-                cp.head.hash,
-                cp.first_v2.map(|id| id.to_string()).unwrap_or_default()
-            )
-            .as_bytes(),
-        );
+        mac.update(checkpoint_message(cp).as_bytes());
         mac
     }
 
@@ -175,6 +180,141 @@ impl CheckpointKey {
 
     pub fn verify(&self, cp: &Checkpoint, mac: &str) -> bool {
         hex::decode(mac).is_ok_and(|m| self.mac(cp).verify_slice(&m).is_ok())
+    }
+}
+
+/// What both the MAC and the Vault signature cover.
+fn checkpoint_message(cp: &Checkpoint) -> String {
+    format!(
+        "strata-audit-checkpoint-v1\n{}\n{}\n{}",
+        cp.head.id,
+        cp.head.hash,
+        cp.first_v2.map(|id| id.to_string()).unwrap_or_default()
+    )
+}
+
+/// One checkpoint as a line of the anchor file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Anchor {
+    pub v: u8,
+    pub at: DateTime<Utc>,
+    pub last_id: i64,
+    pub last_hash: String,
+    pub first_v2_id: Option<i64>,
+    pub key_id: String,
+    pub mac: String,
+    /// Vault Transit signature of the checkpoint, when Vault could sign.
+    pub signature: Option<String>,
+}
+
+impl Anchor {
+    fn checkpoint(&self) -> Checkpoint {
+        Checkpoint {
+            head: Head {
+                id: self.last_id,
+                hash: self.last_hash.clone(),
+            },
+            first_v2: self.first_v2_id,
+        }
+    }
+}
+
+fn anchor_path() -> Option<PathBuf> {
+    std::env::var("STRATA_AUDIT_ANCHOR_PATH")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .map(PathBuf::from)
+}
+
+/// Append one anchor and flush it to disk.
+async fn append_anchor(path: &Path, anchor: &Anchor) -> std::io::Result<()> {
+    let mut line = serde_json::to_vec(anchor).map_err(std::io::Error::other)?;
+    line.push(b'\n');
+    let mut options = tokio::fs::OpenOptions::new();
+    options.append(true).create(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path).await?;
+    file.write_all(&line).await?;
+    file.sync_data().await
+}
+
+/// The newest anchor in the file, read from its last 64 KiB.
+async fn last_anchor(path: &Path) -> std::io::Result<Option<Anchor>> {
+    let mut file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let len = file.metadata().await?.len();
+    file.seek(std::io::SeekFrom::Start(len.saturating_sub(64 * 1024)))
+        .await?;
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail).await?;
+    let tail = String::from_utf8_lossy(&tail);
+    let Some(line) = tail.lines().rev().find(|l| !l.trim().is_empty()) else {
+        return Ok(None);
+    };
+    serde_json::from_str(line)
+        .map(Some)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// Problems with the newest anchor: its Vault signature, its MAC, and the
+/// chain it names.
+async fn check_anchor(
+    conn: &mut PgConnection,
+    key: &CheckpointKey,
+    vault: Option<&crate::config::VaultConfig>,
+    anchor: &Anchor,
+) -> sqlx::Result<Vec<String>> {
+    let cp = anchor.checkpoint();
+    let mut problems = Vec::new();
+    if let (Some(vault), Some(signature)) = (vault, anchor.signature.as_deref()) {
+        let message = checkpoint_message(&cp);
+        match crate::services::vault::verify_audit(vault, message.as_bytes(), signature).await {
+            Ok(true) => {}
+            Ok(false) => problems.push(format!(
+                "the anchored checkpoint at row {} fails its Vault signature",
+                cp.head.id
+            )),
+            Err(e) => tracing::warn!("could not check the audit anchor signature: {e}"),
+        }
+    }
+    // A rotated checkpoint key leaves the MAC unverifiable, not wrong.
+    let checked = if anchor.key_id == key.id {
+        check_checkpoint(conn, key, &cp, &anchor.mac).await?
+    } else {
+        check_checkpoint_rows(conn, &cp).await?
+    };
+    problems.extend(checked.into_iter().map(|p| format!("anchor: {p}")));
+    Ok(problems)
+}
+
+/// The verifier's last result and the newest anchor it wrote or read.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct VerifierStatus {
+    pub last_run: Option<DateTime<Utc>>,
+    pub problems: Vec<String>,
+    pub anchor_path: Option<String>,
+    pub last_anchor: Option<Anchor>,
+}
+
+static STATUS: std::sync::LazyLock<std::sync::Mutex<VerifierStatus>> =
+    std::sync::LazyLock::new(Default::default);
+
+#[must_use]
+pub fn status() -> VerifierStatus {
+    STATUS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn record_status(problems: &[String], anchor: Option<Anchor>) {
+    let mut s = STATUS.lock().unwrap_or_else(|e| e.into_inner());
+    s.last_run = Some(Utc::now());
+    s.problems = problems.to_vec();
+    s.anchor_path = anchor_path().map(|p| p.display().to_string());
+    if anchor.is_some() {
+        s.last_anchor = anchor;
     }
 }
 
@@ -212,6 +352,16 @@ pub async fn check_checkpoint(
     if !key.verify(cp, mac) {
         return Ok(vec![format!("the checkpoint at row {id} fails its MAC")]);
     }
+    check_checkpoint_rows(conn, cp).await
+}
+
+/// Problems with the chain a checkpoint names: the row it ends at and where
+/// the v2 rows begin.
+async fn check_checkpoint_rows(
+    conn: &mut PgConnection,
+    cp: &Checkpoint,
+) -> sqlx::Result<Vec<String>> {
+    let id = cp.head.id;
     let mut problems = Vec::new();
     let stored: Option<String> =
         sqlx::query_scalar("SELECT current_hash FROM audit_logs WHERE id = $1")
@@ -248,7 +398,11 @@ struct VerifierState {
 
 /// Verify new rows every 10 minutes and the whole chain daily, checkpoint
 /// the head when it is intact, and log and audit any break.
-pub fn spawn_verifier(pool: Pool<Postgres>, shutdown: CancellationToken) -> JoinHandle<()> {
+pub fn spawn_verifier(
+    pool: Pool<Postgres>,
+    app: crate::services::app_state::SharedState,
+    shutdown: CancellationToken,
+) -> JoinHandle<()> {
     let state = Arc::new(Mutex::new(VerifierState::default()));
     spawn_periodic(
         PeriodicConfig {
@@ -262,12 +416,23 @@ pub fn spawn_verifier(pool: Pool<Postgres>, shutdown: CancellationToken) -> Join
         move || {
             let pool = pool.clone();
             let state = state.clone();
-            async move { run(&pool, &mut *state.lock().await).await }
+            let app = app.clone();
+            async move {
+                let vault = {
+                    let s = app.read().await;
+                    s.config.as_ref().and_then(|c| c.vault.clone())
+                };
+                run(&pool, vault.as_ref(), &mut *state.lock().await).await
+            }
         },
     )
 }
 
-async fn run(pool: &Pool<Postgres>, state: &mut VerifierState) -> anyhow::Result<()> {
+async fn run(
+    pool: &Pool<Postgres>,
+    vault: Option<&crate::config::VaultConfig>,
+    state: &mut VerifierState,
+) -> anyhow::Result<()> {
     let key = CheckpointKey::from_env()
         .ok_or_else(|| anyhow::anyhow!("no audit checkpoint key is available"))?;
     let mut conn = pool.acquire().await?;
@@ -275,6 +440,27 @@ async fn run(pool: &Pool<Postgres>, state: &mut VerifierState) -> anyhow::Result
     let mut problems = Vec::new();
     let mut boundary = first_v2(&mut conn).await?;
     let latest = latest_checkpoint(&mut conn, &key).await?;
+
+    // The anchor outlives this process, so it also remembers which
+    // checkpoints existed before a restart.
+    let anchor_file = anchor_path();
+    let anchor = match &anchor_file {
+        Some(path) => match last_anchor(path).await {
+            Ok(anchor) => anchor,
+            Err(e) => {
+                problems.push(format!("the audit anchor file cannot be read: {e}"));
+                None
+            }
+        },
+        None => None,
+    };
+    if let Some(anchor) = &anchor {
+        problems.extend(check_anchor(&mut conn, &key, vault, anchor).await?);
+        if anchor.key_id == key.id {
+            state.known_checkpoint = state.known_checkpoint.max(Some(anchor.last_id));
+        }
+    }
+
     let mut start = None;
     if let Some((cp, mac)) = &latest {
         let found = check_checkpoint(&mut conn, &key, cp, mac).await?;
@@ -314,6 +500,7 @@ async fn run(pool: &Pool<Postgres>, state: &mut VerifierState) -> anyhow::Result
         for p in &problems {
             tracing::error!(target: "strata::audit_integrity", "audit chain: {p}");
         }
+        record_status(&problems, anchor);
         if problems != state.alarm {
             let details = serde_json::json!({ "problems": problems });
             if let Err(e) =
@@ -335,9 +522,11 @@ async fn run(pool: &Pool<Postgres>, state: &mut VerifierState) -> anyhow::Result
         tracing::info!(rows = report.rows, "audit chain verified");
     }
     let Some(head) = report.head else {
+        record_status(&[], anchor);
         return Ok(());
     };
     if latest.as_ref().is_some_and(|(cp, _)| cp.head.id >= head.id) {
+        record_status(&[], anchor);
         return Ok(());
     }
     let cp = Checkpoint {
@@ -367,7 +556,52 @@ async fn run(pool: &Pool<Postgres>, state: &mut VerifierState) -> anyhow::Result
         "audit checkpoint"
     );
     state.known_checkpoint = Some(cp.head.id);
+    let written = match &anchor_file {
+        Some(path) => write_anchor(path, vault, &key, &cp, mac).await,
+        None => None,
+    };
+    record_status(&[], written.or(anchor));
     Ok(())
+}
+
+/// Sign `cp` with Vault when it can and append it to the anchor file.
+async fn write_anchor(
+    path: &Path,
+    vault: Option<&crate::config::VaultConfig>,
+    key: &CheckpointKey,
+    cp: &Checkpoint,
+    mac: String,
+) -> Option<Anchor> {
+    let signature = match vault {
+        Some(vault) => {
+            let message = checkpoint_message(cp);
+            match crate::services::vault::sign_audit(vault, message.as_bytes()).await {
+                Ok(sig) => Some(sig),
+                Err(e) => {
+                    tracing::warn!("could not sign the audit checkpoint with Vault: {e}");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+    let entry = Anchor {
+        v: 1,
+        at: Utc::now(),
+        last_id: cp.head.id,
+        last_hash: cp.head.hash.clone(),
+        first_v2_id: cp.first_v2,
+        key_id: key.id.clone(),
+        mac,
+        signature,
+    };
+    match append_anchor(path, &entry).await {
+        Ok(()) => Some(entry),
+        Err(e) => {
+            tracing::error!(path = %path.display(), "could not append the audit anchor: {e}");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -411,6 +645,109 @@ mod tests {
     async fn test_pool() -> Option<PgPool> {
         let url = std::env::var("TEST_DATABASE_URL").ok()?;
         PgPool::connect(&url).await.ok()
+    }
+
+    fn anchor(id: i64, hash: &str, key: &CheckpointKey, signature: Option<&str>) -> Anchor {
+        let cp = Checkpoint {
+            head: Head {
+                id,
+                hash: hash.to_owned(),
+            },
+            first_v2: None,
+        };
+        Anchor {
+            v: 1,
+            at: Utc::now(),
+            last_id: id,
+            last_hash: hash.to_owned(),
+            first_v2_id: None,
+            key_id: key.id.clone(),
+            mac: key.sign(&cp),
+            signature: signature.map(str::to_owned),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_newest_anchor_is_read_back_from_the_end_of_the_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("anchors.jsonl");
+        assert_eq!(last_anchor(&path).await.unwrap(), None);
+        let key = CheckpointKey::new(b"a-secret-of-at-least-thirty-two-bytes");
+        for id in 1..=500 {
+            append_anchor(&path, &anchor(id, &"ab".repeat(32), &key, None))
+                .await
+                .unwrap();
+        }
+        assert_eq!(last_anchor(&path).await.unwrap().unwrap().last_id, 500);
+        tokio::fs::write(&path, b"not json\n").await.unwrap();
+        assert!(last_anchor(&path).await.is_err());
+    }
+
+    /// A Transit stand-in that says every signature is `valid`.
+    async fn verifying_vault(valid: bool) -> crate::config::VaultConfig {
+        use axum::{routing::post, Json, Router};
+        let app = Router::new().route(
+            "/v1/transit/verify/{key}",
+            post(move || async move { Json(serde_json::json!({ "data": { "valid": valid } })) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        crate::config::VaultConfig {
+            address: format!("http://{addr}"),
+            token: "t".into(),
+            transit_key: "k".into(),
+            mode: crate::config::VaultMode::Local,
+            unseal_key: None,
+        }
+    }
+
+    /// Needs `TEST_DATABASE_URL` pointing at a migrated database.
+    #[tokio::test]
+    async fn an_anchor_catches_rewritten_rows_and_forged_signatures() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("TEST_DATABASE_URL unset, skipping");
+            return;
+        };
+        let key = CheckpointKey::new(b"a-secret-of-at-least-thirty-two-bytes");
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock(x'5354415544495400'::bigint)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let id = append(&mut tx, "test.anchor").await;
+        let hash = head(&mut tx).await.unwrap().hash;
+
+        let good = anchor(id, &hash, &key, Some("vault:v1:sig"));
+        let trusting = verifying_vault(true).await;
+        assert!(check_anchor(&mut tx, &key, Some(&trusting), &good)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let forged = verifying_vault(false).await;
+        let found = check_anchor(&mut tx, &key, Some(&forged), &good)
+            .await
+            .unwrap();
+        assert!(found[0].contains("fails its Vault signature"), "{found:?}");
+
+        // The database's copy of the head no longer matches the anchor.
+        sqlx::query("ALTER TABLE audit_logs DISABLE TRIGGER USER")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        exec(
+            &mut tx,
+            "UPDATE audit_logs SET current_hash = repeat('0', 64) WHERE id = $1",
+            id,
+        )
+        .await;
+        let found = check_anchor(&mut tx, &key, None, &good).await.unwrap();
+        assert!(
+            found.iter().any(|p| p.contains("no longer matches")),
+            "{found:?}"
+        );
+        tx.rollback().await.unwrap();
     }
 
     async fn head(conn: &mut PgConnection) -> Option<Head> {

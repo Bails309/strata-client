@@ -143,14 +143,88 @@ pub async fn log(
         _ => details,
     };
 
-    sqlx::query("SELECT audit_append($1, $2, $3)")
+    let started = std::time::Instant::now();
+    let result = sqlx::query("SELECT audit_append($1, $2, $3)")
         .bind(user_id)
         .bind(action_type)
         .bind(details)
         .execute(pool)
-        .await?;
+        .await;
+    WRITES.record(started.elapsed(), result.is_ok());
+    result?;
 
     Ok(())
+}
+
+// ── Write latency (PERF-12) ───────────────────────────────────────────────
+//
+// Appends are serialised by the chain lock, so their latency includes any
+// wait for it. These counters show whether that wait ever matters before
+// anything more elaborate (an outbox) is built.
+
+/// An append slower than this counts as slow.
+const SLOW_APPEND: std::time::Duration = std::time::Duration::from_millis(100);
+
+struct WriteStats {
+    appends: std::sync::atomic::AtomicU64,
+    failures: std::sync::atomic::AtomicU64,
+    slow: std::sync::atomic::AtomicU64,
+    total_us: std::sync::atomic::AtomicU64,
+    max_us: std::sync::atomic::AtomicU64,
+}
+
+static WRITES: WriteStats = WriteStats {
+    appends: std::sync::atomic::AtomicU64::new(0),
+    failures: std::sync::atomic::AtomicU64::new(0),
+    slow: std::sync::atomic::AtomicU64::new(0),
+    total_us: std::sync::atomic::AtomicU64::new(0),
+    max_us: std::sync::atomic::AtomicU64::new(0),
+};
+
+impl WriteStats {
+    fn record(&self, took: std::time::Duration, ok: bool) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let us = u64::try_from(took.as_micros()).unwrap_or(u64::MAX);
+        if !ok {
+            self.failures.fetch_add(1, Relaxed);
+            return;
+        }
+        self.appends.fetch_add(1, Relaxed);
+        self.total_us.fetch_add(us, Relaxed);
+        self.max_us.fetch_max(us, Relaxed);
+        if took >= SLOW_APPEND {
+            self.slow.fetch_add(1, Relaxed);
+        }
+    }
+}
+
+/// Audit append counts and latency since the process started.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AppendStats {
+    pub appends: u64,
+    pub failures: u64,
+    /// Appends that took 100 ms or more, lock wait included.
+    pub slow: u64,
+    pub mean_ms: f64,
+    pub max_ms: f64,
+}
+
+#[must_use]
+pub fn append_stats() -> AppendStats {
+    use std::sync::atomic::Ordering::Relaxed;
+    let appends = WRITES.appends.load(Relaxed);
+    let total = WRITES.total_us.load(Relaxed);
+    AppendStats {
+        appends,
+        failures: WRITES.failures.load(Relaxed),
+        slow: WRITES.slow.load(Relaxed),
+        mean_ms: if appends == 0 {
+            0.0
+        } else {
+            total as f64 / appends as f64 / 1000.0
+        },
+        max_ms: WRITES.max_us.load(Relaxed) as f64 / 1000.0,
+    }
 }
 
 #[cfg(test)]
@@ -206,5 +280,69 @@ mod tests {
         let hits = list_paginated(&pool, 10, 0, None, &searched).await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].details["n"], 1);
+    }
+
+    /// PERF-12 measurement: concurrent appends stay correctly chained, and
+    /// the throughput and latency are printed for the record. Needs
+    /// `TEST_DATABASE_URL`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_appends_stay_chained() {
+        let Some(pool) = std::env::var("TEST_DATABASE_URL").ok().and_then(|url| {
+            sqlx::postgres::PgPoolOptions::new()
+                .max_connections(16)
+                .connect_lazy(&url)
+                .ok()
+        }) else {
+            eprintln!("TEST_DATABASE_URL unset, skipping");
+            return;
+        };
+        const WRITERS: usize = 16;
+        const EACH: usize = 100;
+        let action = format!("bench.{}", Uuid::new_v4().simple());
+        let started = std::time::Instant::now();
+        let tasks: Vec<_> = (0..WRITERS)
+            .map(|w| {
+                let (pool, action) = (pool.clone(), action.clone());
+                tokio::spawn(async move {
+                    let mut worst = std::time::Duration::ZERO;
+                    for n in 0..EACH {
+                        let t = std::time::Instant::now();
+                        log(&pool, None, &action, &serde_json::json!({ "w": w, "n": n }))
+                            .await
+                            .unwrap();
+                        worst = worst.max(t.elapsed());
+                    }
+                    worst
+                })
+            })
+            .collect();
+        let mut worst = std::time::Duration::ZERO;
+        for task in tasks {
+            worst = worst.max(task.await.unwrap());
+        }
+        let total = WRITERS * EACH;
+        let elapsed = started.elapsed();
+        eprintln!(
+            "PERF-12: {total} appends from {WRITERS} writers in {elapsed:?} \
+             ({:.0}/s, mean {:.2} ms, worst {worst:?})",
+            total as f64 / elapsed.as_secs_f64(),
+            elapsed.as_secs_f64() * 1000.0 * WRITERS as f64 / total as f64,
+        );
+
+        let mut conn = pool.acquire().await.unwrap();
+        let first = crate::services::audit_verify::first_v2(&mut conn)
+            .await
+            .unwrap();
+        let report = crate::services::audit_verify::verify(&mut conn, None, first)
+            .await
+            .unwrap();
+        assert!(report.breaks.is_empty(), "{:?}", report.breaks);
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE action_type = $1")
+                .bind(&action)
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+        assert_eq!(count, total as i64);
     }
 }

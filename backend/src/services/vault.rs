@@ -156,6 +156,63 @@ async fn vault_post_with_retry_inner<T: Serialize>(
     })))
 }
 
+/// POST to a Transit path and return `data.<field>` from the reply.
+async fn transit_call(
+    vault: &VaultConfig,
+    path: &str,
+    body: &serde_json::Value,
+    field: &str,
+) -> Result<serde_json::Value, AppError> {
+    let url = format!("{}/v1/transit/{path}", vault.address.trim_end_matches('/'));
+    let resp = vault_post_with_retry(&url, &vault.token, body).await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(AppError::Vault(format!(
+            "Vault {path} failed ({status}): {text}"
+        )));
+    }
+    let reply: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| AppError::Vault(format!("Vault response parse: {e}")))?;
+    Ok(reply["data"][field].clone())
+}
+
+/// Sign `message` with the audit checkpoint key; returns `vault:vN:...`.
+pub async fn sign_audit(vault: &VaultConfig, message: &[u8]) -> Result<String, AppError> {
+    let key = crate::services::vault_provisioning::AUDIT_SIGNING_KEY;
+    let input = base64::engine::general_purpose::STANDARD.encode(message);
+    transit_call(
+        vault,
+        &format!("sign/{key}"),
+        &serde_json::json!({ "input": input }),
+        "signature",
+    )
+    .await?
+    .as_str()
+    .map(str::to_owned)
+    .ok_or_else(|| AppError::Vault("Vault sign returned no signature".into()))
+}
+
+/// Whether `signature` is the audit key's signature of `message`.
+pub async fn verify_audit(
+    vault: &VaultConfig,
+    message: &[u8],
+    signature: &str,
+) -> Result<bool, AppError> {
+    let key = crate::services::vault_provisioning::AUDIT_SIGNING_KEY;
+    let input = base64::engine::general_purpose::STANDARD.encode(message);
+    let valid = transit_call(
+        vault,
+        &format!("verify/{key}"),
+        &serde_json::json!({ "input": input, "signature": signature }),
+        "valid",
+    )
+    .await?;
+    Ok(valid.as_bool() == Some(true))
+}
+
 /// Encrypt a credential using envelope encryption:
 /// 1. Generate random DEK
 /// 2. Encrypt plaintext with DEK (AES-256-GCM)

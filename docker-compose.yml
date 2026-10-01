@@ -34,6 +34,10 @@ services:
       - SETUID
     volumes:
       - backend-config:/app/config
+      # Append-only record of signed audit checkpoints. Kept apart from
+      # the database so rewriting the audit table cannot also rewrite the
+      # anchors; ship it to write-once storage for stronger guarantees.
+      - audit-anchor:/app/audit-anchor
       # RW because the backend's retention sweeper (services::recordings)
       # deletes expired .guac files in addition to streaming them for
       # playback. Mounting :ro caused the cleanup loop to log a WARN
@@ -55,6 +59,7 @@ services:
     environment:
       - RUST_LOG=${RUST_LOG:-info}
       - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-strata}:${POSTGRES_PASSWORD:-strata_default}@postgres-local:5432/${POSTGRES_DB:-strata}}
+      - STRATA_AUDIT_ANCHOR_PATH=${STRATA_AUDIT_ANCHOR_PATH:-/app/audit-anchor/checkpoints.jsonl}
       # ── Session engine ──
       # Blank means every compiled protocol. Naming a subset refuses the
       # rest — there is no fallback, so an omitted protocol is refused,
@@ -357,6 +362,8 @@ volumes:
   krb5-config:
     driver: local
   backend-config:
+    driver: local
+  audit-anchor:
     driver: local
   vault-data:
     driver: local

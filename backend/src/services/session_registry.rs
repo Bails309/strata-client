@@ -601,6 +601,36 @@ impl SessionRegistry {
             system_cpu_cores: 0,
             native_ram_per_session_mb: 0, // placeholder — overridden by admin handler
             native_recommended: 0,        // placeholder — overridden by admin handler
+            memory: MemoryMetrics::current(),
+        }
+    }
+}
+
+/// What session memory is reserved and held, against its limits (PERF-04).
+#[derive(Serialize, Clone, Default)]
+pub struct MemoryMetrics {
+    /// Estimated memory reserved by admitted sessions.
+    pub sessions_reserved_bytes: u64,
+    pub sessions_limit_bytes: u64,
+    /// Sessions refused for capacity or a per-user limit since start.
+    pub sessions_refused: u64,
+    /// Replay history held for observers.
+    pub replay_used_bytes: u64,
+    pub replay_limit_bytes: u64,
+    /// Clipboard data being received from clients.
+    pub clipboard_bytes: u64,
+}
+
+impl MemoryMetrics {
+    fn current() -> Self {
+        let admission = crate::services::admission::stats();
+        Self {
+            sessions_reserved_bytes: admission.reserved_bytes,
+            sessions_limit_bytes: admission.limit_bytes,
+            sessions_refused: admission.rejected,
+            replay_used_bytes: NVR_BUDGET.used.load(Ordering::Relaxed) as u64,
+            replay_limit_bytes: NVR_BUDGET.limit as u64,
+            clipboard_bytes: strata_session::actor::clipboard_bytes_in_use() as u64,
         }
     }
 }
@@ -620,6 +650,7 @@ pub struct MetricsSummary {
     pub native_ram_per_session_mb: u32,
     /// Sessions this host could serve.
     pub native_recommended: u32,
+    pub memory: MemoryMetrics,
 }
 
 #[cfg(test)]
@@ -830,6 +861,7 @@ mod tests {
             system_cpu_cores: 0,
             native_ram_per_session_mb: 24,
             native_recommended: 40,
+            memory: MemoryMetrics::default(),
         };
         let json = serde_json::to_value(&m).unwrap();
         assert_eq!(json["active_sessions"], 3);

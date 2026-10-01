@@ -175,10 +175,11 @@ function RoleEditor({
     const payload: Omit<Role, "id"> = {
       ...(Object.fromEntries(ROLE_FLAGS.map((f) => [f, draft[f]])) as Omit<
         RoleDraft,
-        "name" | "description"
+        "name" | "description" | "sessionLimit"
       >),
       name: trimmedName,
       description: draft.description.trim(),
+      max_concurrent_sessions: draft.sessionLimit,
     };
     let saved: Role;
     try {
@@ -282,6 +283,23 @@ function RoleEditor({
                 maxLength={MAX_DESCRIPTION}
                 onChange={(e) => editor.setField("description", e.target.value)}
                 placeholder="Operational purpose of this role…"
+              />
+            </div>
+            <div className="role-field">
+              <label htmlFor={`${ids}-sessions`}>Concurrent sessions per member</label>
+              <input
+                id={`${ids}-sessions`}
+                className="input"
+                type="number"
+                min={0}
+                max={10000}
+                value={draft.sessionLimit || ""}
+                onChange={(e) =>
+                  editor.setSessionLimit(
+                    Math.min(10000, Math.max(0, Math.trunc(Number(e.target.value) || 0)))
+                  )
+                }
+                placeholder="No limit"
               />
             </div>
           </div>

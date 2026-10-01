@@ -7,6 +7,6 @@ pub mod session;
 pub use audit::{AuditRecord, AuditSink, FileAuditSink, GuacRecordingSink, NullAuditSink};
 pub use manager::{SessionManager, SessionOptions};
 pub use session::{
-    CredentialGuard, InputModerator, Moderation, RecordingPolicy, SessionActor, SessionCommand,
-    SessionConfig, SessionFrame, SessionHandle,
+    clipboard_bytes_in_use, CredentialGuard, InputModerator, Moderation, RecordingPolicy,
+    SessionActor, SessionCommand, SessionConfig, SessionFrame, SessionHandle,
 };

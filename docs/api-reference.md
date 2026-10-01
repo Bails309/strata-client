@@ -828,6 +828,7 @@ All role endpoints require `can_manage_system`. The permission column below stat
 | `can_create_connections` | boolean | **Not enforced by any handler.** Reveals the connections UI; connection and folder endpoints require `can_manage_connections` |
 | `can_use_quick_share` | boolean | Upload via the in-session Quick Share endpoint. User-facing; `can_manage_system` also passes |
 | `can_use_quick_share_outbound` | boolean | **(v1.11.0+)** Submit files out of a session (drive-channel ingest, HTTPS upload-token mint, list, download). `can_manage_system` **also passes** these checks; the HTTPS-snippet consume re-reads the role flag alone. *(v2.2.0 correction: earlier versions of this page said super-admins were not allowed.)* |
+| `max_concurrent_sessions` | integer \| null | **(Unreleased)** Remote sessions a member may hold at once; `null` is no per-role limit, in which case `STRATA_MAX_SESSIONS_PER_USER` applies if set. Send `0` to clear it; 1–10000 otherwise. A session over the limit is refused with `429` before anything connects. |
 
 #### `POST /api/admin/roles`
 
@@ -1213,7 +1214,15 @@ Aggregate metrics across all active tunnel sessions.
   "system_total_memory": 16365801472,
   "system_cpu_cores": 16,
   "native_ram_per_session_mb": 24,
-  "native_recommended": 74
+  "native_recommended": 74,
+  "memory": {
+    "sessions_reserved_bytes": 201326592,
+    "sessions_limit_bytes": 11274289152,
+    "sessions_refused": 0,
+    "replay_used_bytes": 52428800,
+    "replay_limit_bytes": 1073741824,
+    "clipboard_bytes": 0
+  }
 }
 ```
 
@@ -1227,6 +1236,11 @@ Aggregate metrics across all active tunnel sessions.
 | `system_cpu_cores`          | integer | Host logical CPU cores                                                  |
 | `native_ram_per_session_mb` | integer | Memory one session costs, from what the engine actually allocates       |
 | `native_recommended`        | integer | Sessions this host could serve, reserving 30% headroom                  |
+| `memory.sessions_reserved_bytes` | integer | **(Unreleased)** Memory reserved by admitted sessions, estimated from protocol and display size |
+| `memory.sessions_limit_bytes` | integer | The admission budget: `STRATA_SESSION_MEMORY_BUDGET_MB`, else three quarters of the container (or system) memory less the replay budget |
+| `memory.sessions_refused` | integer | Sessions refused since start because the budget or a per-user limit was reached |
+| `memory.replay_used_bytes` / `replay_limit_bytes` | integer | Replay history held for observers, against `STRATA_NVR_MEMORY_BUDGET_MB` |
+| `memory.clipboard_bytes` | integer | Clipboard data currently being received from clients (capped at 256 MiB process-wide) |
 
 ---
 

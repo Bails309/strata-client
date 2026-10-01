@@ -2286,6 +2286,9 @@ use crate::services::audit::{AuditFilters, AuditLogRow};
 pub struct AuditLogQuery {
     pub page: Option<i64>,
     pub per_page: Option<i64>,
+    /// Keyset cursor: return rows older than this id. Takes precedence
+    /// over `page`.
+    pub before: Option<i64>,
     /// Exact `action_type` (e.g. `tunnel.connected`).
     pub action_type: Option<String>,
     /// Dotted prefix on `action_type` (e.g. `tunnel` matches every
@@ -2333,7 +2336,9 @@ pub async fn list_audit_logs(
         search: norm(query.search),
     };
 
-    let rows = crate::services::audit::list_paginated(&db.pool, per_page, offset, &filters).await?;
+    let rows =
+        crate::services::audit::list_paginated(&db.pool, per_page, offset, query.before, &filters)
+            .await?;
     Ok(Json(rows))
 }
 

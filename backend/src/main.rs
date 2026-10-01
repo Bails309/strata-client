@@ -326,6 +326,8 @@ async fn main() -> anyhow::Result<()> {
         services::session_cleanup::spawn_vdi_reaper(state.clone(), shutdown.clone()),
         // ── Spawn outbound Quick-Share purge worker (hourly) ──
         services::outbound_shares::spawn_purge_worker(state.clone(), shutdown.clone()),
+        // ── Spawn audit chain verifier (every 10 min, full daily) ──
+        services::audit_verify::spawn_verifier(db_pool.clone(), shutdown.clone()),
     ];
 
     // ── Spawn SSO state pruner ──

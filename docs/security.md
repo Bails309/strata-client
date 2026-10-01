@@ -563,11 +563,36 @@ All sensitive material (DEKs, plaintext passwords, tunnel ticket credentials) us
 
 ## Audit Trail
 
-The `audit_logs` table is designed as an append-only, tamper-evident log:
+The `audit_logs` table is an append-only, tamper-evident log:
 
-- **Append-only:** The table should be configured with `GRANT INSERT, SELECT` only (no `UPDATE` or `DELETE`)
-- **Hash chain:** Each entry's `current_hash` = `SHA-256(previous_hash || action_type || details)`
-- **Integrity verification:** Walk the chain from the first entry; any mismatch in the hash chain indicates tampering
+- **Append-only:** triggers refuse `UPDATE`, `DELETE` and `TRUNCATE`. They
+  stop the application, and anything reaching the database through it, from
+  changing history; the table owner can still drop them.
+- **Hash chain (v2, migration 098):** `audit_append` hashes each entry with
+  SHA-256 over a length-prefixed encoding of its id, UTC timestamp, user id,
+  action, details and the previous entry's digest, in one call under the
+  chain lock. Rows written before 098 are `hash_version = 1`; their links are
+  checked but their contents, which hashed only the previous digest, action
+  and details, cannot be. Attribution no longer has a foreign key, so
+  deleting a user does not rewrite their entries.
+- **Verification:** a background job checks new entries every 10 minutes and
+  the whole chain daily: every link, every v2 digest, and that no legacy row
+  appears after the first v2 row. A break is logged at error level
+  (`strata::audit_integrity`) and recorded as `audit.integrity_failed`.
+- **Checkpoints:** when the chain is intact the job records its head in
+  `audit_checkpoints` with an HMAC under `STRATA_AUDIT_CHECKPOINT_KEY`, or a
+  key derived from the JWT secret when that is unset, and logs it
+  (`strata::audit_checkpoint`). Rewriting history and recomputing every
+  digest no longer matches the last checkpoint; deleting checkpoints is
+  noticed by a running backend.
+
+**What this does not cover.** Someone who holds the database *and* the
+checkpoint key can rewrite the chain and forge checkpoints. Entries after
+the latest checkpoint (up to 10 minutes) can be truncated unnoticed. The
+independent record is the checkpoint log lines: ship them to a destination
+the database administrators cannot alter, and set
+`STRATA_AUDIT_CHECKPOINT_KEY` to a secret held apart from the database and
+the JWT secret. Changing the key starts a fresh checkpoint series.
 
 ### Logged Events
 

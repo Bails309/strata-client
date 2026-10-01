@@ -1,6 +1,5 @@
 use crate::error::AppError;
-use sha2::{Digest, Sha256};
-use sqlx::{Pool, Postgres};
+use sqlx::{Pool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 /// Paginated audit-log row as returned to admin clients. Joins the author's
@@ -43,58 +42,74 @@ pub struct AuditFilters {
 /// Fetch audit rows in reverse-chronological order (newest first), joined
 /// with `users` and `connections` for display.
 ///
-/// The SQL is static — optional filters are gated by `$N IS NULL OR …`
-/// predicates so the same prepared statement serves every call shape.
+/// `before` is a keyset cursor (the last id of the previous page); when it
+/// is set `offset` is ignored, so deep pages cost the same as the first.
+/// Only the filters in use reach the SQL, so each combination gets a plan
+/// that can use its indexes.
 pub async fn list_paginated(
     pool: &Pool<Postgres>,
     limit: i64,
     offset: i64,
+    before: Option<i64>,
     filters: &AuditFilters,
 ) -> Result<Vec<AuditLogRow>, AppError> {
-    let rows = sqlx::query_as(
+    let mut q = QueryBuilder::<Postgres>::new(
         "SELECT a.id, a.created_at, a.user_id, u.username, a.action_type, a.details, a.current_hash,
                 c.name AS connection_name
          FROM audit_logs a
          LEFT JOIN users u ON u.id = a.user_id
          LEFT JOIN connections c ON c.id = (a.details->>'connection_id')::uuid
-         WHERE ($3::text        IS NULL OR a.action_type = $3)
-           AND ($4::text        IS NULL OR a.action_type = $4 OR a.action_type LIKE $4 || '.%')
-           AND ($5::text        IS NULL OR u.username ILIKE '%' || $5 || '%')
-           AND ($6::timestamptz IS NULL OR a.created_at >= $6)
-           AND ($7::timestamptz IS NULL OR a.created_at <= $7)
-           AND ($8::text        IS NULL OR a.action_type ILIKE '%' || $8 || '%'
-                                       OR a.details::text ILIKE '%' || $8 || '%'
-                                       OR c.name ILIKE '%' || $8 || '%')
-         ORDER BY a.id DESC LIMIT $1 OFFSET $2",
-    )
-    .bind(limit)
-    .bind(offset)
-    .bind(filters.action_type.as_deref())
-    .bind(filters.action_prefix.as_deref())
-    .bind(filters.username.as_deref())
-    .bind(filters.from)
-    .bind(filters.to)
-    .bind(filters.search.as_deref())
-    .fetch_all(pool)
-    .await?;
+         WHERE TRUE",
+    );
+    if let Some(before) = before {
+        q.push(" AND a.id < ").push_bind(before);
+    }
+    if let Some(action) = &filters.action_type {
+        q.push(" AND a.action_type = ").push_bind(action);
+    }
+    if let Some(prefix) = &filters.action_prefix {
+        q.push(" AND (a.action_type = ")
+            .push_bind(prefix)
+            .push(" OR a.action_type LIKE ")
+            .push_bind(format!("{prefix}.%"))
+            .push(")");
+    }
+    if let Some(username) = &filters.username {
+        q.push(" AND a.user_id = ANY(ARRAY(SELECT id FROM users WHERE username ILIKE ")
+            .push_bind(format!("%{username}%"))
+            .push("))");
+    }
+    if let Some(from) = filters.from {
+        q.push(" AND a.created_at >= ").push_bind(from);
+    }
+    if let Some(to) = filters.to {
+        q.push(" AND a.created_at <= ").push_bind(to);
+    }
+    if let Some(search) = &filters.search {
+        // Each branch is on `audit_logs` alone so the trigram and
+        // connection-id indexes can serve it; `= ANY(ARRAY(..))` rather
+        // than `IN (..)`, which the planner would run per row instead.
+        let pattern = format!("%{search}%");
+        q.push(" AND (a.action_type ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" OR a.details::text ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" OR a.details->>'connection_id' = ANY(ARRAY(SELECT id::text FROM connections WHERE name ILIKE ")
+            .push_bind(pattern)
+            .push(")))");
+    }
+    q.push(" ORDER BY a.id DESC LIMIT ").push_bind(limit);
+    if before.is_none() {
+        q.push(" OFFSET ").push_bind(offset);
+    }
+    let rows = q.build_query_as().fetch_all(pool).await?;
     Ok(rows)
 }
 
-/// Compute the chain hash: SHA-256(previous_hash || action_type || details).
-pub fn compute_chain_hash(previous_hash: &str, action_type: &str, details: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(previous_hash.as_bytes());
-    hasher.update(action_type.as_bytes());
-    hasher.update(details.as_bytes());
-    hex::encode(hasher.finalize())
-}
-
-/// Append an immutable, hash-chained audit log entry.
+/// Append an audit entry to the hash chain.
 ///
-/// Uses a PostgreSQL advisory lock to serialise inserts, preventing
-/// concurrent requests from reading the same previous_hash and forking
-/// the chain.  This handles the empty-table case correctly (FOR UPDATE
-/// on zero rows is a no-op and provides no serialisation).
+/// `audit_append` (migration 098) takes the chain lock, hashes the entry
+/// with the previous digest and inserts it in one round trip.
 pub async fn log(
     pool: &Pool<Postgres>,
     user_id: Option<Uuid>,
@@ -128,36 +143,12 @@ pub async fn log(
         _ => details,
     };
 
-    let mut tx = pool.begin().await?;
-
-    // Advisory lock serialises all audit inserts (key chosen to avoid collisions)
-    const AUDIT_LOCK_KEY: i64 = 0x5354_4155_4449_5400; // "STRAUDIT"
-    sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(AUDIT_LOCK_KEY)
-        .execute(&mut *tx)
+    sqlx::query("SELECT audit_append($1, $2, $3)")
+        .bind(user_id)
+        .bind(action_type)
+        .bind(details)
+        .execute(pool)
         .await?;
-
-    let previous_hash: String =
-        sqlx::query_scalar("SELECT current_hash FROM audit_logs ORDER BY id DESC LIMIT 1")
-            .fetch_optional(&mut *tx)
-            .await?
-            .unwrap_or_default();
-
-    let current_hash = compute_chain_hash(&previous_hash, action_type, &details.to_string());
-
-    sqlx::query(
-        "INSERT INTO audit_logs (user_id, action_type, details, previous_hash, current_hash)
-         VALUES ($1, $2, $3, $4, $5)",
-    )
-    .bind(user_id)
-    .bind(action_type)
-    .bind(details)
-    .bind(&previous_hash)
-    .bind(&current_hash)
-    .execute(&mut *tx)
-    .await?;
-
-    tx.commit().await?;
 
     Ok(())
 }
@@ -166,37 +157,54 @@ pub async fn log(
 mod tests {
     use super::*;
 
-    #[test]
-    fn hash_chain_deterministic() {
-        let details = serde_json::json!({"username": "admin"});
-        let hash1 = compute_chain_hash("", "auth.login", &details.to_string());
-        let hash2 = compute_chain_hash("", "auth.login", &details.to_string());
-        assert_eq!(hash1, hash2);
-        assert_eq!(hash1.len(), 64); // SHA-256 = 64 hex chars
-    }
+    /// Needs `TEST_DATABASE_URL` pointing at a migrated database.
+    #[tokio::test]
+    async fn keyset_pages_and_every_filter_run() {
+        let Some(pool) = std::env::var("TEST_DATABASE_URL")
+            .ok()
+            .and_then(|url| sqlx::PgPool::connect_lazy(&url).ok())
+        else {
+            eprintln!("TEST_DATABASE_URL unset, skipping");
+            return;
+        };
+        let action = format!("listtest.{}", Uuid::new_v4().simple());
+        for n in 0..3 {
+            log(&pool, None, &action, &serde_json::json!({ "n": n }))
+                .await
+                .unwrap();
+        }
+        let only = AuditFilters {
+            action_type: Some(action.clone()),
+            ..AuditFilters::default()
+        };
 
-    #[test]
-    fn hash_chain_differs_on_action() {
-        let details = serde_json::json!({});
-        let h1 = compute_chain_hash("abc123", "auth.login", &details.to_string());
-        let h2 = compute_chain_hash("abc123", "auth.logout", &details.to_string());
-        assert_ne!(h1, h2);
-    }
+        let first = list_paginated(&pool, 2, 0, None, &only).await.unwrap();
+        assert_eq!(first.len(), 2);
+        let rest = list_paginated(&pool, 2, 0, Some(first[1].id), &only)
+            .await
+            .unwrap();
+        assert_eq!(rest.len(), 1);
+        assert!(rest[0].id < first[1].id);
+        assert_eq!(rest[0].details["n"], 0);
 
-    #[test]
-    fn hash_chain_differs_on_previous() {
-        let details = serde_json::json!({"id": "123"});
-        let h1 = compute_chain_hash("", "user.create", &details.to_string());
-        let h2 = compute_chain_hash("previous-hash-xyz", "user.create", &details.to_string());
-        assert_ne!(h1, h2);
-    }
-
-    #[test]
-    fn hash_chain_differs_on_details() {
-        let d1 = serde_json::json!({"key": "a"});
-        let d2 = serde_json::json!({"key": "b"});
-        let h1 = compute_chain_hash("", "settings.update", &d1.to_string());
-        let h2 = compute_chain_hash("", "settings.update", &d2.to_string());
-        assert_ne!(h1, h2);
+        let all = AuditFilters {
+            action_type: Some(action.clone()),
+            action_prefix: Some("listtest".into()),
+            username: Some("nobody-has-this-name".into()),
+            from: Some(chrono::Utc::now() - chrono::Duration::hours(1)),
+            to: Some(chrono::Utc::now()),
+            search: Some("\"n\": 1".into()),
+        };
+        assert!(list_paginated(&pool, 10, 0, None, &all)
+            .await
+            .unwrap()
+            .is_empty());
+        let searched = AuditFilters {
+            username: None,
+            ..all
+        };
+        let hits = list_paginated(&pool, 10, 0, None, &searched).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].details["n"], 1);
     }
 }

@@ -86,16 +86,26 @@ function sourceLabel(source: Source): string {
 export default function AvBlockedTab() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [page, setPage] = useState(1);
+  // cursors[n] is the last id shown on page n + 1.
+  const [cursors, setCursors] = useState<number[]>([]);
   const [loadError, setLoadError] = useState("");
   const { formatDateTime } = useSettings();
 
+  const before = page > 1 ? cursors[page - 2] : undefined;
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoadError("");
-    getAuditLogs(page, PAGE_SIZE, { action_type: "file.av_blocked" })
+    getAuditLogs(1, PAGE_SIZE, { action_type: "file.av_blocked", before })
       .then(setLogs)
       .catch(() => setLoadError("Failed to load AV-blocked file list."));
-  }, [page]);
+  }, [before]);
+
+  const nextPage = () => {
+    const last = logs[logs.length - 1];
+    if (!last) return;
+    setCursors((c) => [...c.slice(0, page - 1), last.id]);
+    setPage(page + 1);
+  };
 
   const rows = logs.map(parseRow);
 
@@ -179,11 +189,7 @@ export default function AvBlockedTab() {
           Previous
         </button>
         <span className="py-2 px-2 text-txt-secondary">Page {page}</span>
-        <button
-          className="btn"
-          onClick={() => setPage(page + 1)}
-          disabled={logs.length < PAGE_SIZE}
-        >
+        <button className="btn" onClick={nextPage} disabled={logs.length < PAGE_SIZE}>
           Next
         </button>
       </div>

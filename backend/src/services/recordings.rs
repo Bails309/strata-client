@@ -28,6 +28,8 @@ pub fn parse_recording_enabled(s: &str) -> bool {
 
 pub struct RecordingConfig {
     pub enabled: bool,
+    /// Refuse or end a session rather than let it run unrecorded.
+    pub required: bool,
     pub retention_days: u32,
     pub storage_type: StorageType,
 }
@@ -38,6 +40,9 @@ pub async fn get_config(pool: &sqlx::Pool<sqlx::Postgres>) -> anyhow::Result<Rec
             .await?
             .unwrap_or_else(|| "false".into()),
     );
+    let required = crate::services::settings::get(pool, "recordings_required")
+        .await?
+        .is_some_and(|v| v == "true");
 
     let retention_days = parse_retention_days(
         &crate::services::settings::get(pool, "recordings_retention_days")
@@ -53,6 +58,7 @@ pub async fn get_config(pool: &sqlx::Pool<sqlx::Postgres>) -> anyhow::Result<Rec
 
     Ok(RecordingConfig {
         enabled,
+        required,
         retention_days,
         storage_type,
     })
@@ -769,8 +775,8 @@ pub async fn insert_start(
     client_ip: Option<String>,
 ) -> Result<(), crate::error::AppError> {
     sqlx::query(
-        "INSERT INTO recordings (session_id, connection_id, connection_name, user_id, username, storage_path, storage_type, started_at, client_ip)
-         VALUES ($1, $2, $3, $4, $5, $6, 'local', $7, $8)",
+        "INSERT INTO recordings (session_id, connection_id, connection_name, user_id, username, storage_path, storage_type, started_at, client_ip, status)
+         VALUES ($1, $2, $3, $4, $5, $6, 'local', $7, $8, 'recording')",
     )
     .bind(session_id)
     .bind(connection_id)
@@ -783,6 +789,39 @@ pub async fn insert_start(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Record that a recording failed or stopped short.
+pub async fn mark_failed(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    session_id: &str,
+    status: &str,
+    failure: &str,
+) {
+    if let Err(e) =
+        sqlx::query("UPDATE recordings SET status = $2, failure = $3 WHERE session_id = $1")
+            .bind(session_id)
+            .bind(status)
+            .bind(failure)
+            .execute(pool)
+            .await
+    {
+        tracing::error!(session_id, error = %e, "could not record the recording failure");
+    }
+}
+
+/// Recordings still marked in progress when the backend starts were cut
+/// short by the previous process ending. The backend runs as one replica,
+/// so none of them can still be live.
+pub async fn mark_interrupted(pool: &sqlx::Pool<sqlx::Postgres>) -> Result<u64, sqlx::Error> {
+    let r = sqlx::query(
+        "UPDATE recordings SET status = 'incomplete',
+             failure = 'the backend stopped before the session ended'
+         WHERE status = 'recording'",
+    )
+    .execute(pool)
+    .await?;
+    Ok(r.rows_affected())
 }
 
 // ── Admin session stats (30-day window) ────────────────────────────────
@@ -1682,6 +1721,7 @@ mod tests {
     fn recording_config_fields() {
         let cfg = RecordingConfig {
             enabled: true,
+            required: false,
             retention_days: 90,
             storage_type: StorageType::AzureBlob,
         };
@@ -1850,6 +1890,7 @@ mod tests {
     fn recording_config_disabled() {
         let cfg = RecordingConfig {
             enabled: false,
+            required: false,
             retention_days: 0,
             storage_type: StorageType::Local,
         };

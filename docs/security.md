@@ -1683,6 +1683,25 @@ Session recording captures are managed by a background sync task:
 - **Write protection** — Files modified within the last 30 seconds are skipped to avoid deleting active recordings.
 - **Configurable** — Retention period and storage type (local / Azure Blob) are set via the Admin UI.
 
+### Recording failures (SEC-16)
+
+- **Policy** — *Require recording* (`recordings_required`) makes recording
+  a precondition: a session whose recording row or file cannot be created is
+  refused before the target is contacted, and a session whose recording
+  fails mid-way (disk full, storage stall) is ended. Without it the session
+  continues unrecorded. Both cases raise `recording.failed` (`stage`:
+  `metadata`, `open` or `write`) and an error log.
+- **Outcome** — every recording carries a `status`: `complete`,
+  `incomplete` (stopped early; what was written is kept) or `failed`
+  (nothing usable). Recording lists flag anything not complete.
+- **Durability** — the recording is flushed and synced to disk every 5
+  seconds and on close, so a crash loses at most the last 5 seconds.
+  Recordings left `recording` when the backend starts are marked
+  `incomplete`; this assumes a single backend replica.
+- **Teardown** — every session end, including a failed write or a vanished
+  client, finalises the recording, shuts the engine down and revokes any
+  checked-out credential, each step bounded at 10 seconds.
+
 ---
 
 ## User Lifecycle Retention

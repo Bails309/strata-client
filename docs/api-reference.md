@@ -485,9 +485,16 @@ Toggle session recording.
 ```json
 {
   "enabled": true,
+  "required": true,
   "retention_days": 30
 }
 ```
+
+`required` (optional, stored as `recordings_required`) refuses a session
+whose recording cannot start and ends one whose recording fails. When it is
+false such a session continues unrecorded. Either way the failure is
+audited as `recording.failed` and the recording is marked `failed` or
+`incomplete`.
 
 #### `PUT /api/admin/settings/vault`
 
@@ -1554,12 +1561,16 @@ List the calling user's own historical recordings. Supports optional filtering, 
     "duration_secs": 3600,
     "storage_path": "08c6776c-7fc1-4869-864e-c1a823864ad4-1776293653790.guac",
     "storage_type": "local",
-    "client_ip": "203.0.113.42"
+    "client_ip": "203.0.113.42",
+    "status": "complete",
+    "failure": null
   }
 ]
 ```
 
 `client_ip` is captured at handshake from the rightmost non-empty `X-Forwarded-For` entry (with a `ConnectInfo` peer-IP fallback). It is `null` for recordings created before migration 065.
+
+`status` (migration 099) is `recording` while the session runs, `complete` once it is finalised intact, `incomplete` when recording stopped early or the backend stopped before finalising it (up to 5 seconds may be lost), and `failed` when nothing usable was recorded. `failure` says why.
 
 ### `GET /api/user/recordings/:id/stream`
 

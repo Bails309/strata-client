@@ -20,6 +20,7 @@ import {
   MeResponse,
 } from "../api";
 import HistoricalPlayer from "../components/HistoricalPlayer";
+import RecordingStatusBadge from "../components/RecordingStatusBadge";
 import ConfirmModal from "../components/ConfirmModal";
 import { useSettings } from "../contexts/SettingsContext";
 
@@ -601,6 +602,7 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                         <span className="text-txt-secondary text-sm font-mono tabular-nums">
                           {formatRecDuration(r.duration_secs)}
                         </span>
+                        <RecordingStatusBadge recording={r} />
                       </td>
                       {isAdmin && (
                         <td className="p-4">

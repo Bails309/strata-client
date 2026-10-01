@@ -44,6 +44,10 @@ pub const OBSERVER_QUEUE_DEPTH: usize = 128;
 
 const SYNC_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Longest any one teardown step may take, so a stalled disk or target
+/// cannot keep the others from running.
+const TEARDOWN_STEP: Duration = Duration::from_secs(10);
+
 /// How long to wait for a failed engine to say why it closed.
 const CLOSE_REASON_GRACE: Duration = Duration::from_secs(1);
 
@@ -168,6 +172,12 @@ impl SessionHandle {
             })
             .await
             .map_err(|_| SessionError::PipelineClosed("session actor"))
+    }
+
+    /// Resolves once the actor has finished tearing down, recording
+    /// finalised included.
+    pub async fn closed(&self) {
+        self.commands.closed().await;
     }
 }
 
@@ -306,7 +316,7 @@ impl SessionActor {
                                 Err(SessionError::Engine(err)) => {
                                     break self.end_after_input_failure(err).await;
                                 }
-                                Err(err) => return Err(err),
+                                Err(err) => break self.end_after_failure(err).await,
                             }
                         }
                         Some(SessionCommand::AttachObserver(reply)) => {
@@ -320,13 +330,23 @@ impl SessionActor {
                     }
                 }
                 _ = sync_interval.tick() => {
-                    self.emit_sync().await?;
+                    // The checkpoint bounds how much of the recording a
+                    // crash can lose to one sync interval.
+                    let step = match self.emit_sync().await {
+                        Ok(()) => self.audit.checkpoint().await,
+                        Err(err) => Err(err),
+                    };
+                    if let Err(err) = step {
+                        break self.end_after_failure(err).await;
+                    }
                 }
                 event = self.engine.next_event() => {
                     match event {
                         Ok(Some(event)) => {
                             let disconnect = matches!(event, TargetEvent::Disconnected { .. });
-                            self.on_target_event(event).await?;
+                            if let Err(err) = self.on_target_event(event).await {
+                                break self.end_after_failure(err).await;
+                            }
                             if disconnect {
                                 break "target disconnected".to_owned();
                             }
@@ -358,6 +378,26 @@ impl SessionActor {
         let _ = self
             .on_target_event(TargetEvent::Disconnected { reason, cause })
             .await;
+    }
+
+    /// Wind down after a step of the session failed.
+    async fn end_after_failure(&mut self, err: SessionError) -> String {
+        if let SessionError::Audit(why) = &err {
+            tracing::error!(session = %self.id, error = %why, "recording failed; ending the session");
+            // Not via `emit`: that records first, and recording is what failed.
+            let mut frames = Vec::new();
+            self.encoder.encode(
+                &TargetEvent::Disconnected {
+                    reason: "The session recording failed, so the session was closed.".to_owned(),
+                    cause: DisconnectCause::Failed,
+                },
+                &mut frames,
+            );
+            for frame in frames {
+                let _ = self.to_client.try_send(frame);
+            }
+        }
+        err.to_string()
     }
 
     /// Wind down after the engine refused input.
@@ -635,10 +675,26 @@ impl SessionActor {
         // Every step runs even if an earlier one failed: a socket that
         // refuses to close must not leave a credential live or an audit
         // log unflushed.
-        let engine = self.engine.shutdown().await;
-        let audit = self.audit.finalize().await;
+        let engine = bounded(self.engine.shutdown(), || {
+            Err(EngineError::Transport(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "engine shutdown timed out",
+            )))
+        })
+        .await;
+        let audit = bounded(self.audit.finalize(), || {
+            Err(SessionError::Audit(
+                "recording finalise timed out".to_owned(),
+            ))
+        })
+        .await;
         let credential = match self.credential.as_mut() {
-            Some(guard) => guard.revoke().await,
+            Some(guard) => {
+                bounded(guard.revoke(), || {
+                    Err(SessionError::PipelineClosed("credential revoke timed out"))
+                })
+                .await
+            }
             None => Ok(()),
         };
 
@@ -648,6 +704,13 @@ impl SessionActor {
         credential?;
         audit
     }
+}
+
+/// Run one teardown step within [`TEARDOWN_STEP`].
+async fn bounded<T>(fut: impl std::future::Future<Output = T>, timed_out: impl FnOnce() -> T) -> T {
+    tokio::time::timeout(TEARDOWN_STEP, fut)
+        .await
+        .unwrap_or_else(|_| timed_out())
 }
 
 /// What the user is told when the engine fails rather than ending cleanly.
@@ -1008,6 +1071,82 @@ mod tests {
         // so a closed channel is a precise signal rather than a race.
         while frames.recv().await.is_some() {}
         assert!(*revoked.lock().unwrap(), "credential was never revoked");
+    }
+
+    /// Fails every write once `fail` is set; counts finalisation.
+    #[derive(Clone, Default)]
+    struct FlakySink {
+        fail: Arc<Mutex<bool>>,
+        finalized: Arc<Mutex<u32>>,
+    }
+
+    #[async_trait]
+    impl crate::actor::audit::AuditSink for FlakySink {
+        async fn record(&mut self, _record: AuditRecord) -> Result<(), SessionError> {
+            if *self.fail.lock().unwrap() {
+                return Err(SessionError::Audit("disk full".to_owned()));
+            }
+            Ok(())
+        }
+        async fn finalize(&mut self) -> Result<(), SessionError> {
+            *self.finalized.lock().unwrap() += 1;
+            Ok(())
+        }
+    }
+
+    fn spawn_flaky() -> (
+        SessionHandle,
+        mpsc::Receiver<ClientFrame>,
+        mpsc::UnboundedSender<TargetEvent>,
+        FlakySink,
+    ) {
+        let (engine, events, _inputs) = MockEngine::new(Protocol::Rdp);
+        let sink = FlakySink::default();
+        let (handle, frames) = SessionActor::spawn(SessionConfig {
+            id: "flaky".to_owned(),
+            engine: Box::new(engine),
+            encoder: Box::new(GuacWireEncoder::new()),
+            audit: Box::new(sink.clone()),
+            recording: RecordingPolicy::default(),
+            moderator: None,
+            credential: None,
+        });
+        (handle, frames, events, sink)
+    }
+
+    #[tokio::test]
+    async fn a_recording_failure_ends_the_session_and_still_tears_down() {
+        let (handle, mut frames, events, sink) = spawn_flaky();
+        *sink.fail.lock().unwrap() = true;
+        events
+            .send(TargetEvent::Resized {
+                width: 800,
+                height: 600,
+            })
+            .expect("send");
+
+        recv_until(&mut frames, "recording failed").await;
+        tokio::time::timeout(Duration::from_secs(5), handle.closed())
+            .await
+            .expect("the session kept running after its recording failed");
+        assert_eq!(*sink.finalized.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_vanished_client_still_gets_the_recording_finalised() {
+        let (handle, frames, events, sink) = spawn_flaky();
+        drop(frames);
+        events
+            .send(TargetEvent::Resized {
+                width: 800,
+                height: 600,
+            })
+            .expect("send");
+
+        tokio::time::timeout(Duration::from_secs(5), handle.closed())
+            .await
+            .expect("the session outlived its client");
+        assert_eq!(*sink.finalized.lock().unwrap(), 1);
     }
 
     /// Drain frames until one carries `needle`, so a test never races the

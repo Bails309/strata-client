@@ -341,6 +341,11 @@ async fn main() -> anyhow::Result<()> {
     if orphans > 0 {
         tracing::info!("Removed {orphans} orphaned upload temp file(s)");
     }
+    match services::recordings::mark_interrupted(&db_pool).await {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!("{n} recording(s) were cut short by the previous shutdown"),
+        Err(e) => tracing::error!("Could not mark interrupted recordings: {e}"),
+    }
     if let Some(v) = vault.clone() {
         let pool = db_pool.clone();
         tokio::spawn(async move {

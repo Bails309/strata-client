@@ -65,6 +65,8 @@ pub struct HandshakeParams {
     pub ignore_cert: bool,
     pub recording_path: Option<String>,
     pub recording_name: Option<String>,
+    /// End the session rather than let it continue unrecorded.
+    pub recording_required: bool,
     pub width: u32,
     pub height: u32,
     /// Carried through from the client: applied by the RDP engine to negotiate

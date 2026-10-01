@@ -11,6 +11,7 @@ import {
   HistoricalRecording,
 } from "../api";
 import HistoricalPlayer from "../components/HistoricalPlayer";
+import RecordingStatusBadge from "../components/RecordingStatusBadge";
 import { useSettings } from "../contexts/SettingsContext";
 
 export default function MyRecordings() {
@@ -125,6 +126,7 @@ export default function MyRecordings() {
                     <span className="text-txt-secondary text-sm font-mono tabular-nums">
                       {formatDuration(r.duration_secs)}
                     </span>
+                    <RecordingStatusBadge recording={r} />
                   </td>
                   <td className="text-right">
                     <div className="flex items-center justify-end gap-2">

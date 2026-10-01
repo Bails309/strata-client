@@ -51,6 +51,12 @@ pub trait AuditSink: Send + 'static {
     /// Record one event.
     async fn record(&mut self, record: AuditRecord) -> Result<(), SessionError>;
 
+    /// Make everything recorded so far durable. Called once per sync
+    /// interval, so it bounds what a crash can lose.
+    async fn checkpoint(&mut self) -> Result<(), SessionError> {
+        Ok(())
+    }
+
     /// Flush and close. Called exactly once during orderly teardown.
     async fn finalize(&mut self) -> Result<(), SessionError>;
 }
@@ -114,17 +120,12 @@ impl AuditSink for FileAuditSink {
         Ok(())
     }
 
+    async fn checkpoint(&mut self) -> Result<(), SessionError> {
+        sync_writer(&mut self.writer, &self.path, false).await
+    }
+
     async fn finalize(&mut self) -> Result<(), SessionError> {
-        self.writer
-            .flush()
-            .await
-            .map_err(|e| SessionError::Audit(format!("flush {}: {e}", self.path.display())))?;
-        self.writer
-            .get_mut()
-            .sync_all()
-            .await
-            .map_err(|e| SessionError::Audit(format!("fsync {}: {e}", self.path.display())))?;
-        Ok(())
+        sync_writer(&mut self.writer, &self.path, true).await
     }
 }
 
@@ -187,18 +188,33 @@ impl AuditSink for GuacRecordingSink {
         Ok(())
     }
 
-    async fn finalize(&mut self) -> Result<(), SessionError> {
-        self.writer
-            .flush()
-            .await
-            .map_err(|e| SessionError::Audit(format!("flush {}: {e}", self.path.display())))?;
-        self.writer
-            .get_mut()
-            .sync_all()
-            .await
-            .map_err(|e| SessionError::Audit(format!("fsync {}: {e}", self.path.display())))?;
-        Ok(())
+    async fn checkpoint(&mut self) -> Result<(), SessionError> {
+        sync_writer(&mut self.writer, &self.path, false).await
     }
+
+    async fn finalize(&mut self) -> Result<(), SessionError> {
+        sync_writer(&mut self.writer, &self.path, true).await
+    }
+}
+
+/// Flush buffered bytes to the file and sync them to disk; `all` also
+/// syncs metadata, for the final close.
+async fn sync_writer(
+    writer: &mut BufWriter<File>,
+    path: &Path,
+    all: bool,
+) -> Result<(), SessionError> {
+    writer
+        .flush()
+        .await
+        .map_err(|e| SessionError::Audit(format!("flush {}: {e}", path.display())))?;
+    let file = writer.get_mut();
+    let synced = if all {
+        file.sync_all().await
+    } else {
+        file.sync_data().await
+    };
+    synced.map_err(|e| SessionError::Audit(format!("fsync {}: {e}", path.display())))
 }
 
 #[cfg(test)]

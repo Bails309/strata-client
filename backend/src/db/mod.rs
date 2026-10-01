@@ -289,6 +289,10 @@ pub struct Recording {
     /// `guacd` or `native`, so a session can be attributed to the engine
     /// that served it. `None` for recordings predating migration 081.
     pub engine: Option<String>,
+    /// `recording`, `complete`, `incomplete` or `failed` (migration 099).
+    pub status: String,
+    /// Why the recording is incomplete or failed.
+    pub failure: Option<String>,
 }
 
 #[cfg(test)]
@@ -422,6 +426,8 @@ mod tests {
             created_at: chrono::Utc::now(),
             client_ip: None,
             engine: Some("native".into()),
+            status: "complete".into(),
+            failure: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["session_id"], "sess-001");
@@ -448,6 +454,8 @@ mod tests {
             created_at: chrono::Utc::now(),
             client_ip: None,
             engine: None,
+            status: "incomplete".into(),
+            failure: Some("never finalised".into()),
         };
         let v = serde_json::to_value(&r).unwrap();
         assert!(v["duration_secs"].is_null());

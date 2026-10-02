@@ -1,6 +1,8 @@
 // Copyright 2026 Strata Client Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+import { invalidateSharedFetch } from "./utils/sharedFetch";
+
 const API_BASE = "/api";
 
 /** Flag to prevent concurrent refresh attempts. */
@@ -335,6 +337,8 @@ export const login = async (data: LoginRequest): Promise<LoginResponse> => {
     const body = await res.json().catch(() => ({}));
     throw new ApiError(res.status, body.error || res.statusText);
   }
+  // Other tabs must not show the previous user's polled data.
+  invalidateSharedFetch();
   return res.json();
 };
 
@@ -353,6 +357,7 @@ export interface LogoutResponse {
 }
 
 export async function logout(): Promise<LogoutResponse | null> {
+  invalidateSharedFetch();
   try {
     const res = await fetch(`${API_BASE}/auth/logout`, {
       method: "POST",

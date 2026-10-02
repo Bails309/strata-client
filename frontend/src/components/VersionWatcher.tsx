@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { getStatus } from "../api";
+import { sharedFetch } from "../utils/sharedFetch";
 import { useToast } from "./ToastProvider";
 import { pollWhileVisible } from "./pollWhileVisible";
 
@@ -14,7 +15,7 @@ export default function VersionWatcher({ pollIntervalMs = POLL_INTERVAL_MS } = {
 
     async function evaluateVersion(): Promise<void> {
       try {
-        const statusRes = await getStatus();
+        const statusRes = await sharedFetch("status", pollIntervalMs, getStatus);
         if (cancelled) return;
 
         const serverVersion = statusRes.version;

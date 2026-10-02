@@ -287,6 +287,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credential-expiry and version watchers no longer poll while their tab
   is hidden, catch up as soon as it is shown, and never overlap a slow
   request.
+- **Open tabs share their background polling (PERF-15).** The approval,
+  credential-expiry and version watchers fetch through a shared helper:
+  each fetch takes a Web Lock for its key and reuses a result any tab
+  fetched within the polling interval, and results reach the other tabs
+  over a BroadcastChannel, held in memory only. Ten visible tabs now make
+  about one request per interval instead of ten; there is no leader tab,
+  so closing any tab changes nothing, and calls made while a fetch is in
+  flight share it.
+  Deciding an approval or changing a credential profile fetches fresh
+  data, and signing in or out clears the shared results in every tab.
+  Browsers without Web Locks or BroadcastChannel poll per tab as before.
 - **Health checks are bounded (PERF-09).** At most 32 targets are probed
   at once instead of every connection simultaneously, probes stop with
   the pass instead of outliving it, results are written in one statement,

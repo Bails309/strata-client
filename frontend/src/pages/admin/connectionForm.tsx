@@ -52,7 +52,7 @@ export function FieldGrid({ children }: { children: React.ReactNode }) {
  * System — the slim picker route is open to any authenticated user.
  * Failures are silenced because an empty list simply hides the dropdown.
  */
-function useTrustedCas(): TrustedCaPickerEntry[] {
+export function useTrustedCas(): TrustedCaPickerEntry[] {
   const [trustedCas, setTrustedCas] = useState<TrustedCaPickerEntry[]>([]);
   useEffect(() => {
     let cancelled = false;

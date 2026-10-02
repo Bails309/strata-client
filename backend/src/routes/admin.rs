@@ -3058,6 +3058,7 @@ pub async fn create_ad_sync_config(
     if let Some(ref filter) = body.search_filter {
         validate_ldap_filter(filter)?;
     }
+    validate_defaults_trusted_ca(&db.pool, body.connection_defaults.as_ref()).await?;
 
     // Encrypt bind_password via Vault if configured
     let mut bind_password = body.bind_password.as_deref().unwrap_or("").to_string();
@@ -3166,6 +3167,26 @@ pub async fn create_ad_sync_config(
     Ok(Json(json!({ "id": id, "status": "created" })))
 }
 
+/// Synced connections fail closed on a missing CA, so reject an unknown one up front.
+async fn validate_defaults_trusted_ca(
+    pool: &sqlx::PgPool,
+    defaults: Option<&serde_json::Value>,
+) -> Result<(), AppError> {
+    let Some(raw) = defaults
+        .and_then(|d| d.get("trusted_ca_id"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(());
+    };
+    let id = Uuid::parse_str(raw)
+        .map_err(|_| AppError::Validation("trusted_ca_id must be a UUID".into()))?;
+    if crate::services::trusted_ca::get(pool, id).await?.is_none() {
+        return Err(AppError::Validation("Trusted CA not found".into()));
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 pub struct UpdateAdSyncConfigRequest {
     pub label: Option<String>,
@@ -3228,6 +3249,7 @@ pub async fn update_ad_sync_config(
     if let Some(ref filter) = body.search_filter {
         validate_ldap_filter(filter)?;
     }
+    validate_defaults_trusted_ca(&db.pool, body.connection_defaults.as_ref()).await?;
 
     // Pre-seal passwords (requires runtime VaultConfig from state).
     // Stored values are bound to locals so UpdateFields can borrow them.

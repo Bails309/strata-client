@@ -129,7 +129,14 @@ docker compose logs --since 2h backend | grep "native session ending"
 | `terminated by administrator` | An admin used **Kill** on Active Sessions                               | Audit log: the admin's kill action for that session                            |
 | `revoked`                     | The user's access token was revoked (sign-out elsewhere, forced logout) | Audit row `tunnel.watchdog_closed`, `reason: revoked`                          |
 | `max_duration`                | The session reached `MAX_TUNNEL_DURATION` (8 h)                         | Audit row `tunnel.watchdog_closed`, `reason: max_duration`                     |
+| `account_signed_out`          | v2.3.0: the account's password was changed or reset, or the account was deleted, after the session opened (`users.sessions_valid_after`). The user saw *"This session was closed because your account was signed out."* within 30 seconds | Audit row `tunnel.watchdog_closed`, `reason: account_signed_out`; look for `user.password_reset` / `user.deleted` just before |
+| A recording error (v2.3.0)    | The connection has *Require recording* set and its recording failed, so the session was ended rather than continuing unrecorded | Audit row `recording.failed` with `required: true`; log line `session recording failed` with the stage and error |
 | `gateway shutting down`       | The backend was stopped or restarted                                    | Host / orchestrator logs. The browser shows **Reconnecting…**, not the overlay |
+
+Sessions that **never start** with `429` ("at capacity", "open
+session(s), the most your role allows") are refused by session admission
+in v2.3.0, not disconnected; see
+[login-rate-limiting.md § Sessions refused at capacity](login-rate-limiting.md#55-sessions-refused-at-capacity).
 
 ```sql
 SELECT created_at, user_id, details
@@ -164,4 +171,4 @@ change process.
 - [faq.md § What do the messages mean when a session ends?](../faq.md#what-do-the-messages-mean-when-a-session-ends)
 - [clipboard-diagnostics.md](clipboard-diagnostics.md)
 
-_Last reviewed: 2026-09-24 (v2.1.1)._
+_Last reviewed: 2026-10-02 (v2.3.0)._

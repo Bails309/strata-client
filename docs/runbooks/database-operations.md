@@ -109,7 +109,7 @@ time.
 
 ```bash
 docker compose exec postgres-local \
-  psql -U strata -d strata -c "SELECT version, applied_at FROM schema_migrations ORDER BY version DESC LIMIT 10;"
+  psql -U strata -d strata -c "SELECT version, description, installed_on, success FROM _sqlx_migrations ORDER BY version DESC LIMIT 10;"
 ```
 
 ### 2. ⚠ DESTRUCTIVE — write a compensating migration, do not edit history
@@ -123,11 +123,14 @@ Strata **does not** support `DOWN` migrations. The rollback path is:
 
    ```sql
    -- migrations/NNN_revert_MMM_feature.sql
-   BEGIN;
    ALTER TABLE users DROP COLUMN IF EXISTS broken_column;
-   DELETE FROM schema_migrations WHERE version = 'MMM_feature';
-   COMMIT;
    ```
+
+   Never edit or delete the applied migration's file, and never delete
+   its `_sqlx_migrations` row from a compensating migration: since
+   v2.3.0 the backend refuses to start when an applied migration's file
+   no longer matches its stored checksum (see
+   [Edited migration refused at startup](#procedure--edited-migration-refused-at-startup-v230)).
 
 3. Deploy that version. The advisory lock still applies; no second
    migration will race.
@@ -141,13 +144,12 @@ boot.)
 # Drop into Postgres manually and inspect
 docker compose exec postgres-local psql -U strata -d strata
 
-# Check schema_migrations
-SELECT * FROM schema_migrations ORDER BY applied_at DESC LIMIT 5;
+# Check _sqlx_migrations
+SELECT version, description, installed_on, success FROM _sqlx_migrations ORDER BY version DESC LIMIT 5;
 
-# If the last row is the bad migration and the transaction did not
-# commit cleanly, you'll see partial DDL. Revert it by hand inside a
-# single transaction, then:
-DELETE FROM schema_migrations WHERE version = 'MMM_feature';
+# If the last row is the bad migration with success = false, you'll see
+# partial DDL. Revert it by hand inside a single transaction, then:
+DELETE FROM _sqlx_migrations WHERE version = MMM;
 ```
 
 Then start the previous Strata tag:
@@ -168,6 +170,54 @@ docker compose exec postgres-local \
 
 Restore into the reverted schema with a scripted transform — this is
 application-specific and should go through code review before running.
+
+## Procedure — Edited migration refused at startup (v2.3.0)
+
+**Signal:** the backend exits at startup with
+
+```
+applied migration(s) [NN] no longer match the SQL in this build.
+Applied migrations must not be edited: ...
+```
+
+The backend compares each applied migration's SQL with the checksum
+stored in `_sqlx_migrations`. Before v2.3.0 it silently overwrote a
+different checksum, so an edited migration was accepted without its SQL
+ever running — a way to hide a schema change (SEC-22). It now refuses
+and names the versions. Two differences are still accepted on their own:
+line endings only, and the reviewed version 29 edit that shipped in
+0.11.1.
+
+1. **Find out why the file changed.** Compare the file in this build with
+   the one in the release that applied it:
+
+   ```bash
+   git log --oneline -- backend/migrations/NNN_*.sql
+   git diff <applied-release-tag> HEAD -- backend/migrations/NNN_*.sql
+   ```
+
+   A change you did not expect from an official release is a security
+   incident: stop here and follow
+   [security-incident.md](security-incident.md).
+2. **If the build is wrong**, restore the original file and put any
+   change in a new migration. Rebuild and start; nothing else is needed.
+3. **If the change is intended and harmless** (for example a comment or
+   formatting edit in a fork):
+   1. Check that the live schema matches what the edited file would
+      produce.
+   2. ⚠ Take a database backup.
+   3. Set the versions on the backend and start it once:
+
+      ```env
+      STRATA_MIGRATION_REPAIR_VERSIONS=NN
+      ```
+
+      Each accepted version is logged at error level with its old and
+      new checksums — keep that log line with your change record.
+   4. Remove the variable again, so a later edit is not accepted
+      silently.
+
+**Verification:** the backend logs `Migrations complete` and starts.
 
 ## Verification
 
@@ -194,9 +244,10 @@ If the compensating migration itself broke things:
 ## Related
 
 - [disaster-recovery.md](disaster-recovery.md)
-- [../adr/ADR-0001-rate-limit-single-instance.md](../adr/ADR-0001-rate-limit-single-instance.md)
+- [../adr/ADR-0001-rate-limit-single-instance.md](../adr/ADR-0001-rate-limit-single-instance.md) (superseded for sign-in limits by v2.3.0: they are now in PostgreSQL)
 - [../architecture.md](../architecture.md)
+- [../security.md § Migration integrity](../security.md#migration-integrity-sec-22)
 
 ---
 
-_Last reviewed: 2026-04-21_
+_Last reviewed: 2026-10-02 (v2.3.0)_

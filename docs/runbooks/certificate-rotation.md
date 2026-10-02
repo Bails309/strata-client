@@ -139,6 +139,44 @@ docker compose exec nginx nginx -s reload
 Best practice: always `cp -a fullchain.pem fullchain.pem.bak` and
 `cp -a privkey.pem privkey.pem.bak` **before** step 3 / step 2-ACME.
 
+## Bundled Vault TLS certificate (v2.3.0)
+
+Since v2.3.0 the bundled Vault listens on HTTPS with a certificate from a
+private CA that the one-shot `vault-tls-init` service keeps in the
+`vault-tls` volume. The backend trusts only that CA (`VAULT_CACERT`, from
+the read-only `vault-ca` volume). Nothing here is public, and no
+operator action is normally needed:
+
+| Item | Validity | Renewal |
+| ---- | -------- | ------- |
+| Private CA | 10 years | Kept on every run; recreated only if the `vault-tls` volume is lost |
+| Vault server certificate | 2 years | Reissued by `vault-tls-init` on the next `docker compose up` once it is missing or within 30 days of expiry |
+
+**Check expiry:**
+
+```bash
+docker compose cp vault:/vault/tls/server.crt ./vault-server.crt
+openssl x509 -in ./vault-server.crt -noout -enddate -issuer
+```
+
+**Renew now** (for example after a long-running host was never
+restarted within the 30-day window):
+
+```bash
+docker compose up -d --force-recreate vault-tls-init vault
+docker compose restart backend
+```
+
+Expected: Vault starts healthy, and **Admin → Health** shows Vault
+healthy. **Rotate the CA** (suspected key exposure): stop the stack,
+remove the `vault-tls` and `vault-ca` volumes, and start it again;
+`vault-tls-init` issues a new CA and server certificate and the backend
+trusts the new CA. Vault's data and Strata's credentials are unaffected.
+
+An **external** Vault's certificate is rotated by whoever runs that
+Vault; if its CA changes, update the file `VAULT_CACERT` points at and
+restart the backend.
+
 ## Related
 
 - [disaster-recovery.md](disaster-recovery.md)
@@ -146,4 +184,4 @@ Best practice: always `cp -a fullchain.pem fullchain.pem.bak` and
 
 ---
 
-_Last reviewed: 2026-04-21_
+_Last reviewed: 2026-10-02 (v2.3.0)_

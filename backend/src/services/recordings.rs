@@ -800,7 +800,8 @@ pub async fn get_owned_by_user(
 
 /// Insert the initial row marking the start of a session recording.
 /// Storage type is always `'local'` at handshake — Azure uploads are
-/// performed asynchronously after the session ends.
+/// performed asynchronously after the session ends. Every session runs on
+/// the native engine, so it is known before the session connects.
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_start(
     pool: &sqlx::Pool<sqlx::Postgres>,
@@ -814,8 +815,8 @@ pub async fn insert_start(
     client_ip: Option<String>,
 ) -> Result<(), crate::error::AppError> {
     sqlx::query(
-        "INSERT INTO recordings (session_id, connection_id, connection_name, user_id, username, storage_path, storage_type, started_at, client_ip, status)
-         VALUES ($1, $2, $3, $4, $5, $6, 'local', $7, $8, 'recording')",
+        "INSERT INTO recordings (session_id, connection_id, connection_name, user_id, username, storage_path, storage_type, started_at, client_ip, status, engine)
+         VALUES ($1, $2, $3, $4, $5, $6, 'local', $7, $8, 'recording', 'native')",
     )
     .bind(session_id)
     .bind(connection_id)

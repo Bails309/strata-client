@@ -18,6 +18,16 @@ driver requires `/var/run/docker.sock` mounted into the backend
 container, which grants the backend host-root on the Docker daemon.
 The default compose graph deliberately omits this mount.
 
+> **Accepted risk (v2.3.0, SEC-23).** The v2.3.0 external security
+> review rated this mount High: anyone who can run code as the backend
+> while the overlay is on controls the Docker host. Replacing it with a
+> narrow socket proxy or a separate VDI agent was **descoped**, and the
+> risk is accepted for deployments that enable VDI. Enable the overlay
+> only on hosts where the backend is already trusted with the Docker
+> daemon, keep it off everywhere else, and treat a compromise of the
+> backend on such a host as a compromise of the host. See
+> [security.md § VDI Desktop Containers](security.md#vdi-desktop-containers-vdi-protocol).
+
 ---
 
 ## Contents

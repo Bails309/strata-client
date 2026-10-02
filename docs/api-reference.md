@@ -116,6 +116,13 @@ Standard local username/password login. Only available if `local_auth_enabled` i
 > [!NOTE]
 > The `access_token` is returned in both the JSON response body and as an `HttpOnly` cookie. This allows the SPA to use cookies (more secure against XSS) while supporting legacy or non-browser clients that prefer the `Authorization` header.
 
+**Errors:**
+
+- `400` — username or password longer than 256 characters (v2.3.0)
+- `401` — wrong username or password (the same response for both, after the same Argon2 work)
+- `429` — a sign-in limit was reached (v2.3.0: kept in PostgreSQL, so shared by every replica). The `Retry-After` header gives the seconds until the oldest counted attempt leaves its window. The limits are per username + address (5/min), per username (30/15 min), per address (20/5 min) and for the whole deployment (`STRATA_LOGIN_ATTEMPTS_PER_MINUTE`, default 600). A successful sign-in is not counted. See [security.md § Rate Limiting](security.md#rate-limiting).
+- `429` without `Retry-After` — every password-hashing slot (`STRATA_PASSWORD_HASH_CONCURRENCY`) stayed busy for 10 seconds ("The server is busy")
+
 ### `GET /api/auth/sso/providers`
 
 Returns the list of active, registered OIDC/SSO identity providers configured by administrators. Used by the login page to dynamically render branded sign-in buttons.
@@ -180,6 +187,7 @@ Exchange a valid refresh cookie for a new access token. The refresh token is sen
 
 **Response** `200 OK`
 **Set-Cookie**: `access_token=<jwt>; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=1200`
+**Set-Cookie**: `refresh_token=<jwt>; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=28800` (rotated on every call)
 **Set-Cookie**: `csrf_token=<uuid>; Secure; SameSite=Strict; Path=/; Max-Age=1260`
 **Set-Cookie**: `session_expires=<timestamp>; Secure; SameSite=Strict; Path=/; Max-Age=1260`
 
@@ -192,13 +200,18 @@ Exchange a valid refresh cookie for a new access token. The refresh token is sen
 }
 ```
 
-**Error** `401 Unauthorized` — refresh cookie missing, expired, or revoked.
+**Errors:**
 
-**Refresh-token semantics**: the refresh cookie itself is **not** rotated by this endpoint — only a new access token is minted. The 8-hour cookie `Max-Age=28800` is therefore a hard ceiling on continuous session length, not a sliding window. At the 8-hour mark even an actively-used session is required to log in again. The frontend's proactive refresh logic (driven by DOM activity and, since v1.6.1, the in-process `sessionActivity` event bus that bridges Guacamole-hijacked input events) calls this endpoint silently when the access token has under 10 minutes remaining and an activity event arrives.
+- `401 Unauthorized` — refresh cookie missing, expired, revoked or reused; issued before the account's password was changed or reset; or the sign-in is 12 hours old.
+- `409 Conflict` `{"error":"refresh_in_progress"}` (v2.3.0) — another tab of the same browser rotated this refresh token within the last 30 seconds. Its new cookies are already on their way; the caller should retry with them rather than treat this as a sign-out. The frontend shares one refresh across tabs and handles this automatically.
+
+**Refresh-token semantics (v2.3.0)**: every call **rotates** the refresh token. The presented token is consumed and its successor recorded in one transaction, so of two racing requests exactly one gets a successor (the other gets `409`). Presenting a token that was already rotated, outside the 30-second grace, is treated as theft: the whole token family is revoked, the event is audited as `auth.refresh_token_reused`, and the response is `401`. Each refresh token lives 8 hours (`Max-Age=28800`), so a session idle for 8 hours ends; an active session continues until **12 hours after sign-in** (`ABSOLUTE_SESSION_TTL`), when the user must sign in again. Revocations are synchronised from the database every 15 seconds, and a replica that cannot synchronise for 5 minutes refuses tokens rather than trusting a stale list. The frontend's proactive refresh logic (driven by DOM activity and the in-process `sessionActivity` event bus that bridges Guacamole-hijacked input events) calls this endpoint silently when the access token has under 10 minutes remaining and an activity event arrives.
+
+> Before v2.3.0 the refresh cookie was not rotated and its 8-hour `Max-Age` was the hard ceiling on session length.
 
 ### `PUT /api/auth/password`
 
-Change the authenticated user's password. Requires a valid access token. Revokes the current session on success (user must re-login).
+Change the authenticated user's password. Requires a valid access token. On success every access and refresh token the account holds that was issued before the change is refused (v2.3.0: `users.sessions_valid_after`), and the account's open sessions are closed within 30 seconds; the user must sign in again.
 
 **Request Body**
 
@@ -209,10 +222,10 @@ Change the authenticated user's password. Requires a valid access token. Revokes
 }
 ```
 
-| Field              | Type   | Required | Description                                        |
-| ------------------ | ------ | -------- | -------------------------------------------------- |
-| `current_password` | string | Yes      | The user's current password                        |
-| `new_password`     | string | Yes      | New password (minimum 12 characters, maximum 1024) |
+| Field              | Type   | Required | Description                                       |
+| ------------------ | ------ | -------- | ------------------------------------------------- |
+| `current_password` | string | Yes      | The user's current password                       |
+| `new_password`     | string | Yes      | New password (minimum 12 characters, maximum 256) |
 
 **Response** `200 OK`
 
@@ -225,6 +238,7 @@ Change the authenticated user's password. Requires a valid access token. Revokes
 - `400` — new password does not meet policy requirements
 - `401` — current password incorrect
 - `404` — user not found or not a local auth user
+- `429` — more than 5 attempts in an hour for this user (v2.3.0: counted in PostgreSQL, with `Retry-After`)
 
 ### `POST /api/auth/logout`
 
@@ -514,7 +528,7 @@ Configure or switch Vault mode.
 ```json
 {
   "mode": "external",
-  "address": "http://vault:8200",
+  "address": "https://vault.example.com:8200",
   "token": "s.xxxxxxxxx",
   "transit_key": "guac-master-key"
 }
@@ -526,6 +540,8 @@ Configure or switch Vault mode.
 | `address`     | string                    | If external | Vault server URL                              |
 | `token`       | string                    | If external | Vault authentication token                    |
 | `transit_key` | string                    | No          | Transit key name (default: `guac-master-key`) |
+
+Since v2.3.0 the bundled Vault is served over TLS at `https://vault:8200` and the backend trusts only the CA in `VAULT_CACERT`. An external Vault's certificate must chain to a CA the backend trusts (the system store, or `VAULT_CACERT`). The token needs only the Transit policy described in [security.md § Bundled Vault Security](security.md#bundled-vault-security); the bundled Vault's backend token is no longer a root token.
 
 #### `PUT /api/admin/settings/dns`
 
@@ -609,7 +625,7 @@ Detailed service health status.
   "vault": {
     "configured": true,
     "mode": "local",
-    "address": "http://vault:8200"
+    "address": "https://vault:8200"
   }
 }
 ```
@@ -828,7 +844,7 @@ All role endpoints require `can_manage_system`. The permission column below stat
 | `can_create_connections` | boolean | **Not enforced by any handler.** Reveals the connections UI; connection and folder endpoints require `can_manage_connections` |
 | `can_use_quick_share` | boolean | Upload via the in-session Quick Share endpoint. User-facing; `can_manage_system` also passes |
 | `can_use_quick_share_outbound` | boolean | **(v1.11.0+)** Submit files out of a session (drive-channel ingest, HTTPS upload-token mint, list, download). `can_manage_system` **also passes** these checks; the HTTPS-snippet consume re-reads the role flag alone. *(v2.2.0 correction: earlier versions of this page said super-admins were not allowed.)* |
-| `max_concurrent_sessions` | integer \| null | **(Unreleased)** Remote sessions a member may hold at once; `null` is no per-role limit, in which case `STRATA_MAX_SESSIONS_PER_USER` applies if set. Send `0` to clear it; 1–10000 otherwise. A session over the limit is refused with `429` before anything connects. |
+| `max_concurrent_sessions` | integer \| null | **(v2.3.0)** Remote sessions a member may hold at once; `null` is no per-role limit, in which case `STRATA_MAX_SESSIONS_PER_USER` applies if set. Send `0` to clear it; 1–10000 otherwise. A session over the limit is refused with `429` before anything connects. |
 
 #### `POST /api/admin/roles`
 
@@ -964,7 +980,7 @@ TCP-probe one connection now, instead of waiting for the next 2-minute sweep, an
 | `403` | Caller lacks `can_manage_connections` |
 | `404` | No such connection, or it is soft-deleted |
 
-#### `GET /api/admin/connections/page` (Unreleased)
+#### `GET /api/admin/connections/page` (v2.3.0)
 
 One page of connections, filtered and counted on the server, for the fleet table. Requires `can_manage_connections`. Secret `extra` values are redacted as in `GET /api/admin/connections`. Rows are ordered by name, then id.
 
@@ -985,11 +1001,11 @@ One page of connections, filtered and counted on the server, for the fleet table
 
 `total` counts every row that matches the filters, not just this page.
 
-#### `GET /api/admin/connections/refs` (Unreleased)
+#### `GET /api/admin/connections/refs` (v2.3.0)
 
 Every connection matching the same filters as `/page`, without paging, as small references: `id`, `name`, `protocol`, `hostname`, `port`, `folder_id` and `url` (from `extra.url`, `null` if unset). The console uses it for select-all across pages, role grants and tag assignment. Requires `can_manage_connections`.
 
-#### `GET /api/admin/connections/summary` (Unreleased)
+#### `GET /api/admin/connections/summary` (v2.3.0)
 
 Whole-fleet counts for the telemetry strip. Requires `can_manage_connections`.
 
@@ -1009,7 +1025,7 @@ Whole-fleet counts for the telemetry strip. Requires `can_manage_connections`.
 
 `alert_count` counts connections with at least one alert, so it can be less than the sum of `legacy_sec`, `unpinned` and `cert_ignored`.
 
-#### `POST /api/admin/connections/move` (Unreleased)
+#### `POST /api/admin/connections/move` (v2.3.0)
 
 File many connections in one folder in a single request. Requires `can_manage_connections`. Each moved connection is audited as `connection.updated`.
 
@@ -1080,7 +1096,7 @@ List all users.
 
 The `last_login_at` field (added in v1.9.5, migration 064) is the most recent successful local-login or SSO-callback timestamp. It is `null` for users who have been provisioned (e.g. via AD sync) but have never authenticated; the stale-account auto-cleanup sweep (`user_stale_days`, see [security.md](./security.md#user-lifecycle-retention)) explicitly excludes `null` rows so freshly-provisioned accounts are never aged out solely on creation time.
 
-#### `GET /api/admin/users/page` (Unreleased)
+#### `GET /api/admin/users/page` (v2.3.0)
 
 One page of users, filtered and counted on the server. Requires `can_manage_users`. Returns `{ "items": [...], "total": n }` with the same rows as `GET /api/admin/users`.
 
@@ -1094,7 +1110,7 @@ One page of users, filtered and counted on the server. Requires `can_manage_user
 
 A full page also carries `next`, a cursor for the rows after it. Paging with cursors never repeats or skips a user when others are added or renamed in between.
 
-#### `GET /api/admin/users/refs` (Unreleased)
+#### `GET /api/admin/users/refs` (v2.3.0)
 
 Users for pickers and name lookups, without loading every user. Requires `can_manage_users`.
 
@@ -1293,7 +1309,7 @@ Aggregate metrics across all active tunnel sessions.
 | `system_cpu_cores`          | integer | Host logical CPU cores                                                  |
 | `native_ram_per_session_mb` | integer | Memory one session costs, from what the engine actually allocates       |
 | `native_recommended`        | integer | Sessions this host could serve, reserving 30% headroom                  |
-| `memory.sessions_reserved_bytes` | integer | **(Unreleased)** Memory reserved by admitted sessions, estimated from protocol and display size |
+| `memory.sessions_reserved_bytes` | integer | **(v2.3.0)** Memory reserved by admitted sessions, estimated from protocol and display size |
 | `memory.sessions_limit_bytes` | integer | The admission budget: `STRATA_SESSION_MEMORY_BUDGET_MB`, else three quarters of the container (or system) memory less the replay budget |
 | `memory.sessions_refused` | integer | Sessions refused since start because the budget or a per-user limit was reached |
 | `memory.replay_used_bytes` / `replay_limit_bytes` | integer | Replay history held for observers, against `STRATA_NVR_MEMORY_BUDGET_MB` |
@@ -1798,7 +1814,7 @@ Connections accessible to the authenticated user. Holders of `can_manage_system`
 
 `health_status` is one of `"online"`, `"offline"`, or `"unknown"` (not yet checked). `health_checked_at` is the timestamp of the last TCP probe (null if never checked).
 
-### `GET /api/user/connections/page` (Unreleased)
+### `GET /api/user/connections/page` (v2.3.0)
 
 One page of the connections the caller may open, with the same access rules and row shape as `GET /api/user/connections`. Returns `{ "items": [...], "total": n }`, ordered by name.
 
@@ -1816,7 +1832,7 @@ One page of the connections the caller may open, with the same access rules and 
 
 A full page also carries `next`, a cursor for the rows after it. Paging with cursors never repeats or skips a connection when others are added or renamed in between.
 
-### `GET /api/user/connections/facets` (Unreleased)
+### `GET /api/user/connections/facets` (v2.3.0)
 
 Counts for the dashboard's folder tree and empty states. Takes the same filters as `/page` except `page`, `per_page`, `folder` and `sort`.
 
@@ -1838,18 +1854,18 @@ Pre-connect information for a specific connection. Used by the session client to
 
 **Path Parameter**: `id` (UUID) — connection ID
 
-Returns `403` unless the caller's role grants the connection, directly or through its folder, or the caller can manage connections or the system.
+Returns `403` unless the caller's role grants the connection, directly or through its folder, or the caller can manage connections or the system (v2.3.0; previously any signed-in user could read any connection's pre-connect information).
 
 **Response** `200 OK`
 
 ```json
 {
   "name": "Finance RDS",
+  "has_domain": false,
   "protocol": "rdp",
   "has_credentials": false,
   "ignore_cert": true,
   "watermark": "inherit",
-  "file_transfer_enabled": true,
   "file_transfer_enabled": true,
   "expired_profile": {
     "id": "uuid",
@@ -1864,8 +1880,8 @@ Returns `403` unless the caller's role grants the connection, directly or throug
 
 | Field                   | Type           | Description                                                                                                                                                                                                                                                                                                   |
 | ----------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                  | string         | Connection name (Unreleased)                                                                                                                                                                                                                                                                                   |
-| `has_domain`            | boolean        | The connection sets its own domain, so the credential prompt does not ask for one (Unreleased)                                                                                                                                                                                                               |
+| `name`                  | string         | Connection name (v2.3.0)                                                                                                                                                                                                                                                                                       |
+| `has_domain`            | boolean        | The connection sets its own domain, so the credential prompt does not ask for one (v2.3.0)                                                                                                                                                                                                                   |
 | `protocol`              | string         | `rdp`, `vnc`, `ssh`, `web`, `vdi`, or `kubernetes`                                                                                                                                                                                                                                                            |
 | `has_credentials`       | boolean        | `true` if a non-expired vault credential profile is mapped to this user + connection                                                                                                                                                                                                                          |
 | `ignore_cert`           | boolean        | Whether the connection's RDP certificate validation is disabled                                                                                                                                                                                                                                               |
@@ -2756,7 +2772,7 @@ Obtain a one-time tunnel ticket for a specific connection. This ticket is then u
 | `connection_id`         | UUID    | Yes      | —       | Target connection ID                                                                      |
 | `username`              | string  | No       | —       | One-time username for this session                                                        |
 | `password`              | string  | No       | —       | One-time password for this session                                                        |
-| `domain`                | string  | No       | —       | Domain for the one-time credentials (Unreleased). Used only when the connection sets no domain; trimmed, at most 255 characters, no control characters |
+| `domain`                | string  | No       | —       | Domain for the one-time credentials (v2.3.0). Used only when the connection sets no domain; trimmed, at most 255 characters, no control characters |
 | `credential_profile_id` | UUID    | No       | —       | Vault credential profile to use for this session (one-off, no permanent mapping required) |
 | `width`                 | integer | No       | 1920    | Display width                                                                             |
 | `height`                | integer | No       | 1080    | Display height                                                                            |
@@ -2973,7 +2989,9 @@ Upload a file via multipart form data. Requires authentication **and** the `can_
 | `session_id` | text | Yes      | Connection id of one of the caller's **live** sessions. Must come before `file`; checked before any file bytes are accepted (`403` otherwise). |
 | `file`       | file | Yes      | Binary file payload. Exactly one per request. |
 
-A malformed multipart body, a second `file` part, or `file` before `session_id` returns `400`. Stored files expire after 24 hours even if their session never closes cleanly, the store holds at most 10 GiB across all sessions (`400` when full), and anything left on disk by a previous process is removed at startup.
+A malformed multipart body, a second `file` part, or `file` before `session_id` returns `400` (v2.3.0, SEC-14; multipart errors used to be swallowed). Stored files expire after 24 hours even if their session never closes cleanly, the store holds at most 10 GiB across all sessions (`400` when full), the per-session count (20) is reserved atomically so parallel uploads cannot exceed it, and anything left on disk by a previous process is removed at startup. The temporary file is deleted on every exit path, including a dropped request.
+
+A file larger than `STRATA_AV_MAX_SCAN_SIZE` cannot be scanned; since v2.3.0 (SEC-13) it follows `STRATA_AV_FAIL_MODE` like a scanner error, so in `block` mode it is refused with `400`.
 
 **Response** `200 OK`
 
@@ -3317,13 +3335,13 @@ List delegated approvers (super-admins are implicit and not enumerated here).
 
 ### Download
 
-#### `GET /api/outbound-shares/{id}/download/{token}`
+#### `GET /api/user/outbound-shares/download/{token}`
 
-**Public, capability-based.** The single-use download token is issued on approval / auto-release. First successful GET marks the share `downloaded` and consumes the token; subsequent attempts return `404`.
+**Capability URL, authenticated.** The single-use download token is issued on approval / auto-release and is the authority for the file; the caller must still be signed in with the Quick Share outbound permission so the download is attributed. Only the share's submitter (or a system administrator) may use it — anyone else gets `403`. The first successful GET marks the share `downloaded` and consumes the token; later attempts return `404`. The token segment is redacted from request logs (v2.3.0, SEC-18).
 
-The whole staged file is authenticated before the token is consumed, so a damaged blob fails with `500` and leaves the link usable. The body is then decrypted and sent chunk by chunk with a `Content-Length` of the plaintext size; the server never holds the whole file in memory.
+**Order of checks (v2.3.0, SEC-21):** the owner check runs **before** the token is consumed, and the whole staged file is authenticated and decrypted before the token is cleared. A `403`, a Vault failure or a damaged blob (`500`) therefore leaves the link usable for its owner. Before v2.3.0 another authenticated user who obtained the URL could spend the token with a `403`. The body is decrypted and sent chunk by chunk with a `Content-Length` of the plaintext size; the server never holds the whole file in memory.
 
-**Audit**: `outbound_share.downloaded`.
+**Audit**: `outbound_share.downloaded`, recording the actual caller.
 
 ### Environment
 
@@ -3334,7 +3352,7 @@ The whole staged file is authenticated before the token is consumed, so a damage
 
 ### Audit events
 
-`outbound_share.submitted`, `.decided`, `.downloaded`, `.purged`, `.approver_added`, `.approver_removed`, `.ingest_token.minted`, `.ingest_token.consumed`. All are written to the hash-chained append-only audit log.
+`outbound_share.submitted`, `.decided`, `.downloaded`, `.purged`, `.approver_added`, `.approver_removed`, `.ingest_token.minted`, `.ingest_token.consumed`. All are written to the append-only, tamper-evident audit log (v2 hash chain with keyed checkpoints since v2.3.0).
 
 ---
 
@@ -3404,6 +3422,9 @@ All errors follow this format:
 | 401    | Missing/invalid token or SSO not configured |
 | 403    | Insufficient role permissions               |
 | 404    | Resource not found                          |
+| 409    | Conflict — e.g. `POST /api/auth/refresh` while another tab is rotating the same refresh token (v2.3.0) |
+| 413    | Request body larger than the route's limit, refused from `Content-Length` before it is read (v2.3.0) |
+| 429    | A rate, concurrency or capacity limit was reached: sign-in and password-change limits (with `Retry-After`), password-hashing or file-encryption slots busy, session admission (memory budget or per-user session limit), tunnel and ticket rate limits |
 | 500    | Internal server error                       |
 | 502    | Vault communication failure                 |
 | 503    | System not initialized (setup required)     |
@@ -3724,6 +3745,11 @@ required, but the response intentionally omits the PEM bytes.
 | `trusted_ca.updated`              | Admin edited a Trusted CA bundle. `details`: `{ id, name, fingerprint }`. Added in v1.2.0                                                                                                                                                                                                                                                                                                                                   |
 | `trusted_ca.deleted`              | Admin deleted a Trusted CA bundle. `details`: `{ id, name }`. Added in v1.2.0                                                                                                                                                                                                                                                                                                                                               |
 | `user.stale_auto_deleted`         | Stale-account cleanup worker soft-deleted a user whose `last_login_at` was older than the configured `user_stale_days` threshold. `details`: `{ user_id, username, stale_days }`. `actor_id` is `NULL` (worker, not a human). Added in v1.9.5                                                                                                                                                                               |
+| `auth.refresh_token_reused`       | A refresh token that had already been rotated was presented outside the 30-second concurrency grace; the whole token family was revoked. `details`: `{ family_id }`. Treat as possible token theft. Added in v2.3.0 (SEC-07) |
+| `audit.integrity_failed`          | The audit verifier found a problem with the chain, the latest checkpoint or the anchor file. `details`: `{ problems: [string] }`; written once per distinct set of problems, with no user. See [security.md § Audit Trail](security.md#audit-trail). Added in v2.3.0 (SEC-17) |
+| `recording.failed`                | A session recording could not start or failed while running. `details`: `{ connection_id, session_id, stage, required, error? }`. With *Require recording* set, the session was refused or ended. Added in v2.3.0 (SEC-16) |
+| `file.sftp_uploaded`              | A file uploaded through the SFTP file browser passed scanning and was written to the target. `details`: `{ session_id, connection_id, filename, size, av_status, av_backend }`. Added in v2.3.0 (SEC-10) |
+| `file.av_blocked`                 | The scanner refused a file. `details.source` is `inbound` (Quick Share), an outbound-share source, or since v2.3.0 `sftp_upload` / `sftp_download` (SFTP file browser), with `filename`, `size`, `av_status`, `av_signature`, `av_message` and `av_backend`. An oversize file in `block` mode is refused this way since v2.3.0 (SEC-13) |
 
 ---
 

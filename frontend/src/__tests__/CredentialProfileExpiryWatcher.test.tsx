@@ -3,6 +3,12 @@ import { render, screen, act, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
+// Cross-tab sharing has its own tests; here every poll reaches the API mock.
+vi.mock("../utils/sharedFetch", () => ({
+  sharedFetch: (_key: string, _maxAge: number, fetcher: () => Promise<unknown>) => fetcher(),
+  invalidateSharedFetch: vi.fn(),
+}));
+
 vi.mock("../api", () => ({
   getCredentialProfiles: vi.fn(),
   getProfileMappings: vi.fn(),

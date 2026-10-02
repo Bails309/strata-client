@@ -15,6 +15,10 @@ import {
 import { useToast, useToastHold, type ToastDetail, type ToastVariant } from "./ToastProvider";
 import { publishPendingApprovals } from "./approvalStore";
 import { pollWhileVisible } from "./pollWhileVisible";
+import { invalidateSharedFetch, sharedFetch } from "../utils/sharedFetch";
+
+const CHECKOUTS_KEY = "pending-checkouts";
+const OUTBOUND_KEY = "pending-outbound";
 
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Tunables                                                                  */
@@ -216,6 +220,7 @@ export default function PendingApprovalWatcher({
               toast.success({
                 title: verb === "approved" ? "Approval recorded" : "Denial recorded",
               });
+              invalidateSharedFetch(card.kind === "checkout" ? CHECKOUTS_KEY : OUTBOUND_KEY);
               await refreshRef.current();
             }}
             onError={(message) => toast.error({ title: "Decision failed", description: message })}
@@ -236,10 +241,14 @@ export default function PendingApprovalWatcher({
 
     const [checks, outs] = await Promise.all([
       watchCheckouts
-        ? getPendingApprovals().catch(() => [] as CheckoutRequest[])
+        ? sharedFetch(CHECKOUTS_KEY, pollIntervalMs, getPendingApprovals).catch(
+            () => [] as CheckoutRequest[]
+          )
         : Promise.resolve([]),
       watchOutbound
-        ? listPendingOutboundShares().catch(() => [] as OutboundShare[])
+        ? sharedFetch(OUTBOUND_KEY, pollIntervalMs, listPendingOutboundShares).catch(
+            () => [] as OutboundShare[]
+          )
         : Promise.resolve([]),
     ]);
 
@@ -275,7 +284,7 @@ export default function PendingApprovalWatcher({
     // Already-visible toasts are left alone so an in-progress deny flow
     // isn't reset by a poll.
     for (const c of newOnes) publish(c);
-  }, [watchCheckouts, watchOutbound, toast, publish]);
+  }, [watchCheckouts, watchOutbound, toast, publish, pollIntervalMs]);
 
   useEffect(() => {
     refreshRef.current = refresh;

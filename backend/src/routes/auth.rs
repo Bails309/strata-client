@@ -11,16 +11,8 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::services::app_state::SharedState;
 use crate::services::audit;
+use crate::services::auth_limits;
 use crate::services::settings;
-
-/// Rate limiter keyed by (username, client_ip) to prevent both credential
-/// stuffing from a single IP and distributed attacks against a single user.
-static RATE_LIMIT: std::sync::LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Per-IP rate limiter — prevents a single IP from trying many usernames.
-static IP_RATE_LIMIT: std::sync::LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// A pending SSO authorisation, keyed by its `state` value.
 struct PendingSso {
@@ -96,14 +88,6 @@ async fn fetch_oidc_discovery(
     crate::services::auth::fetch_oidc_discovery_cached(issuer_url).await
 }
 
-const MAX_ATTEMPTS: usize = 5;
-const WINDOW_SECS: u64 = 60;
-/// Max attempts per IP across all usernames
-const MAX_IP_ATTEMPTS: usize = 20;
-const IP_WINDOW_SECS: u64 = 300;
-/// Maximum entries in each rate limiter to prevent OOM under enumeration attacks.
-const MAX_RATE_LIMIT_ENTRIES: usize = 50_000;
-
 #[derive(Deserialize)]
 pub struct LoginRequest {
     pub username: String,
@@ -167,22 +151,6 @@ pub fn check_rate_limit(
     let attempts = map.entry(key.to_string()).or_default();
     attempts.retain(|t| *t > cutoff);
     attempts.len() >= max_attempts
-}
-
-/// [`check_rate_limit`], and on admission record the attempt immediately so
-/// concurrent requests cannot all pass before any failure is counted.
-fn reserve_attempt(
-    map: &mut HashMap<String, Vec<Instant>>,
-    key: &str,
-    max_attempts: usize,
-    window_secs: u64,
-    max_entries: usize,
-) -> bool {
-    if check_rate_limit(map, key, max_attempts, window_secs, max_entries) {
-        return false;
-    }
-    map.entry(key.to_string()).or_default().push(Instant::now());
-    true
 }
 
 /// The resolved client IP, or "unknown" when none was resolved.
@@ -273,49 +241,29 @@ pub async fn login(
 
     let client_ip = extract_client_ip(&headers);
 
-    // Rate-limit key derived from the lower-cased username so an attacker
-    // can’t escape the per-account bucket by varying letter case (e.g.
-    // "Alice" vs "alice" hitting the same account would otherwise count
-    // against two independent buckets).
-    let rate_limit_key = body.username.to_lowercase();
-
-    // ── Per-IP rate limiting ──
-    {
-        let mut map = IP_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-        if !reserve_attempt(
-            &mut map,
-            &client_ip,
-            MAX_IP_ATTEMPTS,
-            IP_WINDOW_SECS,
-            MAX_RATE_LIMIT_ENTRIES,
-        ) {
-            return Err(AppError::RateLimited(
-                "Too many login attempts from this address. Please try again later.".into(),
-            ));
-        }
-    }
-
-    // ── Per-username rate limiting ──
-    {
-        let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-        if !reserve_attempt(
-            &mut map,
-            &rate_limit_key,
-            MAX_ATTEMPTS,
-            WINDOW_SECS,
-            MAX_RATE_LIMIT_ENTRIES,
-        ) {
-            return Err(AppError::RateLimited(
-                "Too many login attempts. Please try again later.".into(),
-            ));
-        }
-    }
-
     let db = {
         let s = state.read().await;
         s.db.clone()
             .ok_or(AppError::Internal("Database not available".into()))?
     };
+
+    // Lower-cased so varying letter case does not open a fresh bucket.
+    let account = body.username.to_lowercase();
+    let account_from_address = format!("{account}|{client_ip}");
+    let reservation = auth_limits::reserve(
+        &db.pool,
+        &[
+            (
+                auth_limits::LOGIN_ACCOUNT_FROM_ADDRESS,
+                &account_from_address,
+            ),
+            (auth_limits::LOGIN_ACCOUNT, &account),
+            (auth_limits::LOGIN_ADDRESS, &client_ip),
+            (auth_limits::login_overall(), "all"),
+        ],
+        "Too many login attempts. Please try again later.",
+    )
+    .await?;
 
     let row = crate::services::users::find_local_by_username_or_email(&db.pool, &body.username)
         .await
@@ -340,16 +288,15 @@ pub async fn login(
         return Err(AppError::Auth("Invalid username or password".into()));
     }
 
-    // Successful login — release this request's reservations.
-    {
-        let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-        map.remove(&rate_limit_key);
-        drop(map);
-        let mut ip_map = IP_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(attempts) = ip_map.get_mut(&client_ip) {
-            attempts.pop();
-        }
-    }
+    // Successful login: its attempts do not count, and the account starts
+    // afresh from this address.
+    auth_limits::release(&db.pool, reservation).await;
+    auth_limits::clear(
+        &db.pool,
+        auth_limits::LOGIN_ACCOUNT_FROM_ADDRESS,
+        &account_from_address,
+    )
+    .await;
 
     // Generate access token (short-lived) and refresh token (longer-lived)
     let (access_token, access_jti) = create_local_jwt(
@@ -885,28 +832,22 @@ pub async fn change_password(
     headers: HeaderMap,
     Json(body): Json<ChangePasswordRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Per-user rate limit on password-change attempts. A stolen access token
-    // could otherwise grind through guesses (and cause downstream account
-    // lockouts on systems that observe failed-change events). 5 attempts
-    // per hour matches the login window.
-    {
-        let key = format!("change_password:{}", user.id);
-        let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-        if !reserve_attempt(&mut map, &key, 5, 3600, MAX_RATE_LIMIT_ENTRIES) {
-            return Err(AppError::Auth(
-                "Too many password change attempts. Please wait before trying again.".into(),
-            ));
-        }
-    }
-
-    // Validate the new password meets policy
-    validate_password(&body.new_password)?;
-
+    // A stolen access token must not be able to grind through guesses at
+    // the current password.
     let db = {
         let s = state.read().await;
         s.db.clone()
             .ok_or(AppError::Internal("Database not available".into()))?
     };
+    auth_limits::reserve(
+        &db.pool,
+        &[(auth_limits::PASSWORD_CHANGE, &user.id.to_string())],
+        "Too many password change attempts. Please wait before trying again.",
+    )
+    .await?;
+
+    // Validate the new password meets policy
+    validate_password(&body.new_password)?;
 
     // Fetch current password hash
     let hash = crate::services::users::local_password_hash(&db.pool, user.id)
@@ -1962,11 +1903,6 @@ mod tests {
 
     #[test]
     fn rate_limit_constants() {
-        assert_eq!(MAX_ATTEMPTS, 5);
-        assert_eq!(WINDOW_SECS, 60);
-        assert_eq!(MAX_IP_ATTEMPTS, 20);
-        assert_eq!(IP_WINDOW_SECS, 300);
-        assert_eq!(MAX_RATE_LIMIT_ENTRIES, 50_000);
         assert_eq!(SSO_STATE_TTL_SECS, 300);
     }
 
@@ -2270,21 +2206,9 @@ mod tests {
     // ── Constants and SSO config ───────────────────────────────────
 
     #[test]
-    fn rate_limit_per_ip_is_stricter_window() {
-        // IP rate limiting has a larger window to catch distributed attacks
-        const { assert!(IP_WINDOW_SECS > WINDOW_SECS) };
-        const { assert!(MAX_IP_ATTEMPTS > MAX_ATTEMPTS) };
-    }
-
-    #[test]
     fn sso_state_ttl_is_reasonable() {
         const { assert!(SSO_STATE_TTL_SECS >= 60) };
         const { assert!(SSO_STATE_TTL_SECS <= 600) };
-    }
-
-    #[test]
-    fn max_rate_limit_entries_prevents_oom() {
-        const { assert!(MAX_RATE_LIMIT_ENTRIES >= 10_000) };
     }
 
     // ── validate_login_input ───────────────────────────────────────────
@@ -2414,16 +2338,6 @@ mod tests {
         assert!(!map.contains_key("new_user"));
         // Existing keys are still evaluated normally.
         assert!(!check_rate_limit(&mut map, "user0", 3, 60, 10));
-    }
-
-    #[test]
-    fn reserve_attempt_counts_admitted_requests() {
-        let mut map = HashMap::new();
-        for _ in 0..3 {
-            assert!(reserve_attempt(&mut map, "k", 3, 60, 1000));
-        }
-        assert!(!reserve_attempt(&mut map, "k", 3, 60, 1000));
-        assert_eq!(map["k"].len(), 3);
     }
 
     // ── extract_cookie tests ──────────────────────────────────────

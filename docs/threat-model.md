@@ -182,7 +182,7 @@ flowchart LR
 
 | Threat                             | Vector                                                     | Mitigation                                                                                                             | Residual                   |
 | ---------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------- |
-| **E** Container escape → host root | Mounting `/var/run/docker.sock` is host-root by definition | **Cannot be fully mitigated** while we use the docker socket. Long-term: replace with Sysbox / Kata / podman rootless. | Open — tracked under W5-\* |
+| **E** Container escape → host root | Mounting `/var/run/docker.sock` is host-root by definition | **Cannot be fully mitigated** while we use the docker socket. The overlay is off by default; see [security.md](security.md) for the deployment guidance. | Accepted — SEC-23 descoped |
 | **I** Cross-tenant container view  | One user lists/inspects another's container                | All docker calls are namespaced by `strata.user_id` label; admin endpoints required to enumerate cross-user            | Acceptable                 |
 | **D** Resource starvation          | One user spawns 100 VDIs                                   | Per-user concurrent VDI cap; operator-set max-containers cap                                                           | OK                         |
 
@@ -262,7 +262,7 @@ share the same `Scanner` trait gate in `services::av` as of v1.12.0.
 | W4-4 | RBAC negative-test pack                                     | 2.3 E (RBAC bypass / IDOR)  | ✅ Done |
 | W5-1 | Production-mode boot guard                                  | 3.4                         | Open    |
 | W5-2 | SBOM + cosign signing                                       | 3.2                         | Open    |
-| W5-3 | VDI: replace `docker.sock` with rootless runtime            | 2.9 E                       | Open    |
+| W5-3 | VDI: replace `docker.sock` with rootless runtime            | 2.9 E                       | Descoped (SEC-23, accepted risk) |
 | W5-4 | Operator playbook: Vault token rotation                     | 2.5 E                       | Open    |
 | W5-5 | External-Vault-only enforcement in production mode          | 2.5 I                       | Open    |
 

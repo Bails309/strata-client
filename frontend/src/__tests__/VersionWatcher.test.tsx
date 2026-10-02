@@ -9,6 +9,12 @@ vi.mock("../api", () => ({
   getStatus: vi.fn(),
 }));
 
+// Cross-tab sharing has its own tests; here every poll reaches the API mock.
+vi.mock("../utils/sharedFetch", () => ({
+  sharedFetch: (_key: string, _maxAge: number, fetcher: () => Promise<unknown>) => fetcher(),
+  invalidateSharedFetch: vi.fn(),
+}));
+
 // Mock window.location
 const originalLocation = window.location;
 

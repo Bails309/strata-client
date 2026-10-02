@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security — fixes from the external security and performance review
 
+Every finding from the review is addressed in this release except two:
+**SEC-23** (the optional VDI overlay mounts `docker.sock` into the
+backend) is descoped and recorded as an accepted risk — see
+[security.md](docs/security.md) — and **SEC-24** concerned `release.yml`,
+which 2.1.1 removed.
+
 - **Delegated user managers can no longer escalate (SEC-01, Critical).**
   Without `can_manage_system`, a `can_manage_users` holder may only assign
   roles, and act on users, whose permissions they already hold; may not act
@@ -73,6 +79,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   password work, so concurrent guesses cannot all pass the limit; password
   change counts its own attempts; a full limiter map refuses new keys instead
   of clearing every live limit.
+- **Login limits hold across replicas (SEC-19).** Login and password-change
+  attempts are now counted in PostgreSQL (migration 102), each admitted
+  under a per-key lock before any password hashing, so parallel guesses
+  cannot exceed a limit however many backends are running. Login is
+  limited per username and address (5 a minute), per username from
+  anywhere (30 in 15 minutes), per address (20 in 5 minutes) and for the
+  whole deployment (600 a minute, `STRATA_LOGIN_ATTEMPTS_PER_MINUTE`).
+  A refusal is `429` with `Retry-After`; a refused password change was
+  `401` before, which the SPA could mistake for an expired session. A
+  successful login is not counted, and the wider per-username limit means
+  one address cannot lock a user out.
 - **`STRATA_TRUSTED_PROXIES` is enforced (SEC-20).** One middleware resolves
   the client IP: verified DMZ edge IP, else `X-Forwarded-For` only when the
   socket peer is a trusted proxy (walking the chain past trusted hops), else
@@ -276,11 +293,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credential-expiry and version watchers no longer poll while their tab
   is hidden, catch up as soon as it is shown, and never overlap a slow
   request.
+- **Open tabs share their background polling (PERF-15).** The approval,
+  credential-expiry and version watchers fetch through a shared helper:
+  each fetch takes a Web Lock for its key and reuses a result any tab
+  fetched within the polling interval, and results reach the other tabs
+  over a BroadcastChannel, held in memory only. Ten visible tabs now make
+  about one request per interval instead of ten; there is no leader tab,
+  so closing any tab changes nothing, and calls made while a fetch is in
+  flight share it.
+  Deciding an approval or changing a credential profile fetches fresh
+  data, and signing in or out clears the shared results in every tab.
+  Browsers without Web Locks or BroadcastChannel poll per tab as before.
 - **Health checks are bounded (PERF-09).** At most 32 targets are probed
   at once instead of every connection simultaneously, probes stop with
   the pass instead of outliving it, results are written in one statement,
   and hostnames resolve through the configured DNS servers, as sessions
   do.
+- **One replica runs each health pass (PERF-09).** A pass claims a row in
+  the new `worker_leases` table (migration 103) first, and can only do so
+  when no live claim exists and the last pass began at least 110 seconds
+  ago, so several backends probe each target once per cycle instead of
+  once each. Results are written only while the claim is held, and only
+  when a status changed or was last confirmed 5 minutes ago, so a quiet
+  estate no longer rewrites every row every 2 minutes. A status nobody has
+  confirmed for 15 minutes goes back to `unknown`, and replicas start
+  their cycle at a random offset. The fleet summary's last sweep is now
+  when a pass last completed.
 - **MP4 conversions are single-flight (PERF-05).** Concurrent downloads of
   the same recording share one conversion, at most two run at once, each
   encoder run is stopped after 15 minutes, and a cached video is only ever
@@ -409,6 +447,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   8 MiB); set it lower to keep restricting uploads at the edge. On the
   public listener `STRATA_DMZ_PUBLIC_HEADER_TIMEOUT_MS` now applies only
   to requests without a body. Responses over 8 MiB no longer get `507`.
+- **Oversize uploads are refused before they are read (PERF-02).** The
+  three 500 MiB upload routes (Quick Share, outbound share and the
+  in-session ingest link) answer `413` as soon as a request declares a
+  larger `Content-Length`; before, the backend read 500 MiB first and then
+  refused it. A body that declares no length is still cut off at the limit.
+- **DMZ large-transfer test (PERF-02).** `scripts/dmz/load/large-transfer.sh`
+  starts the DMZ and backend as a separate compose project on separate
+  ports, sends files just under and over 8 MiB, 100 MiB and 499 MiB up
+  and back down through the DMZ, compares hashes, and samples the memory
+  of both processes. Measured: peak memory stayed at 8–9 MiB for the DMZ
+  and 25–32 MiB for the backend at every size, and 9 / 34 MiB with four
+  100 MiB uploads at once; 499 MiB went up in 18 s and came back in 9 s.
+  An unauthenticated 100 MiB upload is refused in 0.03 s and a 505 MiB
+  one in 0.05 s, each after under 250 KB.
 
 ## [2.2.0] — 2026-09-25
 

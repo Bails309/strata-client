@@ -23,10 +23,10 @@
 #   4. You have set `max_vdi_containers` to a sensible per-replica
 #      cap (Admin → Settings → VDI).
 #
-# The production-recommended alternative is a privileged sidecar
-# exposing a narrow gRPC API to the backend (no docker.sock in the
-# backend itself). This is the v1 simple path; track the sidecar work
-# as a follow-up before exposing VDI to untrusted users.
+# A privileged broker holding docker.sock in place of the backend was
+# considered and descoped (review finding SEC-23, an accepted risk; see
+# docs/security.md). Do not expose VDI to users you would not trust
+# with this host.
 #
 # ─ Usage ─
 #   docker compose -f docker-compose.yml -f docker-compose.vdi.yml up -d

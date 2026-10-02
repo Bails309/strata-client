@@ -2,6 +2,7 @@
 import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { bulkSafeguardCheckout, getCredentialProfiles, type CredentialProfile } from "../api";
+import { invalidateSharedFetch, sharedFetch } from "../utils/sharedFetch";
 import { useToast } from "./ToastProvider";
 import { pollWhileVisible } from "./pollWhileVisible";
 import LeaseBatchBody, { type LeaseItem } from "./LeaseBatchBody";
@@ -250,7 +251,7 @@ export default function CredentialProfileExpiryWatcher({
     async function evaluate(): Promise<void> {
       let profiles: CredentialProfile[];
       try {
-        profiles = await getCredentialProfiles();
+        profiles = await sharedFetch("credential-profiles", pollIntervalMs, getCredentialProfiles);
       } catch {
         // Network errors / 401s are surfaced elsewhere; the watcher stays
         // silent rather than spamming an unrelated toast.
@@ -366,7 +367,11 @@ export default function CredentialProfileExpiryWatcher({
       if (warningsChanged) publishWarnings();
     }
 
-    const unregister = registerLeaseRefresher(evaluate);
+    // A refresh asked for after a change must see it, not another tab's copy.
+    const unregister = registerLeaseRefresher(() => {
+      invalidateSharedFetch("credential-profiles");
+      return evaluate();
+    });
 
     // Runs at once, so a freshly-opened tab discovers an already-expired
     // profile; pauses while hidden and catches up when shown, so a tab that

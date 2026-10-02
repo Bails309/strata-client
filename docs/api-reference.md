@@ -910,7 +910,7 @@ List all remote connections.
 ]
 ```
 
-`health_status` is one of `"online"`, `"offline"`, or `"unknown"` (not yet checked). Updated automatically every 2 minutes by the background health check worker.
+`health_status` is one of `"online"`, `"offline"`, or `"unknown"` (not checked yet, nothing to probe, or not confirmed for 15 minutes). The background health check probes every connection every 2 minutes; with several backend replicas, one of them runs each pass. `health_checked_at` is when the current status was last confirmed: an unchanged status is written again only every 5 minutes.
 
 **Credential extras.** `password`, `private-key`, `passphrase`, `sftp-password`, `sftp-private-key` and `sftp-passphrase` are sealed with Vault on save and returned as `"********"` by list, create and update. Sending `"********"` back keeps the stored value, an empty string clears it, and a new value requires Vault to be configured (`400` otherwise).
 
@@ -2960,7 +2960,7 @@ Revoke a previously created share link.
 
 Session-scoped temporary file hosting. Upload a file and get a random, unguessable download URL to paste into the remote session's browser. Files are automatically deleted when the tunnel disconnects.
 
-**Limits:** 20 files per session, 500 MB per file.
+**Limits:** 20 files per session, 500 MB per file. The 500 MiB request limit includes multipart framing; a request declaring a larger `Content-Length` gets `413` before any of the body is read.
 
 ### `POST /api/files/upload`
 
@@ -3242,7 +3242,7 @@ The remote-session shell POSTs the file back to Strata over HTTPS using the toke
 | ------ | ---- | -------- | -------------- |
 | `file` | file | Yes      | Binary payload |
 
-**Body limit**: 500 MiB.
+**Body limit**: 500 MiB. A request whose `Content-Length` is larger gets `413` before any of the body is read.
 
 **Backend behaviour**:
 

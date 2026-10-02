@@ -490,7 +490,8 @@ pub async fn fleet_summary(pool: &Pool<Postgres>) -> Result<FleetSummary, AppErr
                 COUNT(*) FILTER (WHERE legacy) AS legacy_sec,
                 COUNT(*) FILTER (WHERE unpinned) AS unpinned,
                 COUNT(*) FILTER (WHERE cert) AS cert_ignored,
-                MAX(health_checked_at) AS last_sweep
+                COALESCE((SELECT completed_at FROM worker_leases WHERE name = 'connection_health'),
+                         MAX(health_checked_at)) AS last_sweep
          FROM (
              SELECT health_status, health_checked_at,
                     protocol IN ('rdp', 'vdi') AND COALESCE(extra->>'security', '') = 'rdp' AS legacy,

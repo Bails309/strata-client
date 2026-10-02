@@ -19,6 +19,7 @@ import {
   updateAdSyncConfig,
 } from "../../api";
 import { RDP_KEYBOARD_LAYOUTS } from "./rdpKeyboardLayouts";
+import { useTrustedCas } from "./connectionForm";
 
 export default function AdSyncTab({
   folders,
@@ -55,6 +56,7 @@ export default function AdSyncTab({
     sample?: { dn: string; name: string; description?: string }[];
   } | null>(null);
   const certFileRef = useRef<HTMLInputElement>(null);
+  const trustedCas = useTrustedCas();
 
   const load = useCallback(() => {
     getAdSyncConfigs()
@@ -548,6 +550,35 @@ export default function AdSyncTab({
                     ]}
                   />
                 </div>
+              </div>
+
+              <div className="text-xs font-semibold uppercase tracking-wider opacity-60 mb-2">
+                RDP Certificate Trust
+              </div>
+              <div className="form-group mb-4">
+                <label
+                  htmlFor="ad-cd-trusted-ca"
+                  title="A stored CA bundle that issued the certificates of the synced hosts. Every synced connection verifies its host against this CA, which takes precedence over Ignore server certificate. Manage entries under Admin → Trusted CAs."
+                >
+                  Trusted CA
+                </label>
+                <Select
+                  id="ad-cd-trusted-ca"
+                  value={(editing.connection_defaults ?? {})["trusted_ca_id"] || ""}
+                  onChange={(v) => {
+                    const cd = { ...(editing.connection_defaults ?? {}) };
+                    if (v) cd["trusted_ca_id"] = v;
+                    else delete cd["trusted_ca_id"];
+                    setEditing({ ...editing, connection_defaults: cd });
+                  }}
+                  options={[
+                    { value: "", label: "— Use system default trust store —" },
+                    ...trustedCas.map((c) => ({
+                      value: c.id,
+                      label: c.subject ? `${c.name} (${c.subject})` : c.name,
+                    })),
+                  ]}
+                />
               </div>
 
               <div className="text-xs font-semibold uppercase tracking-wider opacity-60 mb-2">

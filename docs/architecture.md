@@ -181,8 +181,8 @@ The central orchestrator. Responsibilities:
 - **Database** — connects to local or external PostgreSQL; runs advisory-lock-protected migrations
 - **Auth** — multi-method authentication system:
   - **SSO/OIDC (v1.9.0)** — multi-tenant OIDC configurations managed dynamically, allowing multiple custom-labeled sign-in buttons on the login screen. It features dynamic IdP discovery via JWKS, in-memory state tracking to prevent provider mismatches, secure client secret envelope encryption via Vault Transit, and automated session establishment.
-  - **Local Auth** — built-in credentials (Argon2id) with global enable/disable toggle, minimum 12-character password policy, and dedicated password change / admin reset endpoints.
-  - **Session tokens** — short-lived access tokens (20 min) with `HttpOnly` refresh cookies (8 hr), proactive activity-based silent refresh, per-user session tracking (`active_sessions` table), and a pre-expiry countdown warning toast. Cookies (`csrf_token`, `session_expires`) include a 60s buffer (v1.8.2) for improved SPA refresh reliability. Tokens are signed with a persistent `JWT_SECRET` (v1.8.3) to maintain sessions across container restarts.
+  - **Local Auth** — built-in credentials (Argon2id, hashed on the blocking pool with bounded concurrency since v2.3.0) with global enable/disable toggle, 12–256-character password policy, dedicated password change / admin reset endpoints, and sign-in and password-change limits kept in PostgreSQL so every replica shares them (v2.3.0; see [Capacity, integrity and scale-out](#capacity-integrity-and-scale-out-v230)).
+  - **Session tokens** — short-lived access tokens (20 min) with `HttpOnly` refresh cookies (8 hr) that **rotate on every refresh** within a token family (v2.3.0; reuse of a spent token revokes the family), a **12-hour absolute sign-in limit**, proactive activity-based silent refresh shared across tabs by a Web Lock, per-user session tracking (`active_sessions` table), and a pre-expiry countdown warning toast. A password change or reset refuses every earlier token (`users.sessions_valid_after`). Cookies (`csrf_token`, `session_expires`) include a 60s buffer (v1.8.2) for improved SPA refresh reliability. Tokens are signed with a persistent `JWT_SECRET` (v1.8.3) to maintain sessions across container restarts.
   - **Global Security Headers (v1.8.2/1.8.3)** — implements a global `tower-http` middleware that applies `Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate` to every API response. Public-facing headers (`Server`, `X-Powered-By`, and `Content-Security-Policy: frame-ancestors`) are managed at the Nginx gateway layer via NJS (v1.8.3).
   - **Enforcement** — strict backend policy check on every login attempt ensures disabled methods cannot be accessed.
 - **Vault** — envelope encryption for stored credentials via Vault Transit
@@ -231,7 +231,7 @@ justification)` helper at **both** outbound entry points
   separate popup; see
   [Notifications and credential leases](#notifications-and-credential-leases-v220).
 
-- **Audit** — SHA-256 hash-chained append-only log
+- **Audit** — append-only, tamper-evident log: rows are written only through the `audit_append` database function (v2 SHA-256 hash chain, migration 098), triggers refuse `UPDATE` / `DELETE` / `TRUNCATE`, and a background verifier records keyed checkpoints and Vault-signed anchors outside the database (v2.3.0; see [security.md § Audit Trail](security.md#audit-trail))
 
 ### 3. Frontend SPA
 
@@ -264,7 +264,7 @@ Pages:
 - **Global chrome (v2.2.0)** — `GlobalHeader` (route breadcrumbs and the lease pill), `AdminMegaMenu` (three-column admin navigation filtered by `isMegaMenuItemVisible`, which hides links only and is not an access control), `DashboardBackground` (layered background and constellation), and the design tokens in `styles/dashboard-theme.css` for dark and light themes.
 - **Admin Settings** — left-sidebar nav (v1.5.3+) grouped into five sections — **Overview** (Health, Sessions), **Identity & Access** (Access, AD Sync, SSO / OIDC, Kerberos, Password Mgmt), **Connectivity** (Network, DMZ Links, Trusted CAs, VDI), **Workspace** (Display, Tags, Notifications, Recordings), and **Secrets & Security** (Vault, Security). Sections are permission-aware and collapse out of the nav entirely when the current user has no item visible inside them; on screens narrower than the Tailwind `lg` breakpoint the sidebar wraps inline above the content as a horizontal flex row of buttons. The 17 underlying tab panes provide health monitoring, SSO, auth method toggles, Kerberos (multi-realm), vault, recordings, network (DNS configuration), access control, connection group management, AD sync sources (with inline password management configuration: enable toggle, credential source, target filter with preview, password policy, auto-rotation), password management (approval roles with explicit account scoping via searchable dropdown and chip tags, account mappings, checkout requests with decided-by column and self-approval detection), session analytics and metrics, DMZ link health, trusted CAs, and VDI image management. **v2.2.0:** the Connections tab is a fleet manager with a folder tree, and roles are edited in a risk-aware dialog — see [Admin console](#admin-console-fleet-folders-and-roles-v220).
 - **Approvals** — dedicated page for pending password checkout approval decisions, visible only to users assigned to approval roles. Premium card layout with requester avatar, CN-from-DN display, labeled duration and justification sections, and approve/deny action buttons
-- **Audit Logs** — paginated, hash-chained log viewer
+- **Audit Logs** — paginated viewer over the append-only, hash-chained audit log
 - **Theme Toggle** — sidebar button cycling System → Light → Dark themes with localStorage persistence
 - **PWA** — installable Progressive Web App with offline shell caching via service worker; standalone display mode on mobile and tablet
 
@@ -278,15 +278,19 @@ Pages:
 
 Bundled for zero-configuration first boot. Can be replaced with an external database at any time through the Admin UI.
 
+**Least-privilege runtime role (v2.3.0, SEC-25).** The backend runs migrations as the database owner from `DATABASE_URL`, then serves every request through a second pool connected as `<owner>_runtime`. That role can read and write rows but cannot change the schema, drop the audit triggers, or update, delete or truncate audit history. Its password is derived from the owner's, so every replica agrees on it without another stored secret, and its grants are refreshed on each start so new tables are covered. When the owner cannot create roles, the URL carries no password, or `STRATA_DB_RUNTIME_ROLE=off`, the backend keeps the owner connection and logs a warning.
+
 ### 5. HashiCorp Vault
 
 | Item    | Value                                                  |
 | ------- | ------------------------------------------------------ |
 | Image   | `hashicorp/vault:1.19`                                 |
 | Storage | File backend (`/vault/data`)                           |
-| Port    | 8200 (internal only)                                   |
-| Volume  | `vault-data`                                           |
+| Port    | 8200 (internal only; HTTPS since v2.3.0)               |
+| Volume  | `vault-data`, `vault-tls` (CA + server certificate)    |
 | Mode    | Bundled (auto-provisioned) or External (user-provided) |
+
+**TLS (v2.3.0, SEC-25).** A one-shot `vault-tls-init` service (`strata-backend vault-tls-init`, no network, read-only root) runs before Vault. It keeps a private CA in the `vault-tls` volume, which only Vault mounts, issues Vault's server certificate (CA 10 years, server certificate 2 years, reissued on the next start when within 30 days of expiry), and copies **only** the CA certificate to the `vault-ca` volume. The backend mounts `vault-ca` read-only and trusts that CA alone for Vault calls (`VAULT_CACERT`); the default `VAULT_ADDR` is `https://vault:8200`.
 
 Bundled in Docker Compose for zero-configuration credential encryption. On first boot, the backend automatically:
 
@@ -294,7 +298,7 @@ Bundled in Docker Compose for zero-configuration credential encryption. On first
 2. Unseals the Vault
 3. Enables the Transit Secrets Engine
 4. Creates the encryption key (`guac-master-key` by default)
-5. Writes a `strata-transit` policy (encrypt/decrypt on that key, renew and look up its own token) and issues an orphan, periodic (72 h) runtime token with only that policy
+5. Writes the `strata-transit-v2` policy (encrypt/decrypt on that key, sign/verify on the audit signing key used for audit anchors, renew and look up its own token) and issues an orphan, periodic (72 h) runtime token with only that policy
 6. Stores the runtime token and the unseal key in `vault-secrets.json` (mode `0600`) and revokes the root token
 
 On subsequent startups, the backend auto-unseals using the stored unseal key and renews the runtime token hourly. A root token left by an older release is replaced and revoked on the first start; if the runtime token has lapsed, the backend regenerates root from the unseal key (`generate-root`), issues a new runtime token and revokes root again.
@@ -1512,21 +1516,33 @@ strata-client/
 │       └── services/      Business logic
 │           ├── app_state.rs   Shared state + boot phase
 │           ├── ad_sync.rs     AD LDAP sync engine (multi-base, multi-auth)
-│           ├── audit.rs       Hash-chained audit logging
+│           ├── admission.rs   Session admission: memory budget + per-user session limit (v2.3.0)
+│           ├── audit.rs       Audit writes through `audit_append` (v2 hash chain)
+│           ├── audit_verify.rs  Chain verifier, keyed checkpoints, Vault-signed anchor file (v2.3.0)
 │           ├── auth.rs        OIDC token validation
+│           ├── auth_limits.rs Sign-in and password-change limits in PostgreSQL (v2.3.0)
 │           ├── checkouts.rs   Password checkout lifecycle + rotation workers
+│           ├── client_ip.rs   One client-IP resolution for every request, honouring `STRATA_TRUSTED_PROXIES` (v2.3.0)
 │           ├── dns.rs         Target-hostname resolution against admin-set nameservers
-│           ├── health_check.rs  Background TCP health probes for connections
+│           ├── file_crypto.rs Chunked AES-256-GCM (STREAM) for staged files (v2.3.0)
+│           ├── health_check.rs  Background TCP health probes for connections (one replica per pass via a worker lease)
 │           ├── kerberos.rs    Multi-realm krb5.conf generation
+│           ├── keyed_lock.rs  Per-key single-flight locks for cache misses (v2.3.0)
 │           ├── middleware.rs   JWT auth + admin middleware
+│           ├── password.rs    Argon2id parameters + bounded hashing pool
+│           ├── recording_index.rs  Recording seek index (checkpoint every 8 MiB) (v2.3.0)
 │           ├── recordings.rs  Recording config + scheduled retention purge (DB rows, Azure blobs, local files)
+│           ├── refresh_tokens.rs  Refresh-token families, rotation and reuse detection (v2.3.0)
 │           ├── session_cleanup.rs  Periodic active_sessions expiry sweep
-│           ├── session_registry.rs  NVR ring buffer + persistent-state log (v1.9.4) + live session tracking
+│           ├── session_registry.rs  NVR ring buffer + persistent-state log (v1.9.4) + live session tracking; replay history under one memory budget (v2.3.0)
 │           ├── settings.rs    system_settings CRUD
 │           ├── trusted_ca.rs  Trusted CA bundle CRUD + per-session NSS DB import via `certutil` (v1.2.0)
 │           ├── user_cleanup.rs  Daily worker: (1) stale-account sweep — soft-deletes users idle past `user_stale_days` (v1.9.5; `NULL last_login_at` excluded; `0` disables; audited as `user.stale_auto_deleted`), (2) hard-deletes soft-deleted users older than `user_hard_delete_days` (default 90 days), and (3) purges stale `safeguard_enrolment_codes` rows (v1.10.2)
-│           ├── file_store.rs  Session-scoped temporary file storage
+│           ├── file_store.rs  Session-scoped temporary file storage (20 files/session, 10 GiB store, 24 h expiry)
+│           ├── transfer_gate.rs  AV scan + outbound approval for SFTP file-browser transfers (v2.3.0)
 │           ├── vault.rs       Envelope encryption
+│           ├── vault_tls.rs   Private CA + server certificate for the bundled Vault (`vault-tls-init`, v2.3.0)
+│           ├── worker_lease.rs  One replica at a time for a periodic job (`worker_leases`, v2.3.0)
 │           ├── notifications.rs  Dispatcher: maps CheckoutEvent → recipients → EmailMessage; honours opt-outs; writes email_deliveries rows
 │           ├── email/         Transactional email subsystem
 │           │   ├── mod.rs         Re-exports + EmailTransport trait
@@ -1761,15 +1777,17 @@ Step-by-step procedures for on-call engineers live under
 | Runbook                                                       | When to use                                                                                                   |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | [disaster-recovery.md](runbooks/disaster-recovery.md)         | Host loss or corrupted volumes (RTO ≤ 4h, RPO ≤ 24h)                                                          |
-| [security-incident.md](runbooks/security-incident.md)         | Credential exposure, token replay, unauthorised config change                                                 |
-| [certificate-rotation.md](runbooks/certificate-rotation.md)   | Scheduled rotation or expiry alert (ACME + internal CA)                                                       |
+| [security-incident.md](runbooks/security-incident.md)         | Credential exposure, token replay, unauthorised config change, refresh-token reuse, audit integrity failure   |
+| [certificate-rotation.md](runbooks/certificate-rotation.md)   | Scheduled rotation or expiry alert (ACME + internal CA); bundled Vault TLS certificate (v2.3.0)              |
 | [vault-operations.md](runbooks/vault-operations.md)           | Vault unseal, Transit key rotate + rewrap, Shamir rekey                                                       |
-| [database-operations.md](runbooks/database-operations.md)     | Replica promotion, migration rollback, panic-boot recovery                                                    |
+| [database-operations.md](runbooks/database-operations.md)     | Replica promotion, migration rollback, panic-boot recovery, edited migration refused at startup (v2.3.0)      |
 | [smtp-troubleshooting.md](runbooks/smtp-troubleshooting.md)   | Notification emails not arriving, SMTP failures, retry-worker stalls, Vault sealing during config             |
 | [dmz-incident.md](runbooks/dmz-incident.md)                   | DMZ link flap, links-up:0, edge-HMAC/PSK rotation, suspected DMZ host compromise                              |
 | [av-operations.md](runbooks/av-operations.md)                 | AV scanner outage, signature update failure, false-positive triage, EICAR smoke test, capacity check          |
 | [clipboard-diagnostics.md](runbooks/clipboard-diagnostics.md) | RDP copy/paste reported broken — classify stalled-transfer vs wedged `rdpclip.exe`, recover, capture evidence |
 | [session-disconnects.md](runbooks/session-disconnects.md)     | A user reports an unexpected or unexplained session end — map the on-screen message to its cause and log line |
+| [dmz-production-certs.md](runbooks/dmz-production-certs.md)   | Issue and install production certificates for the DMZ link (replace the development certificates)            |
+| [login-rate-limiting.md](runbooks/login-rate-limiting.md)     | Users get `429` on sign-in or password change; session refused with `429` at capacity (v2.3.0)               |
 
 ## Session-activity bus and proactive token refresh (v1.6.1)
 
@@ -2342,6 +2360,152 @@ CredentialProfileExpiryWatcher (60 s) ─┤
 - **Extend** calls `POST /api/user/safeguard/bulk-checkout` for Safeguard JIT
   leases only; **check-in** calls the Safeguard or password-checkout check-in
   endpoint for each lease after a confirmation.
+
+## Capacity, integrity and scale-out (v2.3.0)
+
+v2.3.0 closes an external security and performance review of v2.0.0. The
+security controls are listed finding by finding in
+[security.md § External security review](security.md#external-security-review-v230);
+this section describes the moving parts they and the performance fixes
+added to the architecture.
+
+### Session admission (PERF-04)
+
+[`services/admission.rs`](../backend/src/services/admission.rs) runs before
+a session touches its target. It reserves an estimate of the session's
+memory — 4 MiB for a terminal protocol, 8 MiB plus two framebuffers at four
+bytes a pixel for a graphical one (capped at 8K), and 384 MiB plus
+framebuffers for a web session's Chromium — against one process-wide
+budget, and counts the session against its user's limit. The reservation
+is released when the session ends.
+
+```mermaid
+flowchart LR
+    T[Tunnel request] --> A{admission::admit}
+    A -- role limit reached --> R1[429: session limit]
+    A -- budget full --> R2[429: at capacity]
+    A -- reserved --> C[Credential checkout / VDI container / Chromium]
+    C --> E[Session engine]
+    E -- session ends --> D[Reservation dropped]
+```
+
+- Budget: `STRATA_SESSION_MEMORY_BUDGET_MB`, else three quarters of the
+  cgroup memory limit (or system memory) less the replay budget, never
+  below 256 MiB.
+- Per user: `roles.max_concurrent_sessions` (migration 101), else
+  `STRATA_MAX_SESSIONS_PER_USER`; `max_web_sessions` caps kiosks.
+- Observer replay history shares one budget (`STRATA_NVR_MEMORY_BUDGET_MB`,
+  1 GiB) instead of a fixed buffer per session.
+- Within a session, each client's clipboard and upload streams have
+  count, size, idle and rate limits, and incoming clipboard data is capped
+  at 256 MiB across all sessions (SEC-15).
+- Reserved, limit, refused, replay and clipboard figures are reported
+  under `memory` in `GET /api/admin/metrics`.
+
+### Shared state across replicas
+
+Everything a second backend replica must agree on is now in PostgreSQL:
+
+| Concern | Before v2.3.0 | Now |
+| ------- | ------------- | --- |
+| Sign-in / password-change limits | In-memory per replica | `auth_attempts` + `auth_attempt_reserve()` (migration 102), serialised per bucket by an advisory lock |
+| Refresh tokens | Not rotated | `refresh_tokens` families: rotation in one transaction, reuse revokes the family ([`refresh_tokens.rs`](../backend/src/services/refresh_tokens.rs)) |
+| Token revocation | Loaded at start | Synchronised every 15 s; a replica that cannot synchronise for 5 minutes refuses tokens |
+| Managed-account password operations | Not serialised per account across replicas | One per account (`managed_account_locks`, migration 097, which replaces the per-checkout activation lease added in 095); the password being set is kept sealed on the checkout row from just before the AD reset until the checkout commits |
+| Connection health sweep | Every replica probed every connection | One replica per pass via `worker_leases` ([`worker_lease.rs`](../backend/src/services/worker_lease.rs)); the claim lapses if its holder dies |
+| Audit chain head | Read and written by the application | `audit_append()` under a chain lock in the database (migration 098) |
+
+Cache misses for the same key (OIDC discovery and JWKS, for example)
+queue behind one fetch through
+[`keyed_lock.rs`](../backend/src/services/keyed_lock.rs) instead of all
+going upstream (PERF-14).
+
+### Audit integrity (SEC-17)
+
+```mermaid
+flowchart LR
+    W[Any audit write] --> F["audit_append() (DB)"]
+    F --> L[(audit_logs v2 chain)]
+    V[Verifier: 10 min incremental, daily full] --> L
+    V -- intact --> K["audit_checkpoints (HMAC)"]
+    V -- intact --> S[Vault Transit sign]
+    S --> X[Anchor file STRATA_AUDIT_ANCHOR_PATH]
+    V -- break --> I[audit.integrity_failed + error log]
+```
+
+The application no longer computes chain digests; the database function
+does, so two replicas cannot fork the chain. The runtime database role
+cannot disable the triggers that make the table append-only. The anchor
+file lives outside the database (the `audit-anchor` volume in Compose), so
+rewriting the chain and its checkpoints together is still detected.
+`GET /api/admin/audit-status` reports write latency and the verifier's
+last result.
+
+### Files: chunked encryption and one transfer policy
+
+- **Chunked encryption (PERF-03).** Staged outbound files are sealed by
+  [`file_crypto.rs`](../backend/src/services/file_crypto.rs) as a sequence of
+  AES-256-GCM chunks under the STREAM construction, so encryption and
+  decryption run in bounded memory and reordered, duplicated or truncated
+  chunks fail authentication. At most `STRATA_FILE_CRYPTO_CONCURRENCY`
+  files (one per CPU, up to 4) are processed at once.
+- **SFTP file browser (SEC-10).** Transfers made in the SFTP browser used
+  to bypass both Quick Share controls. They now pass
+  [`transfer_gate.rs`](../backend/src/services/transfer_gate.rs): uploads are
+  scanned like inbound Quick Share; downloads are scanned and then
+  submitted to the outbound approval queue.
+
+### Recordings (SEC-16, PERF-13)
+
+Recordings carry a status (`recording`, `complete`, `incomplete`,
+`failed`; migration 099) and are synced to disk every 5 seconds. Every
+session end finalises its recording. While recording,
+[`recording_index.rs`](../backend/src/services/recording_index.rs) writes a
+seek checkpoint every 8 MiB — the byte offset of an instruction boundary
+plus a prelude that rebuilds the display at that point — so seeking starts
+from the nearest checkpoint instead of replaying from the first byte.
+
+### Trust boundaries tightened
+
+- **Vault** is reached over verified TLS with a Transit-only token
+  ([HashiCorp Vault](#5-hashicorp-vault)).
+- **PostgreSQL** requests run as the least-privilege runtime role
+  ([PostgreSQL](#4-postgresql)).
+- **Client IP** is resolved once per request by
+  [`client_ip.rs`](../backend/src/services/client_ip.rs): verified DMZ edge
+  header, then `X-Forwarded-For` only from `STRATA_TRUSTED_PROXIES` when
+  `STRATA_TRUST_XFF=1`, then the socket peer (SEC-20).
+- **Web kiosks** run Chromium with its sandbox under a seccomp profile,
+  Xvnc on loopback only, and the initial URL checked against
+  `web_allowed_networks` (SEC-02/03/04).
+
+### DMZ link streaming (PERF-02)
+
+The internal node streams request and response bodies through the DMZ
+link instead of collecting up to 8 MiB of each, so large uploads and
+downloads work through the DMZ. Unread body is bounded by h2 flow control
+(1 MiB per stream, 16 MiB per link); bodies over 512 MiB are refused; a
+body idle for 60 seconds fails and a stream open for 30 minutes is reset.
+Detail: [dmz.md § Streaming through the internal node](dmz.md#streaming-through-the-internal-node-perf-02).
+**Both nodes must run v2.3.0.**
+
+### Frontend
+
+- **Cross-tab sharing (PERF-15).** Data every tab polls (pending
+  approvals, leases and similar) goes through
+  [`sharedFetch`](../frontend/src/utils/sharedFetch.ts): a Web Lock per key
+  and a `BroadcastChannel` mean it is fetched about once per interval
+  however many tabs are open. Token refresh takes the
+  `strata-auth-refresh` Web Lock so tabs present the newest refresh
+  cookie in turn rather than a spent one.
+- **Lazy routes.** Pages other than sign-in, the dashboard and the session
+  client are
+  loaded on demand (`React.lazy`), each behind a `PageLoadBoundary` that
+  catches a chunk that fails to load after a new release and asks the user
+  to reload (it does not reload by itself, which would end live sessions).
+- **Paged lists.** The admin connections and users lists and the user's
+  dashboard read server-side pages (`/page`, `/refs`, `/summary`,
+  `/facets` endpoints) instead of loading every row.
 
 ## Extended protocols
 

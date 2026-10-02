@@ -12,5 +12,15 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family ON refresh_tokens (family_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires ON refresh_tokens (expires_at);
 
+-- Databases that applied the duplicate 038 in 0.x never got migration 038's objects.
+CREATE TABLE IF NOT EXISTS revoked_tokens (
+    id          BIGSERIAL PRIMARY KEY,
+    token_hash  TEXT NOT NULL UNIQUE,
+    expires_at  TIMESTAMPTZ NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens (expires_at);
+CREATE INDEX IF NOT EXISTS idx_recordings_session_id ON recordings (session_id);
+
 -- Lets every replica pick up revocations made elsewhere, incrementally.
 CREATE INDEX IF NOT EXISTS idx_revoked_tokens_created_at ON revoked_tokens (created_at);

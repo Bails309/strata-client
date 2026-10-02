@@ -15,7 +15,7 @@ The reference webapp is a Tomcat-hosted JDBC-or-LDAP authentication shell over `
 - OIDC SSO with dynamic JWKS validation and proactive refresh-token rotation
 - 11-flag RBAC checked per handler at every admin endpoint
 - HashiCorp Vault Transit envelope encryption (bundled and auto-unsealed by default)
-- Append-only, SHA-256 hash-chained audit log
+- Append-only, tamper-evident audit log: a SHA-256 hash chain with keyed checkpoints and Vault-signed anchors outside the database (v2.3.0)
 - NVR-style live session observation with a 5-minute rewind buffer
 - Privileged-account checkout / approval / rotation workflow with LDAP `unicodePwd` reset
 - First-class Web kiosk, VDI desktop container, and Kubernetes pod-console connection types
@@ -93,7 +93,11 @@ Anything that publishes a JWKS endpoint and supports the Authorization Code + PK
 
 ### Can I use local users instead of OIDC?
 
-Yes. Local username/password is built in for environments without an OIDC provider. The 12-character minimum password policy is enforced on creation and change; admin password reset is a dedicated endpoint.
+Yes. Local username/password is built in for environments without an OIDC provider. Passwords must be 12–256 characters, are hashed with Argon2id, and an admin password reset is a dedicated endpoint. A password change or reset signs the account out everywhere (v2.3.0).
+
+### Why do I get "Too many attempts" (429) when signing in?
+
+Since v2.3.0 sign-in attempts are limited in PostgreSQL, so every backend replica counts against the same limits: 5 a minute for one username from one address, 30 per 15 minutes for one username, 20 per 5 minutes from one address, and 600 a minute for the whole deployment (`STRATA_LOGIN_ATTEMPTS_PER_MINUTE`). The response's `Retry-After` header, and the message on the sign-in page, give the wait. A successful sign-in clears the username + address limit, and none of the limits is permanent. If many users sign in from one address — behind a NAT or a proxy that Strata does not trust — set `STRATA_TRUST_XFF=1` and list that proxy in `STRATA_TRUSTED_PROXIES` so each user's real address is used; see the [sign-in limits runbook](runbooks/login-rate-limiting.md).
 
 ### How does RBAC work?
 
@@ -118,7 +122,7 @@ It opens a TCP connection to the connection's stored host and port (for `web`, t
 
 ### How long do sessions last?
 
-Access tokens are 20 minutes. Refresh cookies are 8 hours, `HttpOnly`, `Secure`, `SameSite=Lax`. The SPA proactively rotates the access token after ~10 minutes of UI activity. The WebSocket-tunnel auth watchdog (v1.4.1) is independent of access-token TTL: a tunnel stays open until you log out, until your token is revoked, or until the 8-hour `MAX_TUNNEL_DURATION` hard cap. See [docs/security.md § WebSocket-tunnel auth watchdog](security.md#websocket-tunnel-auth-watchdog-v132-revised-v141).
+Access tokens last 20 minutes and refresh tokens 8 hours (`HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/api`). The SPA silently refreshes the access token when it has under 10 minutes left and you are active, and since v2.3.0 every refresh also rotates the refresh token. So an idle browser is signed out after 8 hours, and an active one can stay signed in until **12 hours after sign-in**, when everyone must sign in again. A password change or reset ends every earlier session of the account. The WebSocket-tunnel auth watchdog (v1.4.1) is independent of access-token TTL: a tunnel stays open until you log out, until your token is revoked, or until the 8-hour `MAX_TUNNEL_DURATION` hard cap. See [docs/security.md § WebSocket-tunnel auth watchdog](security.md#websocket-tunnel-auth-watchdog-v132-revised-v141).
 
 ---
 
@@ -206,11 +210,13 @@ By default in the `guac-recordings` Docker volume on the host. Optionally synced
 
 ### Can I delete a recording to comply with a data-subject request?
 
-Yes — Admin → Recordings supports per-recording delete. The deletion itself writes one `recording.deleted` audit row; the recording bytes are removed from disk + Blob; the underlying audit row chain remains intact (the recording metadata row is soft-deleted, not chain-mutated, so the SHA-256 hash chain is preserved).
+Yes — Admin → Recordings supports per-recording delete. The deletion itself writes one `recording.deleted` audit row; the recording bytes are removed from disk + Blob; the audit log itself is never edited (the recording metadata row is soft-deleted, so the audit hash chain is preserved).
 
 ### What does "hash-chained audit log" actually mean?
 
-Every row in the `audit_logs` table includes a `hash` column. Each row's hash is computed over `(prev_hash, action_type, user_id, timestamp, details_json)`. Tampering with any historical row changes its hash and breaks the chain at that point — easily detected by a verifier reading the table top-to-bottom. The chain root is published in the admin UI for periodic external attestation.
+Every row in `audit_logs` stores the digest of the row before it (`previous_hash`) and its own (`current_hash`). Since v2.3.0 (migration 098) rows are written only through the `audit_append` database function, which hashes a length-prefixed encoding of the row's id, timestamp, user, action, details and the previous digest under a lock, and triggers refuse `UPDATE`, `DELETE` and `TRUNCATE`. Editing, removing or reordering a row breaks the chain at that point.
+
+A chain alone cannot stop someone with database write access from recomputing every digest after an edit, so the backend also verifies it: new rows every 10 minutes and the whole chain daily. When the chain is intact it records a **checkpoint** — the head row and digest, with an HMAC under a key the database never holds — and appends it, signed by a Vault Transit key, to an anchor file outside the database (`STRATA_AUDIT_ANCHOR_PATH`). Any break is logged at error level and written as `audit.integrity_failed`; `GET /api/admin/audit-status` reports the verifier's last result. Keep the anchor file on storage the backend cannot rewrite to make a rollback detectable as well. Full detail: [security.md § Audit Trail](security.md#audit-trail).
 
 ### Can users observe each other's sessions?
 
@@ -234,7 +240,7 @@ Strata no longer publishes images at all. Up to v2.1.0, every tagged release pus
 
 ### Is the bundled Vault really safe to use?
 
-The bundled Vault auto-initialises and auto-unseals using a key kept in a Docker volume. That's fine for evaluation and for single-tenant deployments where the host root is already in scope. **It is not appropriate** for multi-tenant or regulated deployments — flip to an external Vault through the admin UI.
+The bundled Vault auto-initialises and auto-unseals using a key kept in a Docker volume. Since v2.3.0 it is served over TLS from a private CA that `vault-tls-init` issues on first start (the backend trusts that CA alone), and the backend's token can use only the Transit key — the root token is revoked after setup. That's fine for evaluation and for single-tenant deployments where the host root is already in scope. **It is not appropriate** for multi-tenant or regulated deployments — flip to an external Vault through the admin UI.
 
 ### Does Strata phone home?
 
@@ -246,7 +252,7 @@ Yes — opt-in. v1.12.0 added a pluggable AV scanner that runs on both Quick Sha
 
 ### What happens if the AV scanner is down?
 
-Fail-closed by default. `STRATA_AV_FAIL_MODE=block` (the shipped default) treats every scanner error — TCP refused, daemon timeout, command not found, `clamd` panic — as a block, with the audit row recording the error message verbatim. Operators who prefer degraded-open behaviour set `STRATA_AV_FAIL_MODE=allow`; even then, **infected** verdicts are still rejected unconditionally (the fail-mode knob only controls **error** verdicts, never **infected** verdicts).
+Fail-closed by default. `STRATA_AV_FAIL_MODE=block` (the shipped default) treats every scanner error — TCP refused, daemon timeout, command not found, `clamd` panic — as a block, with the audit row recording the error message verbatim. Since v2.3.0 a file larger than `STRATA_AV_MAX_SCAN_SIZE`, which cannot be scanned, is treated the same way; the Compose default for that limit now matches the 500 MiB upload limit, so only a lowered limit makes this happen. Operators who prefer degraded-open behaviour set `STRATA_AV_FAIL_MODE=allow`; even then, **infected** verdicts are still rejected unconditionally (the fail-mode knob only controls **error** and **oversize** verdicts, never **infected** verdicts).
 
 ### Can I use Microsoft Defender / Sophos / ESET instead of ClamAV?
 

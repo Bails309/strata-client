@@ -73,55 +73,39 @@ fi
 #      requires write+execute on the *parent directory*, not the file
 #      itself — so even with group-read on the .guac the dir must be g+w.
 #
-# To match the legacy writer's gid we create a local group with the
-# same numeric id (looked up off the recordings directory at runtime,
-# since different guacd builds picked different system gids) and add
-# strata to it as a supplementary group. We then widen the directory
-# itself to g+w (so unlink works) and set g+s so any file created
-# later inherits the gid — keeping the reader/writer group invariant
-# stable across container restarts. Mirrors the docker.sock pattern
-# above.
+#   3. CREATE — the native engine writes each new recording as strata.
+#      The guacd-era directory is still owned by guacd, so without the
+#      chown below every recording fails with EACCES at session start.
+#
+# Strata joins a local group matching each gid the existing files carry
+# (different guacd builds picked different system gids) and takes
+# ownership of the directory itself, never of the files in it.
 RECORDINGS_DIR=/var/lib/guacamole/recordings
 if [ -d "$RECORDINGS_DIR" ]; then
-    # Find a pre-existing recording to read its gid; fall back to the
-    # dir's gid if the volume is empty on first boot.
-    #
-    # NB: `find ... | head -n1` races with SIGPIPE — once `head` closes
-    # its stdin after the first line, `find` keeps writing and gets
-    # killed with SIGPIPE (exit 141). With `set -euo pipefail` at the
-    # top of this script, that 141 propagates and aborts the entire
-    # entrypoint *before* `exec gosu strata strata-backend` runs. The
-    # symptom is a backend container in a crash loop with empty logs
-    # and exit code 141. Disable pipefail just for this pipeline so
-    # the (harmless) SIGPIPE on `find` does not kill the script.
-    set +o pipefail
-    REC_GID=$(find "$RECORDINGS_DIR" -maxdepth 1 -type f -printf '%g\n' 2>/dev/null | head -n1)
-    set -o pipefail
-    if [ -z "${REC_GID:-}" ]; then
-        REC_GID=$(stat -c '%g' "$RECORDINGS_DIR")
-    fi
-    if [ -n "${REC_GID:-}" ] && [ "$REC_GID" != "0" ]; then
-        STRATA_GID=$(id -g strata)
-        if [ "$REC_GID" != "$STRATA_GID" ]; then
-            EXISTING_GROUP=$(getent group "$REC_GID" | cut -d: -f1 || true)
-            if [ -z "$EXISTING_GROUP" ]; then
-                groupadd -g "$REC_GID" guac-recordings
-                EXISTING_GROUP=guac-recordings
-            fi
-            usermod -aG "$EXISTING_GROUP" strata
-            echo "[entrypoint] Added strata to ${EXISTING_GROUP} (gid=${REC_GID}) for recording playback access"
+    STRATA_GID=$(id -g strata)
+    # Read access: join every group older recordings were written under.
+    # `%G` is the numeric gid (`%g` prints a name once the group exists).
+    for REC_GID in $(find "$RECORDINGS_DIR" -maxdepth 1 -type f -printf '%G\n' 2>/dev/null | sort -u); do
+        if [ "$REC_GID" = "0" ] || [ "$REC_GID" = "$STRATA_GID" ]; then
+            continue
         fi
-    fi
+        EXISTING_GROUP=$(getent group "$REC_GID" | cut -d: -f1 || true)
+        if [ -z "$EXISTING_GROUP" ]; then
+            EXISTING_GROUP="guac-recordings-${REC_GID}"
+            groupadd -g "$REC_GID" "$EXISTING_GROUP"
+        fi
+        usermod -aG "$EXISTING_GROUP" strata
+        echo "[entrypoint] Added strata to ${EXISTING_GROUP} (gid=${REC_GID}) for recording playback access"
+    done
 
-    # Grant the recording group write (for unlink) + setgid (so new
-    # files keep the shared gid) on the recordings dir itself. Without
-    # g+w the Azure-sync sweeper's tokio::fs::remove_file() returns
-    # EACCES and stale .guac files accumulate on disk after being
-    # uploaded to Azure. Failures here are non-fatal — the dir may be
-    # on a read-only mount, in which case the sweeper has nothing to
-    # do anyway and the existing EROFS-aggregating warning kicks in.
-    chmod g+ws "$RECORDINGS_DIR" 2>/dev/null || \
-        echo "[entrypoint] WARN: could not chmod g+ws on ${RECORDINGS_DIR} (read-only mount?)"
+    # Write access: the native engine creates every new recording as
+    # strata, and the sweeper unlinks files, so strata must own the
+    # directory itself. Not recursive, so older files keep their group.
+    chown strata:strata "$RECORDINGS_DIR" 2>/dev/null || true
+    chmod u+rwx,g+rwxs "$RECORDINGS_DIR" 2>/dev/null || true
+    if ! gosu strata test -w "$RECORDINGS_DIR"; then
+        echo "[entrypoint] ERROR: ${RECORDINGS_DIR} is not writable by strata; session recordings will fail" >&2
+    fi
 fi
 
 exec gosu strata strata-backend "$@"

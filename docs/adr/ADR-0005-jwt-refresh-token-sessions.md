@@ -7,6 +7,22 @@
 - **Supersedes**: —
 - **Superseded by**: —
 
+> **Status update — v2.3.0 (2026-10-02).** Until v2.3.0 the rotation rule
+> below was not implemented: `/api/auth/refresh` minted a new access token
+> but left the refresh token unchanged (external review finding SEC-07).
+> v2.3.0 implements it with durable token families (`refresh_tokens`,
+> migration 096): each refresh consumes the presented token and records
+> its successor in one transaction, a second use within 30 seconds gets
+> `409` (another tab won the race), and a later reuse revokes the family
+> and is audited as `auth.refresh_token_reused`. Because rotation now
+> extends the refresh token, a separate **12-hour absolute sign-in limit**
+> (`ABSOLUTE_SESSION_TTL`) replaces the 8-hour absolute cap described
+> below, and a password change or reset refuses every earlier token
+> (`users.sessions_valid_after`, SEC-08). Tokens are signed with HS256
+> under `JWT_SECRET` ([ADR-0011](ADR-0011-persistent-jwt-secrets.md)),
+> not RS256 as written below. Current behaviour:
+> [security.md § Refresh-token semantics](../security.md#refresh-token-semantics-clarified-v161-rotation-tracked-since-v22x).
+
 ## Context
 
 Strata issues two tokens on login:

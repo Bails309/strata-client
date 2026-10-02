@@ -73,6 +73,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   password work, so concurrent guesses cannot all pass the limit; password
   change counts its own attempts; a full limiter map refuses new keys instead
   of clearing every live limit.
+- **Login limits hold across replicas (SEC-19).** Login and password-change
+  attempts are now counted in PostgreSQL (migration 102), each admitted
+  under a per-key lock before any password hashing, so parallel guesses
+  cannot exceed a limit however many backends are running. Login is
+  limited per username and address (5 a minute), per username from
+  anywhere (30 in 15 minutes), per address (20 in 5 minutes) and for the
+  whole deployment (600 a minute, `STRATA_LOGIN_ATTEMPTS_PER_MINUTE`).
+  A refusal is `429` with `Retry-After`; a refused password change was
+  `401` before, which the SPA could mistake for an expired session. A
+  successful login is not counted, and the wider per-username limit means
+  one address cannot lock a user out.
 - **`STRATA_TRUSTED_PROXIES` is enforced (SEC-20).** One middleware resolves
   the client IP: verified DMZ edge IP, else `X-Forwarded-For` only when the
   socket peer is a trusted proxy (walking the chain past trusted hops), else

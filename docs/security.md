@@ -1571,17 +1571,24 @@ the same check for one connection immediately and returns the connect time.
 
 ## Rate Limiting
 
-The backend applies in-memory rate limiting at multiple layers to prevent abuse:
+The backend applies rate limiting at multiple layers to prevent abuse. Login and password-change limits are kept in PostgreSQL (`auth_attempts`, migration 102), so every backend replica counts against the same windows; the others are kept in each process's memory:
 
-| Endpoint                      | Key         | Limit          | Window |
-| ----------------------------- | ----------- | -------------- | ------ |
-| `/api/auth/login`             | Username    | 5 attempts     | 60 s   |
-| `/api/auth/login`             | Client IP   | 20 attempts    | 300 s  |
-| `/api/shared/tunnel/:token`   | Share token | 10 attempts    | 60 s   |
-| `/api/tunnel/:id` (WebSocket) | User ID     | 30 connections | 60 s   |
-| `/api/tunnel/ticket`          | User ID     | 30 tickets     | 60 s   |
+| Endpoint                      | Key                       | Limit          | Window |
+| ----------------------------- | ------------------------- | -------------- | ------ |
+| `/api/auth/login`             | Username + client IP      | 5 attempts     | 60 s   |
+| `/api/auth/login`             | Username                  | 30 attempts    | 900 s  |
+| `/api/auth/login`             | Client IP                 | 20 attempts    | 300 s  |
+| `/api/auth/login`             | Whole deployment          | 600 attempts¹  | 60 s   |
+| `/api/auth/password`          | User ID                   | 5 attempts     | 3600 s |
+| `/api/shared/tunnel/:token`   | Share token               | 10 attempts    | 60 s   |
+| `/api/tunnel/:id` (WebSocket) | User ID                   | 30 connections | 60 s   |
+| `/api/tunnel/ticket`          | User ID                   | 30 tickets     | 60 s   |
 
-All rate limiters use a sliding window with automatic OOM protection — entries are pruned when the map exceeds 50,000 (10,000 for share tokens), and cleared entirely if pruning is insufficient.
+¹ `STRATA_LOGIN_ATTEMPTS_PER_MINUTE` changes it.
+
+A login or password-change attempt is admitted, and counted, before any password hashing starts; admission is serialised per key in the database, so parallel guesses cannot exceed a limit on any number of replicas. A refusal is `429` with a `Retry-After` header giving the seconds until the oldest counted attempt leaves the window, and costs nothing against the other limits. A successful login is not counted and clears the username + address limit. Because the per-username limit is wider than the per-address one, a single address cannot lock a user out; every limit is a sliding window, so none is permanent.
+
+The in-memory limiters use a sliding window with automatic OOM protection: when the map exceeds its cap (50,000, or 10,000 for share tokens) expired entries are pruned, and new keys are refused while live ones remain.
 
 ### Share-link hardening (v0.26.0)
 

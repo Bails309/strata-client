@@ -86,6 +86,13 @@ pub enum AppError {
     #[error("{0}")]
     RateLimited(String),
 
+    /// 429 with `Retry-After`.
+    #[error("{message}")]
+    TooManyAttempts {
+        message: String,
+        retry_after_secs: u32,
+    },
+
     #[error("{0}")]
     Internal(String),
 }
@@ -136,7 +143,7 @@ pub fn error_status_and_message(err: &AppError) -> (StatusCode, ErrorCode, Strin
             ErrorCode::SetupRequired,
             "Setup required".into(),
         ),
-        AppError::RateLimited(msg) => (
+        AppError::RateLimited(msg) | AppError::TooManyAttempts { message: msg, .. } => (
             StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::RateLimited,
             msg.clone(),
@@ -180,7 +187,17 @@ impl IntoResponse for AppError {
         // (see ErrorCode docs and docs/API-LIFECYCLE.md). Both are
         // emitted on every error response.
         let body = json!({ "error": message, "code": code.as_str() });
-        (status, axum::Json(body)).into_response()
+        let mut response = (status, axum::Json(body)).into_response();
+        if let AppError::TooManyAttempts {
+            retry_after_secs, ..
+        } = self
+        {
+            response.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from(retry_after_secs),
+            );
+        }
+        response
     }
 }
 
@@ -292,6 +309,17 @@ mod tests {
         // Internal
         let (s, _) = error_response(AppError::Internal("stack trace".into()));
         assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn too_many_attempts_returns_429_with_retry_after() {
+        let response = AppError::TooManyAttempts {
+            message: "slow down".into(),
+            retry_after_secs: 42,
+        }
+        .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[axum::http::header::RETRY_AFTER], "42");
     }
 
     #[test]

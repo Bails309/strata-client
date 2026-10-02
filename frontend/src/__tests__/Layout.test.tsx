@@ -78,6 +78,17 @@ describe("Layout", () => {
     expect(screen.getByText("Audit Trail")).toBeInTheDocument();
   });
 
+  it("hides the whole sidebar in a session until the menu is shown", async () => {
+    const { container } = renderLayout("/session/c1");
+    const sidebar = container.querySelector("aside.strata-sidebar") as HTMLElement;
+    expect(sidebar.style.visibility).toBe("hidden");
+    expect(screen.queryByRole("link", { name: "Connections" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show menu" }));
+    expect(sidebar.style.visibility).toBe("visible");
+    expect(screen.getByRole("link", { name: "Connections" })).toBeInTheDocument();
+  });
+
   it("renders credentials link", () => {
     renderLayout();
     expect(screen.getByText("Credentials & Vault")).toBeInTheDocument();

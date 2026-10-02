@@ -910,7 +910,7 @@ List all remote connections.
 ]
 ```
 
-`health_status` is one of `"online"`, `"offline"`, or `"unknown"` (not yet checked). Updated automatically every 2 minutes by the background health check worker.
+`health_status` is one of `"online"`, `"offline"`, or `"unknown"` (not checked yet, nothing to probe, or not confirmed for 15 minutes). The background health check probes every connection every 2 minutes; with several backend replicas, one of them runs each pass. `health_checked_at` is when the current status was last confirmed: an unchanged status is written again only every 5 minutes.
 
 **Credential extras.** `password`, `private-key`, `passphrase`, `sftp-password`, `sftp-private-key` and `sftp-passphrase` are sealed with Vault on save and returned as `"********"` by list, create and update. Sending `"********"` back keeps the stored value, an empty string clears it, and a new value requires Vault to be configured (`400` otherwise).
 

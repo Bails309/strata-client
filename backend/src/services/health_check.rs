@@ -10,6 +10,21 @@ use uuid::Uuid;
 /// pass budget without a burst of sockets and DNS queries.
 const PROBE_CONCURRENCY: usize = 32;
 
+/// `worker_leases` row that lets one replica run each pass.
+const LEASE: &str = "connection_health";
+/// Outlives the 90 s pass budget, so a claim lapses only if its holder died.
+const LEASE_TTL: Duration = Duration::from_secs(100);
+/// Passes are 120 s apart on each replica; a replica running a little behind
+/// another must not start a second pass.
+const MIN_PASS_GAP: Duration = Duration::from_secs(110);
+/// An unchanged result is written again only this often.
+const REFRESH_AFTER_SECS: f64 = 300.0;
+/// A result not confirmed for this long is reported as unknown.
+const STALE_AFTER_SECS: f64 = 900.0;
+
+/// This process, as a lease holder.
+static REPLICA: std::sync::LazyLock<Uuid> = std::sync::LazyLock::new(Uuid::new_v4);
+
 /// Spawn the connection health-check worker.
 /// Runs every 120 seconds, TCP-probes each connection's hostname:port.
 ///
@@ -21,10 +36,13 @@ pub fn spawn_health_check_worker(
     shutdown: tokio_util::sync::CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     use crate::services::worker::{spawn_periodic, PeriodicConfig};
+    use rand::RngExt;
+    // Replicas started together would otherwise race for every pass.
+    let jitter = Duration::from_secs(rand::rng().random_range(0..60));
     spawn_periodic(
         PeriodicConfig {
             label: "connection_health_check",
-            initial_delay: Duration::from_secs(15),
+            initial_delay: Duration::from_secs(15) + jitter,
             interval: Duration::from_secs(120),
             // Each target has its own 5s TCP timeout; cap the whole pass at 90s.
             iteration_timeout: Duration::from_secs(90),
@@ -89,6 +107,14 @@ async fn run_health_checks(state: SharedState) -> anyhow::Result<()> {
         s.db.clone().ok_or_else(|| anyhow::anyhow!("No DB"))?.pool
     };
 
+    let holder = *REPLICA;
+    if !crate::services::worker_lease::try_claim(&pool, LEASE, holder, LEASE_TTL, MIN_PASS_GAP)
+        .await?
+    {
+        // Another replica has this pass.
+        return Ok(());
+    }
+
     let targets: Vec<ConnTarget> = sqlx::query_as(&format!(
         "SELECT {TARGET_COLUMNS} FROM connections WHERE soft_deleted_at IS NULL"
     ))
@@ -113,26 +139,63 @@ async fn run_health_checks(state: SharedState) -> anyhow::Result<()> {
         .collect()
         .await;
 
-    store_results(&pool, &results).await
+    let written = store_results(&pool, &results, holder).await?;
+    let expired = expire_stale(&pool).await?;
+    crate::services::worker_lease::complete(&pool, LEASE, holder).await?;
+    tracing::debug!(
+        probed = results.len(),
+        written,
+        expired,
+        "connection health pass complete"
+    );
+    Ok(())
 }
 
-/// Record every probe result in one statement.
-async fn store_results(pool: &Pool<Postgres>, results: &[(Uuid, &str)]) -> anyhow::Result<()> {
+/// Record the results that changed, or were last confirmed long enough ago,
+/// in one statement, and only while this replica still holds the pass.
+/// Returns the rows written.
+async fn store_results(
+    pool: &Pool<Postgres>,
+    results: &[(Uuid, &str)],
+    holder: Uuid,
+) -> anyhow::Result<u64> {
     if results.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
     let (ids, statuses): (Vec<Uuid>, Vec<&str>) = results.iter().copied().unzip();
-    sqlx::query(
+    let done = sqlx::query(
         "UPDATE connections AS c
          SET health_status = r.status, health_checked_at = now()
          FROM unnest($1::uuid[], $2::text[]) AS r(id, status)
-         WHERE c.id = r.id",
+         WHERE c.id = r.id
+           AND (c.health_status IS DISTINCT FROM r.status
+                OR c.health_checked_at IS NULL
+                OR c.health_checked_at < now() - make_interval(secs => $3))
+           AND EXISTS (SELECT 1 FROM worker_leases l
+                       WHERE l.name = $4 AND l.holder = $5 AND l.expires_at > now())",
     )
     .bind(&ids)
     .bind(&statuses)
+    .bind(REFRESH_AFTER_SECS)
+    .bind(LEASE)
+    .bind(holder)
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(done.rows_affected())
+}
+
+/// Report results nobody has confirmed for [`STALE_AFTER_SECS`] as unknown,
+/// e.g. targets a pass never reached. Returns the rows changed.
+async fn expire_stale(pool: &Pool<Postgres>) -> anyhow::Result<u64> {
+    let done = sqlx::query(
+        "UPDATE connections SET health_status = 'unknown'
+         WHERE soft_deleted_at IS NULL AND health_status <> 'unknown'
+           AND health_checked_at < now() - make_interval(secs => $1)",
+    )
+    .bind(STALE_AFTER_SECS)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected())
 }
 
 /// Probe `addr` when a resolver produced one, else let the system resolve `host`.
@@ -320,5 +383,87 @@ mod tests {
             web_url: None,
         };
         assert!(t.host_port().is_none());
+    }
+
+    /// Needs `TEST_DATABASE_URL` pointing at a migrated database. Uses the
+    /// real lease row, so it must not run beside a live backend on that database.
+    #[tokio::test]
+    async fn a_pass_writes_only_changes_and_only_while_it_holds_the_lease() {
+        let Some(pool) = std::env::var("TEST_DATABASE_URL")
+            .ok()
+            .and_then(|url| sqlx::PgPool::connect_lazy(&url).ok())
+        else {
+            eprintln!("TEST_DATABASE_URL unset, skipping");
+            return;
+        };
+        let tag = Uuid::new_v4().simple().to_string();
+        let mut ids = Vec::new();
+        for n in 0..2 {
+            ids.push(
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO connections (name, protocol, hostname, port)
+                     VALUES ($1, 'ssh', 'h', 22) RETURNING id",
+                )
+                .bind(format!("{tag}-{n}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            );
+        }
+        let (a, b) = (ids[0], ids[1]);
+        let (holder, other) = (Uuid::new_v4(), Uuid::new_v4());
+        sqlx::query("DELETE FROM worker_leases WHERE name = $1")
+            .bind(LEASE)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(crate::services::worker_lease::try_claim(
+            &pool,
+            LEASE,
+            holder,
+            LEASE_TTL,
+            MIN_PASS_GAP
+        )
+        .await
+        .unwrap());
+
+        let first = [(a, "online"), (b, "offline")];
+        assert_eq!(store_results(&pool, &first, holder).await.unwrap(), 2);
+        assert_eq!(store_results(&pool, &first, holder).await.unwrap(), 0);
+        let changed = [(a, "online"), (b, "online")];
+        assert_eq!(store_results(&pool, &changed, other).await.unwrap(), 0);
+        assert_eq!(store_results(&pool, &changed, holder).await.unwrap(), 1);
+
+        sqlx::query(
+            "UPDATE connections SET health_checked_at = now() - interval '1 hour' WHERE id = $1",
+        )
+        .bind(a)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(expire_stale(&pool).await.unwrap() >= 1);
+        let statuses: Vec<(Uuid, String)> =
+            sqlx::query_as("SELECT id, health_status FROM connections WHERE id = ANY($1)")
+                .bind(&ids)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        for (id, status) in statuses {
+            assert_eq!(status, if id == a { "unknown" } else { "online" });
+        }
+
+        crate::services::worker_lease::complete(&pool, LEASE, holder)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM connections WHERE id = ANY($1)")
+            .bind(&ids)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM worker_leases WHERE name = $1")
+            .bind(LEASE)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }

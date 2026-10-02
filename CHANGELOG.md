@@ -292,6 +292,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the pass instead of outliving it, results are written in one statement,
   and hostnames resolve through the configured DNS servers, as sessions
   do.
+- **One replica runs each health pass (PERF-09).** A pass claims a row in
+  the new `worker_leases` table (migration 103) first, and can only do so
+  when no live claim exists and the last pass began at least 110 seconds
+  ago, so several backends probe each target once per cycle instead of
+  once each. Results are written only while the claim is held, and only
+  when a status changed or was last confirmed 5 minutes ago, so a quiet
+  estate no longer rewrites every row every 2 minutes. A status nobody has
+  confirmed for 15 minutes goes back to `unknown`, and replicas start
+  their cycle at a random offset. The fleet summary's last sweep is now
+  when a pass last completed.
 - **MP4 conversions are single-flight (PERF-05).** Concurrent downloads of
   the same recording share one conversion, at most two run at once, each
   encoder run is stopped after 15 minutes, and a cached video is only ever

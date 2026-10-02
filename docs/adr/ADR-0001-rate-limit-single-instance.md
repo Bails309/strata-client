@@ -5,7 +5,18 @@
 - **Wave**: W3-8
 - **Related standards**: §14.3, §3.3
 - **Supersedes**: —
-- **Superseded by**: —
+- **Superseded by**: — (in part; see the note below)
+
+> **Status update — v2.3.0 (2026-10-02).** For sign-in and password
+> change, option **D** (PostgreSQL) was adopted instead of the Redis
+> promotion below: the `auth_attempts` table and `auth_attempt_reserve()`
+> (migration 102) count attempts for every replica, serialised per bucket
+> by an advisory lock, and refuse with `429` + `Retry-After` before any
+> hashing (external review finding SEC-19). The per-attempt database cost
+> this ADR worried about is one function call, paid only on those two
+> endpoints. The other limiters (share links, tunnel connections, tickets)
+> remain in memory per replica as decided here. See
+> [security.md § Rate Limiting](../security.md#rate-limiting).
 
 ## Context
 

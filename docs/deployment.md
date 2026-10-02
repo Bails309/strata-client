@@ -616,6 +616,128 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v2.2.0 → v2.3.0 (external security and performance review closed)
+
+Rebuild both images, and the **DMZ edge** for DMZ topologies (the link now
+streams bodies; both nodes must run v2.3.0). **Eleven migrations; one new
+Compose service and three new volumes; no `.env` change is required for the
+bundled stack**, but several operator actions below are.
+
+```bash
+cd strata-client
+git pull
+# Take a database backup first (see Backup & Restore).
+docker compose build backend frontend
+docker compose up -d
+```
+
+On the first start `vault-tls-init` issues the bundled Vault's private CA
+and server certificate, Vault restarts on TLS, and the backend moves to
+`https://vault:8200` and replaces its stored root token with a
+Transit-only token. Nothing needs re-entering.
+
+| Migration | Effect | Rollback impact |
+| --------- | ------ | --------------- |
+| `093_users_sso_issuer.sql` | Adds `users.sso_issuer`, binding a linked SSO subject to its issuer; existing links are bound on their next SSO sign-in | Additive |
+| `094_users_sessions_valid_after.sql` | Adds `users.sessions_valid_after`; tokens issued earlier are refused | Additive; an older backend ignores it |
+| `095_checkout_activation_lease.sql` | Adds a per-checkout activation lease; its column is dropped again by 097 | None after 097 |
+| `096_refresh_token_families.sql` | Creates `refresh_tokens` for rotation and reuse detection | Additive; an older backend does not rotate |
+| `097_managed_account_locks.sql` | `managed_account_locks` (one password operation per managed AD account) and sealed `pending_*` columns on `password_checkout_requests`; replaces 095's lease | Drops `activation_lease_until` |
+| `098_audit_chain_v2.sql` | `audit_append()`, `audit_hash_v2()`, `hash_version`, append-only triggers, `audit_checkpoints`, search indexes; drops the `audit_logs.user_id` foreign key so attribution outlives the account | Rolling upgrades are safe (the chain lock key is unchanged), but a row an **older** backend writes after the first v2 row is a `hash_version = 1` row, which the verifier reports as a break. Upgrade every replica; do not roll back past 2.3.0 |
+| `099_recording_status.sql` | Adds `recordings.status` and `failure`; recordings never finalised before the migration are marked `incomplete` | Additive |
+| `100_outbound_share_blob_format.sql` | Records each staged file's encryption format (chunked format 2) | Format-2 files are unreadable by an older backend |
+| `101_role_session_limit.sql` | Adds `roles.max_concurrent_sessions` | Additive |
+| `102_auth_attempts.sql` | `auth_attempts` and `auth_attempt_reserve()` for shared sign-in limits | Additive |
+| `103_worker_leases.sql` | `worker_leases` so one replica runs each periodic pass | Additive |
+
+**Operator actions:**
+
+1. **Web sessions** — set *Admin → Network → Web Browser Sessions →
+   Allowed Networks*. The list is now enforced, and an empty list refuses
+   every web session (SEC-02).
+2. **Custom compose files, Kubernetes, other orchestrators** — carry over
+   the backend's `security_opt: seccomp=./backend/seccomp-chromium.json`,
+   the `vault-tls-init` service, the `vault-tls`, `vault-ca` and
+   `audit-anchor` volumes, and the backend's `VAULT_ADDR`,
+   `VAULT_CACERT` and `STRATA_AUDIT_ANCHOR_PATH` values from
+   `docker-compose.yml`. Without the profile Chromium's sandbox cannot start
+   and every web session fails (SEC-03); `STRATA_WEB_CHROMIUM_SANDBOX=disabled`
+   is a temporary escape hatch only.
+3. **Reverse proxies** — `X-Forwarded-For` is honoured only when
+   `STRATA_TRUST_XFF=1` **and** the socket peer is in
+   `STRATA_TRUSTED_PROXIES` (comma-separated CIDRs or addresses; an invalid
+   entry stops startup). The Compose defaults are `1` and
+   `172.16.0.0/12,192.168.0.0/16`, which cover the bundled `frontend`
+   container; add any proxy outside those ranges (SEC-20). Without it every
+   user shares the proxy's address and its sign-in limit.
+4. **Database owner** — the `DATABASE_URL` user needs `CREATEROLE` so the
+   least-privilege `<owner>_runtime` role can be created (SEC-25). The
+   bundled PostgreSQL user already has it; for an external database run
+   `ALTER ROLE <owner> CREATEROLE;`. Without it the backend keeps serving
+   as the owner and logs a warning.
+5. **Audit anchors** — ship the anchor file (`audit-anchor` volume) to
+   write-once storage if you need tamper evidence that survives a host
+   compromise (SEC-17). Set `STRATA_AUDIT_CHECKPOINT_KEY` if the checkpoint
+   key should not be derived from `JWT_SECRET`.
+6. **Edited migrations** — if startup refuses because an applied migration
+   changed, check the schema, take a backup, and only then set
+   `STRATA_MIGRATION_REPAIR_VERSIONS` (SEC-22). See
+   [security.md § Migration integrity](security.md#migration-integrity-sec-22).
+7. **Recording** — turn on *Require recording* where a session must not run
+   unrecorded (SEC-16).
+8. **SSO** — accounts with a local password are no longer linked on a first
+   SSO sign-in, and nor is an identity whose provider says
+   `email_verified: false` (SEC-06). Affected users sign in with their
+   password, or an administrator removes the local password.
+
+**New environment variables** (all optional; defaults in brackets):
+
+| Variable | Default | Purpose |
+| -------- | ------- | ------- |
+| `VAULT_CACERT` | `/etc/strata/vault-ca/ca.crt` in Compose | CA the backend trusts for Vault |
+| `STRATA_AUDIT_ANCHOR_PATH` | `/app/audit-anchor/checkpoints.jsonl` in Compose; unset = no anchor file | Where signed audit checkpoints are appended |
+| `STRATA_AUDIT_CHECKPOINT_KEY` | Derived from `JWT_SECRET` | HMAC key for audit checkpoints |
+| `STRATA_DB_RUNTIME_ROLE` | on | `off` serves requests as the database owner |
+| `STRATA_MIGRATION_REPAIR_VERSIONS` | unset | Applied migrations whose changed checksum to accept, e.g. `29,46` |
+| `STRATA_LOGIN_ATTEMPTS_PER_MINUTE` | 600 | Sign-in attempts per minute for the whole deployment |
+| `STRATA_PASSWORD_HASH_CONCURRENCY` | One per CPU, up to 4 | Argon2 hashes at once |
+| `STRATA_FILE_CRYPTO_CONCURRENCY` | One per CPU, up to 4 | Files encrypted or verified at once |
+| `STRATA_SESSION_MEMORY_BUDGET_MB` | ¾ of container memory less the replay budget | Session admission budget |
+| `STRATA_MAX_SESSIONS_PER_USER` | unset (no limit) | Per-user session limit where the role sets none |
+| `STRATA_NVR_MEMORY_BUDGET_MB` | 1024 | Replay history for observers, across all sessions |
+| `STRATA_WEB_CHROMIUM_SANDBOX` | on | `disabled` runs Chromium without its sandbox (warns on every launch) |
+
+**Removed:** `STRATA_WEB_VNC_HOST` (kiosk Xvnc listens on loopback only).
+**Changed default:** `STRATA_AV_MAX_SCAN_SIZE` is 524288000 in Compose
+(was 100 MiB), and a file over it is refused in `block` mode.
+**DMZ:** `STRATA_DMZ_PUBLIC_BODY_LIMIT_BYTES` defaults to 512 MiB (was
+8 MiB); see [dmz.md](dmz.md#streaming-through-the-internal-node-perf-02).
+
+**What changes for users:**
+
+| Change | Who notices |
+| ------ | ----------- |
+| A sign-in lasts at most 12 hours however often it is refreshed; anyone signed in longer is asked to sign in again after the upgrade | Everyone |
+| A password change or reset signs the account out everywhere | Local users |
+| `429` with a wait time after repeated failed sign-ins, now shared by every replica | Local users |
+| Sessions may be refused with "at capacity" or "session limit" instead of degrading the server | Everyone, under load |
+| SFTP browser uploads are scanned and downloads go through outbound approval | SFTP users |
+| Recordings show a status; seeking long recordings is fast | Recording viewers |
+
+Users stay signed in across the upgrade: an existing refresh token is
+accepted once and then joins a family (SEC-07).
+
+**Verify post-upgrade:**
+
+1. The in-app **What's New** modal shows the v2.3.0 card.
+2. `docker compose logs backend | grep -i "least-privilege"` shows
+   *Serving requests with the least-privilege database role*.
+3. `docker compose exec backend sh -c 'echo $VAULT_ADDR'` prints
+   `https://vault:8200`, and **Admin → Health** shows Vault healthy.
+4. `GET /api/admin/audit-status` (as an auditor) shows `"problems": []`
+   after the first verifier pass, and `last_anchor` once one is written.
+5. A web session opens (Allowed Networks set, seccomp profile present).
+
 #### v2.1.1 → v2.2.0 (admin console rebuild; role descriptions; unified notifications)
 
 Rebuild both images. **Two migrations, no `.env` change.** The DMZ edge
@@ -2735,6 +2857,28 @@ Once configured, a background task syncs completed recording files to Azure Blob
 ### Configuration
 
 The `config.toml` file is stored in the `backend-config` Docker volume. Back it up alongside database backups.
+
+### Vault, TLS and audit anchors (v2.3.0)
+
+| Volume | Holds | Back up? |
+| ------ | ----- | -------- |
+| `vault-data` | Vault storage, including the Transit keys that wrap every stored credential | **Yes**, with the database: one without the other cannot decrypt credentials |
+| `backend-config` | `config.toml`, `vault-secrets.json` (unseal key and runtime token) and `system-secrets.json` | **Yes** |
+| `vault-tls` | The bundled Vault's private CA key and server certificate | Optional: if lost, `vault-tls-init` issues a new CA on the next start and the backend trusts it, since `vault-ca` is refreshed too |
+| `vault-ca` | The CA certificate only | No; recreated from `vault-tls` |
+| `audit-anchor` | Signed audit checkpoints (`checkpoints.jsonl`) | **Yes, to separate write-once storage** — it is the evidence that the audit log has not been rewritten |
+
+```bash
+# Back up the anchor file
+docker run --rm -v strata-client_audit-anchor:/data -v $(pwd):/backup \
+  alpine cp /data/checkpoints.jsonl /backup/checkpoints-$(date +%F).jsonl
+```
+
+Restoring a database older than the newest anchor makes the verifier report
+that the anchored checkpoint no longer matches the chain
+(`audit.integrity_failed`).
+That is expected after a restore; record the restore in your incident log
+and keep the old anchor file with it.
 
 ---
 

@@ -8,6 +8,15 @@
 - **Supersedes**: —
 - **Superseded by**: —
 
+> **Status update — v2.3.0 (2026-10-02).** The symmetric 8 MiB body cap
+> described below no longer applies. Both nodes now stream request and
+> response bodies through the link, bounded by HTTP/2 flow control (1 MiB
+> per stream, 16 MiB per link) instead of buffering them (external review
+> finding PERF-02). Bodies over 512 MiB are refused, the edge's
+> `STRATA_DMZ_PUBLIC_BODY_LIMIT_BYTES` defaults to 512 MiB, an idle body
+> fails after 60 seconds and a stream is reset after 30 minutes. See
+> [dmz.md § Streaming through the internal node](../dmz.md#streaming-through-the-internal-node-perf-02).
+
 ## Context
 
 Through v0.25.0, the only supported deployment shape exposed the

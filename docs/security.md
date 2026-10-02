@@ -160,10 +160,12 @@ For environments without an OIDC provider, Strata Client supports built-in usern
 **Password Policy:**
 
 - Minimum 12 characters enforced on user creation and password change
-- Maximum 1024 characters to prevent abuse
-- Argon2id hashing with cryptographically random salts
+- Maximum 256 characters (login input and new passwords alike)
+- Argon2id hashing with cryptographically random salts, run on the blocking pool with at most `STRATA_PASSWORD_HASH_CONCURRENCY` at once (default: one per CPU, up to 4); a request that waits more than 10 seconds for a slot is told the server is busy (PERF-01). An unknown username costs the same Argon2 work as a wrong password, so timing does not reveal which usernames exist.
+- Attempts are limited in PostgreSQL before any hashing — see [Rate Limiting](#rate-limiting)
 - Users can change their own password via `PUT /api/auth/password` (requires current password verification)
 - Admins can force-reset any user's password via `POST /api/admin/users/:id/reset-password`
+- A password change, admin reset or account deletion sets `users.sessions_valid_after` (migration 094): every access and refresh token issued before that instant is refused, and the account's native sessions are closed within 30 seconds. Restoring a deleted user does not restore its old sessions (SEC-08).
 
 ### Session Management
 
@@ -192,7 +194,7 @@ The 60-second buffer on `csrf_token` and `session_expires` (implemented in v1.8.
 
 **Token claims:** Both tokens include a `token_type` claim (`"access"` or `"refresh"`). The auth middleware rejects refresh tokens used as access tokens. A `default_token_type()` provides backward compatibility for pre-existing tokens during upgrade.
 
-**Refresh token isolation:** The refresh cookie is scoped to `Path=/api/auth/refresh` and uses `SameSite=Strict`, preventing it from being sent to any other endpoint or in cross-site requests.
+**Refresh token isolation:** The refresh cookie is scoped to `Path=/api` (so that both `/api/auth/refresh` and `/api/auth/logout` can read it) and uses `SameSite=Strict`, so it is never sent in a cross-site request.
 
 **Per-user session tracking:** Each login records an entry in the `active_sessions` table with the token's JTI (UUID), user ID, IP address, user agent, and expiry time. This provides visibility into how many active sessions a user has.
 
@@ -221,7 +223,7 @@ callbacks in `SessionManager.tsx`, `SessionClient.tsx`,
 `strata-session-activity` window event;
 `SessionTimeoutWarning` subscribes to it alongside the existing DOM
 events. The result is a single in-process invariant —
-**as long as the user is interacting with any window of any session, they cannot be silently signed out** — and the 8-hour refresh-token ceiling is the only hard cap on session length. See [docs/architecture.md § Session-activity bus and proactive token refresh (v1.6.1)](architecture.md#session-activity-bus-and-proactive-token-refresh-v161) for the full call-site table and design rationale.
+**as long as the user is interacting with any window of any session, they cannot be silently signed out** — until the 12-hour absolute sign-in limit (`ABSOLUTE_SESSION_TTL`, v2.3.0), which is the only hard cap on session length. See [docs/architecture.md § Session-activity bus and proactive token refresh (v1.6.1)](architecture.md#session-activity-bus-and-proactive-token-refresh-v161) for the full call-site table and design rationale.
 
 #### Global Cache-Control Headers (v1.8.2)
 
@@ -1523,9 +1525,10 @@ The bundled Vault container runs on the internal Docker bridge network and is **
 - **TLS** — before Vault starts, the one-shot `vault-tls-init` container (the backend image, no network, read-only root) creates a private CA and issues Vault's server certificate for `vault`, `localhost` and `127.0.0.1` (ECDSA P-256; CA 10 years, server 2 years, reissued within 30 days of expiry on the next start). The CA key and server key stay in the `vault-tls` volume, which only Vault mounts. The backend mounts `vault-ca` read-only, which holds the CA certificate alone, and verifies Vault against it: someone on the compose network can no longer read the transit plaintext, the runtime token or the unseal key in transit, or impersonate Vault without that CA's key. If `VAULT_CACERT` cannot be read, Vault calls fail rather than falling back to an unverified connection.
 - **Unseal key** — stored with the runtime token in `vault-secrets.json` (mode `0600`) in the `backend-config` volume. Back the volume up; loss of the unseal key means Vault data cannot be recovered after a container restart.
 - **No root token at runtime (SEC-25)** — the backend uses root only while provisioning and then revokes it. It runs with an orphan, periodic (72 h, renewed hourly) token whose `strata-transit-v2` policy allows only encrypt/decrypt on the configured key, sign/verify on the `strata-audit` key, and renewing/looking up itself; it cannot read or change policies, mounts, other keys or tokens. Because the backend keeps the unseal key so restarts stay automatic, a full compromise of the backend can still regenerate root — the backend itself does this to reissue a lapsed runtime token. Operators who need that boundary should use an external Vault with auto-unseal.
-- **IPC_LOCK** — the container is granted `IPC_LOCK` capability; `disable_mlock = true` is set for container compatibility.
+- **IPC_LOCK** — the container is granted the `IPC_LOCK` capability so Vault can lock its secret pages out of swap; mlock is left enabled (Vault's default) in the bundled configuration.
 - **File storage** — Vault data is persisted to the `vault-data` Docker volume. This volume should be backed up alongside database backups.
 - **Single key share** — the bundled Vault uses a single unseal key (1 key share, threshold of 1) for simplicity. For production deployments requiring Shamir's Secret Sharing, use an external Vault cluster.
+- **UI disabled** — the Vault web UI is disabled in the bundled configuration.
 
 ### Least-privilege database role (SEC-25)
 
@@ -1537,7 +1540,6 @@ The backend migrates the schema with the credentials in `DATABASE_URL`, then ser
 - it is `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`.
 
 The role's password is an HMAC of the owner's password, so every replica derives the same one without another stored secret; its grants are refreshed on every start. The owner must have `CREATEROLE` (the bundled Postgres user is a superuser). If it does not, or `DATABASE_URL` carries no password, or `STRATA_DB_RUNTIME_ROLE=off`, the backend logs a warning and keeps serving as the owner. The owner password remains in the backend's environment for migrations, so this separates what request-handling SQL can do rather than what a full process compromise can reach.
-- **UI disabled** — the Vault web UI is disabled in the bundled configuration.
 
 ---
 
@@ -1642,8 +1644,166 @@ All services in the Docker Compose stack apply security constraints:
 | `security_opt: no-new-privileges:true` | All services                                                                                                                                                                                       |
 | `cap_drop: ALL`                        | All services                                                                                                                                                                                       |
 | `cap_add` (minimal)                    | `frontend` (`NET_BIND_SERVICE`), `backend` / `postgres-local` (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`), `vault` (`IPC_LOCK`, `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`) |
-| `read_only: true` + `tmpfs`            | `frontend`                                                                                                                                                                                         |
+| `read_only: true` + `tmpfs`            | `frontend`, `vault-tls-init`                                                                                                                                                                       |
+| `network_mode: none`                   | `vault-tls-init` (one-shot certificate issuer; needs no network)                                                                                                                                    |
+| Custom seccomp profile                 | `backend` — [`seccomp-chromium.json`](../backend/seccomp-chromium.json), Docker's default plus `clone` / `unshare` / `chroot`, so Chromium's sandbox can start without `CAP_SYS_ADMIN` (v2.3.0) |
 | Resource limits (`cpus`, `memory`)     | `backend`, `postgres-local`                                                                                                                                                               |
+
+---
+
+## External security review (v2.3.0)
+
+An external review of v2.0.0 reported 25 security findings (`SEC-01`–`SEC-25`:
+1 Critical, 17 High, 7 Medium). v2.3.0 fixes 23, descopes `SEC-23` as an
+accepted risk, and `SEC-24` no longer applied. The table records where each
+control sits, whether the code path is reachable **before** authentication,
+and where it is documented; the subsections after it document the controls
+that have no other home in this file. The release history is in
+[CHANGELOG.md § 2.3.0](../CHANGELOG.md#230--2026-10-02).
+
+| ID | Control now in force | Trust boundary | Reachable | Documented in |
+| -- | -------------------- | -------------- | --------- | ------------- |
+| SEC-01 | A user manager without `can_manage_system` can only grant what it holds, cannot act on itself, cannot remove the last system administrator | Admin API | Post-auth | [Granular Admin Permissions](#granular-admin-permissions) |
+| SEC-02 | Web kiosk egress checked against `web_allowed_networks` at launch | Backend → web targets | Post-auth | [Web Sessions](#web-sessions-web-protocol) |
+| SEC-03 | Chromium sandbox on, seccomp profile, fail-closed | Kiosk → host kernel | Post-auth | [Web Sessions](#web-sessions-web-protocol) |
+| SEC-04 | Xvnc on loopback only | Container network | Post-auth | [Web Sessions](#web-sessions-web-protocol) |
+| SEC-05 | SSO bound to the initiating browser (PKCE, `nonce`, `sso_binding`) | Browser ↔ IdP ↔ backend | **Pre-auth** | [OIDC](#oidc--openid-connect-multi-sso-support-since-v190) |
+| SEC-06 | SSO identities scoped to their issuer; no linking to local-password or unverified-email accounts | IdP → backend | **Pre-auth** | [OIDC](#oidc--openid-connect-multi-sso-support-since-v190) |
+| SEC-07 | Refresh tokens rotate in families with reuse detection; revocations synced every 15 s, fail-closed after 5 min | Browser ↔ backend | Post-auth | [Refresh-token semantics](#refresh-token-semantics-clarified-v161-rotation-tracked-since-v22x) |
+| SEC-08 | Password change/reset/deletion invalidates every earlier token; 12-hour absolute sign-in | Browser ↔ backend | Post-auth | [Local Authentication](#local-authentication) |
+| SEC-09 | One password operation per managed AD account (`managed_account_locks`) | Backend → AD | Post-auth | [Checkout Lifecycle](#checkout-lifecycle) |
+| SEC-10 | SFTP transfers staged, scanned, and sent through outbound approval | Session ↔ browser | Post-auth | [Ingest path 3](#ingest-path-3--sftp-file-browser-v22x) |
+| SEC-11 | SFTP uploads never follow a symlink | Backend → SFTP target | Post-auth | [below](#sftp-upload-final-path-sec-11) |
+| SEC-12 | Connection secrets in `extra` sealed with Vault, read back as `********` | Database at rest | Post-auth | [Envelope Encryption](#envelope-encryption-credentials-at-rest) |
+| SEC-13 | A file too large to scan follows `STRATA_AV_FAIL_MODE` | Upload → store | Post-auth | [below](#files-too-large-to-scan-sec-13) |
+| SEC-14 | Quick Share uploads bound to a live session, quota-capped, expiring | Upload → store | Post-auth (ingest token: **pre-auth**, token is the credential) | [below](#quick-share-upload-lifecycle-sec-14) |
+| SEC-15 | Per-client stream counts, sizes, idle limits and rates; shared-control guests limited to input | Browser → session engine | Post-auth | [below](#session-streams-and-capacity-sec-15-perf-04) |
+| SEC-16 | Recording status, *Require recording*, guaranteed finalisation | Session → recording volume | Post-auth | [below](#recording-integrity-sec-16) |
+| SEC-17 | v2 hash chain written by `audit_append`, append-only triggers, verifier, keyed checkpoints and Vault-signed anchors | Database | n/a | [Audit Trail](#audit-trail) |
+| SEC-18 | Capability tokens redacted from logs | Backend → logs | **Pre-auth** (capability URLs) | [below](#capability-tokens-in-logs-sec-18) |
+| SEC-19 | Login and password-change limits in PostgreSQL, across replicas | Browser → backend | **Pre-auth** (login) | [Rate Limiting](#rate-limiting) |
+| SEC-20 | Client IP from `X-Forwarded-For` only via trusted proxies | Proxy → backend | **Pre-auth** | [Client IP resolution](#x-forwarded-for-is-now-opt-in-on-the-backend) |
+| SEC-21 | Outbound download: owner check and decryption before the token is spent | Browser → backend | Post-auth | [below](#outbound-download-links-sec-21) |
+| SEC-22 | An edited applied migration stops startup | Deployment → database | n/a | [below](#migration-integrity-sec-22) |
+| SEC-23 | **Descoped — accepted risk:** VDI overlay gives the backend `docker.sock` | Backend → Docker host | Post-auth | [VDI](#vdi-desktop-containers-vdi-protocol) |
+| SEC-24 | **Not applicable** — the release workflow was removed in v2.1.1 | CI | n/a | [Dependency & supply-chain security](#dependency--supply-chain-security) |
+| SEC-25 | Transit-only Vault token, Vault over verified TLS, least-privilege database role | Backend ↔ Vault / Postgres | n/a | [Bundled Vault Security](#bundled-vault-security), [Least-privilege database role](#least-privilege-database-role-sec-25) |
+
+### Capability tokens in logs (SEC-18)
+
+Quick Share download tokens, outbound-share download and ingest tokens, and
+share-link tokens are bearer credentials carried in URL paths. The request
+trace span logs the path through `loggable_path()`
+([`routes/mod.rs`](../backend/src/routes/mod.rs)), which replaces the token
+segment with `:redacted` and never includes the query string. Quick Share
+log lines carry a `token_ref` — a truncated SHA-256 of the token — so a
+burst of requests can be correlated without the log holding a usable
+token, and the WebSocket authentication path no longer logs its query
+string.
+
+### Session streams and capacity (SEC-15, PERF-04)
+
+An authenticated client could previously open unbounded clipboard and
+upload streams inside a session and hold their data in memory. Each client
+is now limited to:
+
+| Limit | Value |
+| ----- | ----- |
+| Clipboard streams open at once | 4 |
+| Clipboard data across them | 16 MiB |
+| Idle clipboard stream | dropped after 30 s |
+| Upload streams open at once | 16 (file transfers: 8 per session) |
+| Opening streams and file requests | burst of 32, then 8 a second |
+| Incoming clipboard data across **all** sessions | 256 MiB |
+
+A stream id already in use cannot be reopened, an upload the target refuses
+frees its id, clipboard size is checked before a blob is decoded, and a
+refused stream gets an error `ack` so the browser stops sending. A
+shared-control guest can only send input and use its own clipboard streams:
+it cannot write into, end or acknowledge the operator's streams or start
+file transfers, and a malformed guest frame is dropped instead of ending
+the operator's session.
+
+Capacity is admitted before anything is opened. A new session reserves an
+estimate of its memory (by protocol and display size; a web session counts
+its browser) against a process-wide budget — three quarters of the
+container memory limit less the replay budget, or
+`STRATA_SESSION_MEMORY_BUDGET_MB` — and against the role's
+`max_concurrent_sessions` (migration 101) or `STRATA_MAX_SESSIONS_PER_USER`.
+Replay history for observers shares one budget
+(`STRATA_NVR_MEMORY_BUDGET_MB`, default 1 GiB). Over any limit the session
+is refused with `429` **before** a credential is checked out, a container
+or browser started, or the target contacted. `max_web_sessions` is now
+enforced the same way. Reserved, used and limit figures are under `memory`
+in `GET /api/admin/metrics`.
+
+### Quick Share upload lifecycle (SEC-14)
+
+`POST /api/files/upload` requires a `session_id` multipart field **before**
+the file part, and it must be the connection id of one of the caller's
+live sessions; otherwise the request is refused (`400` malformed, `403`
+foreign or absent session) before any file bytes are accepted. A second
+file part is refused, multipart errors are no longer swallowed, and the
+temporary file is removed on every exit path, including a dropped request.
+Per-session counts (20 files) are reserved atomically, the store is capped
+at 10 GiB, files expire after 24 hours, and orphans are removed at startup.
+A body declaring more than the 500 MiB route limit is refused with `413`
+before it is read. Outbound Quick Share parsing has the same multipart
+fixes.
+
+### Files too large to scan (SEC-13)
+
+A scanner verdict of `Skipped { reason: "oversize" }` now follows
+`STRATA_AV_FAIL_MODE` like an engine error: in `block` mode an unscanned
+file is refused, not accepted. The Compose default
+`STRATA_AV_MAX_SCAN_SIZE` was 100 MiB against a 500 MiB upload limit,
+which let every file between the two through unscanned; it is now
+524,288,000 bytes, and `STRATA_AV_TIMEOUT_MS` matches the code's 120 s.
+
+### SFTP upload final path (SEC-11)
+
+The SFTP root check validated the parent directory but not the final path
+component, so a symlink at the target name could redirect an upload
+outside the root. An existing symlink at the target name is now refused;
+an existing regular file is removed and the upload is created with
+`O_EXCL`, so a link planted between the check and the create makes the
+create fail instead of writing elsewhere. A session may hold at most 8
+open transfers.
+
+### Recording integrity (SEC-16)
+
+Every recording has a status: `recording` while the session runs,
+`complete` once finalised intact, `incomplete` when it stopped early or
+the backend stopped before finalising it (up to 5 seconds of data may be
+lost, as recordings are synced every 5 seconds), and `failed` when nothing
+usable was recorded (migration 099). With *Require recording* set, a
+session whose recording cannot start is refused before the target is
+contacted, and one whose recording fails is ended; either way the failure
+is audited as `recording.failed`. Every session end — including an error
+or a vanished browser, which used to skip it — now finalises the
+recording, stops the engine and revokes the session's credential, each
+within 10 seconds. Recordings still open when the backend starts are
+marked `incomplete`.
+
+### Outbound download links (SEC-21)
+
+An outbound-share download link is single-use. The owner check used to run
+**after** the token was consumed, so another authenticated user who
+obtained the URL could burn it with a `403`. The owner check now runs
+first, and the file is decrypted before the token is cleared, so a `403`
+or a Vault failure leaves the link usable. `outbound_share.downloaded`
+records the actual caller.
+
+### Migration integrity (SEC-22)
+
+Startup used to overwrite the stored checksum of any applied migration
+whose file had changed, so an edited migration was accepted without its
+SQL ever running — a way to hide a schema change. Startup now refuses and
+names the versions. Two differences are still accepted automatically: line
+endings only, and the version 29 edits that shipped in 0.11.1. An operator
+who has checked the schema and taken a backup can accept named versions
+with `STRATA_MIGRATION_REPAIR_VERSIONS=29,46`; each acceptance is logged at
+error level with the old and new checksums.
 
 ---
 
@@ -1704,9 +1864,9 @@ The suppression now rests on reachability rather than absence. The Marvin attack
 | `RUSTSEC-2026-0258` / `GHSA-q83h-524g-xf6h`                | `h2` (Rust)         | `0.4.14` → `0.4.16`   | **Real, and partly unauthenticated.** See below.                                                                                                                                            | v1.14.5  |
 | `GHSA-2v37-7h3g-55p8` / `CVE-2026-67213`                   | `nanoid` (npm)      | `3.3.16` → `3.3.18`   | **None at runtime.** Build-toolchain `dev` transitive (`vite` → `postcss` → `nanoid`) used to mint source-map identifiers at a fixed size; never bundled, never in the runtime image. | v1.14.5  |
 | `RUSTSEC-2023-0071`                                        | `rsa` (Rust)        | — (no fix)           | **Not reachable.** Compiled via the RDP stack, but no RSA private key is ever supplied, so the decryption timing the attack needs never happens. Suppressed with justification (above). | —        |
-| `RUSTSEC-2026-0286` / `GHSA-r6vc-97x9-63vv`                | `cryptoki` (Rust)   | `0.12.0` → `0.12.1`   | **Not reachable, fixed anyway.** Out-of-bounds read decoding `CKA_ALLOWED_MECHANISMS` from a PKCS#11 token. Compiled via `sspi`'s smart-card support; Strata never opens a PKCS#11 session. Lockfile bump only. | Unreleased |
-| `RUSTSEC-2026-0285` / `GHSA-2mjx-qc3c-rqvc`                | `rustls` (Rust)     | `0.23.41` → `0.23.45` | **None in the build**, which already resolved `0.23.45`. Reported from the stale `crates/vendor/ironrdp-connector/Cargo.lock`, now deleted. | Unreleased |
-| `RUSTSEC-2026-0118`, `RUSTSEC-2026-0119`                   | `hickory-proto` (Rust) | `0.25.2` → `0.26.1+` | **None in the build**, which resolves `0.26.3` via `hickory-resolver`. Reported from the stale `crates/vendor/sspi/Cargo.lock`, now deleted. | Unreleased |
+| `RUSTSEC-2026-0286` / `GHSA-r6vc-97x9-63vv`                | `cryptoki` (Rust)   | `0.12.0` → `0.12.1`   | **Not reachable, fixed anyway.** Out-of-bounds read decoding `CKA_ALLOWED_MECHANISMS` from a PKCS#11 token. Compiled via `sspi`'s smart-card support; Strata never opens a PKCS#11 session. Lockfile bump only. | 2.2.0 |
+| `RUSTSEC-2026-0285` / `GHSA-2mjx-qc3c-rqvc`                | `rustls` (Rust)     | `0.23.41` → `0.23.45` | **None in the build**, which already resolved `0.23.45`. Reported from the stale `crates/vendor/ironrdp-connector/Cargo.lock`, now deleted. | 2.2.0 |
+| `RUSTSEC-2026-0118`, `RUSTSEC-2026-0119`                   | `hickory-proto` (Rust) | `0.25.2` → `0.26.1+` | **None in the build**, which resolves `0.26.3` via `hickory-resolver`. Reported from the stale `crates/vendor/sspi/Cargo.lock`, now deleted. | 2.2.0 |
 | `RUSTSEC-2023-0089`                                        | `atomic-polyfill` (Rust) | — (unmaintained) | **None.** Not compiled for the Linux target. Suppressed with justification (above). | —        |
 
 #### `h2` unbounded empty `DATA` frames — why this one was material (v1.14.5)
@@ -2674,20 +2834,38 @@ operator-facing documentation.
   references the bundle via `extra->>'trusted_ca_id'`. CRUD events
   emit `trusted_ca.created`, `trusted_ca.updated`, and
   `trusted_ca.deleted` audit rows.
-- **Sandbox semantics — `--no-sandbox` + `--test-type` (v1.3.0).**
-  The kiosk runs as root inside the backend container, so the
-  spawner has always had to pass `--no-sandbox`; v1.3.0 also passes
-  `--test-type` to suppress the resulting _"You are using an
-  unsupported command-line flag…"_ yellow infobar (and a handful of
-  other end-user prompts that have no meaning inside a single-tab
-  kiosk). **`--test-type` does not disable the sandbox.** Rendering,
-  network stack, mojo IPC, JIT, and origin isolation are unchanged.
-  The flag is paired exclusively with `--no-sandbox` in the argv
-  builder; two unit tests pin the pairing so a future refactor can't
-  silently emit `--test-type` on its own. The kiosk's threat model
-  (single-tab, X-display-isolated per session, ephemeral profile,
-  egress allow-list, NSS trust limited to operator-uploaded roots)
-  is unaffected.
+- **Sandbox (v2.3.0, SEC-03; was `--no-sandbox` since v1.3.0).**
+  Chromium runs as the unprivileged `strata` user **with its sandbox
+  on**. Its namespace sandbox needs `clone`, `unshare` and `chroot`,
+  which Docker's default seccomp profile refuses to a container
+  without `CAP_SYS_ADMIN`; the bundled compose file therefore runs
+  the backend with
+  [`backend/seccomp-chromium.json`](../backend/seccomp-chromium.json),
+  which is Docker's default profile with those three calls allowed
+  without the `CAP_SYS_ADMIN` condition, so the sandbox starts under
+  `no-new-privileges` with every capability but the five file and
+  identity ones dropped. If the sandbox cannot start, the kiosk launch
+  **fails** rather than falling back to an unsandboxed browser.
+  `STRATA_WEB_CHROMIUM_SANDBOX=disabled` is the only way to run
+  without it; it is logged at warning level on every launch and only
+  then are `--no-sandbox` and `--test-type` passed (unit tests pin
+  both directions). A deployment that does not carry the seccomp
+  profile over will see every web session fail until it does or opts
+  out.
+- **VNC display on loopback only (v2.3.0, SEC-04).** Each kiosk's
+  Xvnc runs with `-localhost -nolisten tcp`, so the unauthenticated
+  display is reachable only from inside the backend container, where
+  the session engine is its one client; sibling containers on
+  `guac-internal` can no longer connect to it. `STRATA_WEB_VNC_HOST`
+  was removed.
+- **Egress checked at launch (v2.3.0, SEC-02).** Before a kiosk
+  starts, its initial URL must be `http` or `https` without embedded
+  credentials, and every address its host resolves to must fall
+  inside `web_allowed_networks` (*Admin → Network → Web Browser
+  Sessions → Allowed Networks*, CIDR ranges or single addresses,
+  validated on save). An empty list refuses every launch. Loopback
+  and link-local addresses — including the cloud metadata address
+  `169.254.169.254` — are refused even under `0.0.0.0/0`.
 - **Kiosk lifecycle — eviction-on-disconnect (v1.3.0).** The
   WebSocket-tunnel route now calls `web_runtime.evict()` after the
   proxy loop returns, dropping the registry's `Arc<WebSessionHandle>`.

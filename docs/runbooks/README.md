@@ -50,13 +50,14 @@ The runbooks listed below cover §26/§28 of the Coding Standards.
 | Runbook                  | Scope                                                       | Status |
 | ------------------------ | ----------------------------------------------------------- | ------ |
 | disaster-recovery.md     | Backup/restore, RTO/RPO                                     | Active |
-| security-incident.md     | Security incident response                                  | Active |
-| certificate-rotation.md  | ACME + internal CA rotation                                 | Active |
+| security-incident.md     | Security incident response; refresh-token reuse; audit integrity failure | Active |
+| certificate-rotation.md  | ACME + internal CA rotation; bundled Vault TLS certificate  | Active |
 | vault-operations.md      | Vault unseal, rekey, rotate keys                            | Active |
-| database-operations.md   | Postgres failover, migration rollback                       | Active |
+| database-operations.md   | Postgres failover, migration rollback, edited-migration refusal | Active |
 | dmz-incident.md          | DMZ split-topology incident response                        | Active |
 | dmz-production-certs.md  | Production DMZ mTLS cert generation & setup                 | Active |
 | smtp-troubleshooting.md  | Notification email delivery failures, retry-worker stalls   | Active |
 | av-operations.md         | AV scanner outage, signature updates, false-positive triage | Active |
 | clipboard-diagnostics.md | RDP clipboard failure triage, recovery & evidence capture   | Active |
 | session-disconnects.md   | Unexpected session ends: on-screen message → cause → log    | Active |
+| login-rate-limiting.md   | `429` on sign-in, password change or session capacity       | Active |

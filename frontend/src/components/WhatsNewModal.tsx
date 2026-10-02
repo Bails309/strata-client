@@ -30,6 +30,43 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.3.0",
+    subtitle:
+      "This release closes an independent security and performance review of Strata. Sign-in, file transfers, recordings and the audit trail are harder to abuse, every connection secret is kept encrypted, and the app loads faster and asks the server for less, especially with many tabs open or thousands of connections.",
+    sections: [
+      {
+        title: "Sign-in that holds up under pressure",
+        description:
+          "Repeated wrong passwords are now limited across every Strata server, not per server, and the message tells you how long to wait. Changing or resetting a password signs that account out everywhere, and a sign-in now lasts at most 12 hours. Single sign-on is tied to the browser that started it and to the provider that vouched for you, so a link from someone else cannot sign you in.",
+      },
+      {
+        title: "Files are checked whichever way they move",
+        description:
+          "Files moved through the in-session file browser now go through the same antivirus scan and outbound approval as Quick Share. Downloads that need approval wait in Outbound Quick Share until they are approved. Large files up to the 500 MB limit now work through a DMZ deployment, and a file that is too large is refused straight away instead of after it has uploaded.",
+      },
+      {
+        title: "Recordings you can rely on and move through quickly",
+        description:
+          "Recordings now show whether they are complete, incomplete or failed. Administrators can require recording, so a session whose recording cannot start or fails is ended rather than continuing unrecorded. Jumping to a point late in a long recording no longer replays it from the beginning.",
+      },
+      {
+        title: "Faster to open and lighter on the server",
+        description:
+          "The first page load is about a quarter of its previous size; other pages load the first time you open them. Large connection and user lists are searched and paged on the server. Several open tabs now share their background checks instead of each asking the server separately, and hidden tabs stop asking at all.",
+      },
+      {
+        title: "Smaller fixes",
+        description:
+          "The menu no longer leaves a small panel with your initial in the bottom-left corner of a remote session. The Domain field in the RDP credential prompt is now used. Web browser sessions run with Chromium's sandbox switched on.",
+      },
+      {
+        title: "For administrators: before you upgrade",
+        description:
+          "Web browser sessions now only reach the networks listed under Admin, Network, Web Browser Sessions, Allowed Networks; an empty list blocks them. If Strata sits behind a reverse proxy, make sure the proxy is listed in STRATA_TRUSTED_PROXIES. Roles can now limit how many sessions each member holds. The optional VDI desktops feature still gives Strata control of the Docker host it runs on; this is recorded as an accepted risk, so enable it only on a host dedicated to Strata. The release notes list every change and the full set of operator actions.",
+      },
+    ],
+  },
+  {
     version: "2.2.0",
     subtitle:
       "A new look across the whole app, one notification system with a place to manage every credential lease, and an admin console rebuilt for running a large estate: a fleet manager for connections, a proper folder tree, and a role editor that shows the risk of every permission and exactly what each folder grant reaches.",

@@ -7,13 +7,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-10-02
+
+### Minor release — the external security and performance review is closed: 23 of 25 security findings and all 19 performance findings fixed, one finding descoped as an accepted risk and one no longer applicable
+
+### The ask
+
+An external review of v2.0.0 produced two reports, kept here by their own
+titles because that is what a future reader will search for:
+
+> - *"Strata-Client-Cyber-Security-Report"* — 25 findings, `SEC-01` to
+>   `SEC-25` (1 Critical, 17 High, 7 Medium).
+> - *"Strata-Client-Performance-Optimisation-Report"* — 19 findings,
+>   `PERF-01` to `PERF-19` (10 High, 9 Medium).
+
+The request was to fix every finding, batch by batch, one branch and pull
+request per batch (#437 to #464). Findings that were only partly fixed by
+their first pull request were finished later at the request *"can we close
+off all partly done items so they are complete"*, and the release was
+closed with *"lets descope SEC-23 and close of all the others"*. One
+unrelated user report was fixed on the way: *"when i connect to a
+connection, I get a small overlay of the menu in the bottom left corner of
+the screen"* (#463).
+
+The report audited v2.0.0, so findings were spot-checked against v2.2.0
+before work began; every one checked was still present, and `SEC-24` no
+longer applied because v2.1.1 had removed its workflow. Several fixes went
+further than the report asked, because the code turned out to be worse
+than reported (for example `PERF-17`: the Docker dependency-cache stage
+also omitted the vendored forks, so the cache had never worked). Where a
+fix changes behaviour an operator will notice, it is listed again under
+[*Deploy*](#deploy) as an operator action.
+
+### Findings register
+
+Every finding, its severity or priority as the review graded it, what was
+done, and the pull requests that did it.
+
+| ID | Severity | Finding | Resolution | PRs |
+| -- | -------- | ------- | ---------- | --- |
+| SEC-01 | Critical | Delegated user administration permits privilege escalation | Fixed | #437 |
+| SEC-02 | High | Browser network allow-list is not enforced by the launch path | Fixed | #439, #443 |
+| SEC-03 | High | Chromium sandbox disabled despite non-root runtime | Fixed | #439 |
+| SEC-04 | High | Unauthenticated kiosk VNC listeners share the infrastructure network | Fixed | #437 |
+| SEC-05 | High | SSO state is not bound to the initiating browser | Fixed | #438 |
+| SEC-06 | High | SSO account linking is not provider-scoped | Fixed | #438 |
+| SEC-07 | High | Refresh rotation and revocation lack authoritative atomic state | Fixed | #444 |
+| SEC-08 | High | Password and account changes do not invalidate every session | Fixed | #438 |
+| SEC-09 | High | Password checkout lifecycle is not serialised per managed account | Fixed | #444 |
+| SEC-10 | High | Native SFTP bypasses Quick Share approval and scanning | Fixed | #442 |
+| SEC-11 | High | SFTP upload root checks do not protect the final path | Fixed | #439 |
+| SEC-12 | High | SFTP secrets can be stored in plaintext connection extras | Fixed | #438 |
+| SEC-13 | High | The Compose scan-size cap permits unscanned large uploads | Fixed | #437 |
+| SEC-14 | High | Temporary uploads lack reliable ownership, expiry and aggregate quotas | Fixed | #439 |
+| SEC-15 | High | Native protocol stream count and aggregate memory are unbounded | Fixed | #448, #456 |
+| SEC-16 | High | Recording failures can lose required evidence | Fixed | #451 |
+| SEC-17 | Medium | The audit chain does not establish the claimed tamper protection | Fixed | #450, #457 |
+| SEC-18 | High | Capability tokens and sensitive URLs enter logs | Fixed | #437 |
+| SEC-19 | Medium | Password-attempt limiters have enforcement gaps | Fixed | #437, #464 |
+| SEC-20 | Medium | Trusted-proxy configuration is not enforced by IP extraction | Fixed | #438 |
+| SEC-21 | Medium | Outbound download tokens are consumed before owner authorisation | Fixed | #437 |
+| SEC-22 | Medium | Migration checksum repair conceals historical changes | Fixed | #441 |
+| SEC-23 | High | Optional VDI exposes unrestricted Docker daemon authority | **Descoped — accepted risk** (see below) | #464 |
+| SEC-24 | Medium | Release publication is not tied to passed security gates | **Not applicable** — `release.yml` was removed in v2.1.1 | — |
+| SEC-25 | High | Bundled infrastructure retains excessive credential authority | Fixed (Vault and database); Vault traffic also moved to TLS | #455, #460 |
+| PERF-01 | High | Bound password hashing outside async request workers | Fixed | #441 |
+| PERF-02 | High | Stream HTTP bodies through the entire DMZ link | Fixed, measured end to end | #454, #464 |
+| PERF-03 | High | Replace whole-file encryption/decryption buffers | Fixed | #453 |
+| PERF-04 | High | Add process-wide session and stream memory budgets | Fixed | #448, #456 |
+| PERF-05 | High | Queue and deduplicate recording conversions | Fixed | #446 |
+| PERF-06 | High | Load routes, documentation and release history on demand | Fixed | #446 |
+| PERF-07 | High | Batch credential-profile mapping retrieval | Fixed | #441 |
+| PERF-08 | Medium | Paginate and filter collections at the server boundary | Fixed | #452, #458 |
+| PERF-09 | High | Bound and coordinate health probes | Fixed | #446, #464 |
+| PERF-10 | Medium | Cache or roll up historical dashboard statistics | Fixed (cached; rollups judged unnecessary) | #452 |
+| PERF-11 | Medium | Optimise audit search and deep pagination | Fixed | #450 |
+| PERF-12 | Medium | Reduce audit-write serialisation overhead safely | Fixed and measured | #450, #457 |
+| PERF-13 | Medium | Index recording state for seeking and improve parsing | Fixed | #451, #462 |
+| PERF-14 | Medium | Coalesce cache misses and handle signing-key rotation | Fixed | #447 |
+| PERF-15 | Medium | Coordinate polling and refresh across browser tabs | Fixed | #446, #464 |
+| PERF-16 | Medium | Deduplicate browser startup and retain session leases | Fixed | #447 |
+| PERF-17 | Medium | Correct release profiles and dependency-cache construction | Fixed | #437 |
+| PERF-18 | High | Release database connections during PAM external work | Fixed | #441 |
+| PERF-19 | Medium | Reuse bounded clients for Vault provisioning | Fixed | #437 |
+
 ### Security — fixes from the external security and performance review
 
-Every finding from the review is addressed in this release except two:
-**SEC-23** (the optional VDI overlay mounts `docker.sock` into the
-backend) is descoped and recorded as an accepted risk — see
-[security.md](docs/security.md) — and **SEC-24** concerned `release.yml`,
-which 2.1.1 removed.
+The entries below describe each change as it behaves now; several findings
+appear twice because a later pull request finished what an earlier one
+started.
 
 - **Delegated user managers can no longer escalate (SEC-01, Critical).**
   Without `can_manage_system`, a `can_manage_users` holder may only assign
@@ -461,6 +543,161 @@ which 2.1.1 removed.
   100 MiB uploads at once; 499 MiB went up in 18 s and came back in 9 s.
   An unauthenticated 100 MiB upload is refused in 0.03 s and a 505 MiB
   one in 0.05 s, each after under 250 KB.
+
+### Fixed (backfill)
+
+- **The menu no longer shows over the remote desktop (#463).** Reported as
+  *"a small overlay of the menu in the bottom left corner of the screen"*.
+  In a session the closed sidebar shrinks to zero width, but it keeps
+  `overflow: visible` so that its flyouts can escape it, and so its footer
+  — the user's initial and the green online dot — was still drawn in the
+  bottom-left corner on top of the session. The closed sidebar is now
+  `visibility: hidden`, which also takes it out of the tab order and the
+  accessibility tree; the edge tab that opens it is unchanged
+  ([`Layout.tsx`](frontend/src/components/Layout.tsx)). Merged without a
+  CHANGELOG entry; backfilled here.
+
+### Dependencies (backfill)
+
+These merged without CHANGELOG entries.
+
+| Package | From | To | Why |
+| ------- | ---- | -- | --- |
+| `dompurify` | 3.4.15 | 3.4.16 | Dependabot group (#435) |
+| `marked` | 18.0.13 | 18.0.14 | Dependabot group (#435) |
+| `react-i18next` | 17.0.14 | 17.0.15 | Dependabot group (#435) |
+| `undici` | 8.10.2 | 8.11.2 | Dependabot group (#435) |
+| `eslint`, `typescript-eslint`, `prettier`, `jsdom`, `vite` | 10.10.0, 8.70.0, 3.9.8, 30.1.0, 8.3.0 | 10.11.0, 8.70.1, 3.9.9, 30.1.1, 8.3.1 | Dependabot group, development only (#435) |
+| `brace-expansion` (override) | ^5.0.9 | ^5.0.12 | Closes the open Dependabot alert; reaches the build through ESLint's `minimatch` (#440) |
+| `github/codeql-action` (`init`, `analyze`, `upload-sarif`) | 4.38.1 | 4.38.2 | CI only (#436) |
+| `tower-http` | features + `limit` | | `RequestBodyLimitLayer` for the early `413` (`PERF-02`) |
+| `aes-gcm` | features + `stream` | | Chunked STREAM encryption of outbound shares (`PERF-03`) |
+| `rcgen` 0.13 (`ring`, `pem`), `time` 0.3 | new | | `vault-tls-init` issues the bundled Vault's CA and certificate |
+
+No dependency was removed. `rcgen` uses the `ring` backend already in the
+tree, so no new cryptography provider was added.
+
+### Tests and CI (backfill)
+
+- **End-to-end tests follow the Quick Share gate (#449).** Since `SEC-14`
+  an upload's `session_id` must be one of the caller's live sessions, and
+  CI has no target to open one against, so the Quick Share spec now
+  asserts the gate itself: no live session `403`, malformed or missing
+  `session_id` `400`, no credentials `401`/`403`, unknown download token
+  `404`.
+- **Command palette shortcut tests no longer race background polling
+  (#434).**
+- **Two dashboard tests stop depending on timing (#461).** A lease set to
+  expire exactly an hour ahead rendered as *1h left* on a fast runner
+  instead of *59m left*; it now expires 1 h 30 m 30 s ahead. A debounced
+  server search is given 5 seconds to render instead of 1.
+- **`cargo fmt` applied to `main` (#445).** Three branches had merged
+  unformatted because the toolchain could not be downloaded locally;
+  rustfmt is now always run before a Rust commit.
+
+### Accepted risk — SEC-23 descoped
+
+With the optional VDI overlay (`docker-compose.vdi.yml`) applied, the
+backend holds `/var/run/docker.sock`, so a compromise of the backend is a
+compromise of the Docker host. The review asked for a broker on a separate
+trust boundary that alone holds the socket and accepts only server-owned
+desktop templates. A design was drawn up — a `vdi-broker` service on a
+private control network, templates pinned by image digest with resource
+ceilings and environment allow-lists, no host mounts beyond a
+broker-computed home directory, no privileged mode, host namespaces or
+devices, and every action audited — and then descoped for this release.
+
+The overlay remains off by default. [docs/security.md](docs/security.md)
+records the risk and the conditions for enabling VDI (a host dedicated to
+Strata, a whitelist of reviewed and pinned images, `max_vdi_containers`,
+and VDI only for users trusted with that host); the threat model marks
+threat 2.9 E and work item W5-3 as accepted and descoped, and the overlay's
+own warning says so.
+
+### Scope & safety
+
+| Area | Change |
+| ---- | ------ |
+| Schema | Eleven migrations, all applied automatically at backend start, in order: **`093`** `users.sso_issuer` (SEC-06); **`094`** `users.sessions_valid_after` (SEC-08); **`095`** checkout activation lease (PERF-18, superseded by 097); **`096`** `refresh_tokens` families (SEC-07); **`097`** `managed_account_locks` and the sealed pending-password columns on `password_checkout_requests` (SEC-09); **`098`** audit chain v2, the `audit_append` function, `UPDATE`/`DELETE`/`TRUNCATE` triggers on `audit_logs`, `audit_checkpoints`, and trigram search indexes when `pg_trgm` is available (SEC-17, PERF-11, PERF-12); **`099`** `recordings.status`/`failure` (SEC-16); **`100`** outbound-share blob format (PERF-03); **`101`** `roles.max_concurrent_sessions` (PERF-04); **`102`** `auth_attempts` and `auth_attempt_reserve()` (SEC-19); **`103`** `worker_leases` (PERF-09). `098` can take a while on a large `audit_logs` table; see its header. |
+| Database role | Requests now run as `<owner>_runtime`, created and re-granted by the backend at start (SEC-25); it cannot change the schema or rewrite audit history. Needs `CREATEROLE` on the owner, else the backend warns and stays on the owner. `STRATA_DB_RUNTIME_ROLE=off` opts out. |
+| API — new | `GET /api/admin/audit-status`; `GET /api/admin/connections/page`, `/refs`, `/summary`; `POST /api/admin/connections/move`; `GET /api/admin/users/page`, `/refs`; `GET /api/user/connections/page`, `/facets`; `GET /api/user/credential-mappings`. |
+| API — changed | Login and password change answer `429` with `Retry-After` when limited (password change was `401`). `POST /api/auth/refresh` answers `409` for a token rotated by another tab in the last 30 s. `GET /api/user/connections/:id/info` returns `403` without access and gains `name` and `has_domain`. `POST /api/tunnel/ticket` accepts `domain`. Upload routes answer `413` on a declared oversize body. `POST /api/files/upload` needs `session_id` first, naming a live session. New sessions can be refused with `429` (memory budget, per-role limit, `max_web_sessions`). Connection secrets in `extra` read back as `********`. `GET /api/admin/metrics` gains `memory`. Recording lists carry `status`. |
+| Audit events | New: `audit.integrity_failed`, `auth.refresh_token_reused`, `recording.failed`, `file.sftp_uploaded`; `file.av_blocked` gains sources `sftp_upload` and `sftp_download`, and `outbound_share.downloaded` now records the actual caller (SEC-21). None renamed or removed. |
+| Env vars — new | `STRATA_AUDIT_ANCHOR_PATH`, `STRATA_AUDIT_CHECKPOINT_KEY`, `STRATA_DB_RUNTIME_ROLE`, `STRATA_FILE_CRYPTO_CONCURRENCY`, `STRATA_LOGIN_ATTEMPTS_PER_MINUTE`, `STRATA_MAX_SESSIONS_PER_USER`, `STRATA_MIGRATION_REPAIR_VERSIONS`, `STRATA_NVR_MEMORY_BUDGET_MB`, `STRATA_PASSWORD_HASH_CONCURRENCY`, `STRATA_SESSION_MEMORY_BUDGET_MB`, `STRATA_WEB_CHROMIUM_SANDBOX`, `VAULT_CACERT`. All optional with safe defaults. |
+| Env vars — changed or removed | **Removed:** `STRATA_WEB_VNC_HOST`. **Now enforced:** `STRATA_TRUSTED_PROXIES` (an invalid entry stops startup; Compose default `172.16.0.0/12,192.168.0.0/16`). **New Compose defaults:** `VAULT_ADDR=https://vault:8200`, `STRATA_AV_MAX_SCAN_SIZE=524288000`, `STRATA_AV_TIMEOUT_MS=120000`. **DMZ:** `STRATA_DMZ_PUBLIC_BODY_LIMIT_BYTES` defaults to 512 MiB (was 8 MiB); `STRATA_DMZ_PUBLIC_HEADER_TIMEOUT_MS` applies only to bodyless requests. |
+| Compose | New one-shot service `vault-tls-init`; new volumes `vault-tls`, `vault-ca`, `audit-anchor`; the backend runs with `seccomp=./backend/seccomp-chromium.json`; Vault listens on TLS. |
+| Authorisation | Tightened, never loosened: delegated user managers (SEC-01), connection info (#458), Quick Share uploads (SEC-14), outbound downloads (SEC-21), shared-control guests (SEC-15). |
+| Dependencies | See *Dependencies (backfill)*. |
+| Frontend | Lazy routes and a reload prompt for failed chunks (PERF-06); server-side paging and pickers (PERF-08); shared background polling (PERF-15); recording status badges; role session limit; *Require recording* setting; *Allowed Networks* editor; credential prompt domain; sidebar overlay fix. |
+| DMZ edge | **Must be rebuilt**: streaming bodies (PERF-02) and the Dockerfile fix. |
+
+### Testing
+
+- **Backend** — `cargo fmt --check` and `cargo clippy --all-targets -D
+  warnings` clean; **1384** tests pass in a `rust:1.98` container against a
+  PostgreSQL 16 database with every migration applied (`TEST_DATABASE_URL`),
+  including the database-gated tests for refresh rotation, account locks,
+  the audit chain and its verifier, the runtime role's missing privileges,
+  the login limiter (40 parallel attempts admit exactly 5) and the health
+  lease (six replicas, one winner).
+- **Frontend** — `tsc --noEmit` clean; **93** test files, **1781** tests
+  pass.
+- **End to end** — the Quick Share and command-palette Playwright specs as
+  amended in #449 and #434.
+- **DMZ** — `scripts/dmz/load/large-transfer.sh` against a backend built
+  from this code: files of 8 MiB ± 1 KiB, 100 MiB and 499 MiB round-trip
+  through the DMZ with matching SHA-256; peak memory 8–9 MiB (DMZ) and
+  25–32 MiB (backend) regardless of size.
+- **Measured** — audit appends (PERF-12): 253 a second with 16 writers.
+  Main JavaScript bundle (PERF-06): 2,620 kB → 718 kB.
+- **Live** — Vault TLS verified against a real Vault using certificates from
+  `vault-tls-init`; the Chromium sandbox verified in the real backend image
+  with the seccomp profile.
+
+### Deploy
+
+```bash
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+Migrations `093`–`103` apply at backend start; take a database backup
+first, as for any release with migrations. `vault-tls-init` runs once, and
+the backend moves to `https://vault:8200` on its own. Rebuild and redeploy
+the **DMZ edge** for DMZ topologies.
+
+**Operator actions:**
+
+1. **Web sessions** — set *Admin → Network → Web Browser Sessions →
+   Allowed Networks*. The list is now enforced and an empty list refuses
+   every web session (SEC-02).
+2. **Custom compose files** — carry over the backend's `seccomp` profile,
+   the `vault-tls-init` service and the `vault-tls`, `vault-ca` and
+   `audit-anchor` volumes. Without the profile, Chromium's sandbox cannot
+   start and web sessions fail (SEC-03) unless
+   `STRATA_WEB_CHROMIUM_SANDBOX=disabled` is set.
+3. **Reverse proxies** — make sure `STRATA_TRUSTED_PROXIES` lists the proxy
+   in front of the backend; client IPs from any other peer's
+   `X-Forwarded-For` are now ignored (SEC-20).
+4. **Database owner** — grant `CREATEROLE` to the `DATABASE_URL` user so the
+   least-privilege runtime role can be created (SEC-25).
+5. **Audit anchors** — ship `STRATA_AUDIT_ANCHOR_PATH` (the `audit-anchor`
+   volume) to write-once storage if you need tamper evidence that survives
+   a host compromise (SEC-17).
+6. **Edited migrations** — if startup refuses because an applied migration
+   changed, check the schema, take a backup, and only then set
+   `STRATA_MIGRATION_REPAIR_VERSIONS` (SEC-22).
+7. **Recording** — turn on *Require recording* where a session must not run
+   unrecorded (SEC-16).
+8. **SSO** — accounts with a local password are no longer linked on a first
+   SSO login, and nor is an identity whose provider says
+   `email_verified: false` (SEC-06).
+
+Users stay signed in across the upgrade: existing refresh tokens are
+accepted once and then join a family (SEC-07). From now on a sign-in lasts
+at most 12 hours however often it is refreshed (SEC-08), so anyone signed
+in for longer than that is asked to sign in again.
 
 ## [2.2.0] — 2026-09-25
 

@@ -88,8 +88,9 @@ Required secrets (one ExternalSecret each, mounted as env vars):
 |--------------------------|-----------------------|-------|
 | `DATABASE_URL`           | Postgres credentials  | Include `sslmode=verify-full` and CA path. |
 | `JWT_SECRET`             | Generated 64-byte hex | Rotate by dual-running with `JWT_SECRET_NEXT`; see [runbooks/](runbooks/). |
-| `VAULT_ADDR`             | Plain config          | Not secret. |
-| `VAULT_TOKEN`            | Vault AppRole login   | Use a periodic, renewable token. |
+| `VAULT_ADDR`             | Plain config          | Not secret. Use `https://`; since v2.3.0 the backend verifies Vault's certificate. |
+| `VAULT_CACERT`           | ConfigMap (CA bundle) | v2.3.0. Path to the CA that issued Vault's certificate, if it is not in the system store. |
+| `VAULT_TOKEN`            | Vault AppRole login   | Use a periodic, renewable token whose policy allows only `transit/encrypt` and `transit/decrypt` on the data key, `transit/sign` and `transit/verify` on the audit signing key, and renewing / looking up itself; never a root token. |
 | `DEFAULT_ADMIN_PASSWORD` | One-time-use          | Set only on first boot; remove after setup completes. |
 | `SMTP_USERNAME`          | SMTP relay creds      | If notifications enabled. |
 | `SMTP_PASSWORD`          | SMTP relay creds      | If notifications enabled. |
@@ -103,6 +104,24 @@ For the DMZ edge:
 | `LINK_TLS_KEY`           | mTLS edge key         | |
 | `PUBLIC_TLS_CERT`        | Public-facing cert    | Or use cert-manager + Let's Encrypt. |
 | `PUBLIC_TLS_KEY`         | Public-facing key     | |
+
+## v2.3.0 requirements
+
+The Compose stack carries these automatically; a Kubernetes deployment
+must provide them itself.
+
+| Requirement | Why | How |
+| ----------- | --- | --- |
+| Seccomp profile for the backend | Chromium's sandbox needs `clone`, `unshare` and `chroot`; without them every web session fails (SEC-03) | Install [`backend/seccomp-chromium.json`](../backend/seccomp-chromium.json) on each node (for example with the Security Profiles Operator) and set `securityContext.seccompProfile: { type: Localhost, localhostProfile: <path> }` on the backend container. `STRATA_WEB_CHROMIUM_SANDBOX=disabled` is a temporary escape hatch only |
+| `CREATEROLE` for the database owner | The backend creates and uses the least-privilege `<owner>_runtime` role (SEC-25) | `ALTER ROLE <owner> CREATEROLE;` on the managed database. Otherwise it serves as the owner and logs a warning; `STRATA_DB_RUNTIME_ROLE=off` silences that deliberately |
+| Audit anchor storage | Signed audit checkpoints must outlive the database (SEC-17) | A small RWO PVC (or object-storage sidecar with write-once retention) mounted on the backend, with `STRATA_AUDIT_ANCHOR_PATH` pointing at a file in it. Only one replica writes per pass |
+| Trusted proxies | Client addresses for limits and audit come from `X-Forwarded-For` only when the peer is trusted (SEC-20) | `STRATA_TRUST_XFF=1` and `STRATA_TRUSTED_PROXIES=<ingress controller pod CIDR>` on the backend |
+| Memory limit on the backend | Session admission sizes its budget from the cgroup limit (PERF-04) | Set `resources.limits.memory`; optionally `STRATA_SESSION_MEMORY_BUDGET_MB` |
+| Web egress allow-list | Kiosks are refused until *Allowed Networks* is set (SEC-02) | *Admin → Network → Web Browser Sessions* after first boot |
+
+Sign-in limits, refresh-token rotation, revocations and the health-check
+sweep are coordinated through PostgreSQL in v2.3.0, so backend replicas
+need no sticky sessions or shared cache for them.
 
 ## Persistent volumes
 
@@ -460,7 +479,10 @@ kubectl -n strata logs -l app=strata-backend | grep 'av scanner ready'
 
 # 3. EICAR smoke test (the smoke-test user MUST have the "Use Quick Share"
 #    role flag enabled — otherwise the upload returns 403 FORBIDDEN before
-#    the scanner is consulted. See docs/av-scanning.md → Verification.)
+#    the scanner is consulted. Since v2.3.0 session_id must also be the
+#    connection id of a session that user has open right now, and must
+#    come before the file part; otherwise the upload returns 403 or 400.
+#    See docs/av-scanning.md → Verification.)
 kubectl -n strata exec deploy/strata-backend -- \
   sh -c 'printf "X5O!P%%@AP[4\\PZX54(P^)7CC)7}\$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!\$H+H*" > /tmp/eicar.com \
          && curl -sS -o /dev/null -w "%{http_code}\n" \

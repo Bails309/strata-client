@@ -2960,7 +2960,7 @@ Revoke a previously created share link.
 
 Session-scoped temporary file hosting. Upload a file and get a random, unguessable download URL to paste into the remote session's browser. Files are automatically deleted when the tunnel disconnects.
 
-**Limits:** 20 files per session, 500 MB per file.
+**Limits:** 20 files per session, 500 MB per file. The 500 MiB request limit includes multipart framing; a request declaring a larger `Content-Length` gets `413` before any of the body is read.
 
 ### `POST /api/files/upload`
 
@@ -3242,7 +3242,7 @@ The remote-session shell POSTs the file back to Strata over HTTPS using the toke
 | ------ | ---- | -------- | -------------- |
 | `file` | file | Yes      | Binary payload |
 
-**Body limit**: 500 MiB.
+**Body limit**: 500 MiB. A request whose `Content-Length` is larger gets `413` before any of the body is read.
 
 **Backend behaviour**:
 

@@ -409,6 +409,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   8 MiB); set it lower to keep restricting uploads at the edge. On the
   public listener `STRATA_DMZ_PUBLIC_HEADER_TIMEOUT_MS` now applies only
   to requests without a body. Responses over 8 MiB no longer get `507`.
+- **Oversize uploads are refused before they are read (PERF-02).** The
+  three 500 MiB upload routes (Quick Share, outbound share and the
+  in-session ingest link) answer `413` as soon as a request declares a
+  larger `Content-Length`; before, the backend read 500 MiB first and then
+  refused it. A body that declares no length is still cut off at the limit.
+- **DMZ large-transfer test (PERF-02).** `scripts/dmz/load/large-transfer.sh`
+  starts the DMZ and backend as a separate compose project on separate
+  ports, sends files just under and over 8 MiB, 100 MiB and 499 MiB up
+  and back down through the DMZ, compares hashes, and samples the memory
+  of both processes. Measured: peak memory stayed at 8–9 MiB for the DMZ
+  and 25–32 MiB for the backend at every size, and 9 / 34 MiB with four
+  100 MiB uploads at once; 499 MiB went up in 18 s and came back in 9 s.
+  An unauthenticated 100 MiB upload is refused in 0.03 s and a 505 MiB
+  one in 0.05 s, each after under 250 KB.
 
 ## [2.2.0] — 2026-09-25
 

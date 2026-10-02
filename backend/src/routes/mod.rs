@@ -19,11 +19,24 @@ use axum::{
 };
 use axum_prometheus::PrometheusMetricLayer;
 use tower_http::cors::CorsLayer;
+use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::{DefaultOnRequest, DefaultOnResponse, TraceLayer};
 
 use crate::services::app_state::SharedState;
 use crate::services::middleware::{require_admin, require_auth, require_csrf};
+
+/// Largest request body the file upload routes accept, multipart framing included.
+const UPLOAD_LIMIT_BYTES: usize = 500 * 1024 * 1024;
+
+/// Body limit for upload routes. Unlike `DefaultBodyLimit` alone, a body
+/// whose `Content-Length` is over the limit gets 413 before any of it is read.
+fn upload_limit(bytes: usize) -> (DefaultBodyLimit, RequestBodyLimitLayer) {
+    (
+        DefaultBodyLimit::disable(),
+        RequestBodyLimitLayer::new(bytes),
+    )
+}
 
 pub fn build_router(state: SharedState) -> Router {
     let cors = build_cors_layer();
@@ -63,7 +76,7 @@ pub fn build_router(state: SharedState) -> Router {
         // 10-minute TTL, minted via the authed `ingest-token` route).
         .route(
             "/api/outbound-shares/ingest/{token}",
-            post(outbound_shares::ingest_via_token).layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
+            post(outbound_shares::ingest_via_token).layer(upload_limit(UPLOAD_LIMIT_BYTES)),
         )
         .route(
             "/api/shared/tunnel/{share_token}",
@@ -541,7 +554,7 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/user/pending-approvals", get(user::pending_approvals))
         .route(
             "/api/files/upload",
-            post(files::upload).layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
+            post(files::upload).layer(upload_limit(UPLOAD_LIMIT_BYTES)),
         )
         .route(
             "/api/files/session/{session_id}",
@@ -553,7 +566,7 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/user/outbound-shares",
             get(outbound_shares::list_mine)
                 .post(outbound_shares::submit)
-                .layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
+                .layer(upload_limit(UPLOAD_LIMIT_BYTES)),
         )
         .route(
             "/api/user/outbound-shares/download/{token}",
@@ -744,6 +757,53 @@ fn build_cors_layer() -> CorsLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn post_to_limited_route(
+        body: axum::body::Body,
+        content_length: Option<usize>,
+    ) -> axum::http::StatusCode {
+        use tower::ServiceExt;
+        let app: Router = Router::new().route(
+            "/up",
+            post(|b: axum::body::Bytes| async move { b.len().to_string() }).layer(upload_limit(16)),
+        );
+        let mut req = axum::http::Request::post("/up");
+        if let Some(n) = content_length {
+            req = req.header(axum::http::header::CONTENT_LENGTH, n);
+        }
+        let res = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            app.oneshot(req.body(body).unwrap()),
+        )
+        .await
+        .expect("answered without waiting for the body")
+        .unwrap();
+        res.status()
+    }
+
+    #[tokio::test]
+    async fn upload_limit_refuses_a_declared_oversize_body_without_reading_it() {
+        // The body never yields: reading any of it would hang the request.
+        let never = futures_util::stream::pending::<Result<axum::body::Bytes, std::io::Error>>();
+        let status = post_to_limited_route(axum::body::Body::from_stream(never), Some(17)).await;
+        assert_eq!(status, axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn upload_limit_cuts_off_an_undeclared_body_at_the_limit() {
+        let chunks = futures_util::stream::iter(
+            [b"0123456789", b"0123456789"].map(|c| Ok::<_, std::io::Error>(c.as_slice())),
+        );
+        let status = post_to_limited_route(axum::body::Body::from_stream(chunks), None).await;
+        assert_eq!(status, axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn upload_limit_passes_a_body_within_the_limit() {
+        let status =
+            post_to_limited_route(axum::body::Body::from("0123456789abcdef"), Some(16)).await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+    }
 
     #[test]
     fn loggable_path_redacts_capability_tokens() {

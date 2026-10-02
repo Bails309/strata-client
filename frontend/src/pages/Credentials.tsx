@@ -33,6 +33,7 @@ import {
   UserAccountMapping,
   getSafeguardEnabled,
 } from "../api";
+import { withoutLinkedManagedProfiles } from "../components/leaseStore";
 
 export default function Credentials({ vaultConfigured }: { vaultConfigured: boolean }) {
   type Tab = "profiles" | "request" | "my-checkouts";
@@ -863,545 +864,530 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
             </div>
           ) : (
             <div className="flex flex-col gap-3">
-              {profiles
-                .filter((p) => {
-                  // Hide [managed] profiles that are linked to another user profile
-                  if (p.label.startsWith("[managed]")) {
-                    const isLinked = profiles.some(
-                      (other) =>
-                        other.checkout_id &&
-                        other.id !== p.id &&
-                        allCheckouts.find((c) => c.id === other.checkout_id)?.managed_ad_dn ===
-                          p.label.replace("[managed] ", "")
-                    );
-                    return !isLinked;
-                  }
-                  return true;
-                })
-                .map((profile) => {
-                  const isExpanded = expanded === profile.id;
-                  const profileMappings = mappings[profile.id] || [];
-                  const isAddingMapping = mappingProfileId === profile.id;
-                  const linkedCo = profile.checkout_id
-                    ? allCheckouts.find((c) => c.id === profile.checkout_id)
-                    : null;
-                  const linkedActive = linkedCo ? isCheckoutLive(linkedCo) : false;
-                  const isEffectivelyExpired = profile.expired || (linkedCo && !linkedActive);
+              {withoutLinkedManagedProfiles(profiles).map((profile) => {
+                const isExpanded = expanded === profile.id;
+                const profileMappings = mappings[profile.id] || [];
+                const isAddingMapping = mappingProfileId === profile.id;
+                const linkedCo = profile.checkout_id
+                  ? allCheckouts.find((c) => c.id === profile.checkout_id)
+                  : null;
+                const linkedActive = linkedCo ? isCheckoutLive(linkedCo) : false;
+                const isEffectivelyExpired = profile.expired || (linkedCo && !linkedActive);
 
-                  return (
+                return (
+                  <div
+                    key={profile.id}
+                    className="card !p-0 !overflow-hidden"
+                    style={
+                      isEffectivelyExpired
+                        ? { borderColor: "var(--color-danger)", borderWidth: 1 }
+                        : undefined
+                    }
+                  >
+                    {/* Profile header */}
                     <div
-                      key={profile.id}
-                      className="card !p-0 !overflow-hidden"
-                      style={
-                        isEffectivelyExpired
-                          ? { borderColor: "var(--color-danger)", borderWidth: 1 }
-                          : undefined
-                      }
+                      className="flex items-center justify-between px-5 py-4 cursor-pointer transition-colors duration-150"
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={isExpanded}
+                      style={{
+                        borderBottom: isExpanded ? "1px solid var(--color-border)" : "none",
+                      }}
+                      onClick={() => setExpanded(isExpanded ? null : profile.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setExpanded(isExpanded ? null : profile.id);
+                        }
+                      }}
                     >
-                      {/* Profile header */}
-                      <div
-                        className="flex items-center justify-between px-5 py-4 cursor-pointer transition-colors duration-150"
-                        role="button"
-                        tabIndex={0}
-                        aria-expanded={isExpanded}
-                        style={{
-                          borderBottom: isExpanded ? "1px solid var(--color-border)" : "none",
-                        }}
-                        onClick={() => setExpanded(isExpanded ? null : profile.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            setExpanded(isExpanded ? null : profile.id);
-                          }
-                        }}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div
-                            className="w-8 h-8 rounded-md flex items-center justify-center shrink-0"
-                            style={{
-                              background: "var(--color-accent-dim)",
-                              color: "var(--color-accent-light)",
-                            }}
-                          >
-                            <svg
-                              width="16"
-                              height="16"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
-                            </svg>
-                          </div>
-                          <div>
-                            <span className="font-semibold text-[0.9rem] text-txt-primary">
-                              {profile.label}
-                            </span>
-                            <span className="text-txt-tertiary text-xs ml-3">
-                              {profileMappings.length} connection
-                              {profileMappings.length !== 1 ? "s" : ""}
-                            </span>
-                            {linkedActive && linkedCo?.expires_at ? (
-                              <span
-                                className={`ml-3 text-xs font-semibold ${
-                                  new Date(linkedCo.expires_at).getTime() - Date.now() < 300000
-                                    ? "text-danger"
-                                    : new Date(linkedCo.expires_at).getTime() - Date.now() < 900000
-                                      ? "text-warning"
-                                      : "text-success"
-                                }`}
-                              >
-                                ⏱ {getTimeRemaining(linkedCo.expires_at)}
-                              </span>
-                            ) : linkedCo && !linkedActive ? (
-                              <span className="ml-3 text-xs font-semibold px-2 py-0.5 rounded-full bg-danger-dim text-danger">
-                                {linkedCo.status === "CheckedIn"
-                                  ? "Checked in — password scrambled"
-                                  : "Checkout expired"}
-                              </span>
-                            ) : profile.expired ? (
-                              <span className="ml-3 text-xs font-semibold px-2 py-0.5 rounded-full bg-danger-dim text-danger">
-                                Expired — update required
-                              </span>
-                            ) : (
-                              <span className="ml-3 text-xs text-txt-tertiary">
-                                Expires {formatDateTime(profile.expires_at)}
-                              </span>
-                            )}
-                            {profile.checkout_id && (
-                              <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-accent/10 text-accent">
-                                🔗 Checkout linked
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            className="btn !px-2 !py-1 text-xs"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditing({
-                                id: profile.id,
-                                label: profile.label,
-                                username: "",
-                                password: "",
-                                ttl_hours: profile.ttl_hours,
-                                ttl_minutes: profile.ttl_minutes ?? 0,
-                                extended_expiry: profile.extended_expiry,
-                                kind: profile.kind ?? "local",
-                                original_kind: profile.kind ?? "local",
-                                safeguard_account_id: profile.safeguard_account_id,
-                                safeguard_asset: profile.safeguard_asset,
-                              });
-                            }}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            className="btn !px-2 !py-1 text-xs text-danger"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setDeletingId(profile.id);
-                            }}
-                          >
-                            Delete
-                          </button>
+                      <div className="flex items-center gap-3">
+                        <div
+                          className="w-8 h-8 rounded-md flex items-center justify-center shrink-0"
+                          style={{
+                            background: "var(--color-accent-dim)",
+                            color: "var(--color-accent-light)",
+                          }}
+                        >
                           <svg
-                            className={`shrink-0 text-txt-tertiary transition-transform duration-250 ${isExpanded ? "rotate-180" : ""}`}
                             width="16"
                             height="16"
-                            viewBox="0 0 16 16"
+                            viewBox="0 0 24 24"
                             fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
                           >
-                            <path
-                              d="M4 6L8 10L12 6"
-                              stroke="currentColor"
-                              strokeWidth="1.5"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
+                            <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
                           </svg>
                         </div>
-                      </div>
-
-                      {/* Expanded: mappings */}
-                      {isExpanded && (
-                        <div className="px-5 py-4" style={{ background: "var(--color-surface)" }}>
-                          {profileMappings.length > 0 ? (
-                            <table className="w-full" style={{ margin: 0 }}>
-                              <thead>
-                                <tr>
-                                  <th>Connection</th>
-                                  <th>Protocol</th>
-                                  <th style={{ width: 80 }}></th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {profileMappings.map((m) => (
-                                  <tr key={m.connection_id}>
-                                    <td className="font-medium">{m.connection_name}</td>
-                                    <td>
-                                      <span
-                                        className="text-xs font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full"
-                                        style={{
-                                          background: "var(--color-accent-dim)",
-                                          color: "var(--color-accent-light)",
-                                        }}
-                                      >
-                                        {m.protocol}
-                                      </span>
-                                    </td>
-                                    <td>
-                                      <button
-                                        className="btn !px-2 !py-1 text-xs text-danger"
-                                        onClick={() => handleRemoveMapping(m.connection_id)}
-                                      >
-                                        Unmap
-                                      </button>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
+                        <div>
+                          <span className="font-semibold text-[0.9rem] text-txt-primary">
+                            {profile.label}
+                          </span>
+                          <span className="text-txt-tertiary text-xs ml-3">
+                            {profileMappings.length} connection
+                            {profileMappings.length !== 1 ? "s" : ""}
+                          </span>
+                          {linkedActive && linkedCo?.expires_at ? (
+                            <span
+                              className={`ml-3 text-xs font-semibold ${
+                                new Date(linkedCo.expires_at).getTime() - Date.now() < 300000
+                                  ? "text-danger"
+                                  : new Date(linkedCo.expires_at).getTime() - Date.now() < 900000
+                                    ? "text-warning"
+                                    : "text-success"
+                              }`}
+                            >
+                              ⏱ {getTimeRemaining(linkedCo.expires_at)}
+                            </span>
+                          ) : linkedCo && !linkedActive ? (
+                            <span className="ml-3 text-xs font-semibold px-2 py-0.5 rounded-full bg-danger-dim text-danger">
+                              {linkedCo.status === "CheckedIn"
+                                ? "Checked in — password scrambled"
+                                : "Checkout expired"}
+                            </span>
+                          ) : profile.expired ? (
+                            <span className="ml-3 text-xs font-semibold px-2 py-0.5 rounded-full bg-danger-dim text-danger">
+                              Expired — update required
+                            </span>
                           ) : (
-                            <p className="text-txt-tertiary text-sm mb-3">
-                              No connections mapped. Add a connection below so these credentials are
-                              used automatically.
-                            </p>
+                            <span className="ml-3 text-xs text-txt-tertiary">
+                              Expires {formatDateTime(profile.expires_at)}
+                            </span>
                           )}
-
-                          {/* Linked checkout badge / link controls */}
-                          {!profile.label.startsWith("[managed]") &&
-                            (activeCheckouts.filter((c) => isCheckoutLive(c)).length > 0 ||
-                              profile.checkout_id) && (
-                              <div
-                                className="mt-3 pt-3"
-                                style={{ borderTop: "1px solid var(--color-border)" }}
-                              >
-                                <span className="text-xs font-medium text-txt-secondary mb-2 block uppercase tracking-wider">
-                                  Checked-Out Account
-                                </span>
-                                {profile.checkout_id ? (
-                                  (() => {
-                                    const linked = allCheckouts.find(
-                                      (c) => c.id === profile.checkout_id
-                                    );
-                                    return (
-                                      <div className="flex items-center justify-between bg-success/5 border border-success/20 rounded-lg px-4 py-2.5">
-                                        <div>
-                                          <div className="text-sm font-medium">
-                                            {linked?.managed_ad_dn || "Linked checkout"}
-                                          </div>
-                                          <div className="text-xs text-txt-secondary">
-                                            {linked && isCheckoutLive(linked)
-                                              ? `Expires ${formatDateTime(linked.expires_at ?? null)} · ${getTimeRemaining(linked.expires_at!)}`
-                                              : linked?.status === "CheckedIn"
-                                                ? "Checked in — password scrambled"
-                                                : linked?.status === "Expired" ||
-                                                    (linked && isCheckoutExpired(linked))
-                                                  ? "Checkout expired — credentials may be stale"
-                                                  : "Unknown status"}
-                                          </div>
-                                        </div>
-                                        <button
-                                          className="btn !px-2 !py-1 text-xs text-danger"
-                                          onClick={() => handleLinkCheckout(profile.id, null)}
-                                        >
-                                          Unlink
-                                        </button>
-                                      </div>
-                                    );
-                                  })()
-                                ) : linkingProfileId === profile.id ? (
-                                  <div>
-                                    <Select
-                                      value=""
-                                      onChange={(val) => {
-                                        if (val) handleLinkCheckout(profile.id, val);
-                                      }}
-                                      placeholder="Select an active checkout…"
-                                      className="w-full mb-2"
-                                      options={activeCheckouts
-                                        .filter((c) => isCheckoutLive(c))
-                                        .map((c) => ({
-                                          value: c.id,
-                                          label: `${c.managed_ad_dn} — ${getTimeRemaining(c.expires_at)}`,
-                                        }))}
-                                    />
-                                    <button
-                                      className="btn text-xs"
-                                      onClick={() => setLinkingProfileId(null)}
-                                    >
-                                      Cancel
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <button
-                                    className="btn text-xs"
-                                    onClick={() => setLinkingProfileId(profile.id)}
-                                  >
-                                    <span className="flex items-center gap-1.5">
-                                      <svg
-                                        width="14"
-                                        height="14"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        strokeWidth="2"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                      >
-                                        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-                                        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-                                      </svg>
-                                      Link Checked-Out Account
-                                    </span>
-                                  </button>
-                                )}
-                              </div>
-                            )}
-
-                          {/* Add mapping */}
-                          {isAddingMapping ? (
-                            <div
-                              className="mt-4"
-                              style={{
-                                borderTop:
-                                  profileMappings.length > 0
-                                    ? "1px solid var(--color-border)"
-                                    : "none",
-                                paddingTop: profileMappings.length > 0 ? "1rem" : 0,
-                              }}
-                            >
-                              <label
-                                htmlFor="add-mapping-connections"
-                                className="text-xs font-medium text-txt-secondary mb-1 block"
-                              >
-                                Connections
-                              </label>
-                              <div className="relative">
-                                <div
-                                  ref={mappingTriggerRef}
-                                  role="button"
-                                  tabIndex={0}
-                                  aria-haspopup="listbox"
-                                  aria-expanded={mappingDropdownOpen}
-                                  className="cs-trigger cursor-pointer min-h-[2.5rem] flex flex-wrap items-center gap-1.5 !py-1.5"
-                                  onClick={() => setMappingDropdownOpen(!mappingDropdownOpen)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter" || e.key === " ") {
-                                      e.preventDefault();
-                                      setMappingDropdownOpen(!mappingDropdownOpen);
-                                    }
-                                  }}
-                                >
-                                  {mappingConnectionIds.map((cid) => {
-                                    const conn = mappingPicked[cid];
-                                    return conn ? (
-                                      <span
-                                        key={cid}
-                                        className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full"
-                                        style={{
-                                          background: "var(--color-accent-dim)",
-                                          color: "var(--color-accent-light)",
-                                        }}
-                                      >
-                                        {conn.name}
-                                        <button
-                                          type="button"
-                                          className="hover:text-danger ml-0.5"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setMappingConnectionIds(
-                                              mappingConnectionIds.filter((id) => id !== cid)
-                                            );
-                                          }}
-                                        >
-                                          ×
-                                        </button>
-                                      </span>
-                                    ) : null;
-                                  })}
-                                  {mappingConnectionIds.length === 0 && (
-                                    <span className="text-txt-tertiary text-sm">
-                                      Select connections…
-                                    </span>
-                                  )}
-                                  <svg
-                                    className={`shrink-0 ml-auto text-txt-tertiary transition-transform duration-250 ${mappingDropdownOpen ? "rotate-180 text-accent" : ""}`}
-                                    width="16"
-                                    height="16"
-                                    viewBox="0 0 16 16"
-                                    fill="none"
-                                  >
-                                    <path
-                                      d="M4 6L8 10L12 6"
-                                      stroke="currentColor"
-                                      strokeWidth="1.5"
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                    />
-                                  </svg>
-                                </div>
-                                {mappingDropdownOpen &&
-                                  createPortal(
-                                    <div
-                                      ref={mappingDropdownRef}
-                                      className="rounded-md shadow-lg"
-                                      style={{
-                                        ...menuStyle,
-                                        background: "var(--color-surface-elevated)",
-                                        border: "1px solid var(--color-glass-border)",
-                                      }}
-                                    >
-                                      <div className="p-2 pb-0">
-                                        <input
-                                          className="input w-full !text-sm"
-                                          placeholder="Search connections…"
-                                          value={mappingSearch}
-                                          onChange={(e) => setMappingSearch(e.target.value)}
-                                          onClick={(e) => e.stopPropagation()}
-                                          // Mapping picker just opened — focus-on-appear is the expected UX.
-                                          // eslint-disable-next-line jsx-a11y/no-autofocus
-                                          autoFocus
-                                        />
-                                      </div>
-                                      <ul
-                                        className="max-h-52 overflow-y-auto list-none m-0 p-1"
-                                        role="listbox"
-                                      >
-                                        {filteredAvailable.length === 0 && (
-                                          <li className="px-3 py-2 text-sm text-txt-tertiary">
-                                            No matching connections
-                                          </li>
-                                        )}
-                                        {filteredAvailable.map((c) => {
-                                          const isSelected = mappingConnectionIds.includes(c.id);
-                                          return (
-                                            <li
-                                              key={c.id}
-                                              role="option"
-                                              tabIndex={-1}
-                                              aria-selected={isSelected}
-                                              className="cs-option flex items-center gap-2 cursor-pointer"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                toggleMappingConnection(c);
-                                              }}
-                                              onKeyDown={(e) => {
-                                                if (e.key === "Enter" || e.key === " ") {
-                                                  e.preventDefault();
-                                                  toggleMappingConnection(c);
-                                                }
-                                              }}
-                                            >
-                                              <span
-                                                className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 ${isSelected ? "bg-accent border-accent" : "border-txt-tertiary"}`}
-                                                style={
-                                                  isSelected
-                                                    ? {
-                                                        background: "var(--color-accent)",
-                                                        borderColor: "var(--color-accent)",
-                                                      }
-                                                    : undefined
-                                                }
-                                              >
-                                                {isSelected && (
-                                                  <svg
-                                                    width="10"
-                                                    height="10"
-                                                    viewBox="0 0 14 14"
-                                                    fill="none"
-                                                  >
-                                                    <path
-                                                      d="M3 7L6 10L11 4"
-                                                      stroke="white"
-                                                      strokeWidth="2"
-                                                      strokeLinecap="round"
-                                                      strokeLinejoin="round"
-                                                    />
-                                                  </svg>
-                                                )}
-                                              </span>
-                                              <div className="flex-1 min-w-0">
-                                                <div className="text-sm truncate">
-                                                  {c.name}{" "}
-                                                  <span className="text-txt-tertiary">
-                                                    ({c.protocol.toUpperCase()})
-                                                  </span>
-                                                </div>
-                                                {c.description && (
-                                                  <div className="text-xs text-txt-tertiary truncate">
-                                                    {c.description}
-                                                  </div>
-                                                )}
-                                              </div>
-                                            </li>
-                                          );
-                                        })}
-                                      </ul>
-                                    </div>,
-                                    document.body
-                                  )}
-                              </div>
-                              <div className="flex items-center gap-3 mt-3">
-                                <button
-                                  className="btn-primary !py-[0.55rem]"
-                                  onClick={handleAddMapping}
-                                  disabled={mappingConnectionIds.length === 0}
-                                >
-                                  Map{" "}
-                                  {mappingConnectionIds.length > 0
-                                    ? `(${mappingConnectionIds.length})`
-                                    : ""}
-                                </button>
-                                <button
-                                  className="btn !py-[0.55rem]"
-                                  onClick={() => {
-                                    setMappingProfileId(null);
-                                    setMappingConnectionIds([]);
-                                    setMappingSearch("");
-                                  }}
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <button
-                              className="btn text-xs mt-3"
-                              onClick={() => {
-                                setMappingProfileId(profile.id);
-                                setMappingConnectionIds([]);
-                                setMappingSearch("");
-                              }}
-                            >
-                              <span className="flex items-center gap-1.5">
-                                <svg
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeWidth="2"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                >
-                                  <line x1="12" y1="5" x2="12" y2="19" />
-                                  <line x1="5" y1="12" x2="19" y2="12" />
-                                </svg>
-                                Add Connections
-                              </span>
-                            </button>
+                          {profile.checkout_id && (
+                            <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-accent/10 text-accent">
+                              🔗 Checkout linked
+                            </span>
                           )}
                         </div>
-                      )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="btn !px-2 !py-1 text-xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditing({
+                              id: profile.id,
+                              label: profile.label,
+                              username: "",
+                              password: "",
+                              ttl_hours: profile.ttl_hours,
+                              ttl_minutes: profile.ttl_minutes ?? 0,
+                              extended_expiry: profile.extended_expiry,
+                              kind: profile.kind ?? "local",
+                              original_kind: profile.kind ?? "local",
+                              safeguard_account_id: profile.safeguard_account_id,
+                              safeguard_asset: profile.safeguard_asset,
+                            });
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="btn !px-2 !py-1 text-xs text-danger"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeletingId(profile.id);
+                          }}
+                        >
+                          Delete
+                        </button>
+                        <svg
+                          className={`shrink-0 text-txt-tertiary transition-transform duration-250 ${isExpanded ? "rotate-180" : ""}`}
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                        >
+                          <path
+                            d="M4 6L8 10L12 6"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </div>
                     </div>
-                  );
-                })}
+
+                    {/* Expanded: mappings */}
+                    {isExpanded && (
+                      <div className="px-5 py-4" style={{ background: "var(--color-surface)" }}>
+                        {profileMappings.length > 0 ? (
+                          <table className="w-full" style={{ margin: 0 }}>
+                            <thead>
+                              <tr>
+                                <th>Connection</th>
+                                <th>Protocol</th>
+                                <th style={{ width: 80 }}></th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {profileMappings.map((m) => (
+                                <tr key={m.connection_id}>
+                                  <td className="font-medium">{m.connection_name}</td>
+                                  <td>
+                                    <span
+                                      className="text-xs font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full"
+                                      style={{
+                                        background: "var(--color-accent-dim)",
+                                        color: "var(--color-accent-light)",
+                                      }}
+                                    >
+                                      {m.protocol}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <button
+                                      className="btn !px-2 !py-1 text-xs text-danger"
+                                      onClick={() => handleRemoveMapping(m.connection_id)}
+                                    >
+                                      Unmap
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        ) : (
+                          <p className="text-txt-tertiary text-sm mb-3">
+                            No connections mapped. Add a connection below so these credentials are
+                            used automatically.
+                          </p>
+                        )}
+
+                        {/* Linked checkout badge / link controls */}
+                        {!profile.label.startsWith("[managed]") &&
+                          (activeCheckouts.filter((c) => isCheckoutLive(c)).length > 0 ||
+                            profile.checkout_id) && (
+                            <div
+                              className="mt-3 pt-3"
+                              style={{ borderTop: "1px solid var(--color-border)" }}
+                            >
+                              <span className="text-xs font-medium text-txt-secondary mb-2 block uppercase tracking-wider">
+                                Checked-Out Account
+                              </span>
+                              {profile.checkout_id ? (
+                                (() => {
+                                  const linked = allCheckouts.find(
+                                    (c) => c.id === profile.checkout_id
+                                  );
+                                  return (
+                                    <div className="flex items-center justify-between bg-success/5 border border-success/20 rounded-lg px-4 py-2.5">
+                                      <div>
+                                        <div className="text-sm font-medium">
+                                          {linked?.managed_ad_dn || "Linked checkout"}
+                                        </div>
+                                        <div className="text-xs text-txt-secondary">
+                                          {linked && isCheckoutLive(linked)
+                                            ? `Expires ${formatDateTime(linked.expires_at ?? null)} · ${getTimeRemaining(linked.expires_at!)}`
+                                            : linked?.status === "CheckedIn"
+                                              ? "Checked in — password scrambled"
+                                              : linked?.status === "Expired" ||
+                                                  (linked && isCheckoutExpired(linked))
+                                                ? "Checkout expired — credentials may be stale"
+                                                : "Unknown status"}
+                                        </div>
+                                      </div>
+                                      <button
+                                        className="btn !px-2 !py-1 text-xs text-danger"
+                                        onClick={() => handleLinkCheckout(profile.id, null)}
+                                      >
+                                        Unlink
+                                      </button>
+                                    </div>
+                                  );
+                                })()
+                              ) : linkingProfileId === profile.id ? (
+                                <div>
+                                  <Select
+                                    value=""
+                                    onChange={(val) => {
+                                      if (val) handleLinkCheckout(profile.id, val);
+                                    }}
+                                    placeholder="Select an active checkout…"
+                                    className="w-full mb-2"
+                                    options={activeCheckouts
+                                      .filter((c) => isCheckoutLive(c))
+                                      .map((c) => ({
+                                        value: c.id,
+                                        label: `${c.managed_ad_dn} — ${getTimeRemaining(c.expires_at)}`,
+                                      }))}
+                                  />
+                                  <button
+                                    className="btn text-xs"
+                                    onClick={() => setLinkingProfileId(null)}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  className="btn text-xs"
+                                  onClick={() => setLinkingProfileId(profile.id)}
+                                >
+                                  <span className="flex items-center gap-1.5">
+                                    <svg
+                                      width="14"
+                                      height="14"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    >
+                                      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                                      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                                    </svg>
+                                    Link Checked-Out Account
+                                  </span>
+                                </button>
+                              )}
+                            </div>
+                          )}
+
+                        {/* Add mapping */}
+                        {isAddingMapping ? (
+                          <div
+                            className="mt-4"
+                            style={{
+                              borderTop:
+                                profileMappings.length > 0
+                                  ? "1px solid var(--color-border)"
+                                  : "none",
+                              paddingTop: profileMappings.length > 0 ? "1rem" : 0,
+                            }}
+                          >
+                            <label
+                              htmlFor="add-mapping-connections"
+                              className="text-xs font-medium text-txt-secondary mb-1 block"
+                            >
+                              Connections
+                            </label>
+                            <div className="relative">
+                              <div
+                                ref={mappingTriggerRef}
+                                role="button"
+                                tabIndex={0}
+                                aria-haspopup="listbox"
+                                aria-expanded={mappingDropdownOpen}
+                                className="cs-trigger cursor-pointer min-h-[2.5rem] flex flex-wrap items-center gap-1.5 !py-1.5"
+                                onClick={() => setMappingDropdownOpen(!mappingDropdownOpen)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    setMappingDropdownOpen(!mappingDropdownOpen);
+                                  }
+                                }}
+                              >
+                                {mappingConnectionIds.map((cid) => {
+                                  const conn = mappingPicked[cid];
+                                  return conn ? (
+                                    <span
+                                      key={cid}
+                                      className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full"
+                                      style={{
+                                        background: "var(--color-accent-dim)",
+                                        color: "var(--color-accent-light)",
+                                      }}
+                                    >
+                                      {conn.name}
+                                      <button
+                                        type="button"
+                                        className="hover:text-danger ml-0.5"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setMappingConnectionIds(
+                                            mappingConnectionIds.filter((id) => id !== cid)
+                                          );
+                                        }}
+                                      >
+                                        ×
+                                      </button>
+                                    </span>
+                                  ) : null;
+                                })}
+                                {mappingConnectionIds.length === 0 && (
+                                  <span className="text-txt-tertiary text-sm">
+                                    Select connections…
+                                  </span>
+                                )}
+                                <svg
+                                  className={`shrink-0 ml-auto text-txt-tertiary transition-transform duration-250 ${mappingDropdownOpen ? "rotate-180 text-accent" : ""}`}
+                                  width="16"
+                                  height="16"
+                                  viewBox="0 0 16 16"
+                                  fill="none"
+                                >
+                                  <path
+                                    d="M4 6L8 10L12 6"
+                                    stroke="currentColor"
+                                    strokeWidth="1.5"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                  />
+                                </svg>
+                              </div>
+                              {mappingDropdownOpen &&
+                                createPortal(
+                                  <div
+                                    ref={mappingDropdownRef}
+                                    className="rounded-md shadow-lg"
+                                    style={{
+                                      ...menuStyle,
+                                      background: "var(--color-surface-elevated)",
+                                      border: "1px solid var(--color-glass-border)",
+                                    }}
+                                  >
+                                    <div className="p-2 pb-0">
+                                      <input
+                                        className="input w-full !text-sm"
+                                        placeholder="Search connections…"
+                                        value={mappingSearch}
+                                        onChange={(e) => setMappingSearch(e.target.value)}
+                                        onClick={(e) => e.stopPropagation()}
+                                        // Mapping picker just opened — focus-on-appear is the expected UX.
+                                        // eslint-disable-next-line jsx-a11y/no-autofocus
+                                        autoFocus
+                                      />
+                                    </div>
+                                    <ul
+                                      className="max-h-52 overflow-y-auto list-none m-0 p-1"
+                                      role="listbox"
+                                    >
+                                      {filteredAvailable.length === 0 && (
+                                        <li className="px-3 py-2 text-sm text-txt-tertiary">
+                                          No matching connections
+                                        </li>
+                                      )}
+                                      {filteredAvailable.map((c) => {
+                                        const isSelected = mappingConnectionIds.includes(c.id);
+                                        return (
+                                          <li
+                                            key={c.id}
+                                            role="option"
+                                            tabIndex={-1}
+                                            aria-selected={isSelected}
+                                            className="cs-option flex items-center gap-2 cursor-pointer"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              toggleMappingConnection(c);
+                                            }}
+                                            onKeyDown={(e) => {
+                                              if (e.key === "Enter" || e.key === " ") {
+                                                e.preventDefault();
+                                                toggleMappingConnection(c);
+                                              }
+                                            }}
+                                          >
+                                            <span
+                                              className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 ${isSelected ? "bg-accent border-accent" : "border-txt-tertiary"}`}
+                                              style={
+                                                isSelected
+                                                  ? {
+                                                      background: "var(--color-accent)",
+                                                      borderColor: "var(--color-accent)",
+                                                    }
+                                                  : undefined
+                                              }
+                                            >
+                                              {isSelected && (
+                                                <svg
+                                                  width="10"
+                                                  height="10"
+                                                  viewBox="0 0 14 14"
+                                                  fill="none"
+                                                >
+                                                  <path
+                                                    d="M3 7L6 10L11 4"
+                                                    stroke="white"
+                                                    strokeWidth="2"
+                                                    strokeLinecap="round"
+                                                    strokeLinejoin="round"
+                                                  />
+                                                </svg>
+                                              )}
+                                            </span>
+                                            <div className="flex-1 min-w-0">
+                                              <div className="text-sm truncate">
+                                                {c.name}{" "}
+                                                <span className="text-txt-tertiary">
+                                                  ({c.protocol.toUpperCase()})
+                                                </span>
+                                              </div>
+                                              {c.description && (
+                                                <div className="text-xs text-txt-tertiary truncate">
+                                                  {c.description}
+                                                </div>
+                                              )}
+                                            </div>
+                                          </li>
+                                        );
+                                      })}
+                                    </ul>
+                                  </div>,
+                                  document.body
+                                )}
+                            </div>
+                            <div className="flex items-center gap-3 mt-3">
+                              <button
+                                className="btn-primary !py-[0.55rem]"
+                                onClick={handleAddMapping}
+                                disabled={mappingConnectionIds.length === 0}
+                              >
+                                Map{" "}
+                                {mappingConnectionIds.length > 0
+                                  ? `(${mappingConnectionIds.length})`
+                                  : ""}
+                              </button>
+                              <button
+                                className="btn !py-[0.55rem]"
+                                onClick={() => {
+                                  setMappingProfileId(null);
+                                  setMappingConnectionIds([]);
+                                  setMappingSearch("");
+                                }}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            className="btn text-xs mt-3"
+                            onClick={() => {
+                              setMappingProfileId(profile.id);
+                              setMappingConnectionIds([]);
+                              setMappingSearch("");
+                            }}
+                          >
+                            <span className="flex items-center gap-1.5">
+                              <svg
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
+                                <line x1="12" y1="5" x2="12" y2="19" />
+                                <line x1="5" y1="12" x2="19" y2="12" />
+                              </svg>
+                              Add Connections
+                            </span>
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </>

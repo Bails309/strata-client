@@ -37,6 +37,9 @@ pub struct CredentialProfileRow {
     /// Safeguard AssetId / asset name for `kind='safeguard'` profiles.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub safeguard_asset: Option<String>,
+    /// Managed AD account of the linked checkout, kept after it expires.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub managed_ad_dn: Option<String>,
 }
 
 /// Maximum TTL (in hours) when a profile opts in to extended expiry.
@@ -98,11 +101,14 @@ pub async fn list_for_user(
     user_id: Uuid,
 ) -> Result<Vec<CredentialProfileRow>, AppError> {
     let rows = sqlx::query_as(
-        "SELECT id, label, created_at, updated_at, expires_at,
-                (expires_at < now()) AS expired, ttl_hours, ttl_minutes,
-                extended_expiry, checkout_id,
-                kind, safeguard_account_id, safeguard_asset
-         FROM credential_profiles WHERE user_id = $1 ORDER BY label",
+        "SELECT cp.id, cp.label, cp.created_at, cp.updated_at, cp.expires_at,
+                (cp.expires_at < now()) AS expired, cp.ttl_hours, cp.ttl_minutes,
+                cp.extended_expiry, cp.checkout_id,
+                cp.kind, cp.safeguard_account_id, cp.safeguard_asset,
+                r.managed_ad_dn
+         FROM credential_profiles cp
+         LEFT JOIN password_checkout_requests r ON r.id = cp.checkout_id
+         WHERE cp.user_id = $1 ORDER BY cp.label",
     )
     .bind(user_id)
     .fetch_all(pool)

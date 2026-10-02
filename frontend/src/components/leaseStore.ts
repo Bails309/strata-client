@@ -2,22 +2,16 @@
    CredentialProfileExpiryWatcher owns the polling and publishes each fetch
    here, so the header indicator and lease drawer never poll on their own. */
 import { useEffect, useState, useSyncExternalStore } from "react";
-import type { CheckoutRequest, CredentialProfile } from "../api";
+import type { CredentialProfile } from "../api";
 
 const MANAGED_PREFIX = "[managed] ";
 
 /** Drops `[managed]` profiles whose account is already reached through a
  *  profile linked to its checkout; that profile carries the same lease. */
-export function withoutLinkedManagedProfiles(
-  profiles: CredentialProfile[],
-  checkouts: CheckoutRequest[]
-): CredentialProfile[] {
-  const linkedDns = new Set<string>();
-  for (const p of profiles) {
-    if (!p.checkout_id) continue;
-    const dn = checkouts.find((c) => c.id === p.checkout_id)?.managed_ad_dn;
-    if (dn) linkedDns.add(dn.toLowerCase());
-  }
+export function withoutLinkedManagedProfiles(profiles: CredentialProfile[]): CredentialProfile[] {
+  const linkedDns = new Set(
+    profiles.flatMap((p) => (p.managed_ad_dn ? [p.managed_ad_dn.toLowerCase()] : []))
+  );
   return profiles.filter(
     (p) =>
       !p.label.startsWith(MANAGED_PREFIX) ||

@@ -5704,6 +5704,7 @@ mod tests {
             kind: "local".into(),
             safeguard_account_id: None,
             safeguard_asset: None,
+            managed_ad_dn: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["label"], "Work");

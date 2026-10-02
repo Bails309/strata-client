@@ -319,7 +319,11 @@ enum ChecksumRepair {
 /// Checksums of migration contents that shipped in a release and were later
 /// changed, in both line-ending forms. Version 29 was briefly reused by
 /// `029_case_insensitive_email.sql` (0.11.1) before it moved to 030.
+/// Version 96 gained a `CREATE TABLE revoked_tokens` for databases that
+/// skipped 038 (it shared its number with what is now 039).
 const KNOWN_EDITS: &[(i64, &str)] = &[
+    (96, "b73ef99564857c88e0639a0b9c633079a140648818795372546e9de39f39a17cfeebf2492a95f84b272c7389fdc1e4ce"),
+    (96, "1c3e9c07f5fc0676481dcd30b599fc4056982f4cbf0772e85eec0055bd4498742e87a3fa2f3fa42a4b3c795c0864be94"),
     (29, "c277f20fe638aa15e2e6de56b64f1f365b7825f9b04385fe89349ca1c3647f0f7d5ef85c7bd39fbf24eb1ec808f3fe49"),
     (29, "e8e5e1d79ea2323f8a900fe3aff85022f7ac2bacd6e0df4575773f65433934ccfd0e47b71771a86c14c294fdf7ae5a60"),
     (29, "8c21a00a6e8cf61e936cef6c0a81070c513fe53c622a4e71383ffd3fb69d02e322f09d8a7ae06372733f21a9603805e1"),

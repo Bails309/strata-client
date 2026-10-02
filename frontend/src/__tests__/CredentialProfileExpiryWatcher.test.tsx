@@ -11,7 +11,6 @@ vi.mock("../utils/sharedFetch", () => ({
 
 vi.mock("../api", () => ({
   getCredentialProfiles: vi.fn(),
-  getMyCheckouts: vi.fn(),
   getProfileMappings: vi.fn(),
   bulkSafeguardCheckout: vi.fn(),
 }));
@@ -19,9 +18,7 @@ vi.mock("../api", () => ({
 import {
   bulkSafeguardCheckout,
   getCredentialProfiles,
-  getMyCheckouts,
   getProfileMappings,
-  type CheckoutRequest,
   type CredentialProfile,
 } from "../api";
 import ToastProvider from "../components/ToastProvider";
@@ -350,16 +347,30 @@ describe("CredentialProfileExpiryWatcher", () => {
 
   it("does not warn separately for a managed account linked to another profile", async () => {
     const soon = new Date(Date.now() + 4 * 60 * 1000).toISOString();
-    vi.mocked(getMyCheckouts).mockResolvedValue([
-      { id: "co-1", managed_ad_dn: "CN=Bailey,OU=Admins,DC=corp" } as CheckoutRequest,
-    ]);
     vi.mocked(getCredentialProfiles).mockResolvedValue([
       profile({ id: "p-1", label: "[managed] CN=Bailey,OU=Admins,DC=corp", expires_at: soon }),
-      profile({ id: "p-2", label: "DMZ SA1", expires_at: soon, checkout_id: "co-1" }),
+      profile({
+        id: "p-2",
+        label: "DMZ SA1",
+        expires_at: soon,
+        checkout_id: "co-1",
+        managed_ad_dn: "CN=Bailey,OU=Admins,DC=corp",
+      }),
     ]);
     mount();
     await waitFor(() => expect(screen.getByText(/DMZ SA1 expires in/)).toBeInTheDocument());
     expect(screen.queryByText(/credential leases expiring/)).toBeNull();
+  });
+
+  it("does not report an expired managed account linked to another profile", async () => {
+    const dn = "CN=Bailey\\, Matt (Tier 0),OU=T0-Accounts,DC=corp";
+    vi.mocked(getCredentialProfiles).mockResolvedValue([
+      expiredProfile("p-1", `[managed] ${dn}`),
+      expiredProfile("p-2", "DMZ SA0", { checkout_id: "co-old", managed_ad_dn: dn }),
+    ]);
+    mount();
+    await waitFor(() => expect(screen.getByText(/DMZ SA0 has expired/)).toBeInTheDocument());
+    expect(screen.queryByText(/Privileged Credentials Expired/)).toBeNull();
   });
 
   it("withdraws an expired toast once the lease is renewed", async () => {

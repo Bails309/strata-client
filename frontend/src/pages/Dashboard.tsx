@@ -39,7 +39,7 @@ import {
   HOST_HEALTH_LABEL,
   type TargetSessionState,
 } from "../components/connections/connectionState";
-import { useNow } from "../components/leaseStore";
+import { useNow, withoutLinkedManagedProfiles } from "../components/leaseStore";
 import Select from "../components/Select";
 import EnterpriseCheckbox from "../components/EnterpriseCheckbox";
 import ConnectionEmptyState from "../components/ConnectionEmptyState";
@@ -316,18 +316,10 @@ export default function Dashboard() {
   }, [connTagMap, adminConnTagMap]);
 
   // Derived: filtered profiles list (hides [managed] profiles if already linked to a named one)
-  const filteredProfiles = useMemo(() => {
-    return credProfiles.filter((p) => {
-      if (!p.label.startsWith("[managed]")) return true;
-      // It's a [managed] profile -> show it ONLY if there isn't another profile linked to the same AD account
-      const dn = p.label.replace("[managed] ", "");
-      const isLinkedElsewhere = credProfiles.some((other) => {
-        if (other.id === p.id || !other.checkout_id) return false;
-        return allCheckouts.find((c) => c.id === other.checkout_id)?.managed_ad_dn === dn;
-      });
-      return !isLinkedElsewhere;
-    });
-  }, [credProfiles, allCheckouts]);
+  const filteredProfiles = useMemo(
+    () => withoutLinkedManagedProfiles(credProfiles),
+    [credProfiles]
+  );
 
   // Filter state only: matching happens on the server.
   const { filters, setFilter, resetAllFilters, clearScope } = useConnectionFilter<Connection>([], {

@@ -1573,6 +1573,8 @@ export interface CredentialProfile {
   safeguard_account_id?: string;
   /** Asset label or numeric AssetId — present when kind === "safeguard". */
   safeguard_asset?: string;
+  /** Managed AD account of the linked checkout, even once it has expired. */
+  managed_ad_dn?: string;
 }
 
 export interface CredentialMapping {

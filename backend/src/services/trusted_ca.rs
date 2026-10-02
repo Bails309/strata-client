@@ -301,6 +301,18 @@ pub async fn delete(pool: &PgPool, id: Uuid) -> Result<bool, AppError> {
             "Cannot delete: this CA is still attached to {in_use} connection(s)"
         )));
     }
+    let ad_sources: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM ad_sync_configs
+          WHERE (connection_defaults->>'trusted_ca_id') = $1::text",
+    )
+    .bind(id.to_string())
+    .fetch_one(pool)
+    .await?;
+    if ad_sources > 0 {
+        return Err(AppError::Validation(format!(
+            "Cannot delete: this CA is the default for {ad_sources} AD sync source(s)"
+        )));
+    }
 
     let res = sqlx::query("DELETE FROM trusted_ca_bundles WHERE id = $1")
         .bind(id)

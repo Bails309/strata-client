@@ -1,7 +1,13 @@
 /* Polls credential profiles and toasts on threshold crossings + expiry. */
 import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { bulkSafeguardCheckout, getCredentialProfiles, type CredentialProfile } from "../api";
+import {
+  bulkSafeguardCheckout,
+  getCredentialProfiles,
+  getMyCheckouts,
+  type CheckoutRequest,
+  type CredentialProfile,
+} from "../api";
 import { invalidateSharedFetch, sharedFetch } from "../utils/sharedFetch";
 import { useToast } from "./ToastProvider";
 import { pollWhileVisible } from "./pollWhileVisible";
@@ -14,6 +20,7 @@ import {
   publishLeases,
   registerLeaseRefresher,
   WARNING_TOAST,
+  withoutLinkedManagedProfiles,
 } from "./leaseStore";
 
 /* ────────────────────────────────────────────────────────────────────────── */
@@ -258,6 +265,16 @@ export default function CredentialProfileExpiryWatcher({
         return;
       }
       if (cancelled) return;
+      if (profiles.some((p) => p.label.startsWith("[managed]"))) {
+        let checkouts: CheckoutRequest[] = [];
+        try {
+          checkouts = await sharedFetch("my-checkouts", pollIntervalMs, getMyCheckouts);
+        } catch {
+          /* without checkouts nothing can be matched, so every lease is shown */
+        }
+        if (cancelled) return;
+        profiles = withoutLinkedManagedProfiles(profiles, checkouts);
+      }
       publishLeases(profiles);
 
       const now = Date.now();
@@ -370,6 +387,7 @@ export default function CredentialProfileExpiryWatcher({
     // A refresh asked for after a change must see it, not another tab's copy.
     const unregister = registerLeaseRefresher(() => {
       invalidateSharedFetch("credential-profiles");
+      invalidateSharedFetch("my-checkouts");
       return evaluate();
     });
 

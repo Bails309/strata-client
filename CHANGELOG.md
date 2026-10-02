@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security — fixes from the external security and performance review
 
+Every finding from the review is addressed in this release except two:
+**SEC-23** (the optional VDI overlay mounts `docker.sock` into the
+backend) is descoped and recorded as an accepted risk — see
+[security.md](docs/security.md) — and **SEC-24** concerned `release.yml`,
+which 2.1.1 removed.
+
 - **Delegated user managers can no longer escalate (SEC-01, Critical).**
   Without `can_manage_system`, a `can_manage_users` holder may only assign
   roles, and act on users, whose permissions they already hold; may not act

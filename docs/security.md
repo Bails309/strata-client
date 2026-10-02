@@ -2712,6 +2712,15 @@ operator-facing documentation.
   (the default compose graph deliberately omits the mount). A
   sidecar driver running in a separate, more locked-down namespace
   is recommended for production deployments.
+- **Accepted risk (review finding SEC-23, descoped).** Replacing the
+  socket mount with a broker that alone holds `docker.sock` and accepts
+  only server-owned desktop templates was considered and descoped.
+  With the VDI overlay applied, a compromise of the backend is a
+  compromise of the Docker host. The overlay is off by default; where
+  it is needed, run Strata on a host dedicated to it (nothing else
+  that shares the Docker daemon), keep the image whitelist to
+  reviewed, pinned images, set `max_vdi_containers`, and offer VDI
+  only to users you would trust with that host.
 - **Image whitelist.** Only operator-approved images may be
   referenced as the `image` field of a `vdi` connection. Matching is
   strict equality — there is no glob, tag, or digest substitution

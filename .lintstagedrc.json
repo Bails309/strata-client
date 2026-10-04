@@ -1,10 +1,10 @@
 {
   "frontend/**/*.{ts,tsx,js,jsx}": [
-    "bash -c 'cd frontend && npx eslint --fix'",
-    "bash -c 'cd frontend && npx prettier --write'"
+    "node frontend/node_modules/eslint/bin/eslint.js --fix",
+    "node frontend/node_modules/prettier/bin/prettier.cjs --write --ignore-path frontend/.prettierignore"
   ],
   "frontend/**/*.{json,css,md}": [
-    "bash -c 'cd frontend && npx prettier --write'"
+    "node frontend/node_modules/prettier/bin/prettier.cjs --write --ignore-path frontend/.prettierignore"
   ],
   "backend/**/*.rs": [
     "bash -c 'cd backend && cargo fmt --'"

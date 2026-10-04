@@ -30,6 +30,23 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.3.3",
+    subtitle:
+      "A maintenance release: Strata is built with the latest Rust compiler and SSH library, and a dependency alert is closed by removing the package. Nothing changes in how you use Strata.",
+    sections: [
+      {
+        title: "Newer compiler and SSH library",
+        description:
+          "Strata is now built with Rust 1.99 everywhere, and remote SSH and SFTP sessions use the newest version of the SSH library. That library's security fix only affects SSH servers, which Strata never acts as. Long SSH and file-transfer sessions now refresh their encryption keys on the schedule the protocol intends.",
+      },
+      {
+        title: "For administrators",
+        description:
+          "Rebuild the images as usual, including the DMZ edge if you run one. There is no migration and no configuration change. A dependency alert for a pattern-matching package used only by a developer tool is closed; that package was never part of Strata itself.",
+      },
+    ],
+  },
+  {
     version: "2.3.2",
     subtitle:
       "Approved SSH host keys and certificate pins now survive an Active Directory sync, so a connection you have verified stays verified instead of going back to Unpinned and being refused.",

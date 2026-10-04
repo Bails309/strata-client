@@ -1902,6 +1902,8 @@ The suppression now rests on reachability rather than absence. The Marvin attack
 | `RUSTSEC-2026-0285` / `GHSA-2mjx-qc3c-rqvc`                | `rustls` (Rust)     | `0.23.41` → `0.23.45` | **None in the build**, which already resolved `0.23.45`. Reported from the stale `crates/vendor/ironrdp-connector/Cargo.lock`, now deleted. | 2.2.0 |
 | `RUSTSEC-2026-0118`, `RUSTSEC-2026-0119`                   | `hickory-proto` (Rust) | `0.25.2` → `0.26.1+` | **None in the build**, which resolves `0.26.3` via `hickory-resolver`. Reported from the stale `crates/vendor/sspi/Cargo.lock`, now deleted. | 2.2.0 |
 | `RUSTSEC-2023-0089`                                        | `atomic-polyfill` (Rust) | — (unmaintained) | **None.** Not compiled for the Linux target. Suppressed with justification (above). | —        |
+| `GHSA-j7h2-66j4-ghjf`                                      | `russh` (Rust)      | `0.63.3` → `0.64.0`   | **Not reachable, upgraded anyway.** The russh **server** did not check that a client's public-key signature used the negotiated algorithm (a client could downgrade its own `rsa-sha2-512` to `rsa-sha1`; no authentication bypass). Strata uses russh only as an SSH **client**, so it never verifies client signatures. | 2.3.3 |
+| Dependabot #52 (stack exhaustion via nested brace patterns) | `braces` (npm)      | `≤ 3.0.3` → no fix; **removed** | **None at runtime.** Root-workspace `dev` transitive of the pre-commit hook (`lint-staged` → `micromatch` → `braces`), fed only the repository's own `.lintstagedrc.json` globs; never in `frontend/`, `e2e/`, a bundle or an image. Removed by upgrading `lint-staged` 15 → 17, which uses `picomatch`. | 2.3.3 |
 
 #### `h2` unbounded empty `DATA` frames — why this one was material (v1.14.5)
 
@@ -1922,6 +1924,8 @@ The fix is the lockfile bump to `h2 0.4.16`. The declared `"0.4"` requirement is
 - **Renovate** ([`renovate.json`](../renovate.json)) raises routine dependency-update PRs, which then pass through the same gates plus Dependency Review before merge.
 - **Lockfiles are committed** for both ecosystems (`Cargo.lock`, `package-lock.json`, `frontend/package-lock.json`, `e2e/package-lock.json`) so that a build is reproducible and an audit result is meaningful. CI installs with `npm ci`, never `npm install`, so the lockfile is authoritative.
 - **Transitive pins use `overrides`.** When a vulnerable package is pulled in by a dependency whose own requirement range is not ours to edit, the fix is an `overrides` entry in [`frontend/package.json`](../frontend/package.json) — not a forked dependency and not a suppression. Each entry is expected to be removed once the parent package's own range moves past it.
+- **When no fixed version exists, remove the package.** If an advisory has no patched release, the preferred fix is a parent upgrade that drops the vulnerable package from the graph, rather than a suppression. v2.3.3 did this for `braces` (Dependabot #52) by moving `lint-staged` to 17, which uses `picomatch`.
+- **The Rust toolchain is pinned, and every pin moves together.** CI installs it through `dtolnay/rust-toolchain` pinned to a commit SHA (with the version in a trailing comment), and both builder images (`backend/Dockerfile`, `crates/strata-dmz/Dockerfile`) pin `rust:<version>` by digest, so a compromised tag cannot change what builds a release. Since v2.3.3 all four pins are Rust 1.99; before that they had drifted between 1.95 and 1.98.
 
 ---
 

@@ -23,7 +23,7 @@
 //!     -v strata-session-test_k3s-output:/kube:ro \
 //!     -e STRATA_KUBE_TEST_HOST=strata-kube-target \
 //!     -e STRATA_KUBE_TEST_CONFIG=/kube/kubeconfig.yaml \
-//!     rust:1.98-slim-trixie \
+//!     rust:1.99-slim-trixie \
 //!     cargo test -p strata-session --all-features --test kube_live -- --ignored
 //! docker compose -f docker-compose.session-test.yml down -v
 //! ```

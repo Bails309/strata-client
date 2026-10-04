@@ -11,7 +11,7 @@ By contributing to this project, you agree that your contributions will be licen
 ### Development Environment
 
 **Backend (Rust):**
-- Rust 1.95 (`rustup` recommended)
+- Rust 1.99 (`rustup` recommended; CI and the Docker builders pin 1.99)
 - A running PostgreSQL instance (or use the bundled Docker container)
 
 ```bash
@@ -21,8 +21,12 @@ cargo run
 ```
 
 **Frontend (TypeScript / React):**
-- Node.js 20+
+- Node.js 22.22.1+ (CI uses 24; the pre-commit hook's `lint-staged` 17 refuses older versions)
 - npm
+
+Run `npm install` once at the repository root as well: it installs the
+`husky` pre-commit hook, which runs ESLint `--fix` and Prettier on staged
+frontend files and `cargo fmt` on staged backend files.
 
 ```bash
 cd frontend

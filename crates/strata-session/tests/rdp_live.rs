@@ -30,7 +30,7 @@
 //!     -e STRATA_RDP_LEGACY_HOST=strata-rdp-legacy \
 //!     -e STRATA_RDP_TEST_USER=strata \
 //!     -e STRATA_RDP_TEST_PASSWORD=strata-test-password \
-//!     rust:1.98-slim-trixie \
+//!     rust:1.99-slim-trixie \
 //!     cargo test -p strata-session --all-features --test rdp_live -- --ignored
 //! docker compose -f docker-compose.session-test.yml down -v
 //! ```

@@ -110,12 +110,14 @@ tracing = { workspace = true }
 # engine runs in-process inside the backend, so that abort would take
 # every RDP session down with it. That rules out the older russh that
 # current `ironrdp` would otherwise force us onto; see the version note
-# on the RDP dependencies below.
+# on the RDP dependencies below. 0.64 also enforces rekey read/time limits
+# (#766); its `legacy-ed25519-pkcs8-parser` removal changes nothing here,
+# because that opt-in feature was never enabled.
 #
 # `ring` rather than the default `aws-lc-rs`: aws-lc is a C library, and
 # removing C from the session tier is the point of this crate. rustls
 # already standardises the workspace on ring.
-russh = { version = "0.63", optional = true, default-features = false, features = [
+russh = { version = "0.64", optional = true, default-features = false, features = [
     "ring",
     "flate2",
 ] }

@@ -191,8 +191,15 @@ async fn the_pty_takes_a_new_size() {
         .await
         .expect("resizing");
 
-    type_line(&mut engine, "stty size").await;
-    read_until(&mut engine, "40 100").await;
+    // The kubelet applies resizes asynchronously to stdin, so a `stty size`
+    // sent straight after can still report the old window. Wait in the pod
+    // for the new size instead.
+    type_line(
+        &mut engine,
+        "until [ \"$(stty size)\" = '40 100' ]; do sleep 0.2; done; echo RESIZE''D",
+    )
+    .await;
+    read_until(&mut engine, "RESIZED").await;
 }
 
 #[tokio::test]

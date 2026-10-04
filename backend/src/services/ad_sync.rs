@@ -407,7 +407,8 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
 
     // High performance bulk upsert using UNNEST and ON CONFLICT.
     // The `is_insert` check (xmax = 0) correctly distinguishes NEW entries from UPDATED ones.
-    let stats: (i64, i64) = sqlx::query_as(
+    let synced_extra = merged_extra_sql("connections.extra", "$10::jsonb", "$11::text[]");
+    let stats: (i64, i64) = sqlx::query_as(&format!(
         r#"
         WITH discovered AS (
             SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[]) AS t(dn, hostname, name, description)
@@ -425,7 +426,7 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
                 folder_id = EXCLUDED.folder_id,
                 description = EXCLUDED.description,
                 domain = EXCLUDED.domain,
-                extra = $10::jsonb,
+                extra = {synced_extra},
                 updated_at = now()
             WHERE connections.hostname != EXCLUDED.hostname 
                OR connections.name != EXCLUDED.name 
@@ -435,7 +436,7 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
                OR connections.description IS DISTINCT FROM EXCLUDED.description 
                OR connections.domain IS DISTINCT FROM EXCLUDED.domain
                OR connections.soft_deleted_at IS NOT NULL
-               OR connections.extra IS DISTINCT FROM $10::jsonb
+               OR connections.extra IS DISTINCT FROM {synced_extra}
             RETURNING (xmax = 0) AS is_insert
         )
         SELECT 
@@ -443,7 +444,7 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
             COALESCE(COUNT(*) FILTER (WHERE NOT is_insert), 0)::bigint AS updated
         FROM upserted
         "#,
-    )
+    ))
     .bind(&dns)
     .bind(&hostnames)
     .bind(&names)
@@ -454,6 +455,7 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
     .bind(config.folder_id)
     .bind(config.id)
     .bind(&defaults)
+    .bind(PER_HOST_PINS)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -1036,10 +1038,92 @@ async fn scheduler_tick(
     Ok(())
 }
 
+/// Connection parameters that pin one host's identity.
+///
+/// A sync rewrites `extra` from the source's defaults, which cannot know
+/// any single host's key, so these are carried over from the existing row
+/// rather than wiped — wiping an SSH host key blocks the connection.
+const PER_HOST_PINS: &[&str] = &[
+    "host-key",
+    "host-key-fingerprint",
+    "sftp-host-key",
+    "cert-fingerprints",
+];
+
+/// SQL for a synced connection's `extra`: the defaults, overlaid with the
+/// pins the existing row already holds.
+fn merged_extra_sql(existing: &str, defaults: &str, pins: &str) -> String {
+    format!(
+        "({defaults} || COALESCE((SELECT jsonb_object_agg(pin.key, pin.value) \
+         FROM jsonb_each({existing}) AS pin WHERE pin.key = ANY({pins})), '{{}}'::jsonb))"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Needs `TEST_DATABASE_URL`; any PostgreSQL database will do.
+    #[tokio::test]
+    async fn a_resync_keeps_the_host_pins_and_replaces_the_rest() {
+        let Some(pool) = std::env::var("TEST_DATABASE_URL")
+            .ok()
+            .and_then(|url| sqlx::PgPool::connect_lazy(&url).ok())
+        else {
+            eprintln!("TEST_DATABASE_URL unset, skipping");
+            return;
+        };
+        let sql = format!(
+            "SELECT {}",
+            merged_extra_sql("$1::jsonb", "$2::jsonb", "$3::text[]")
+        );
+        let merged = |existing: serde_json::Value, defaults: serde_json::Value| {
+            let (pool, sql) = (pool.clone(), sql.clone());
+            async move {
+                sqlx::query_scalar::<_, serde_json::Value>(&sql)
+                    .bind(existing)
+                    .bind(defaults)
+                    .bind(PER_HOST_PINS)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+
+        // The reported bug: an approved SSH key wiped by the next sync.
+        assert_eq!(
+            merged(
+                json!({ "host-key": "ssh-ed25519 AAAA", "color-scheme": "old" }),
+                json!({ "color-scheme": "new" }),
+            )
+            .await,
+            json!({ "host-key": "ssh-ed25519 AAAA", "color-scheme": "new" })
+        );
+        // Every pin survives; a stale non-pin key does not.
+        assert_eq!(
+            merged(
+                json!({
+                    "host-key-fingerprint": "SHA256:a",
+                    "sftp-host-key": "SHA256:b",
+                    "cert-fingerprints": "AB:CD",
+                    "ignore-cert": "true",
+                }),
+                json!({}),
+            )
+            .await,
+            json!({
+                "host-key-fingerprint": "SHA256:a",
+                "sftp-host-key": "SHA256:b",
+                "cert-fingerprints": "AB:CD",
+            })
+        );
+        // A row with no pins takes the defaults verbatim.
+        assert_eq!(
+            merged(json!({}), json!({ "enable-wallpaper": "true" })).await,
+            json!({ "enable-wallpaper": "true" })
+        );
+    }
 
     // ── AdSyncConfig serde roundtrip ──────────────────────────────────
 

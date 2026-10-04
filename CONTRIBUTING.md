@@ -21,8 +21,12 @@ cargo run
 ```
 
 **Frontend (TypeScript / React):**
-- Node.js 20+
+- Node.js 22.22.1+ (CI uses 24; the pre-commit hook's `lint-staged` 17 refuses older versions)
 - npm
+
+Run `npm install` once at the repository root as well: it installs the
+`husky` pre-commit hook, which runs ESLint `--fix` and Prettier on staged
+frontend files and `cargo fmt` on staged backend files.
 
 ```bash
 cd frontend

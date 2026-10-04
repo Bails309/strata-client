@@ -43,6 +43,46 @@ RUSTSEC-2026-0153/0154) still holds.
 **Scope.** No schema, API, environment-variable or behavioural change;
 operators rebuild images as usual.
 
+### Security — `braces` stack exhaustion (Dependabot #52) removed from the dependency graph
+
+Dependabot alert #52: *"braces vulnerable to stack-exhaustion denial of
+service through deeply nested patterns"* — `braces` ≤ `3.0.3`, **no patched
+version**. Its recursive AST walkers have no depth guard, so a deeply nested
+brace pattern under the length limit exhausts the call stack and kills the
+Node.js process with an uncaught `RangeError`.
+
+**Exposure: none at runtime.** `braces 3.0.3` was only in the **root**
+`package-lock.json`, as a `dev` transitive of the pre-commit hook
+(`lint-staged 15.5.2` → `micromatch 4.0.8` → `braces`). It expanded the glob
+keys of the repository's own [`.lintstagedrc.json`](.lintstagedrc.json) on
+developers' machines; it is not in `frontend/` or `e2e/`, never bundled, and
+not in any image.
+
+**Fix.** With no patched `braces`, the dependency is removed: `lint-staged`
+`^15.2.11` → `^17.6.0`, which matches globs with `picomatch` instead of
+`micromatch`. The root graph drops from 56 packages to 6 and `npm audit`
+reports 0 vulnerabilities.
+
+**Pre-commit hook repaired on the way.** Testing the upgrade showed the hook
+had never linted the staged files. Every task was
+`bash -c 'cd frontend && npx eslint --fix'`: the file paths lint-staged
+appends became bash positional parameters the script never used, so ESLint
+`--fix`ed the **whole** frontend on every commit and Prettier ran with no
+files. Under lint-staged 17 on Windows the Prettier task then waited for
+stdin and hung the commit. The tasks now call the frontend's ESLint and
+Prettier directly with `node`, from the repository root, so the staged files
+are passed as arguments; ESLint 10 finds `frontend/eslint.config.js` from each
+file's location, and Prettier is given `--ignore-path
+frontend/.prettierignore`. Verified on a staged throwaway file: Prettier
+formatted only that file with the frontend's `.prettierrc.json`, and ESLint
+resolved the frontend config (`prefer-const` reported from the repo root).
+The `backend/**/*.rs` task is unchanged.
+
+**Scope.** Developer tooling only: no runtime, image, API, schema or
+configuration change. lint-staged 17 needs **Node.js ≥ 22.22.1** to run the
+hook (CI and the images use Node 24); [CONTRIBUTING.md](CONTRIBUTING.md) now
+says so.
+
 ## [2.3.2] — 2026-10-04
 
 ### Patch release — an AD sync no longer wipes approved SSH host keys and certificate pins

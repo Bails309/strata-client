@@ -1903,6 +1903,7 @@ The suppression now rests on reachability rather than absence. The Marvin attack
 | `RUSTSEC-2026-0118`, `RUSTSEC-2026-0119`                   | `hickory-proto` (Rust) | `0.25.2` → `0.26.1+` | **None in the build**, which resolves `0.26.3` via `hickory-resolver`. Reported from the stale `crates/vendor/sspi/Cargo.lock`, now deleted. | 2.2.0 |
 | `RUSTSEC-2023-0089`                                        | `atomic-polyfill` (Rust) | — (unmaintained) | **None.** Not compiled for the Linux target. Suppressed with justification (above). | —        |
 | `GHSA-j7h2-66j4-ghjf`                                      | `russh` (Rust)      | `0.63.3` → `0.64.0`   | **Not reachable, upgraded anyway.** The russh **server** did not check that a client's public-key signature used the negotiated algorithm (a client could downgrade its own `rsa-sha2-512` to `rsa-sha1`; no authentication bypass). Strata uses russh only as an SSH **client**, so it never verifies client signatures. | Unreleased |
+| Dependabot #52 (stack exhaustion via nested brace patterns) | `braces` (npm)      | `≤ 3.0.3` → no fix; **removed** | **None at runtime.** Root-workspace `dev` transitive of the pre-commit hook (`lint-staged` → `micromatch` → `braces`), fed only the repository's own `.lintstagedrc.json` globs; never in `frontend/`, `e2e/`, a bundle or an image. Removed by upgrading `lint-staged` 15 → 17, which uses `picomatch`. | Unreleased |
 
 #### `h2` unbounded empty `DATA` frames — why this one was material (v1.14.5)
 

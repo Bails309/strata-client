@@ -79,9 +79,7 @@ export default function AdSyncFailureBanner({
                   {f.failures} failed {f.failures === 1 ? "run" : "runs"}
                 </span>
                 {f.last_error && (
-                  <code className="mt-1 block break-words text-xs text-danger">
-                    {f.last_error}
-                  </code>
+                  <code className="mt-1 block break-words text-xs text-danger">{f.last_error}</code>
                 )}
                 {onViewHistory && (
                   <button

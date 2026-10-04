@@ -170,6 +170,10 @@ Since v2.1.1 the heading tells you what kind of end it was, and the sentence und
 
 A separate **Reconnecting…** overlay means the connection between *your browser* and Strata dropped; that one retries automatically. Operators can trace any of these to a log line with the [session-disconnects runbook](runbooks/session-disconnects.md).
 
+### An SSH connection goes back to *Unpinned* after an AD sync and is refused.
+
+Fixed in v2.3.2. Approving a host key with **Verify Host Keys** stores it in the connection's settings, and until v2.3.2 every Active Directory sync rebuilt a synced connection's settings from the source's defaults, deleting the key. Strata will not connect to an SSH host without a pinned key, so the connection was refused until the key was approved again. A sync now keeps each connection's host key, SFTP host key and RDP certificate pins. Connections stripped before the upgrade need their keys approved once more; after that they survive every sync.
+
 ### There is no sound in my RDP session.
 
 RDP audio works from v2.1.1. Before that, every session told Windows not to send audio, and Windows additionally sends none unless a device-redirection channel is offered beside the audio one. If audio is still silent:

@@ -38,7 +38,7 @@ codegen-units = 1
 strip = true
 
 [workspace.package]
-version = "2.3.1"
+version = "2.3.2"
 
 edition = "2021"
 license = "Apache-2.0"

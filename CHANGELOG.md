@@ -7,46 +7,151 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed — an AD sync wiped approved SSH host keys, blocking the connection
+## [2.3.2] — 2026-10-04
+
+### Patch release — an AD sync no longer wipes approved SSH host keys and certificate pins
+
+### The ask
+
+Reported against v2.3.1 with a screenshot of **Admin → Connections**
+filtered to one SSH host, `cicsazvm038`, showing the **Unpinned** badge:
 
 > "if i verify a host key and then assign it to the host it changes from
 > unpinned to matches. however, when i run a new ADSync and the host is
 > synced from an ADSync, it removes the host key and returns to an unpinned
 > state blocking connections"
 
-**Root cause.** The sync upsert in
-[`services/ad_sync.rs`](backend/src/services/ad_sync.rs) replaced a synced
-connection's whole `extra` with the source's `connection_defaults`
-(`extra = $10::jsonb`), and treated any difference from the defaults as a
-change. **Verify Host Keys** stores the approved key in the same `extra`
-(`host-key`), so the next sync saw a difference and overwrote it. With no
-host key the SSH engine refuses the session (no trust-on-first-use), and the
-connection showed **Unpinned** again. RDP certificate pins
-(`cert-fingerprints`) and SFTP host keys were lost the same way.
+Fixed in #473. This release also backfills API documentation for the four
+host-key and certificate-discovery endpoints the fix relates to, which had
+shipped in v2.0.0 without a reference entry.
 
-**Fix.** A synced connection's `extra` is now the source's defaults overlaid
-with the per-host pins the existing row already holds — `host-key`,
-`host-key-fingerprint`, `sftp-host-key` and `cert-fingerprints`
-(`PER_HOST_PINS`, merged in SQL by `merged_extra_sql()`). A source's
-defaults cannot know any single host's key, so a pin set on the connection
-always wins. Every other key still follows the defaults, so removing a
-default still removes it from synced connections, and a connection whose
-only difference is a pin is no longer rewritten on every sync.
+### The symptom
 
-**Scope & safety.** No schema, API, environment-variable or dependency
-change. Trust is not widened: the preserved values are ones an administrator
-already approved on that connection, and nothing new is pinned.
+| Step | What the operator saw |
+| ---- | --------------------- |
+| 1. **Verify Host Keys** on an AD-synced SSH connection | The survey reported the host as `missing` |
+| 2. Approve the key | The survey reported `matches`; the fleet table dropped the **Unpinned** badge; sessions connected |
+| 3. Run the AD sync (scheduled or **Sync AD / LDAP**) | The badge returned to **Unpinned**, the fleet's *Security alerts* count went back up, and the connection was refused because the SSH engine had no key to verify against |
 
-**Testing.** New DB-backed
-`a_resync_keeps_the_host_pins_and_replaces_the_rest` (pins survive, a stale
-non-pin key does not, a pin-free row takes the defaults verbatim); the full
-upsert shape — subqueries in `ON CONFLICT … DO UPDATE SET` and its `WHERE` —
-checked against PostgreSQL 16. `cargo fmt --check`, `cargo clippy
--D warnings` and the 44 `ad_sync` tests pass.
+Connections created by hand were never affected; only connections with an
+`ad_source_id`. The same loss applied, less visibly, to RDP connections
+pinned with `cert-fingerprints` and SSH connections with an
+`sftp-host-key`: the pin vanished at the next sync and the connection fell
+back to its trusted-CA bundle, `ignore-cert`, or refusal.
 
-**Deploy.** Rebuild the backend. Connections already stripped by a sync
-must be re-verified once (**Admin → Connections → Verify Host Keys**); after
-that they survive syncs.
+### Root cause
+
+Two pieces of code wrote the same JSON column with different assumptions:
+
+1. **Approving a key** (`PUT /api/admin/connections/host-keys`,
+   `approve_ssh_host_keys` in
+   [`routes/admin.rs`](backend/src/routes/admin.rs)) stores it in the
+   connection's `extra` under `host-key`, with
+   `jsonb_set(extra, '{host-key}', …)`.
+2. **The AD sync upsert** (`do_sync` in
+   [`services/ad_sync.rs`](backend/src/services/ad_sync.rs)) treated
+   `extra` as owned entirely by the source. On every run it set
+   `extra = $10::jsonb` — the source's `connection_defaults` — and its
+   change detection was `connections.extra IS DISTINCT FROM $10::jsonb`.
+
+A connection holding an approved key therefore always differed from the
+defaults, was always rewritten, and always lost the key. The fleet
+**Unpinned** badge is computed directly from that column
+(`protocol = 'ssh' AND COALESCE(extra->>'host-key', '') = ''` in
+`connections::fleet_summary`), which is why it reappeared. The SSH engine
+has no trust-on-first-use, so a connection without `host-key` or
+`host-key-fingerprint` is refused at connect time.
+
+### The fix
+
+A synced connection's `extra` is now the source's defaults **overlaid with
+the per-host trust pins the existing row already holds**:
+
+| Key | What it pins | Set by |
+| --- | ------------ | ------ |
+| `host-key` | Approved SSH host public key (OpenSSH format) | **Verify Host Keys** / connection editor |
+| `host-key-fingerprint` | SSH host key SHA-256 fingerprints | Connection editor |
+| `sftp-host-key` | SFTP target host key, when SFTP goes to another host | Connection editor |
+| `cert-fingerprints` | RDP certificate SHA-256 fingerprints | Connection editor / certificate discovery |
+
+- The list is `PER_HOST_PINS` in
+  [`services/ad_sync.rs`](backend/src/services/ad_sync.rs);
+  `merged_extra_sql()` builds the SQL
+  `defaults || (pins taken from connections.extra)` with
+  `jsonb_each` / `jsonb_object_agg`, used both in `DO UPDATE SET` and in
+  the change-detection `WHERE`.
+- **A pin on the connection always wins** over the same key in the defaults:
+  a source applies to every host it imports and cannot know any single
+  host's key.
+- **Every other key still follows the defaults**, including removals: a
+  default taken off the source disappears from its connections at the next
+  sync, as before.
+- **Fewer writes.** A connection whose only difference from the defaults is a
+  pin now matches the merged value and is no longer rewritten on every sync.
+
+`trusted_ca_id` is deliberately **not** preserved: since v2.3.1 it is a
+source-level default (**RDP Certificate Trust**), so the source is the
+authority for it.
+
+### Rejected approaches
+
+- **Merge everything** (`extra = connections.extra || defaults`). Keeps the
+  pins, but a default removed from a source would never leave its
+  connections, and stale keys would accumulate for ever.
+- **Move pins to their own columns.** The cleanest separation, but a schema
+  change and a rewrite of every reader of `extra` for a patch release.
+- **Re-read and merge in Rust.** One extra round trip and an array of
+  per-row JSON per sync; the SQL merge does the same inside the existing
+  statement.
+
+### Scope & safety
+
+| Area | Change |
+| ---- | ------ |
+| Schema | None |
+| REST API | None. Documentation backfilled for `POST /api/admin/connections/host-keys`, `PUT /api/admin/connections/host-keys`, `POST /api/admin/connections/{id}/host-key` and `POST /api/admin/connections/{id}/certificate` |
+| Environment variables | None |
+| Dependencies | None |
+| Trust | Not widened. The preserved values are ones an administrator already approved on that connection; the sync still cannot add or change a pin on an existing connection, and a pin is never copied between connections |
+| Behaviour | AD-synced connections keep their host-key and certificate pins across syncs; all other parameters still follow the source's defaults |
+
+### Testing
+
+| Check | Result |
+| ----- | ------ |
+| New `a_resync_keeps_the_host_pins_and_replaces_the_rest` (DB-backed, PostgreSQL 16): an approved `host-key` survives while a stale default is replaced; all four pins survive while a non-pin key is dropped; a pin-free row takes the defaults verbatim | Passed |
+| Full upsert shape — subqueries in `ON CONFLICT … DO UPDATE SET` and its `WHERE` — run against PostgreSQL 16: an existing row kept its `host-key` and lost a stale key, an unchanged row was not updated, a new row was inserted | Passed |
+| `cargo test -p strata-backend --bin strata-backend ad_sync` | 44 passed |
+| `cargo fmt -p strata-backend -- --check`, `cargo clippy -p strata-backend --all-targets -- -D warnings` | Clean |
+
+### Documentation
+
+| Document | Change |
+| -------- | ------ |
+| [docs/api-reference.md](docs/api-reference.md) | **Backfill:** host-key survey, host-key approval, single host-key read and RDP certificate read endpoints, with request, response, status and audit details; AD sync connection defaults state which keys are kept |
+| [docs/security.md](docs/security.md) | AD sync connection defaults: per-host pins are preserved (versioned v2.3.2) |
+| [docs/architecture.md](docs/architecture.md) | AD sync component description |
+| [docs/deployment.md](docs/deployment.md) | v2.3.1 → v2.3.2 upgrade notes |
+| [docs/faq.md](docs/faq.md) | New question: an SSH connection goes back to *Unpinned* after an AD sync |
+| [README.md](README.md) | AD sync capability and release row |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | None — no trust boundary or key data flow moved |
+
+### Deploy
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+No migration, `.env` change or DMZ edge rebuild. The frontend rebuild is
+only for the What's New card.
+
+**Operator action:** connections that a sync has **already** stripped do not
+get their pins back on their own. Run **Admin → Connections → Verify Host
+Keys** once and approve the keys again (and re-enter any RDP certificate
+pins); from then on they survive every sync.
 
 ## [2.3.1] — 2026-10-04
 

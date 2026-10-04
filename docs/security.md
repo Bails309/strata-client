@@ -698,6 +698,11 @@ AD sync bind passwords are encrypted at rest using the same Vault Transit envelo
 - For Kerberos auth, the CA cert is written to a temporary file and set via `LDAPTLS_CACERT`; the file is cleaned up after the query
 - The `tls_skip_verify` option disables certificate validation entirely — use only for testing
 
+These settings secure the **LDAP** connection. Certificate trust for the **RDP** connections a source creates is separate: since v2.3.1 a source's `connection_defaults.trusted_ca_id` attaches a stored Trusted CA bundle to every connection it creates or updates (**Admin → AD Sync → RDP Certificate Trust**). The tunnel verifies the RDP host against that bundle, ahead of *Ignore server certificate*, and **fails closed** if the bundle has been deleted rather than falling back to whatever `ignore-cert` says. Two guards keep that from becoming an outage (post-authentication, `can_manage_system`):
+
+- Creating or updating a source with an id that is not a UUID, or names no stored bundle, is refused with `400`.
+- Deleting a bundle that any AD sync source uses as its default is refused with `400` (*"Cannot delete: this CA is the default for N AD sync source(s)"*), as deleting one attached to a connection already was.
+
 ### Kerberos Credential Isolation
 
 Each AD sync source uses a unique credential cache (`KRB5CCNAME=FILE:/tmp/krb5cc_adsync_{config_id}`) to prevent cross-config credential leakage during concurrent syncs. Cache files are cleaned up after each query.
@@ -715,7 +720,8 @@ AD sync `connection_defaults` are applied as the `extra` JSONB on synced connect
 - **H.264 GFX passthrough (v0.28.0 – v1.14.6 via `guacd`; removed in v2.0.0; restored natively in v2.1.0)**: `enable-h264` is stripped from every connection's `extra` map by migration `087` and is no longer accepted by the whitelist. Since v2.1.0 the native engine's opt-in passthrough is governed by `disable-gfx` alone (inverted: `"false"` enables it), and `disable-offscreen-caching` remains accepted but inert. The v2.0.0 removal was itself the security-relevant point at the time: advertising a codec the engine could not deliver corrupted the bitmap cache into persistent ghost tiles, so leaving a dead toggle in the editor was worse than removing it. Rationale in [migration 087](../backend/migrations/087_drop_h264_passthrough.sql); the v2.1.0 design, which forwards the bitstream to the browser without decoding it server-side, is in [h264-passthrough.md](h264-passthrough.md). No additional credentials, paths, or shell-executable parameters are exposed by these flags
 - **Audio (v2.1.1)**: `disable-audio` is now honoured on RDP — before v2.1.1 it was accepted and ignored, and audio never played either way. Unset, the host is invited to redirect audio over RDPSND; set, the Client Info PDU carries `INFO_NOAUDIOPLAYBACK`. An empty RDPDR channel is advertised in both cases; see [RDP device-redirection channel](#rdp-device-redirection-channel-v211).
 - **Session recording**: recording-path, recording-name, create-recording-path, recording-include-keys, recording-exclude-output, recording-exclude-mouse, recording-exclude-touch
-- **Authentication**: ignore-cert (certificate validation bypass only — no credential parameters)
+- **Authentication**: ignore-cert (certificate validation bypass only — no credential parameters); `trusted_ca_id` (v2.3.1, a reference to a stored bundle, validated on save — see [TLS / Certificate Handling](#tls--certificate-handling))
+- **Keyboard**: `server-layout`. Since v2.3.1 it selects the layout printable characters are typed on, so a wrong value types wrong characters; it carries no secret and cannot inject anything beyond keystrokes the user typed
 - **Clipboard, audio, printing, Wake-on-LAN**: various toggle and configuration parameters
 
 ---
@@ -1185,17 +1191,34 @@ without elevating either side's privileges.
   user (`gosu strata` in `backend/entrypoint.sh`). The user's
   primary gid does not match the writer's gid by construction.
 - On every container start, `backend/entrypoint.sh` reads the
-  numeric gid off whichever guacd-written file is present in
-  `/var/lib/guacamole/recordings`, falling back to the directory
-  gid on first boot when the volume is empty.
-- If the discovered gid does not already exist inside the backend
-  container's `/etc/group`, a local group named `guac-recordings`
-  is created with that gid. Either way, the `strata` user is added
-  to the group via `usermod -aG`, becoming a supplementary-group
-  member.
+  **numeric** gid (`find -printf '%G'`) of **every** file in
+  `/var/lib/guacamole/recordings`, de-duplicated. Until v2.3.1 it read
+  the gid of one file only, falling back to the directory's, and used
+  `%g`, which prints a group **name** once a matching group exists.
+- For each gid that is neither `0` nor `strata`'s own, a local group is
+  created if the container has none (`guac-recordings-<gid>`), and the
+  `strata` user is added to it via `usermod -aG`, becoming a
+  supplementary-group member.
 - After the supplementary-group bootstrap, standard POSIX
   group-read on the `0640` recording files is sufficient — no
   capabilities required at read time.
+
+**Writer side (native engine, v2.0.0+; directory ownership since v2.3.1):**
+
+- The engine creates each recording as `strata`, and the retention
+  sweeper unlinks files, so `strata` needs write and execute on the
+  **directory**. A guacd-era volume leaves the directory owned by guacd.
+  Before v2.3.1 the entrypoint granted group write to the directory's own
+  group, which was not necessarily a group `strata` had joined, and every
+  new recording then failed at session start with `EACCES` (recording
+  status `failed`, *"open recording …: Permission denied"*).
+- The entrypoint now runs `chown strata:strata` on the directory itself
+  (**not recursive** — older files keep their owner and group) and
+  `chmod u+rwx,g+rwxs`, then checks `gosu strata test -w` and logs
+  `[entrypoint] ERROR: … is not writable by strata; session recordings
+  will fail` if the directory is still not writable (read-only mount,
+  `all_squash`, CIFS without `uid=`/`gid=`). Both commands tolerate
+  failure so a read-only volume does not stop the backend starting.
 
 **What we deliberately do _not_ do:**
 
@@ -1209,7 +1232,8 @@ without elevating either side's privileges.
 - We do not `chown -R strata:strata /var/lib/guacamole` in the
   backend entrypoint (that line was previously present and was
   removed in v1.1.0). It raced with in-flight guacd writes and
-  destroys the gid signal the supplementary-group lookup needs.
+  destroys the gid signal the supplementary-group lookup needs. The
+  v2.3.1 `chown` touches the recordings directory alone, never a file.
 - We do not chmod recordings to world-readable (`0644`). On a
   multi-tenant Linux host where the volume is bind-mounted from
   a shared directory, world-read would expose recording byte
@@ -1805,6 +1829,16 @@ who has checked the schema and taken a backup can accept named versions
 with `STRATA_MIGRATION_REPAIR_VERSIONS=29,46`; each acceptance is logged at
 error level with the old and new checksums.
 
+The automatic list (`KNOWN_EDITS` in
+[`backend/src/db/mod.rs`](../backend/src/db/mod.rs)) holds only edits that
+shipped in a release and are recorded with the reason. v2.3.1 added version
+96 (both line-ending forms of its earlier checksum): it gained an idempotent
+`CREATE TABLE IF NOT EXISTS revoked_tokens` for databases created from an
+early build whose migration 38 was the duplicate `038_indexes_and_not_null`,
+which the pre-SEC-22 auto-repair had then rewritten — the exact concealment
+SEC-22 closed. Those databases had **no token-revocation table** and failed
+to start on 096; the edit restores it without hiding any other change.
+
 ---
 
 ## Dependency & supply-chain security
@@ -2300,6 +2334,32 @@ Strata remaps **Right Ctrl** (keysym `0xFFE4`) as a Windows key proxy, following
 ### Security Considerations
 
 The proxy operates entirely in the browser (client-side JavaScript). No keysym remapping or key injection occurs on the backend. The proxy cannot introduce keys that the user did not physically press — it only translates Right Ctrl into Super_L in the keysym stream before forwarding to `client.sendKeyEvent()`.
+
+### Layout keymaps and lock state (v2.3.1)
+
+Since v2.3.1 the RDP engine types each printable character as a key press on the target's layout, using guacd's RDP keymaps (Apache-2.0) embedded unmodified in [`engine/rdp/keymaps/`](../crates/strata-session/src/engine/rdp/keymaps). See [architecture.md § Keyboard](architecture.md#keyboard-characters-typed-on-the-targets-layout-v231) for the mechanism.
+
+- **No new input surface.** The tables are compiled into the binary with `include_str!` and parsed once from those constants; nothing is read from the network, the database or the filesystem. A table that fails to parse is logged at `ERROR` and that layout falls back to Unicode input. `every_bundled_keymap_parses` guards all 18 in CI.
+- **Keystrokes are still only what the user typed.** The engine adds Shift or AltGr presses around a character, and synchronize events that set Num Lock on and Caps Lock off, so that the target produces the **same** character the browser reported; it never produces a character the user did not type. A wrong `server-layout` types wrong characters but cannot widen access.
+- **Releases always match presses**, so a key can no longer be left held down on the target by releasing Ctrl first — which, on a privileged session, was a stuck key the next user input would combine with.
+- **Synchronize events are sent only while no key is held**, because a synchronize event can reset the target's held-key state.
+- **Read-only sessions are unaffected:** keyboard input is dropped before any of this runs.
+
+---
+
+## Clipboard push on paste shortcuts (v2.3.1)
+
+The browser pushes the local clipboard to the remote on pointer and focus events (since v1.x) and, since v2.3.1, when the user types **Ctrl+V** or **Shift+Insert** in a focused session ([`utils/pasteShortcutGate.ts`](../frontend/src/utils/pasteShortcutGate.ts)). Security properties:
+
+| Property | Detail |
+| -------- | ------ |
+| When the clipboard is read | Only on a paste chord typed while a session view has keyboard focus, which is an explicit request to paste. This is narrower than the existing `mouseenter` trigger |
+| Where it goes | Only to the session the keystroke was typed into, through the existing serialised `sendClipboardToRemote()`; the shared viewer is not wired |
+| Policy | `disable-paste` is still enforced by the engine, which drops the text; the 8 MiB cap and per-client stream limits (SEC-15) apply unchanged |
+| Diagnostics | Logged as `source: "paste-shortcut"` in the content-free `strataClipboard` ring buffer — lengths and an FNV-1a digest, never text |
+| Failure | A denied or slow read never swallows the keystroke: it is released after 1 s at most, and a denial is recorded as `local-read-failed` |
+
+The engine also stops advertising a format list before the target's CLIPRDR Monitor Ready, so the client's capability PDU is never sent ahead of the server's.
 
 ---
 

@@ -124,6 +124,28 @@ Mode B is the v1.14.4 defect. Mode A is the v1.14.1 defect, which
 should now degrade to a partial copy plus a console warning rather
 than a silent dead clipboard.
 
+If copy/paste is not broken but **late** — local → remote pastes the
+*previous* text, and works after a click in the session — that is
+**Mode D — no push before the paste**, fixed in v2.3.1. The local
+clipboard was pushed only on pointer and focus events, so Alt+Tab back
+to the browser and an immediate Ctrl+V sent nothing first. On v2.3.1+,
+Ctrl+V and Shift+Insert push first and hold the keystroke (up to 1 s).
+In a dump, a paste typed in the session shows `queued` with
+`source: "paste-shortcut"` followed by `stream-end`, or
+`skip-duplicate` when the text was already sent. If there is **no**
+`paste-shortcut` entry, the paste was not typed in a focused Strata
+session view (for example the right-click menu in Windows, which only
+sees what earlier pointer pushes delivered), or the build predates
+v2.3.1. A `local-read-failed` entry means the browser denied the read:
+check the site's clipboard permission and that the page is served over
+HTTPS.
+
+Known limitation: after the remote copies something the bridge does not
+carry (a file, an image, or anything under `disable-copy`), re-copying
+the **same** text locally that was last sent is skipped as a duplicate,
+so the remote keeps its own copy. Copying any different text locally
+resolves it.
+
 ### 1b. Attribute a Mode C failure to a stage
 
 When a copy vanishes entirely, bring up both tracers and reproduce:
@@ -175,6 +197,8 @@ strataClipboard.disable();
 | Event                                                           | Direction | Interpretation                                                                                                                   |
 | --------------------------------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `queued` → `stream-open` → `stream-end`                         | out       | A healthy local → remote push.                                                                                                   |
+| `queued` with `source: "paste-shortcut"`                        | out       | (v2.3.1) The user pressed Ctrl+V or Shift+Insert in the session; the keystroke was held until this push finished. A `skip-duplicate` with this source means the remote was believed to hold that text already. |
+| `local-read-failed`                                             | out       | The browser refused to let the page read the local clipboard (permission denied, no user activation, insecure origin). `source` says which trigger asked. A paste keystroke is still delivered, with the remote's previous clipboard. |
 | `skip-duplicate`                                                | out       | Suppressed because the remote is believed to already hold this text. Expected for the burst of triggers a single click produces. |
 | `skip-disconnected` / `abort-disconnected` / `abort-mid-stream` | out       | The tunnel was closed. Look for a preceding `tunnel-closed`.                                                                     |
 | `stream-failed` / `stream-open-failed`                          | out       | The Guacamole client rejected the write.                                                                                         |
@@ -338,4 +362,4 @@ strataClipboard.clear();
 
 ---
 
-_Last reviewed: 2026-08-12._
+_Last reviewed: 2026-10-04 (v2.3.1 — Mode D and the `paste-shortcut` / `local-read-failed` events added; the Mode C commands above describe the `guacd` era and are kept for historical deployments)._

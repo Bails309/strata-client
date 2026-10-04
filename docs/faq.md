@@ -181,7 +181,19 @@ RDP audio works from v2.1.1. Before that, every session told Windows not to send
 
 ### The wrong characters appear when I type in an RDP session on a non-US keyboard.
 
-Fixed in v2.1.1. Your browser applies your local keyboard layout, and the engine used to send the result as a US key position that Windows then re-interpreted through *its* layout — so on a UK keyboard `\` arrived as `#` and `@` and `"` were swapped. Typed characters are now sent as characters, which works for every layout. Shortcuts (anything held with Ctrl, Alt or the Windows key) are still sent as key positions so they keep working; AltGr is treated as a character key, not a shortcut. The **Failsafe (Unicode events)** keyboard-layout option no longer changes anything, because every layout now behaves that way.
+Set the connection's **Keyboard layout** to the layout the remote Windows user has (blank means UK English). Your browser applies your local layout, and the engine re-types each character on the configured target layout, so `\`, `@`, `"` and `£` land on the right keys only when that setting matches the remote user's layout. Characters the layout cannot type are sent as Unicode. **Failsafe (Unicode events)** sends every character as Unicode, which works on any layout but not at a PowerShell prompt on Server Core.
+
+### I can't type at a PowerShell prompt on Windows Server Core, but Notepad works.
+
+Fixed in v2.3.1. Characters were being sent as Unicode key events, which the PSReadLine version shipped with Windows Server 2019/2022 ignores. They are now typed as key presses on the connection's keyboard layout. If the connection uses **Failsafe (Unicode events)**, change it to the remote user's layout.
+
+### The numeric keypad does nothing in a remote session.
+
+Fixed in v2.3.1 for RDP and SSH (VNC was never affected). With Num Lock on, the keypad's digits and decimal point were not recognised by either engine and were dropped. They now arrive as keypad keys, and Strata switches the remote side's Num Lock on before each digit, so the keypad types digits even if Windows turned Num Lock off at sign-in. Alt plus a keypad number code works on Windows. If the keypad moves the cursor instead, your **own** Num Lock is off.
+
+### When I paste text I copied on my own machine, I get the old contents, or it only works after I click in the session.
+
+Fixed in v2.3.1. Your clipboard used to be sent to the session only when the pointer entered it or you clicked, so returning with Alt+Tab and pressing Ctrl+V straight away pasted whatever the remote held before. Ctrl+V and Shift+Insert now send your clipboard first and wait for it, for up to a second. If it still happens, follow [runbooks/clipboard-diagnostics.md](runbooks/clipboard-diagnostics.md) and look for `paste-shortcut` entries in `strataClipboard.print()`; a `local-read-failed` entry means the browser refused to let the page read your clipboard.
 
 ### My RDP session looks zoomed in, or everything looks smaller than it used to.
 
@@ -207,6 +219,10 @@ If clipboard access is denied outright (nothing transfers in either direction), 
 ### Where are recordings stored?
 
 By default in the `guac-recordings` Docker volume on the host. Optionally synced to Azure Blob Storage on session end for durable, memory-efficient streaming playback (configure under **Admin → Storage**).
+
+### Every recording shows *failed* with "Permission denied".
+
+The recordings volume was created before v2.0.0, when `guacd` owned the directory, and the native engine could not create files in it. Fixed in v2.3.1: the backend takes ownership of the directory (not the older files) on every start. If it persists, the backend logs `[entrypoint] ERROR: … is not writable by strata` at startup, which means the volume is read-only or the storage squashes file ownership. See [deployment.md § Session Recordings](deployment.md#session-recordings).
 
 ### Can I delete a recording to comply with a data-subject request?
 

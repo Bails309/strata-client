@@ -1715,6 +1715,7 @@ List the calling user's own historical recordings. Supports optional filtering, 
     "storage_path": "08c6776c-7fc1-4869-864e-c1a823864ad4-1776293653790.guac",
     "storage_type": "local",
     "client_ip": "203.0.113.42",
+    "engine": "native",
     "status": "complete",
     "failure": null
   }
@@ -1722,6 +1723,8 @@ List the calling user's own historical recordings. Supports optional filtering, 
 ```
 
 `client_ip` is captured at handshake from the rightmost non-empty `X-Forwarded-For` entry (with a `ConnectInfo` peer-IP fallback). It is `null` for recordings created before migration 065.
+
+`engine` (migration 081) is the session engine that served the recording, `guacd` or `native`, and `null` for rows that predate migration 081. Since v2.3.1 it is written when the recording **starts**; before that it was set only on finalisation, so a recording still in progress, or a session that never connected, returned `null` and the admin Sessions page showed *Unknown*.
 
 `status` (migration 099) is `recording` while the session runs, `complete` once it is finalised intact, `incomplete` when recording stopped early or the backend stopped before finalising it (up to 5 seconds may be lost), and `failed` when nothing usable was recorded. `failure` says why.
 
@@ -1978,6 +1981,7 @@ List the authenticated user's credential profiles.
 | `checkout_id`     | UUID \| null | If non-null, the profile was populated from an active password checkout and its expiry is bounded by the checkout duration regardless of `ttl_hours`.                                                                                                                                                                                                |
 | `expires_at`      | timestamp    | `created_at + ttl_hours`. After this point the profile is no longer considered a valid credential source by the tunnel and a renewal is required.                                                                                                                                                                                                    |
 | `expired`         | boolean      | Server-computed convenience field equivalent to `expires_at <= now()`.                                                                                                                                                                                                                                                                               |
+| `managed_ad_dn`   | string       | (v2.3.1) Present only when `checkout_id` is set: the managed AD account of the linked password checkout, read with a `LEFT JOIN` on `password_checkout_requests` and kept after that checkout expires. The lease UI uses it to hide a `[managed]` profile whose account another profile already reaches, so one lease is not listed twice. Omitted when absent. |
 
 #### `POST /api/user/credential-profiles`
 
@@ -2701,6 +2705,10 @@ Upgrades to a WebSocket connection carrying the Guacamole-style instruction stre
 > **Clipboard stream concurrency.** The local → remote direction uses the same stream shape in reverse (`clipboard` → `blob`… → `end`), and the wire protocol permits multiple stream indices to be open simultaneously. Windows' CLIPRDR does not: the remote clipboard is a single shared buffer, so two overlapping transfers splice their payloads and can leave `rdpclip.exe` wedged for the remainder of the logged-on Windows session — a state that survives reconnecting the tunnel, because RDP reattaches to the same Windows session.
 >
 > Client implementations **must serialise** local → remote clipboard transmission: open at most one clipboard stream at a time and send its `end` before opening the next. Strata's client does this in [`clipboardSync.ts`](../frontend/src/components/clipboardSync.ts). The engine forwards whatever the client sends, so third-party clients speaking this tunnel are subject to the same constraint.
+
+> **Clipboard before a paste keystroke (v2.3.1 note).** A `clipboard` stream and a following `key` instruction are processed in order, but Windows' clipboard owner applies the new CLIPRDR format list asynchronously, so a paste keystroke sent immediately behind a changed clipboard can still read the old one. Strata's client therefore sends the clipboard stream, waits for it, waits a further 150 ms when the text changed, and only then sends the `key` instructions for Ctrl+V / Shift+Insert ([`pasteShortcutGate.ts`](../frontend/src/utils/pasteShortcutGate.ts)). Third-party clients should do the same. On RDP the engine holds a clipboard that arrives before the target's CLIPRDR Monitor Ready and advertises it in its Monitor Ready answer.
+
+> **Keyboard input (v2.3.1 note).** `key` instructions still carry X11 keysyms. On RDP the engine now types printable keysyms as key presses on the connection's `server-layout` (blank = `en-gb-qwerty`) and sends Unicode events only for characters that layout cannot type, or for every character under `failsafe`. On RDP the Caps Lock (`0xFFE5`) and Num Lock (`0xFF7F`) keysyms are **ignored**: the client is expected to have applied them already, and the engine keeps the target at Num Lock on, Caps Lock off. Keypad keysyms `0xFFB0`–`0xFFB9`, `0xFFAE` and `0xFFAC` are honoured on RDP, SSH and Kubernetes. A `key` release is matched to whatever its press was sent as.
 
 **DMZ deployment mode (v1.5.2+)**: When a user reaches the backend through a public-facing `strata-dmz` edge node, this WebSocket upgrade is forwarded end-to-end through the reverse-tunnel link using **RFC 8441 Extended CONNECT** over the link's HTTP/2 connection. The DMZ proxy:
 
@@ -3651,10 +3659,16 @@ Required permission: `can_manage_system`.
 
 **Errors**
 
-- `400 Bad Request` — at least one row in `connections` (with
-  `protocol = 'web'`) still references this bundle via
-  `extra->>'trusted_ca_id'`. Detach the bundle from those connections
-  first.
+- `400 Bad Request` — at least one row in `connections` still references
+  this bundle via `extra->>'trusted_ca_id'`, whatever its protocol (RDP
+  connections attach bundles from the same list; earlier revisions of this
+  page said `protocol = 'web'` only, which the handler has never applied).
+  Message: *"Cannot delete: this CA is still attached to N connection(s)"*.
+  Detach the bundle from those connections first.
+- `400 Bad Request` — (v2.3.1) at least one AD sync source uses this bundle
+  as `connection_defaults.trusted_ca_id`. Message: *"Cannot delete: this CA
+  is the default for N AD sync source(s)"*. Clear the default on those
+  sources first; synced connections fail closed on a missing bundle.
 - `404 Not Found` — no such bundle.
 
 Writes a `trusted_ca.deleted` audit event.
@@ -3870,7 +3884,7 @@ The `connection_defaults` field accepts a JSON object of connection parameter ke
 | `disable-gfx`                | Controls the Graphics Pipeline Extension (GFX). **Inverted:** `"false"` *enables* it, and with it opt-in H.264 passthrough on the native engine (v2.1.0+). See [h264-passthrough.md](h264-passthrough.md)                                                                                                    |
 | `enable-h264`                | **Removed in v2.0.0** (stripped from every connection by migration `087` and no longer whitelisted). It gated the `guacd`-era passthrough (v0.28.0 – v1.14.6); since v2.1.0 H.264 is governed by `disable-gfx` alone                                                                                        |
 | `disable-audio`              | Stop the RDP host redirecting desktop audio (`INFO_NOAUDIOPLAYBACK`). **Honoured since v2.1.1**; before that it was accepted and ignored, and audio never played either way                                                                                                                                  |
-| `server-layout`              | Keyboard layout announced to the RDP host. Governs positional keys (shortcuts, navigation, modifiers). Since v2.1.1 printable characters are sent as Unicode and do not depend on it; the *Failsafe (Unicode events)* value is therefore equivalent to any other                                              |
+| `server-layout`              | Keyboard layout of the target user. Printable characters are typed on this layout's keys, so it must match the user's Windows layout. Blank means `en-gb-qwerty`; `failsafe` (or an unknown name) sends Unicode key events, which PSReadLine on Server Core ignores                                              |
 | `force-lossless`             | Force lossless encoding (disables H.264; falls back to RemoteFX). Use only for screens where colour fidelity is critical (e.g. medical imaging)                                                                                                                                                               |
 | `color-depth`                | Colour depth in bits per pixel. **Must be `32` for H.264 GFX**; lower values silently disable H.264 and fall back to RemoteFX. The backend defaults this to `32` when empty (v0.28.0+)                                                                                                                        |
 | `recording-path`             | Directory for screen recording files                                                                                                                                                                                                                                                                          |
@@ -3880,10 +3894,19 @@ The `connection_defaults` field accepts a JSON object of connection parameter ke
 | `recording-exclude-mouse`    | Exclude mouse events from recordings                                                                                                                                                                                                                                                                          |
 | `recording-exclude-touch`    | Exclude touch events from recordings                                                                                                                                                                                                                                                                          |
 | `recording-exclude-output`   | Exclude graphical output from recordings                                                                                                                                                                                                                                                                      |
+| `trusted_ca_id`              | (v2.3.1) UUID of a stored Trusted CA bundle (`GET /api/user/trusted-cas`). Every synced RDP connection verifies its host against it, ahead of `ignore-cert`, and the tunnel refuses the session if the bundle no longer exists. Validated on create and update, see below                                       |
+
+**Errors (create and update)** — in addition to the existing validation errors:
+
+- `400 Bad Request` *"trusted_ca_id must be a UUID"* — (v2.3.1)
+  `connection_defaults.trusted_ca_id` is a non-empty string that is not a UUID.
+- `400 Bad Request` *"Trusted CA not found"* — (v2.3.1) the UUID names no
+  stored bundle. An empty string or an absent key means no CA.
 
 ### `PUT /api/admin/ad-sync-configs/:id`
 
-Partial update of an AD sync source. Only provided fields are updated.
+Partial update of an AD sync source. Only provided fields are updated. A
+`connection_defaults` object is validated as for create.
 
 ### `DELETE /api/admin/ad-sync-configs/:id`
 

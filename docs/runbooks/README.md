@@ -60,4 +60,5 @@ The runbooks listed below cover §26/§28 of the Coding Standards.
 | av-operations.md         | AV scanner outage, signature updates, false-positive triage | Active |
 | clipboard-diagnostics.md | RDP clipboard failure triage, recovery & evidence capture   | Active |
 | session-disconnects.md   | Unexpected session ends: on-screen message → cause → log    | Active |
+| keyboard-input.md        | Wrong characters, console prompt ignores typing, keypad, stuck keys | Active |
 | login-rate-limiting.md   | `429` on sign-in, password change or session capacity       | Active |

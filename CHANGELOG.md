@@ -7,6 +7,525 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.1] — 2026-10-04
+
+### Patch release — typing works at a PowerShell prompt on Server Core, the numeric keypad types, and Ctrl+V pastes what was just copied
+
+### The ask
+
+Three issues were reported together, verbatim:
+
+> - "numeric keyboard doesn't work on any remote sessions"
+> - "keyboard doesn't work on windows core servers: it's a bit weird as it
+>   works on the SConfig screen, but then it stops, you can't type anything
+>   in the terminal window, but if you open a notepad window, it's working
+>   there. Clipboard also works, so you can paste in top the terminal"
+> - "copying text from local client into the session is a bit intermittent,
+>   but I noticed it before v2 upgrade - from what I've seen it's got a
+>   delay, and sometimes I need to copy from the server to the laptop first
+>   for it to work the other direction"
+
+The fix for the second issue needed a product decision, so it was put to the
+reporter: the target's keyboard layout lives in the Windows user profile and
+Strata cannot detect it, so a connection with no layout set has to assume one.
+The answer was **"en-GB for blank (UK estate)"**.
+
+The release also ships six pull requests merged to `main` after v2.3.0
+without a CHANGELOG entry (#466–#471); they are backfilled under
+[*Backfilled from `main`*](#backfilled-from-main-466471) below.
+
+### Summary
+
+| # | Report | Root cause, in one line | Fixed in |
+| - | ------ | ----------------------- | -------- |
+| 1 | Numeric keypad types nothing | `KP_0`–`KP_9` and `KP_Decimal` had no RDP scancode and no SSH byte mapping, so both engines dropped them | `engine/rdp/keycodes.rs`, `engine/keymap.rs` |
+| 2 | Nothing can be typed at a Server Core PowerShell prompt | Since v2.1.1 every printable character was sent as a Unicode key event, which Windows delivers as `VK_PACKET`; the PSReadLine shipped with Server 2019/2022 ignores `VK_PACKET` | `engine/rdp/{keycodes,layouts,mod}.rs`, `session_engine.rs` |
+| 3 | Local → remote paste is late or pastes old text | The local clipboard was only pushed on pointer and focus events; a paste typed after Alt+Tab fired none of them | `utils/pasteShortcutGate.ts`, `components/clipboardSync.ts` |
+
+---
+
+### Fixed — the numeric keypad types nothing
+
+#### The symptom
+
+With Num Lock on, keypad digits and the keypad decimal point produced no
+input in **any** RDP or SSH session. Keypad Enter, `+`, `-` and `*` worked;
+with Num Lock off the keypad's navigation keys (Home, End, arrows) worked.
+VNC was unaffected.
+
+#### Root cause
+
+`Guacamole.Keyboard` (vendored in
+[`frontend/src/lib/guacamole-vendor.js`](frontend/src/lib/guacamole-vendor.js))
+reports a keypad key by its X11 keypad keysym when Num Lock is on — `KP_0`
+(`0xFFB0`) to `KP_9` (`0xFFB9`) and `KP_Decimal` (`0xFFAE`), taken from
+`keyCode` 96–105 and 110 — and by the ordinary navigation keysym (`Home`
+`0xFF50`, `Left` `0xFF51`, …) when it is off. Neither engine knew the keypad
+digit keysyms:
+
+- **RDP.** [`engine/rdp/keycodes.rs`](crates/strata-session/src/engine/rdp/keycodes.rs)
+  `named_scancode()` mapped `KP_Divide`, `KP_Multiply`, `KP_Subtract`,
+  `KP_Add` and `KP_Enter`, but not the digits or the decimal point. The
+  Unicode fallback did not catch them either, because
+  `keymap::keysym_to_char()` only treats Latin-1 (`0x20`–`0xFF`) and Unicode
+  (`0x0100_0000 | cp`) keysyms as characters. `resolve_key()` returned `None`
+  and the keystroke was discarded silently.
+- **SSH and Kubernetes.** [`engine/keymap.rs`](crates/strata-session/src/engine/keymap.rs)
+  had `KP_Enter` in `named_key()` and nothing else from the keypad, and
+  `printable()` hit the same `keysym_to_char()` gap.
+- **VNC** forwards keysyms unchanged to the RFB server, which understands
+  keypad keysyms natively — which is why it was the one protocol that worked.
+
+A latent defect sat beside it: `KP_Divide` was sent as the **main-block**
+`/` position (scancode `0x35` without the `E0` prefix). On layouts where that
+key is not `/` — German has `-` there — keypad `/` typed the wrong character.
+
+#### The fix
+
+- **RDP.** `named_scancode()` now maps the keypad by position: `KP_0` → `0x52`,
+  `KP_1` → `0x4F`, `KP_2` → `0x50`, `KP_3` → `0x51`, `KP_4` → `0x4B`,
+  `KP_5` → `0x4C`, `KP_6` → `0x4D`, `KP_7` → `0x47`, `KP_8` → `0x48`,
+  `KP_9` → `0x49`, `KP_Decimal` and `KP_Separator` → `0x53`, and `KP_Divide`
+  → `E0 35`. These are the keypad keys themselves, not the top-row digits,
+  so Alt+numpad character codes work and the keypad decimal key produces the
+  target layout's decimal separator (`,` on a German target).
+- **Num Lock on the target.** A keypad scancode only types a digit while the
+  target's Num Lock is on, and the target never reports its lock state.
+  `needs_num_lock()` marks the keypad digit keysyms, and the engine sends a
+  fast-path synchronize event (`SyncEvent`, Num Lock on, Caps Lock off) before
+  one whenever no other key is held. See
+  [Lock keys](#lock-keys-belong-to-the-browser) below.
+- **SSH and Kubernetes.** A new `keypad_char()` in `engine/keymap.rs` maps
+  `KP_0`–`KP_9`, `KP_Decimal`, `KP_Separator`, `KP_Divide`, `KP_Multiply`,
+  `KP_Add`, `KP_Subtract` and `KP_Equal` to their characters, used by
+  `printable()` after `keysym_to_char()`. It is deliberately kept out of
+  `keysym_to_char()`, which the RDP engine uses to decide what counts as
+  text: keypad keys must stay keypad positions there.
+
+---
+
+### Fixed — typing does nothing at a PowerShell prompt on Server Core
+
+#### The symptom
+
+On a Windows Server Core host the SConfig menu accepted input, but after
+leaving it for the PowerShell prompt nothing typed appeared. Notepad, opened
+from the same session, accepted everything. Pasting into the console with
+Ctrl+V or a right-click worked. Enter, arrows and Backspace worked; letters,
+digits and symbols did not.
+
+#### Root cause
+
+RDP carries a keystroke in one of two forms: a **scancode** (a key position,
+which the target turns into a character through its own keyboard layout) or
+a **Unicode keyboard event** (`TS_UNICODE_KEYBOARD_EVENT`, a character). Windows
+injects a Unicode event as a key message with the virtual-key code
+`VK_PACKET` carrying the character.
+
+v2.1.1 (#420) changed the RDP engine to send **every printable character** as
+a Unicode event, to stop the target applying its layout on top of the one the
+browser had already applied (on a UK target `\` arrived as `#`). That was
+correct for GUI applications, which read the resulting `WM_CHAR`. It broke
+console line editors: the PSReadLine module that ships with Windows
+PowerShell on Server 2019 and 2022 ignores console key records whose key is
+`ConsoleKey.Packet`. Upstream fixed this in 2022 (PowerShell/PSReadLine#2632,
+*"Don't ignore ConsoleKey.Packet type as that is simply Unicode"*), but the
+in-box module predates it.
+
+Every observation follows from that one mechanism:
+
+| Observation | Why |
+| ----------- | --- |
+| SConfig accepts input | SConfig reads with `Read-Host`, which uses the console's cooked line input, not PSReadLine |
+| The PowerShell prompt does not | The prompt is PSReadLine, which drops `VK_PACKET` |
+| Notepad works | GUI windows receive the character as `WM_CHAR` |
+| Ctrl+V works | A key held with Ctrl, left Alt or Super was always sent as a scancode, so it is a real key press |
+| Enter, arrows, Backspace work | Named keys were always scancodes |
+
+`mstsc` never hits this because it always sends scancodes.
+
+#### The fix — type each character on the target's layout
+
+Printable characters are again sent as **key presses**, but on the
+**target's** keyboard layout rather than as US key positions, so #420 stays
+fixed. This is how `guacd` did it.
+
+- **Layout tables.** [`engine/rdp/layouts.rs`](crates/strata-session/src/engine/rdp/layouts.rs)
+  embeds guacd's own RDP keymaps — `apache/guacamole-server`
+  `src/protocols/rdp/keymaps/*.keymap`, Apache-2.0, copied unmodified with
+  their licence headers into
+  [`engine/rdp/keymaps/`](crates/strata-session/src/engine/rdp/keymaps) and
+  credited in [NOTICE](NOTICE) — and parses them on first use
+  (`Keymap::parse`, cached in a `OnceLock`). `keymap_for_layout(id)` returns,
+  for every character a layout can type, the key and whether Shift and/or
+  AltGr must be down (`KeyStroke`). All 19 layouts the admin panel offers have
+  a table; guacd ships no Finnish map, and Windows' Finnish layout is the
+  Swedish one, so `fi-fi-qwerty` uses `sv_se_qwerty.keymap`.
+- **Parsing rules.** Only `map` lines with a quoted character string are
+  read; hex-keysym lines are dead keys and IME toggles, which browsers do not
+  deliver as keysyms. `+caps` lines are skipped because the engine keeps the
+  target's Caps Lock off. When a character appears more than once, the stroke
+  with the fewest modifiers wins, and on a tie the first definition, as in
+  guacd.
+- **Per-keystroke decision.** `resolve_key(keysym, shortcut_held, keymap)` in
+  [`engine/rdp/keycodes.rs`](crates/strata-session/src/engine/rdp/keycodes.rs):
+
+  | Keystroke | Sent as |
+  | --------- | ------- |
+  | Printable character the layout can type, no shortcut modifier held | `KeyEvent::Character` — the layout's key, with Shift and AltGr pressed or lifted around the key-down only |
+  | Any key while Ctrl, left Alt or Super is held | `KeyEvent::Scancode` — the layout's key for that character if it has one, otherwise the US position; the user's modifiers are not adjusted |
+  | Space, Enter, Tab, arrows, function keys, keypad, modifiers | `KeyEvent::Scancode` |
+  | Character the layout cannot type, or a connection set to `failsafe` | `KeyEvent::Unicode` |
+
+  The shortcut row is now layout-aware too: on an AZERTY target, Ctrl+A is
+  sent as the key labelled A (the US Q position) rather than the US A
+  position, which AZERTY reads as Q.
+- **Modifier fix-ups.** `character_events()` in
+  [`engine/rdp/mod.rs`](crates/strata-session/src/engine/rdp/mod.rs) makes the
+  target's Shift and AltGr match what the character needs, then restores the
+  user's own. The browser has already folded the user's modifiers into the
+  character, so they no longer describe what the target needs: Caps Lock plus
+  Shift yields a lower-case keysym with Shift still down, and a local layout
+  can put `@` on a different chord from the target's. Only the key-down is
+  wrapped, because Windows resolves the character on key-down. AltGr is
+  synthesised as the extended right Alt (`E0 38`), which every layout whose
+  table uses `+altgr` treats as AltGr.
+- **Releases match presses.** `RdpSession::keys_down` records what each held
+  keysym was sent as (`SentKey::Scancode` or `SentKey::Unicode`), and a
+  release sends exactly that. Previously a release was re-resolved with the
+  current modifier state, so a key pressed with Ctrl held and released after
+  Ctrl was sent as a scancode press and a Unicode release — leaving the key
+  down on the target.
+
+#### Lock keys belong to the browser
+
+Caps Lock and Num Lock are no longer forwarded (`is_local_lock_key()`): the
+browser has already applied both to the keysym it reports, and toggling the
+target as well would make the layout tables wrong. The engine instead sets
+the target's lock state with a fast-path synchronize event — Num Lock on,
+Caps Lock off, Scroll Lock as last toggled (Scroll Lock is still forwarded and
+tracked) — at three points, each only while **no key is held**, because a
+synchronize event can reset the target's held-key state:
+
+1. Immediately after connecting (`sync_locks()`).
+2. Before every keypad digit, because the target cannot tell us it turned Num
+   Lock off.
+3. Before the first layout character after a Deactivation-Reactivation
+   Sequence (`locks_dirty`), because the switch from the logon screen to the
+   desktop applies the user's `InitialKeyboardIndicators`.
+
+#### The default layout is now UK English
+
+A layout table is only correct when it matches the layout the **target user**
+has, which Windows takes from the user profile and Strata cannot detect.
+`rdp_keyboard()` in [`backend/src/session_engine.rs`](backend/src/session_engine.rs)
+resolves the connection's `server-layout`:
+
+| `server-layout` | Advertised layout | Characters typed as |
+| --------------- | ----------------- | ------------------- |
+| blank or absent | `0x0809` (en-GB) | Key presses on the UK table |
+| one of the 19 offered names | that layout | Key presses on its table |
+| `failsafe` | `0x0809` | Unicode events (as guacd's `failsafe`) |
+| any other name | `0x0809` | Unicode events, with a `WARN` log line naming it |
+
+The admin panel's blank option and the AD sync and connection-form
+placeholders now read **Default (UK English)**
+([`rdpKeyboardLayouts.ts`](frontend/src/pages/admin/rdpKeyboardLayouts.ts),
+[`AdSyncTab.tsx`](frontend/src/pages/admin/AdSyncTab.tsx),
+[`connectionForm.tsx`](frontend/src/pages/admin/connectionForm.tsx)).
+
+#### Rejected approaches
+
+- **Keep Unicode as the default.** No regression risk, but every console
+  prompt on Server 2019/2022 stays unusable unless each connection names a
+  layout explicitly. Offered to the reporter and declined.
+- **Default to en-US, matching the old label and guacd.** On a UK estate it
+  brings #420 back for every connection without an explicit layout.
+- **Send the physical key the user pressed** (`KeyboardEvent.code`), as
+  `mstsc` and Microsoft's web client do. Correct whenever the local and
+  target layouts match, but the Guacamole `key` instruction carries only a
+  keysym, so it needs a protocol extension and a rewrite of the vendored
+  `Guacamole.Keyboard`.
+
+---
+
+### Fixed — local → remote paste is late, or pastes what was there before
+
+#### The symptom
+
+Text copied on the laptop sometimes pasted into the session only after a
+delay, or the session pasted what it held previously. The reporter found that
+copying something from the server to the laptop first made it work.
+Pre-dated v2.0.0.
+
+#### Root cause
+
+The local clipboard reaches the target only when the browser **pushes** it,
+and every push was driven by the pointer or focus:
+
+1. **`mouseenter`, `mousedown` and `focus`** (capture phase) on the session
+   display, registered in
+   [`SessionManager.tsx`](frontend/src/components/SessionManager.tsx), plus
+   the pop-out's own pair in [`usePopOut.ts`](frontend/src/components/usePopOut.ts).
+2. **A window `paste` listener.** This never fires for a paste typed *inside*
+   a session: the capture-phase `trapKeyDown` in
+   [`SessionClient.tsx`](frontend/src/pages/SessionClient.tsx) calls
+   `preventDefault()` on every keydown while the session is focused, and a
+   prevented Ctrl+V raises no `paste` event.
+
+Copy text in another application, Alt+Tab back to the browser with the
+pointer already over the session, and press Ctrl+V: the pointer never left
+the display, so there is no `mouseenter`; the regained window focus goes to
+the element that held it — the session container, an ancestor of the
+display — so the display's capture listener does not see it; and there is no
+click. The keystroke reaches Windows before any push, and Windows pastes its
+previous contents. The next click or pointer re-entry pushes the new text,
+which is the "delay". Copying from the server "fixed" it only because doing
+so involves clicking in the session.
+
+A second, smaller defect was in the engine. `ironrdp-cliprdr` 0.7's
+`initiate_copy()` in the `Initialization` state sends the client
+Capabilities, Temporary Directory **and** Format List PDUs together. A push
+that arrived before the target's Monitor Ready — easy, since the first
+`mouseenter` usually lands within moments of connecting — sent all three
+ahead of the target's capability exchange, then sent them a second time when
+Monitor Ready arrived.
+
+#### The fix
+
+- **Paste shortcuts wait for the clipboard.** New
+  [`utils/pasteShortcutGate.ts`](frontend/src/utils/pasteShortcutGate.ts)
+  wraps the key sender. On **Ctrl+V** (`v` or `V` with either Ctrl held) or
+  **Shift+Insert** it runs a clipboard sync first and buffers that key and
+  every key after it, including releases, then replays them in order — so
+  modifier releases can never overtake the paste. A sync that fails, or has
+  not settled within `PASTE_GATE_TIMEOUT_MS` (1 s, e.g. behind a browser
+  permission prompt), releases the keys anyway.
+- **The sync.** `prepareRemotePaste()` in
+  [`components/clipboardSync.ts`](frontend/src/components/clipboardSync.ts)
+  reads the local clipboard through the new shared `pushLocalClipboard()`
+  and sends it through the existing serialised `sendClipboardToRemote()`
+  with source `paste-shortcut`. When new text was actually sent it waits
+  `PASTE_SETTLE_MS` (150 ms) more, because `rdpclip.exe` applies a new format
+  list asynchronously and a keystroke directly behind it can still read the
+  old clipboard. When the text is a duplicate there is no wait.
+- **Wired into** the main session view (`SessionClient.tsx`), pop-outs
+  (`usePopOut.ts`, reading the pop-out window's own clipboard, since only the
+  focused document may read it), multi-monitor windows
+  (`useMultiMonitor.ts`) and the tiled view (`TiledView.tsx`). It sits
+  beneath the Right-Ctrl Windows-key proxy, so Right-Ctrl+V (Win+V,
+  clipboard history) is not gated.
+- **One reader.** `SessionManager`'s focus/pointer handler now calls
+  `pushLocalClipboard()` too, so a denied read is recorded the same way
+  everywhere (`local-read-failed`, now with a `source`).
+- **CLIPRDR ordering.** `RdpSession::clipboard_ready` is set when the target's
+  Monitor Ready arrives. Until then a browser push only stores the text, and
+  the Monitor Ready answer advertises it.
+
+#### Rejected approaches
+
+- **Tell the browser when the target copies something it will not receive**
+  (a file, an image, or anything under `disable-copy`), by sending an empty
+  clipboard to reset the duplicate guard. Built and removed before release:
+  the next click would then push local text and **overwrite the file or
+  image the user had just copied on the target**.
+- **Push on window focus.** Every open session registers its own listeners,
+  so this would push the local clipboard into background sessions the user is
+  not using.
+
+#### Known limitation
+
+If the target copies something non-textual and the user then copies the
+**same** text locally as was last sent, the duplicate guard still skips it.
+That keeps the target's copy intact, which is the commoner intent.
+
+---
+
+### Backfilled from `main` (#466–#471)
+
+Merged after v2.3.0 without a CHANGELOG entry; recorded here as a backfill.
+
+#### Fixed — startup failure `relation "revoked_tokens" does not exist` (#466)
+
+Databases created from commit `ef20848` recorded migration version 38 as the
+duplicate `038_indexes_and_not_null`. The checksum auto-repair that existed
+until SEC-22 later rewrote that row, so `038_revoked_tokens_and_indexes`
+never ran, and migration `096_refresh_token_families.sql` — which indexes
+`revoked_tokens` — failed on startup. `096` now creates `revoked_tokens`,
+`idx_revoked_tokens_expires_at` and `idx_recordings_session_id` if they are
+absent. Because 096 had already shipped, both line-ending forms of its
+previous checksum are added to `KNOWN_EDITS` in
+[`backend/src/db/mod.rs`](backend/src/db/mod.rs), so databases that applied
+the old 096 still start under SEC-22's edited-migration refusal. A new
+migration touching a 038 object must not assume it exists on old databases.
+
+#### Added — a trusted CA as an AD sync connection default (#467)
+
+An AD sync source can attach a stored **Trusted CA** to every RDP connection
+it creates or updates (**Admin → AD Sync → RDP Certificate Trust**), so
+synced hosts are verified against the issuing CA rather than relying on
+*Ignore server certificate*. The value is stored as
+`connection_defaults.trusted_ca_id` and lands in each synced connection's
+`extra`, where the tunnel already resolves it — and **fails closed** if the CA
+no longer exists. Two guards follow from that:
+
+- Creating or updating a source checks the id (`validate_defaults_trusted_ca`
+  in [`routes/admin.rs`](backend/src/routes/admin.rs)): `400` *"trusted_ca_id
+  must be a UUID"* or *"Trusted CA not found"*.
+- A CA that is an AD sync default cannot be deleted
+  ([`services/trusted_ca.rs`](backend/src/services/trusted_ca.rs)): `400`
+  *"Cannot delete: this CA is the default for N AD sync source(s)"*.
+
+`useTrustedCas()` is now exported from `connectionForm.tsx` for the AD sync
+form.
+
+#### Fixed — a managed lease reported twice (#468, #469)
+
+A `[managed]` credential profile whose account is reached through another
+profile linked to the same checkout expires at the same moment as that
+profile, so it appeared twice in expiry toasts, the header lease pill and the
+lease drawer. #468 made the expiry watcher drop it using the rule the
+Dashboard and Credentials pages already applied. That rule matched through
+`/api/user/checkouts`, which returns only active checkouts and the five most
+recent expired ones, so a managed account whose linked checkout had aged out
+reappeared; #469 therefore makes `GET /api/user/credential-profiles` return the
+linked checkout's `managed_ad_dn` (a `LEFT JOIN` on `password_checkout_requests`
+in `credential_profiles::list_for_user`, kept after expiry), and
+`withoutLinkedManagedProfiles()` in
+[`leaseStore.ts`](frontend/src/components/leaseStore.ts) dedupes from that
+field alone for the watcher, Dashboard and Credentials page.
+
+#### Fixed — every native recording failed with `Permission denied` (#470)
+
+Volumes created in the guacd era leave `/var/lib/guacamole/recordings` owned
+by guacd. [`backend/entrypoint.sh`](backend/entrypoint.sh) joined `strata` to
+the group of **one** existing file and granted group write to the directory's
+**own** group; when those differed, every new recording failed at session
+start with `EACCES` (recording status `failed`, failure *"open recording …:
+Permission denied"*). On restart it also read the group with `%g`, which
+prints a **name** once the group exists. The entrypoint now:
+
+- joins `strata` to a local group for **every** numeric gid (`%G`) older
+  recordings carry, creating `guac-recordings-<gid>` where needed, so they
+  stay playable and deletable;
+- takes ownership of the **directory only** (`chown strata:strata`, not
+  recursive — older files keep their group) with `u+rwx,g+rwxs`, because the
+  native engine creates each recording as `strata` and the retention sweeper
+  unlinks files;
+- logs `[entrypoint] ERROR: … is not writable by strata; session recordings
+  will fail` at startup if the directory is still not writable.
+
+#### Fixed — recordings showed *Engine: Unknown* until they ended (#471)
+
+`recordings.engine` was only written when a session was finalised, so
+recordings still in progress, and sessions that never connected, showed
+**Unknown** on the admin Sessions page. Every session runs on the native
+engine, so `recordings::insert_start` now writes `engine = 'native'` with the
+row.
+
+---
+
+### Documentation
+
+| Document | Change |
+| -------- | ------ |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Remote input and clipboard data flows describe layout-aware typing, lock-key handling and the paste gate |
+| [docs/architecture.md](docs/architecture.md) | Keyboard section rewritten for v2.3.1 (tables, modifier fix-ups, release tracking, numeric keypad, lock keys, default layout); new *Paste shortcuts wait for the clipboard* section with CLIPRDR ordering; engine table, AD sync, trusted CA, lease-dedupe and recordings-directory notes; runbook index |
+| [docs/security.md](docs/security.md) | New *Layout keymaps and lock state* and *Clipboard push on paste shortcuts* sections; AD sync RDP certificate trust and `trusted_ca_id` / `server-layout` defaults; Recordings Volume rewritten for the v2.3.1 entrypoint; migration-integrity note on the version 96 known edit |
+| [docs/api-reference.md](docs/api-reference.md) | `server-layout` semantics; WebSocket notes on paste ordering and keyboard input; `managed_ad_dn` on credential profiles; `engine` on recordings; AD sync `trusted_ca_id` and its errors; trusted-CA delete errors |
+| [docs/deployment.md](docs/deployment.md) | v2.3.0 → v2.3.1 upgrade notes; user guide for paste shortcuts, typing, layout and keypad; recordings `Permission denied` troubleshooting |
+| [docs/faq.md](docs/faq.md) | Wrong characters, Server Core prompt, numeric keypad, stale paste, failed recordings |
+| [docs/runbooks/keyboard-input.md](docs/runbooks/keyboard-input.md) | **New** runbook, indexed in `runbooks/README.md` and `architecture.md` |
+| [docs/runbooks/clipboard-diagnostics.md](docs/runbooks/clipboard-diagnostics.md) | Mode D (no push before the paste); `paste-shortcut` and `local-read-failed` events |
+| [docs/runbooks/database-operations.md](docs/runbooks/database-operations.md) | The `revoked_tokens` / migration 96 failure and its known edit |
+
+Corrections to earlier documentation, made here rather than by editing old
+entries:
+
+- **`SECURITY.md` supported versions** still listed `2.2.x` after v2.3.0
+  shipped; it now lists `2.3.x`.
+- **`DELETE /api/admin/trusted-cas/{id}`** was documented as refusing only
+  when a `web` connection used the bundle. The handler has never filtered by
+  protocol: any connection referencing the bundle blocks deletion.
+- **`recordings.engine`** was undocumented in the recordings API response.
+
+---
+
+### Scope & safety
+
+| Area | Change |
+| ---- | ------ |
+| Schema | **No new migration.** Migration `096`'s content changed in #466 (idempotent `CREATE … IF NOT EXISTS`), with its old checksums accepted through `KNOWN_EDITS` |
+| REST API | `GET /api/user/credential-profiles` gains optional `managed_ad_dn` (#469). AD sync create/update can return `400` for a bad `connection_defaults.trusted_ca_id`, and `DELETE /api/admin/trusted-cas/{id}` can return `400` when an AD sync source uses the CA (#467). No endpoint added or removed |
+| WebSocket / wire protocol | None. Keystrokes, clipboard and synchronize events change only between the engine and the RDP target |
+| Environment variables | None |
+| Dependencies | None. The 18 keymap files are data compiled into the binary with `include_str!`; no crate or npm package was added |
+| Third-party material | guacd's RDP keymaps (Apache-2.0), unmodified, licence headers intact; credited in [NOTICE](NOTICE) |
+| Trust boundaries | None moved. Keymaps are parsed from compile-time strings, never from network or user input. The paste gate reads the local clipboard only on a paste chord typed in a focused session, which is narrower than the existing click and focus triggers; the server still drops pastes on `disable-paste` connections |
+| Behaviour | Blank `server-layout` means **UK English** (was US position + Unicode). Printable characters are key presses, not Unicode, except under `failsafe`. Caps Lock and Num Lock keys are no longer forwarded; the target is kept at Num Lock on, Caps Lock off. Ctrl+V and Shift+Insert wait up to 1 s for the clipboard |
+| Recordings | Engine column populated at start (#471); entrypoint takes ownership of the recordings directory, not its files (#470) |
+
+---
+
+### Testing
+
+Run in `rust:1.98-slim-trixie` with `fonts-dejavu-core` installed, and in the
+Windows frontend workspace:
+
+| Check | Result |
+| ----- | ------ |
+| `cargo fmt -p strata-session -p strata-backend -- --check` | Clean |
+| `cargo clippy -p strata-session --all-features --all-targets -- -D warnings` | Clean |
+| `cargo clippy -p strata-backend --all-targets -- -D warnings` | Clean |
+| `cargo test -p strata-session --all-features --lib` | **264 passed** |
+| `cargo test -p strata-backend --bin strata-backend keyboard` | 1 passed |
+| `npx tsc --noEmit` | Clean |
+| `vitest run` on the 7 affected files (`pasteShortcutGate`, `clipboardSync`, `SessionManager`, `usePopOut`, `useMultiMonitor`, `TiledView.component`, `SessionClient`) | **125 passed** |
+
+Tests added or rewritten:
+
+| File | Tests |
+| ---- | ----- |
+| `engine/rdp/layouts.rs` | `every_bundled_keymap_parses`, `uk_symbols_use_uk_positions` (the #420 characters, `£`, `€`), `us_symbols_use_us_positions`, `altgr_characters_carry_the_altgr_flag` (German `@`, `\`, QWERTZ `z`), `caps_lock_rows_are_not_used`, `finnish_uses_the_swedish_table`, `unknown_layout_has_no_keymap`; `every_layout_the_admin_panel_offers_resolves` now also requires a keymap |
+| `engine/rdp/keycodes.rs` | `printable_characters_are_typed_on_the_target_layout`, `characters_the_layout_cannot_type_fall_back_to_unicode`, `without_a_keymap_printable_characters_travel_as_unicode`, `a_held_shortcut_modifier_sends_a_bare_key_position` (incl. AZERTY Ctrl+A), `keypad_digits_use_keypad_positions` (incl. `E0 35` keypad `/`), `lock_keys_are_applied_locally`; space, AltGr, fallback and keysym-sweep tests run with and without a keymap |
+| `engine/rdp/mod.rs` | `a_character_whose_modifiers_are_already_held_is_sent_bare`, `a_missing_shift_is_pressed_around_the_key_only`, `a_held_shift_is_lifted_for_an_unshifted_character`, `altgr_is_synthesised_as_extended_right_alt`, `a_unicode_key_releases_with_the_same_code_units` |
+| `engine/keymap.rs` | `keypad_keys_type_their_characters` |
+| `backend/src/session_engine.rs` | `the_keyboard_layout_defaults_to_uk_english` (blank, whitespace, explicit layouts, `failsafe`, unknown name) |
+| `__tests__/pasteShortcutGate.test.ts` (new) | ordinary keys pass straight through; Ctrl+V and everything after it is held then replayed in order; Shift+Insert is gated; a sync that never settles is released after the timeout; a failed sync still delivers the key |
+| `__tests__/clipboardSync.test.ts` | `prepareRemotePaste` pushes changed text; a duplicate is neither re-sent nor delayed |
+
+**Not yet verified against a live Windows host** in this release: a Server
+Core PowerShell prompt, keypad entry with the target's Num Lock off at logon,
+and a non-UK layout connection. Those are the first things to check after
+deploying.
+
+---
+
+### Deploy
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+No migration, `.env` change or DMZ edge rebuild is required.
+
+**Operator actions:**
+
+1. **Check every RDP connection's keyboard layout, including AD sync
+   defaults.** Characters are now typed on that layout's keys. A blank value
+   means **UK English**; a connection whose remote user has another layout
+   must name it, or symbols land on the wrong keys (`\` as `#`, `@` and `"`
+   swapped on a US/UK mismatch).
+2. **Move connections off `failsafe`** where users need a PowerShell or other
+   console prompt; it still sends Unicode, which those prompts ignore.
+3. **Recordings** on a guacd-era volume need nothing: the entrypoint fixes
+   ownership on start. If the backend logs `[entrypoint] ERROR: … is not
+   writable by strata`, the volume is read-only or squashes ownership
+   (NFS `all_squash`, CIFS without `uid=`/`gid=`).
+
 ## [2.3.0] — 2026-10-02
 
 ### Minor release — the external security and performance review is closed: 23 of 25 security findings and all 19 performance findings fixed, one finding descoped as an accepted risk and one no longer applicable

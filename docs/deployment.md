@@ -616,6 +616,55 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v2.3.0 → v2.3.1 (keyboard on Server Core, numeric keypad, paste shortcuts)
+
+Rebuild the backend and frontend images. **No migration, no `.env`
+change, no DMZ edge rebuild.**
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+**Behaviour that changes for users — tell them before you upgrade:**
+
+| Change | What users notice | If it is unwanted |
+| ------ | ----------------- | ----------------- |
+| RDP characters are typed as key presses on the connection's keyboard layout | Typing works at PowerShell and other console prompts on Server Core. On a connection whose layout does not match the remote user's, symbols land on the wrong keys (`\` as `#`, `@` and `"` swapped) | Set the connection's **Keyboard layout** to the remote user's layout |
+| A blank keyboard layout means **UK English** | Connections that never set one now type on the UK table (before: US positions plus Unicode) | Set the layout explicitly; AD sync sources have the same setting under connection defaults |
+| *Failsafe (Unicode events)* unchanged | Still types every character as Unicode, which console prompts on Server 2019/2022 ignore | Choose the remote user's layout instead |
+| Numeric keypad types in RDP and SSH | Keypad digits and decimal point work; the remote side is kept at Num Lock on | — (the old behaviour was a bug) |
+| Caps Lock / Num Lock keys are not sent to RDP | The browser applies them; the remote lock-key indicators stay at Num Lock on, Caps Lock off | — |
+| Ctrl+V and Shift+Insert wait for the clipboard | The keystroke reaches the session after the local clipboard has been sent, up to 1 s later | — |
+
+**Operator actions:**
+
+1. Review the keyboard layout on RDP connections and AD sync connection
+   defaults whose remote users do not type on a UK layout.
+2. Move connections used for console work off **Failsafe (Unicode events)**.
+3. Recordings on a guacd-era volume: nothing to do. The entrypoint now owns
+   the recordings directory; if the backend logs
+   `[entrypoint] ERROR: /var/lib/guacamole/recordings is not writable by strata`,
+   the volume is read-only or squashes ownership.
+4. A database that previously failed to start with
+   `relation "revoked_tokens" does not exist` starts normally after this
+   upgrade.
+
+**Verify post-upgrade:**
+
+1. The in-app **What's New** modal shows the v2.3.1 card.
+2. On a Server Core host, the PowerShell prompt accepts typed text.
+3. Keypad digits type in an RDP and an SSH session.
+4. Copy text locally, Alt+Tab to the browser and press Ctrl+V in a session
+   without moving the mouse: the new text is pasted.
+5. **Admin → Sessions** shows **native** in the Engine column for a session
+   still in progress.
+
+If typing misbehaves, follow
+[runbooks/keyboard-input.md](runbooks/keyboard-input.md).
+
 #### v2.2.0 → v2.3.0 (external security and performance review closed)
 
 Rebuild both images, and the **DMZ edge** for DMZ topologies (the link now
@@ -2839,6 +2888,17 @@ docker run --rm -v strata-client_guac-recordings:/data -v $(pwd):/backup \
   alpine tar czf /backup/recordings.tar.gz -C /data .
 ```
 
+> **Every recording `failed` with *Permission denied* (fixed in v2.3.1).**
+> On a volume created before v2.0.0 the recordings directory is owned by
+> guacd. Since v2.3.1 the backend entrypoint takes ownership of the
+> directory (not its files) on every start and joins a group for every gid
+> older recordings carry, so they stay playable. If a recording still fails
+> to open, check the backend's first log lines for
+> `[entrypoint] ERROR: /var/lib/guacamole/recordings is not writable by strata`;
+> it means the volume is mounted read-only or the storage squashes
+> ownership (NFS `all_squash`, CIFS without `uid=`/`gid=`). See
+> [security.md § Recordings Volume](security.md#recordings-volume--cross-container-posix-permissions-model).
+
 #### Azure Blob Storage
 
 Configure via **Admin → Recordings** in the web UI:
@@ -3010,7 +3070,7 @@ The session bar at the bottom of the screen shows thumbnails of all active sessi
 Clipboard synchronisation between your local machine and the remote session is automatic:
 
 - **Copy from remote → local** — Text copied inside the remote desktop is automatically available in your local clipboard when you hover over or focus the session view.
-- **Copy from local → remote** — Text on your local clipboard is pushed to the remote session when the session view gains focus (click into the session or mouse over it).
+- **Copy from local → remote** — Text on your local clipboard is pushed to the remote session when the session view gains focus (click into the session or mouse over it), and — since v2.3.1 — whenever you press **Ctrl+V** or **Shift+Insert** in the session. The paste keystroke waits until your clipboard has been sent (at most one second), so pasting straight after Alt+Tab from another application pastes what you just copied rather than what the remote held before.
 
 No manual action is required. Clipboard sync works with both RDP and SSH sessions.
 
@@ -3114,6 +3174,25 @@ When connected to a remote session, the following keyboard shortcuts are availab
 | `Ctrl+K`           | Open Command Palette           | Search and launch connections from keyboard                               |
 | `F12`              | Browser DevTools               | Passed through to the browser (not sent to remote)                        |
 | `Ctrl+Shift+I/J`   | Browser DevTools               | Passed through to the browser (not sent to remote)                        |
+| `Ctrl+V` / `Shift+Insert` | Paste into the remote session | Sends your local clipboard first and waits for it (up to 1 s) before the keystroke reaches the remote (v2.3.1) |
+
+#### Typing, keyboard layout and the numeric keypad (v2.3.1)
+
+- **Characters are typed on the remote user's keyboard layout**, which is
+  the connection's **Keyboard layout** setting (blank means UK English). Your
+  own keyboard decides *which* character you typed; Strata presses the keys
+  that produce it on the remote layout. If symbols such as `\`, `@`, `"` or
+  `£` come out wrong, the connection's layout does not match the remote
+  user's — ask an administrator to set it.
+- **Console prompts work**, including PowerShell on Windows Server Core.
+  Connections set to *Failsafe (Unicode events)* still send every
+  character as Unicode, which those prompts ignore.
+- **Caps Lock and Num Lock stay on your side.** Your browser applies them;
+  the remote session is kept at Num Lock on and Caps Lock off, so its lock
+  indicators may not match your keyboard's lights.
+- **The numeric keypad** types digits and the decimal point as keypad keys
+  in RDP and SSH sessions, so Alt plus a keypad number code works on
+  Windows, and the keypad decimal key gives the remote layout's separator.
 
 #### Keyboard Lock (Fullscreen + HTTPS)
 

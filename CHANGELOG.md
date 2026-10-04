@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — an AD sync wiped approved SSH host keys, blocking the connection
+
+> "if i verify a host key and then assign it to the host it changes from
+> unpinned to matches. however, when i run a new ADSync and the host is
+> synced from an ADSync, it removes the host key and returns to an unpinned
+> state blocking connections"
+
+**Root cause.** The sync upsert in
+[`services/ad_sync.rs`](backend/src/services/ad_sync.rs) replaced a synced
+connection's whole `extra` with the source's `connection_defaults`
+(`extra = $10::jsonb`), and treated any difference from the defaults as a
+change. **Verify Host Keys** stores the approved key in the same `extra`
+(`host-key`), so the next sync saw a difference and overwrote it. With no
+host key the SSH engine refuses the session (no trust-on-first-use), and the
+connection showed **Unpinned** again. RDP certificate pins
+(`cert-fingerprints`) and SFTP host keys were lost the same way.
+
+**Fix.** A synced connection's `extra` is now the source's defaults overlaid
+with the per-host pins the existing row already holds — `host-key`,
+`host-key-fingerprint`, `sftp-host-key` and `cert-fingerprints`
+(`PER_HOST_PINS`, merged in SQL by `merged_extra_sql()`). A source's
+defaults cannot know any single host's key, so a pin set on the connection
+always wins. Every other key still follows the defaults, so removing a
+default still removes it from synced connections, and a connection whose
+only difference is a pin is no longer rewritten on every sync.
+
+**Scope & safety.** No schema, API, environment-variable or dependency
+change. Trust is not widened: the preserved values are ones an administrator
+already approved on that connection, and nothing new is pinned.
+
+**Testing.** New DB-backed
+`a_resync_keeps_the_host_pins_and_replaces_the_rest` (pins survive, a stale
+non-pin key does not, a pin-free row takes the defaults verbatim); the full
+upsert shape — subqueries in `ON CONFLICT … DO UPDATE SET` and its `WHERE` —
+checked against PostgreSQL 16. `cargo fmt --check`, `cargo clippy
+-D warnings` and the 44 `ad_sync` tests pass.
+
+**Deploy.** Rebuild the backend. Connections already stripped by a sync
+must be re-verified once (**Admin → Connections → Verify Host Keys**); after
+that they survive syncs.
+
 ## [2.3.1] — 2026-10-04
 
 ### Patch release — typing works at a PowerShell prompt on Server Core, the numeric keypad types, and Ctrl+V pastes what was just copied

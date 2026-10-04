@@ -3867,7 +3867,7 @@ Create a new AD sync source.
 
 #### Connection Defaults
 
-The `connection_defaults` field accepts a JSON object of connection parameter key-value pairs that are applied as the `extra` JSONB on every connection created or updated by this sync source. Supported RDP parameters include:
+The `connection_defaults` field accepts a JSON object of connection parameter key-value pairs that are applied as the `extra` JSONB on every connection created or updated by this sync source. The per-host trust pins an existing connection holds (`host-key`, `host-key-fingerprint`, `sftp-host-key`, `cert-fingerprints`) are kept on every sync; every other key follows the defaults. Supported RDP parameters include:
 
 | Parameter                    | Description                                                                                                                                                                                                                                                                                                   |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -291,6 +291,35 @@ fn backspace(handshake: &HandshakeParams) -> Backspace {
         .unwrap_or_default()
 }
 
+/// Layout id and whether to type Unicode, from `server-layout`.
+///
+/// Characters are typed on this layout, so it has to match the target
+/// user's own; a mismatch moves symbols (`\` arriving as `#`). Blank means
+/// UK English, which is what this estate's targets use. `failsafe` and
+/// names with no bundled keymap send Unicode events instead, which console
+/// line editors such as PSReadLine on Server Core ignore.
+fn rdp_keyboard(handshake: &HandshakeParams) -> (u32, bool) {
+    const DEFAULT_LAYOUT: u32 = 0x0809;
+    let name = handshake
+        .extra
+        .get("server-layout")
+        .map(|n| n.trim())
+        .filter(|n| !n.is_empty());
+    let Some(name) = name else {
+        return (DEFAULT_LAYOUT, false);
+    };
+    if let Some(id) = keyboard_layout_id(name) {
+        return (id, false);
+    }
+    if !name.eq_ignore_ascii_case("failsafe") {
+        tracing::warn!(
+            layout = name,
+            "unknown server-layout; sending Unicode key events"
+        );
+    }
+    (DEFAULT_LAYOUT, true)
+}
+
 /// Bits per pixel to request, from the connection's `color-depth`.
 ///
 /// Only the four depths guacd offers are accepted; anything else keeps
@@ -1547,15 +1576,13 @@ async fn connect_target(
         }
         Protocol::Rdp => {
             warn_unsupported_rdp_params(handshake);
-            let layout = handshake
-                .extra
-                .get("server-layout")
-                .and_then(|name| keyboard_layout_id(name));
+            let (keyboard_layout, unicode_keyboard) = rdp_keyboard(handshake);
             let desktop_scale_factor = desktop_scale_factor_from_dpi(handshake.dpi);
             let factory = RdpEngineFactory::new(RdpConfig {
                 domain: handshake.domain.clone(),
                 kdc_url: kdc_url(handshake),
-                keyboard_layout: layout.unwrap_or(RdpConfig::default().keyboard_layout),
+                keyboard_layout,
+                unicode_keyboard,
                 client_name: handshake
                     .extra
                     .get("client-name")
@@ -1806,6 +1833,29 @@ mod tests {
         for junk in ["", "  ", "del", "0"] {
             hs.extra.insert("backspace".into(), junk.into());
             assert_eq!(backspace(&hs), Backspace::Delete, "{junk:?}");
+        }
+    }
+
+    #[test]
+    fn the_keyboard_layout_defaults_to_uk_english() {
+        let mut hs = handshake("rdp", None);
+        assert_eq!(rdp_keyboard(&hs), (0x0809, false));
+
+        hs.extra.insert("server-layout".into(), "  ".into());
+        assert_eq!(rdp_keyboard(&hs), (0x0809, false));
+
+        hs.extra
+            .insert("server-layout".into(), "en-us-qwerty".into());
+        assert_eq!(rdp_keyboard(&hs), (0x0409, false));
+
+        hs.extra
+            .insert("server-layout".into(), "de-de-qwertz".into());
+        assert_eq!(rdp_keyboard(&hs), (0x0407, false));
+
+        // Typing on a guessed layout moves symbols; Unicode does not.
+        for unicode in ["failsafe", "cs-cz-qwertz"] {
+            hs.extra.insert("server-layout".into(), unicode.into());
+            assert_eq!(rdp_keyboard(&hs), (0x0809, true), "{unicode}");
         }
     }
 

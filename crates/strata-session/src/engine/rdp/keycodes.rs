@@ -6,12 +6,15 @@
 //! it, the mapping is kept pure so it can be tested exhaustively rather
 //! than debugged through a live Windows host.
 //!
-//! Scancodes are the physical key positions of a US layout, used for keys
-//! that are positions rather than text: modifiers, navigation, function
-//! keys, and any keystroke held with a shortcut modifier. Printable
-//! characters travel as Unicode instead, because the browser reports what
-//! the user's local layout produced and the target would otherwise apply
-//! its own layout on top of that.
+//! Named keys (modifiers, navigation, function keys, keypad) are fixed
+//! positions. Printable characters are typed through the target layout's
+//! [`Keymap`]: the browser reports the character the user's own layout
+//! produced, so it has to be re-typed on the target's layout rather than
+//! sent as the US key position. Unicode events are the fallback for
+//! characters the layout cannot type -- not the default, because console
+//! line editors (PSReadLine on Server Core) drop them.
+
+use super::layouts::{KeyStroke, Keymap};
 
 /// A key position on the wire: scancode plus the extended-key flag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,27 +44,34 @@ impl Scancode {
     }
 }
 
-/// A resolved key event for RDP transmission: either a hardware scancode
-/// or a Unicode character fallback.
+/// A resolved key event for RDP transmission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyEvent {
-    /// Physical PC/XT set 1 scancode (for US-layout keys, modifiers, navigation).
+    /// A key position, sent with whatever modifiers are already held.
     Scancode(Scancode),
-    /// Unicode character fallback (for accented/international characters with no physical US key).
+    /// A character on the target layout, with the modifiers that type it.
+    Character(KeyStroke),
+    /// Unicode character fallback, for characters the layout cannot type.
     Unicode(char),
 }
 
-/// Resolve an X11 keysym to either a physical scancode or a Unicode character.
+/// Resolve an X11 keysym for transmission.
 ///
-/// The browser reports the *character* the user's own layout produced, not
-/// the key they pressed, so sending a US key position lets the target apply
-/// its layout a second time -- on a UK target `\` arrives as `#`. Printable
-/// characters therefore travel as Unicode, which is layout-independent.
+/// With a `keymap`, printable characters are typed on the target's layout.
+/// Without one (guacd's `failsafe` layout) they travel as Unicode.
 ///
-/// `shortcut_held` forces the scancode path: `Ctrl+C` has to arrive as a key
-/// position, because a Unicode `c` is text rather than a shortcut.
+/// `shortcut_held` forces a bare key position: `Ctrl+C` has to arrive as a
+/// key, because a Unicode `c` is text rather than a shortcut, and the user's
+/// own modifiers must not be adjusted underneath it.
 #[must_use]
-pub fn resolve_key(keysym: u32, shortcut_held: bool) -> Option<KeyEvent> {
+pub fn resolve_key(keysym: u32, shortcut_held: bool, keymap: Option<&Keymap>) -> Option<KeyEvent> {
+    if let Some(stroke) = keymap.and_then(|keymap| keymap.stroke(keysym)) {
+        return Some(if shortcut_held {
+            KeyEvent::Scancode(stroke.scancode)
+        } else {
+            KeyEvent::Character(stroke)
+        });
+    }
     if !shortcut_held {
         if let Some(ch) = crate::engine::keymap::keysym_to_char(keysym) {
             // Space keeps its key position: it is identical on every layout
@@ -75,6 +85,22 @@ pub fn resolve_key(keysym: u32, shortcut_held: bool) -> Option<KeyEvent> {
         return Some(KeyEvent::Scancode(scancode));
     }
     crate::engine::keymap::keysym_to_char(keysym).map(KeyEvent::Unicode)
+}
+
+/// Lock keys the browser has already applied to the keysyms it sends.
+///
+/// Forwarding them would toggle the target's state a second time, and the
+/// engine needs Caps Lock off and Num Lock on for its scancodes to mean
+/// what it intends.
+#[must_use]
+pub fn is_local_lock_key(keysym: u32) -> bool {
+    matches!(keysym, 0xffe5 | 0xff7f) // Caps_Lock, Num_Lock
+}
+
+/// Keypad keys whose scancode only types a digit with Num Lock on.
+#[must_use]
+pub fn needs_num_lock(keysym: u32) -> bool {
+    matches!(keysym, 0xffb0..=0xffb9 | 0xffae | 0xffac)
 }
 
 /// The bit a modifier keysym occupies in the held-shortcut set.
@@ -206,11 +232,23 @@ fn named_scancode(keysym: u32) -> Option<Scancode> {
         0xffc7 => Scancode::plain(0x44),    // F10
         0xffc8 => Scancode::plain(0x57),    // F11
         0xffc9 => Scancode::plain(0x58),    // F12
-        0xffaf => Scancode::plain(0x35),    // KP_Divide -> shares the '/' key
+        0xffaf => Scancode::extended(0x35), // KP_Divide
         0xffaa => Scancode::plain(0x37),    // KP_Multiply
         0xffad => Scancode::plain(0x4a),    // KP_Subtract
         0xffab => Scancode::plain(0x4e),    // KP_Add
         0xff8d => Scancode::extended(0x1c), // KP_Enter
+        0xffb0 => Scancode::plain(0x52),    // KP_0
+        0xffb1 => Scancode::plain(0x4f),    // KP_1
+        0xffb2 => Scancode::plain(0x50),    // KP_2
+        0xffb3 => Scancode::plain(0x51),    // KP_3
+        0xffb4 => Scancode::plain(0x4b),    // KP_4
+        0xffb5 => Scancode::plain(0x4c),    // KP_5
+        0xffb6 => Scancode::plain(0x4d),    // KP_6
+        0xffb7 => Scancode::plain(0x47),    // KP_7
+        0xffb8 => Scancode::plain(0x48),    // KP_8
+        0xffb9 => Scancode::plain(0x49),    // KP_9
+        0xffae => Scancode::plain(0x53),    // KP_Decimal
+        0xffac => Scancode::plain(0x53),    // KP_Separator (decimal comma)
         _ => return None,
     };
     Some(code)
@@ -311,45 +349,87 @@ mod tests {
         assert_eq!(keysym_to_scancode(0xff20), None);
     }
 
-    #[test]
-    fn printable_characters_travel_as_unicode_not_key_positions() {
-        // The bug this exists for: the browser reports the character the
-        // user's layout produced, so a UK `\` sent as the US key position
-        // 0x2b is re-decoded by a UK target as `#`.
-        assert_eq!(
-            resolve_key(u32::from(b'\\'), false),
-            Some(KeyEvent::Unicode('\\'))
-        );
-        assert_eq!(
-            resolve_key(u32::from(b'|'), false),
-            Some(KeyEvent::Unicode('|'))
-        );
-        // Characters that swap places between US and UK layouts.
-        assert_eq!(
-            resolve_key(u32::from(b'@'), false),
-            Some(KeyEvent::Unicode('@'))
-        );
-        assert_eq!(
-            resolve_key(u32::from(b'"'), false),
-            Some(KeyEvent::Unicode('"'))
-        );
-        assert_eq!(
-            resolve_key(u32::from(b'#'), false),
-            Some(KeyEvent::Unicode('#'))
-        );
-        assert_eq!(resolve_key(0x00a3, false), Some(KeyEvent::Unicode('£')));
+    fn uk() -> Option<&'static Keymap> {
+        super::super::layouts::keymap_for_layout(0x0809)
+    }
+
+    fn stroke(code: u8, shift: bool, altgr: bool) -> Option<KeyEvent> {
+        Some(KeyEvent::Character(KeyStroke {
+            scancode: Scancode::plain(code),
+            shift,
+            altgr,
+        }))
     }
 
     #[test]
-    fn a_held_shortcut_modifier_forces_the_key_position() {
+    fn printable_characters_are_typed_on_the_target_layout() {
+        // #420: a UK `\` sent as the US position 0x2b reads as `#` on a UK
+        // target, so the UK table's own positions are used.
+        assert_eq!(
+            resolve_key(u32::from(b'\\'), false, uk()),
+            stroke(0x56, false, false)
+        );
+        assert_eq!(
+            resolve_key(u32::from(b'#'), false, uk()),
+            stroke(0x2b, false, false)
+        );
+        assert_eq!(
+            resolve_key(u32::from(b'@'), false, uk()),
+            stroke(0x28, true, false)
+        );
+        assert_eq!(resolve_key(0x00a3, false, uk()), stroke(0x04, true, false)); // £
+                                                                                 // Not Unicode: PSReadLine on Server Core drops VK_PACKET input.
+        assert_eq!(
+            resolve_key(u32::from(b'a'), false, uk()),
+            stroke(0x1e, false, false)
+        );
+        assert_eq!(
+            resolve_key(u32::from(b'-'), false, uk()),
+            stroke(0x0c, false, false)
+        );
+    }
+
+    #[test]
+    fn characters_the_layout_cannot_type_fall_back_to_unicode() {
+        assert_eq!(
+            resolve_key(0x00fc, false, uk()),
+            Some(KeyEvent::Unicode('ü'))
+        );
+        assert_eq!(
+            resolve_key(0x0100_4e2d, false, uk()),
+            Some(KeyEvent::Unicode('中'))
+        );
+    }
+
+    #[test]
+    fn without_a_keymap_printable_characters_travel_as_unicode() {
+        // guacd's `failsafe` layout.
+        assert_eq!(
+            resolve_key(u32::from(b'\\'), false, None),
+            Some(KeyEvent::Unicode('\\'))
+        );
+        assert_eq!(
+            resolve_key(0x00a3, false, None),
+            Some(KeyEvent::Unicode('£'))
+        );
+    }
+
+    #[test]
+    fn a_held_shortcut_modifier_sends_a_bare_key_position() {
         // Ctrl+C must arrive as a key position: a Unicode `c` is text.
         assert_eq!(
-            resolve_key(u32::from(b'c'), true),
+            resolve_key(u32::from(b'c'), true, uk()),
             Some(KeyEvent::Scancode(Scancode::plain(0x2e)))
         );
         assert_eq!(
-            resolve_key(u32::from(b'c'), false),
-            Some(KeyEvent::Unicode('c'))
+            resolve_key(u32::from(b'c'), true, None),
+            Some(KeyEvent::Scancode(Scancode::plain(0x2e)))
+        );
+        // AZERTY: Ctrl+A is the key labelled A, which is the US Q position.
+        let fr = super::super::layouts::keymap_for_layout(0x040c);
+        assert_eq!(
+            resolve_key(u32::from(b'a'), true, fr),
+            Some(KeyEvent::Scancode(Scancode::plain(0x10)))
         );
     }
 
@@ -357,10 +437,42 @@ mod tests {
     fn space_keeps_its_key_position() {
         // Identical on every layout, and read as a key rather than text by
         // games and full-screen terminal UIs.
+        for keymap in [uk(), None] {
+            assert_eq!(
+                resolve_key(u32::from(b' '), false, keymap),
+                Some(KeyEvent::Scancode(Scancode::plain(0x39)))
+            );
+        }
+    }
+
+    #[test]
+    fn keypad_digits_use_keypad_positions() {
+        // The keypad, not the top row: Alt+numpad codes depend on it.
         assert_eq!(
-            resolve_key(u32::from(b' '), false),
-            Some(KeyEvent::Scancode(Scancode::plain(0x39)))
+            resolve_key(0xffb1, false, uk()),
+            Some(KeyEvent::Scancode(Scancode::plain(0x4f)))
         );
+        assert_eq!(
+            resolve_key(0xffb0, false, None),
+            Some(KeyEvent::Scancode(Scancode::plain(0x52)))
+        );
+        assert_eq!(
+            resolve_key(0xffae, false, uk()),
+            Some(KeyEvent::Scancode(Scancode::plain(0x53)))
+        );
+        // Keypad `/` is E0-prefixed; without it the target reads the main `/`.
+        assert_eq!(keysym_to_scancode(0xffaf), Some(Scancode::extended(0x35)));
+        for keysym in 0xffb0..=0xffb9 {
+            assert!(needs_num_lock(keysym));
+        }
+        assert!(!needs_num_lock(0xffab)); // KP_Add works either way
+    }
+
+    #[test]
+    fn lock_keys_are_applied_locally() {
+        assert!(is_local_lock_key(0xffe5)); // Caps_Lock
+        assert!(is_local_lock_key(0xff7f)); // Num_Lock
+        assert!(!is_local_lock_key(0xff14)); // Scroll_Lock is a real key
     }
 
     #[test]
@@ -379,37 +491,32 @@ mod tests {
 
     #[test]
     fn resolve_key_distinguishes_scancodes_and_unicode_fallback() {
-        // Keys that are positions rather than text stay scancodes.
         assert_eq!(
-            resolve_key(u32::from(b'a'), true),
-            Some(KeyEvent::Scancode(Scancode::plain(0x1e)))
-        );
-        assert_eq!(
-            resolve_key(0xff08, false), // BackSpace
+            resolve_key(0xff08, false, uk()), // BackSpace
             Some(KeyEvent::Scancode(Scancode::plain(0x0e)))
         );
-
-        // International characters are Unicode whatever the modifier state.
-        assert_eq!(resolve_key(0x00e9, false), Some(KeyEvent::Unicode('é')));
-        assert_eq!(resolve_key(0x00fc, false), Some(KeyEvent::Unicode('ü')));
-        assert_eq!(resolve_key(0x00f1, true), Some(KeyEvent::Unicode('ñ')));
-        assert_eq!(resolve_key(0x0100_20ac, true), Some(KeyEvent::Unicode('€')));
         assert_eq!(
-            resolve_key(0x0100_4e2d, false),
-            Some(KeyEvent::Unicode('中'))
+            resolve_key(0x00f1, true, uk()),
+            Some(KeyEvent::Unicode('ñ'))
+        );
+        assert_eq!(
+            resolve_key(0x00e9, false, None),
+            Some(KeyEvent::Unicode('é'))
         );
 
         // Unmapped non-character keysyms return None
-        assert_eq!(resolve_key(0xff20, false), None);
-        assert_eq!(resolve_key(0x0200_0000, false), None);
+        assert_eq!(resolve_key(0xff20, false, uk()), None);
+        assert_eq!(resolve_key(0x0200_0000, false, None), None);
     }
 
     #[test]
     fn never_panics_across_the_keysym_space() {
         for keysym in (0u32..0x0110_0000).step_by(89) {
             let _ = keysym_to_scancode(keysym);
-            let _ = resolve_key(keysym, false);
-            let _ = resolve_key(keysym, true);
+            for keymap in [uk(), None] {
+                let _ = resolve_key(keysym, false, keymap);
+                let _ = resolve_key(keysym, true, keymap);
+            }
         }
     }
 }

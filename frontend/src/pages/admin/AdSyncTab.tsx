@@ -523,7 +523,7 @@ export default function AdSyncTab({
                       else delete cd["server-layout"];
                       setEditing({ ...editing, connection_defaults: cd });
                     }}
-                    placeholder="Default (US English)"
+                    placeholder="Default (UK English)"
                     options={RDP_KEYBOARD_LAYOUTS}
                   />
                 </div>

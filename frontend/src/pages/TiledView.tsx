@@ -10,6 +10,8 @@ import { useSessionManager, GuacSession } from "../components/SessionManager";
 import { useSidebarWidth } from "../components/Layout";
 import SessionWatermark from "../components/SessionWatermark";
 import { createWinKeyProxy } from "../utils/winKeyProxy";
+import { createPasteShortcutGate } from "../utils/pasteShortcutGate";
+import { prepareRemotePaste } from "../components/clipboardSync";
 
 /**
  * Computes a grid layout (cols × rows) to best fill the available space
@@ -95,7 +97,11 @@ export default function TiledView() {
 
     // Wire up keyboards for focused sessions
     for (const s of focusedSessions) {
-      const winProxy = createWinKeyProxy((p, k) => s.client.sendKeyEvent(p, k));
+      const pasteGate = createPasteShortcutGate(
+        (p, k) => s.client.sendKeyEvent(p, k),
+        () => prepareRemotePaste(s)
+      );
+      const winProxy = createWinKeyProxy(pasteGate.send);
       s.keyboard.onkeydown = (keysym: number) => {
         return winProxy.onkeydown(keysym);
       };

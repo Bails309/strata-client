@@ -6,9 +6,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Guacamole from "guacamole-common-js";
 import { GuacSession, sendSizeFromCss } from "./SessionManager";
-import { clipboardDiag, sendClipboardToRemote } from "./clipboardSync";
+import { clipboardDiag, prepareRemotePaste, sendClipboardToRemote } from "./clipboardSync";
 import { notifySessionActivity } from "./sessionActivity";
 import { createWinKeyProxy } from "../utils/winKeyProxy";
+import { createPasteShortcutGate } from "../utils/pasteShortcutGate";
 import { installShortcutProxy } from "../utils/shortcutProxy";
 import { installKeyboardLock } from "../utils/keyboardLock";
 import { useUserPreferences } from "./UserPreferencesProvider";
@@ -278,7 +279,11 @@ export function usePopOut(
 
     // ── Keyboard input in the popup ──
     const kb = new Guacamole.Keyboard(popup.document);
-    const winProxy = createWinKeyProxy((p, k) => sess.client.sendKeyEvent(p, k));
+    const pasteGate = createPasteShortcutGate(
+      (p, k) => sess.client.sendKeyEvent(p, k),
+      () => prepareRemotePaste(sess, popup.navigator.clipboard)
+    );
+    const winProxy = createWinKeyProxy(pasteGate.send);
     kb.onkeydown = (keysym: number) => {
       // While the popup palette is open, don't forward to the remote and
       // return TRUE so Guacamole.Keyboard does NOT call preventDefault on

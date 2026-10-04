@@ -1,7 +1,7 @@
 // Shared RDP keyboard layout options used by the RDP connection form and the
 // AD Sync connection defaults section.
 export const RDP_KEYBOARD_LAYOUTS: { value: string; label: string }[] = [
-  { value: "", label: "Default (US English)" },
+  { value: "", label: "Default (UK English)" },
   { value: "en-us-qwerty", label: "US English (Qwerty)" },
   { value: "en-gb-qwerty", label: "UK English (Qwerty)" },
   { value: "de-de-qwertz", label: "German (Qwertz)" },

@@ -8,6 +8,7 @@ import {
   clipboardDiag,
   clipboardFingerprint,
   installClipboardDiagnostics,
+  pushLocalClipboard,
   resetRemoteClipboardEcho,
   sendClipboardToRemote,
   type ClipboardTxState,
@@ -675,15 +676,7 @@ export function SessionManagerProvider({
 
     // ── Clipboard sync: local → remote (on focus) ──
     const pushClipboard = async () => {
-      try {
-        const text = await navigator.clipboard?.readText();
-        if (text) await sendClipboardToRemote(session, text, "focus");
-      } catch (err) {
-        // Denied (no transient activation, insecure context, blocked
-        // permission). Recorded rather than swallowed — a permanently
-        // denied read looks identical to "paste stopped working".
-        clipboardDiag(sessionId, "out", "local-read-failed", { err: String(err) });
-      }
+      await pushLocalClipboard(session, "focus");
     };
     // Push local clipboard whenever the display gets focus or is clicked.
     // mouseenter works when the browser already has focus (tabbing between

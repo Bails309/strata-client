@@ -37,7 +37,7 @@ optionally scaled with round-robin sidecars. **None of that exists now.**
 | ---- | ----- |
 | Location | `crates/strata-session`, linked into the backend binary |
 | Concurrency | One Tokio task per session. RDP ran on a dedicated thread with its own current-thread runtime until the `ironrdp` 0.17 upgrade, because `ironrdp-async` 0.7's connection future was not `Send`; since 0.10 made it `Send`, an RDP session is an ordinary `tokio::spawn` like the others |
-| RDP | `ironrdp` — CredSSP/NLA only, PNG/WebP-encoded damage regions, opt-in MS-RDPEGFX H.264 passthrough (v2.1.0), RDPSND audio paired with an empty RDPDR channel (v2.1.1), Unicode keyboard events for printable characters (v2.1.1), Display Control resize, CLIPRDR clipboard, Set Error Info codes translated for the user (v2.1.1) |
+| RDP | `ironrdp` — CredSSP/NLA only, PNG/WebP-encoded damage regions, opt-in MS-RDPEGFX H.264 passthrough (v2.1.0), RDPSND audio paired with an empty RDPDR channel (v2.1.1), printable characters typed on the target's layout with a Unicode fallback (v2.3.1; Unicode-only in v2.1.1–v2.3.0), numeric keypad as keypad scancodes (v2.3.1), Display Control resize, CLIPRDR clipboard, Set Error Info codes translated for the user (v2.1.1) |
 | SSH | `russh` — interactive PTY, mandatory host-key pinning, key or password auth, keyboard-interactive |
 | VNC | `vnc-rs` — standard RFB security types, repeaters, reverse connections |
 | Kubernetes | native exec client over `v4.channel.k8s.io` with client-certificate auth |
@@ -123,6 +123,16 @@ Volumes:
 > supplementary group. Recordings written by the native engine are owned
 > by `strata` directly.
 >
+> **Since v2.3.1 (#470)** the entrypoint joins `strata` to a group for
+> *every* numeric gid (`%G`) the existing files carry, and takes ownership
+> of the recordings **directory** itself (`chown strata:strata`, not
+> recursive, `u+rwx,g+rwxs`) so the native engine can create files in a
+> directory a guacd-era volume left owned by guacd. Before that, a
+> mismatch between the one file's gid it joined and the directory's own
+> group made every new recording fail at start with `EACCES`. A startup
+> `ERROR` line reports a directory that is still not writable. See
+> [security.md § Recordings Volume](security.md#recordings-volume--cross-container-posix-permissions-model).
+>
 > **Custom DNS** is no longer applied by copying a `resolv.conf` into a
 > container at startup — see [Target hostname resolution](#target-hostname-resolution-v200) below.
 
@@ -190,7 +200,7 @@ The central orchestrator. Responsibilities:
 - **Tunnel** — authenticates the WebSocket upgrade, resolves the target, and hands the socket to the engine ([`backend/src/tunnel.rs`](../backend/src/tunnel.rs), ~190 lines since v2.0.0)
 - **Metrics** — per-session bandwidth tracking (bytes in/out) with aggregate metrics endpoint
 - **Config push** — generates `krb5.conf` (multi-realm), toggles recordings, manages SSO settings
-- **AD sync** — scheduled LDAP/LDAPS queries against Active Directory to discover and import computer accounts; supports simple bind and Kerberos keytab auth, custom CA certificates, multiple search bases per source, gMSA/MSA exclusion filters, and configurable connection defaults (RDP performance flags, session recording parameters)
+- **AD sync** — scheduled LDAP/LDAPS queries against Active Directory to discover and import computer accounts; supports simple bind and Kerberos keytab auth, custom CA certificates, multiple search bases per source, gMSA/MSA exclusion filters, and configurable connection defaults (RDP performance flags, session recording parameters, keyboard layout, and since v2.3.1 a stored Trusted CA that every synced RDP connection verifies its host against)
 - **Password management** — privileged account password checkout and rotation for AD-managed service accounts; configurable password generation policy, LDAP `unicodePwd` reset, Vault-sealed credential storage, approval workflows with explicit account-to-role scoping (each approval role is mapped to specific managed AD accounts), dedicated "Search Base OUs" for user discovery (allowing separate scoping from device discovery), **scheduled future-dated checkouts** (requests between now + 30 s and now + 14 days sit idle with no credential material until the scheduled moment, at which point the existing 60-second expiration worker activates them), **emergency approval bypass (break-glass)** per AD sync config — gated by `pm_allow_emergency_bypass`, requires ≥ 10-character justification, **hard-capped at 30 minutes** server-side, writes a dedicated `checkout.emergency_bypass` audit event, surfaces an ⚡ Emergency badge across Credentials and Approvals views, background workers for checkout expiration and zero-knowledge auto-rotation, requester username resolution for approver visibility, and decided-by tracking with self-approval detection
 - **Connection health checks** — background TCP probing of every connection's hostname:port every 2 minutes; results (online/offline/unknown) persisted and exposed via API for dashboard status indicators. Since v2.2.0 `POST /api/admin/connections/{id}/probe` runs the same check for one connection on demand (`health_check::probe_one`) and also returns the TCP connect latency; see [Admin console](#admin-console-fleet-folders-and-roles-v220)
 - **DNS configuration** — admin-configurable nameservers and search suffixes used by the session engine to resolve **target** hostnames in-process; applies to new sessions with no restart. Strata's own infrastructure lookups stay on Docker's embedded resolver. See [Target hostname resolution](#target-hostname-resolution-v200).
@@ -1568,7 +1578,7 @@ strata-client/
 │       ├── components/    Shared components (Layout, GlobalHeader, AdminMegaMenu, Select, EnterpriseCheckbox, SessionBar, SessionManager, clipboardSync, QuickShare, SessionTimeoutWarning, ThemeProvider, ToastProvider, PendingApprovalWatcher, CredentialProfileExpiryWatcher, leaseStore, LeaseIndicator, LeaseDrawer, WhatsNewModal)
 │       ├── hooks/         Shared hooks (useConnectionFilter)
 │       ├── styles/        Design tokens (dashboard-theme.css)
-│       ├── utils/         Pure helpers (keybindings, sessionEnd, popoutPalette, browserCapabilities, keyboardLock, winKeyProxy, …)
+│       ├── utils/         Pure helpers (keybindings, sessionEnd, popoutPalette, browserCapabilities, keyboardLock, winKeyProxy, pasteShortcutGate, …)
 │       └── pages/         Page components (Dashboard, Documentation, SessionClient, AdminSettings, AuditLogs, Approvals, Login, SetupWizard, SharedViewer)
 │           ├── admin/     One module per Admin Settings tab (Security, Network, Display, SSO, Kerberos, Recordings, Vault, Tags, Health, Sessions, Passwords, AdSync, Access) plus the shared connection-form helpers and ConnectionFoldersView
 │           │   ├── fleet/ Connections fleet manager (FleetManager, FleetToolbar, FleetTable, FleetBulkDock, FleetTelemetryStrip, fleetModel)
@@ -1786,6 +1796,7 @@ Step-by-step procedures for on-call engineers live under
 | [av-operations.md](runbooks/av-operations.md)                 | AV scanner outage, signature update failure, false-positive triage, EICAR smoke test, capacity check          |
 | [clipboard-diagnostics.md](runbooks/clipboard-diagnostics.md) | RDP copy/paste reported broken — classify stalled-transfer vs wedged `rdpclip.exe`, recover, capture evidence |
 | [session-disconnects.md](runbooks/session-disconnects.md)     | A user reports an unexpected or unexplained session end — map the on-screen message to its cause and log line |
+| [keyboard-input.md](runbooks/keyboard-input.md)               | Wrong characters, nothing typed at a console prompt, dead keypad, stuck keys in an RDP or SSH session (v2.3.1) |
 | [dmz-production-certs.md](runbooks/dmz-production-certs.md)   | Issue and install production certificates for the DMZ link (replace the development certificates)            |
 | [login-rate-limiting.md](runbooks/login-rate-limiting.md)     | Users get `429` on sign-in or password change; session refused with `429` at capacity (v2.3.0)               |
 
@@ -2081,6 +2092,55 @@ so before, which meant every network drop, server-side disconnect and
 auto-reconnect attempt left a window-level `paste` listener bound to a
 dead client for the lifetime of the page.
 
+## Paste shortcuts wait for the clipboard (v2.3.1)
+
+The local clipboard reaches the target only when the browser pushes it.
+The automatic pushes are pointer- and focus-driven (`mouseenter`,
+`mousedown`, `focus` on the display; the pop-out's own pair), and the
+window `paste` listener never fires for a paste typed **inside** a session,
+because the session's capture-phase key trap prevents the default action of
+every keydown. Returning to the browser with Alt+Tab, pointer already over
+the session, and pressing Ctrl+V therefore fired no push at all, and the
+target pasted what it held before.
+
+[`utils/pasteShortcutGate.ts`](../frontend/src/utils/pasteShortcutGate.ts)
+sits in the key path of every session view:
+
+```
+Guacamole.Keyboard ──► createWinKeyProxy ──► createPasteShortcutGate ──► client.sendKeyEvent
+                                                  │
+                                    Ctrl+V / Shift+Insert
+                                                  ▼
+                                        prepareRemotePaste()
+                                  read local clipboard → sendClipboardToRemote
+                                  (+150 ms settle if the text changed)
+```
+
+| Behaviour | Detail |
+| --------- | ------ |
+| Trigger | Key-down of `v`/`V` with either Ctrl held, or `Insert` with either Shift held, as tracked from the keys that passed through the gate |
+| Hold | That key and **every** later key event, releases included, are buffered and replayed in order, so a modifier release cannot overtake the paste |
+| Release | When `prepareRemotePaste()` settles, fails, or after `PASTE_GATE_TIMEOUT_MS` (1 s) — whichever is first |
+| Settle | `PASTE_SETTLE_MS` (150 ms) after a push that sent new text, because `rdpclip.exe` applies a new format list asynchronously; none for a duplicate |
+| Clipboard read | `pushLocalClipboard()`; pop-out and multi-monitor windows pass their own `navigator.clipboard`, since only the focused document may read |
+| Wired into | `SessionClient.tsx`, `usePopOut.ts`, `useMultiMonitor.ts`, `TiledView.tsx` (not the shared viewer) |
+
+The gate is below the Right-Ctrl Windows-key proxy, so Right-Ctrl+V reaches
+the target as Win+V (clipboard history) without being held.
+
+**CLIPRDR ordering.** `ironrdp-cliprdr` sends Capabilities, Temporary
+Directory and Format List together the first time it is asked to advertise
+a copy, so a browser push that arrived before the target's **Monitor Ready**
+sent them ahead of the target's own capability exchange. The engine records
+Monitor Ready in `RdpSession::clipboard_ready`; until then a push only
+stores the text, and the Monitor Ready answer advertises it.
+
+**Duplicate guard, deliberately unchanged.** When the target copies
+something the bridge does not carry (a file, an image, anything under
+`disable-copy`), the browser still believes the target holds the last text
+it sent. Resetting that belief was tried and rejected: the next click would
+push local text and overwrite what the user had just copied on the target.
+
 ## Clipboard diagnostics (v1.14.4)
 
 Both ends carry opt-in instrumentation for diagnosing clipboard
@@ -2159,42 +2219,94 @@ IdP, and the trail continues outside the Strata logs).
 ## Native RDP input, display and audio (v2.1.1)
 
 Four behaviours of the RDP engine that a user notices directly, each of
-which was wrong until v2.1.1 for a reason that is easy to reintroduce.
+which was wrong until v2.1.1 for a reason that is easy to reintroduce. The
+keyboard model was revised again in v2.3.1.
 
-### Keyboard: Unicode for text, scancodes for positions
+### Keyboard: characters typed on the target's layout (v2.3.1)
 
 RDP can carry a keystroke two ways: as a **scancode** (a physical key
 position, which the target maps through *its* keyboard layout) or as a
-**Unicode** key event (a character, which the target inserts as-is). The
-browser reports X11 keysyms, and a keysym is the character the user's
+**Unicode** key event (a character, which Windows injects as `VK_PACKET`).
+The browser reports X11 keysyms, and a keysym is the character the user's
 **local** layout already produced.
 
-Sending that character as a US-layout scancode applies a layout twice.
-On a UK keyboard, `\` is the key that sits where US has `#`; translated to
-the US position and re-mapped by a UK-configured Windows host it arrives
-as `#`. Every step is individually correct, which is why it survived.
-`mstsc` does not hit this because it sends the physical key, not the
-character.
+Sending that character as a *US* scancode applies a layout twice: on a UK
+target `\` arrives as `#` (#420). v2.1.1 fixed that by sending every
+printable character as Unicode, which broke console line editors: the
+PSReadLine that ships with Windows Server 2019/2022 drops `VK_PACKET` input
+(fixed upstream in PSReadLine #2632), so nothing could be typed at a
+PowerShell prompt on Server Core while Notepad and `Read-Host` worked.
 
-`resolve_key(keysym, shortcut_held)` in
+The engine now types each character on the **target's** layout, as guacd
+did. `layouts.rs` embeds guacd's RDP keymaps (Apache-2.0, unmodified) and
+`keymap_for_layout(id)` gives the key plus Shift/AltGr for every character
+the layout can type. `resolve_key(keysym, shortcut_held, keymap)` in
 [`engine/rdp/keycodes.rs`](../crates/strata-session/src/engine/rdp/keycodes.rs)
 decides per keystroke:
 
 | Keystroke | Sent as | Why |
 | --------- | ------- | --- |
-| Printable character, no shortcut modifier held | `KeyEvent::Unicode` | Layout-independent: the character the user sees is the character that arrives |
-| Any key while Ctrl, Alt (left) or Super is held | Scancode | `Ctrl+C` must be the C *position*; a Unicode `c` is text, not a shortcut |
-| Space, Enter, Tab, arrows, function keys, modifiers | Scancode | Positions, not text |
-| Character with no US position (`£`, `é`, `中`) | `KeyEvent::Unicode` | There is no scancode to send |
+| Printable character the layout can type | `KeyEvent::Character` | Scancode, with Shift/AltGr pressed or lifted around the key-down to match the layout |
+| Any key while Ctrl, Alt (left) or Super is held | Scancode, no modifier adjustment | `Ctrl+C` must be the C *position*; on AZERTY that is the layout's own C key |
+| Space, Enter, Tab, arrows, function keys, keypad, modifiers | Scancode | Positions, not text |
+| Character the layout cannot type, or `failsafe` layout | `KeyEvent::Unicode` | There is no key to send |
+
+**The tables.** The 18 `.keymap` files in
+[`engine/rdp/keymaps/`](../crates/strata-session/src/engine/rdp/keymaps)
+are compiled in with `include_str!` and parsed once (`Keymap::parse`, cached
+in a `OnceLock`). Only `map` lines with a quoted character string are read;
+hex-keysym lines (dead keys, IME toggles) are skipped because browsers do not
+deliver those keysyms, and `+caps` lines are skipped because the target's
+Caps Lock is held off. Where a character appears twice, the stroke with
+fewer modifiers wins, then the first definition. Finnish (`0x040B`) uses
+the Swedish table, which is what Windows' Finnish layout is.
+
+**Modifier fix-ups.** The browser has folded the user's modifiers into the
+character, so they no longer say what the target needs — Caps Lock plus
+Shift yields a lower-case keysym with Shift still down. `character_events()`
+in [`engine/rdp/mod.rs`](../crates/strata-session/src/engine/rdp/mod.rs)
+presses a missing Shift (`0x2A`) or lifts held ones (`0x2A`, `0x36`), and
+presses or lifts AltGr as extended right Alt (`E0 38`), around the
+key-down only, then restores them. Windows resolves the character on
+key-down, so the release needs no wrapping.
+
+**Releases match presses.** `RdpSession::keys_down` maps each held keysym
+to what it was sent as (`SentKey::Scancode` or `SentKey::Unicode`), and a
+release sends exactly that. Re-resolving on release — the v2.1.1 behaviour
+— sent a Unicode release for a key pressed as a scancode whenever Ctrl was
+let go first, leaving the key down on the target.
+
+**Numeric keypad.** With Num Lock on, `Guacamole.Keyboard` reports keypad
+digits as `KP_0`–`KP_9` (`0xFFB0`–`0xFFB9`) and the decimal point as
+`KP_Decimal` (`0xFFAE`); with it off, as the ordinary navigation keysyms,
+which map to the grey navigation cluster. Until v2.3.1 the digit keysyms
+had no mapping and were dropped. They are now keypad positions (`KP_0` →
+`0x52`, `KP_1` → `0x4F` … `KP_9` → `0x49`, `KP_Decimal` / `KP_Separator` →
+`0x53`), and keypad `/` is `E0 35` rather than the main-block `/` key.
+SSH and Kubernetes map the same keysyms to characters in
+`keymap::keypad_char()`.
+
+**Lock keys are the browser's.** Caps Lock and Num Lock are not forwarded
+(`is_local_lock_key()`): the browser has already applied them to the
+keysym. The engine sends a fast-path synchronize event — Num Lock on, Caps
+Lock off, Scroll Lock as last toggled — at connect, before every keypad
+digit, and before the first layout character after a
+Deactivation-Reactivation Sequence (logon applies the user's
+`InitialKeyboardIndicators`), each only while no key is held, because a
+synchronize event can reset the target's held-key state.
 
 **AltGr is not a shortcut modifier.** `shortcut_modifier_bit()` deliberately
 omits `Alt_R`: on most non-US layouts it is AltGr, which composes
 characters, and counting it would send `AltGr+Q` on a German keyboard as a
-US key position instead of `@`.
+bare key position instead of `@`.
 
-The connection's `server-layout` is still sent in the Client Core Data and
-still governs the positional keys. The **Failsafe (Unicode events)** layout
-option is now a no-op, because what it selected is what every layout does.
+**`server-layout` must match the target user's layout.** Windows uses the
+user profile's layout, which the client cannot detect. `rdp_keyboard()` in
+[`backend/src/session_engine.rs`](../backend/src/session_engine.rs) treats a
+blank value as UK English (`en-gb-qwerty`, advertised as `0x0809`);
+`failsafe` and names without a bundled keymap send Unicode, and so do not
+work in console line editors. Diagnosis:
+[runbooks/keyboard-input.md](runbooks/keyboard-input.md).
 
 ### Display: device pixels, and DPI only on request
 
@@ -2357,6 +2469,14 @@ CredentialProfileExpiryWatcher (60 s) ─┤
   `leaseStore`.
 - **`leaseStore`** is a small subscribe/snapshot store. The header pill and the
   drawer only read it, so the lease UI adds **no** requests of its own.
+- **One lease per account.** A `[managed]` profile whose account is already
+  reached through a profile linked to its checkout carries the same lease, so
+  `withoutLinkedManagedProfiles()` drops it before anything is published. Since
+  v2.3.1 the link is read from `managed_ad_dn` on each credential profile,
+  which the server fills from the linked checkout even after it has expired;
+  matching through `/api/user/checkouts` missed checkouts that had aged out of
+  that list (#468, #469). The Dashboard and Credentials pages apply the same
+  function.
 - **Extend** calls `POST /api/user/safeguard/bulk-checkout` for Safeguard JIT
   leases only; **check-in** calls the Safeguard or password-checkout check-in
   endpoint for each lease after a confirmation.
@@ -2571,7 +2691,13 @@ afterwards.
 
 A new admin-managed table `trusted_ca_bundles` stores PEMs once with
 a friendly name; any `web` connection can attach a bundle via
-`extra.trusted_ca_id`. The runtime path is:
+`extra.trusted_ca_id`. RDP connections use the same key for certificate
+trust (v2.0.0), and since v2.3.1 an AD sync source can set it in
+`connection_defaults`, so every connection the source creates or updates
+carries it. For RDP the tunnel resolves the id to its PEM and **fails closed**
+if the bundle no longer exists, which is why a bundle referenced by a
+connection or used as an AD sync default cannot be deleted. The web-session
+runtime path is:
 
 1. `routes/tunnel.rs` resolves `cfg.trusted_ca_id` to the PEM bytes
    via `services::trusted_ca::get(&pool, id)` _before_ constructing

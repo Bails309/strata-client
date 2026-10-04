@@ -36,7 +36,7 @@ pub mod keycodes;
 pub mod layouts;
 pub mod tls;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -62,7 +62,7 @@ use ironrdp_graphics::diff::find_different_rects_sub;
 use ironrdp_graphics::image_processing::PixelFormat;
 use ironrdp_graphics::pointer::DecodedPointer;
 use ironrdp_pdu::geometry::{InclusiveRectangle, Rectangle as _};
-use ironrdp_pdu::input::fast_path::{FastPathInputEvent, KeyboardFlags};
+use ironrdp_pdu::input::fast_path::{FastPathInputEvent, KeyboardFlags, SynchronizeFlags};
 use ironrdp_pdu::input::mouse::PointerFlags;
 use ironrdp_pdu::input::MousePdu;
 use ironrdp_pdu::nego::NegoRequestData;
@@ -95,7 +95,10 @@ use crate::engine::rdp::clipboard::{
     MAX_CLIPBOARD_BYTES,
 };
 use crate::engine::rdp::kdc::KdcNetworkClient;
-use crate::engine::rdp::keycodes::{resolve_key, shortcut_modifier_bit, KeyEvent};
+use crate::engine::rdp::keycodes::{
+    is_local_lock_key, needs_num_lock, resolve_key, shortcut_modifier_bit, KeyEvent, Scancode,
+};
+use crate::engine::rdp::layouts::{keymap_for_layout, KeyStroke, Keymap};
 use crate::engine::{
     DisconnectCause, EngineFactory, InputEvent, Protocol, ProtocolEngine, TargetEvent, TargetSpec,
 };
@@ -118,6 +121,9 @@ pub struct RdpConfig {
     pub client_name: String,
     /// Keyboard layout ID the target should assume (0x0409 = en-US).
     pub keyboard_layout: u32,
+    /// Send printable characters as Unicode events rather than typing
+    /// them on `keyboard_layout` -- guacd's `failsafe` layout.
+    pub unicode_keyboard: bool,
     /// Windows domain, when the account is not local to the target.
     pub domain: Option<String>,
     /// KDC address for Kerberos authentication, e.g. `tcp://dc.corp:88`.
@@ -231,6 +237,7 @@ impl Default for RdpConfig {
         Self {
             client_name: "strata".to_owned(),
             keyboard_layout: 0x0409,
+            unicode_keyboard: false,
             domain: None,
             kdc_url: None,
             performance: RdpPerformance::default(),
@@ -448,6 +455,8 @@ struct RdpSession {
     audio: mpsc::Receiver<Bytes>,
     /// What the operator last copied, held until the target pastes.
     local_clipboard: Option<String>,
+    /// The target has sent Monitor Ready, so a format list may be sent.
+    clipboard_ready: bool,
     /// Format we last asked the target for, needed to decode its reply.
     pending_paste: Option<ClipboardFormatId>,
     /// Drop every keyboard, mouse and paste event from the client.
@@ -458,6 +467,14 @@ struct RdpSession {
     disable_paste: bool,
     /// Shortcut modifiers currently held, as a bit per modifier key.
     shortcut_modifiers: u8,
+    /// Character table for the target's layout; `None` types Unicode.
+    keymap: Option<&'static Keymap>,
+    /// What each held keysym was sent as, so its release matches.
+    keys_down: HashMap<u32, SentKey>,
+    /// Scroll Lock as last set on the target.
+    scroll_lock: bool,
+    /// The target may have changed its lock keys since we last set them.
+    locks_dirty: bool,
     /// Previous frame, for narrowing the target's coarse damage rects.
     shadow: Vec<u8>,
     /// Scratch buffer for cropped RGB pixels before PNG encoding, reused across frames.
@@ -755,12 +772,19 @@ impl RdpSession {
             clipboard,
             audio,
             local_clipboard: None,
+            clipboard_ready: false,
             pending_paste: None,
             requested_size: None,
             read_only: config.read_only,
             disable_copy: config.disable_copy,
             disable_paste: config.disable_paste,
             shortcut_modifiers: 0,
+            keymap: (!config.unicode_keyboard)
+                .then(|| keymap_for_layout(config.keyboard_layout))
+                .flatten(),
+            keys_down: HashMap::new(),
+            scroll_lock: false,
+            locks_dirty: false,
             shadow: Vec::new(),
             cropped_scratch: Vec::new(),
             encoded_scratch: BytesMut::new(),
@@ -771,6 +795,7 @@ impl RdpSession {
             enable_webp: config.enable_webp,
         };
         session.request_full_repaint().await?;
+        session.sync_locks().await?;
         Ok(session)
     }
 
@@ -911,6 +936,9 @@ impl RdpSession {
             }
 
             tracing::info!(width, height, resized, "rdp reactivation complete");
+            // The logon-to-desktop switch applies the user's
+            // InitialKeyboardIndicators, which can turn Num Lock off.
+            self.locks_dirty = true;
             self.request_full_repaint().await?;
             return Ok(());
         }
@@ -1205,6 +1233,7 @@ impl RdpSession {
                 ClipboardEvent::FormatListRequested => {
                     // MS-RDPECLIP: the server withholds its own format lists
                     // until the client answers Monitor Ready with one.
+                    self.clipboard_ready = true;
                     self.advertise_local_formats().await?;
                 }
             }
@@ -1261,6 +1290,87 @@ impl RdpSession {
         self.absorb(outputs).await
     }
 
+    /// Set the target's lock keys to what the scancodes assume: Num Lock
+    /// on (keypad digits), Caps Lock off (keymap rows are the caps-off ones).
+    ///
+    /// A sync event may reset the target's held-key state, so it is only
+    /// sent while nothing is held.
+    async fn sync_locks(&mut self) -> Result<(), EngineError> {
+        self.locks_dirty = false;
+        self.send_input(&[FastPathInputEvent::SyncEvent(self.lock_flags())])
+            .await
+    }
+
+    fn lock_flags(&self) -> SynchronizeFlags {
+        let mut flags = SynchronizeFlags::NUM_LOCK;
+        if self.scroll_lock {
+            flags |= SynchronizeFlags::SCROLL_LOCK;
+        }
+        flags
+    }
+
+    async fn handle_key(&mut self, keysym: u32, pressed: bool) -> Result<(), EngineError> {
+        if is_local_lock_key(keysym) {
+            return Ok(());
+        }
+        if let Some(bit) = shortcut_modifier_bit(keysym) {
+            if pressed {
+                self.shortcut_modifiers |= bit;
+            } else {
+                self.shortcut_modifiers &= !bit;
+            }
+        }
+
+        if !pressed {
+            // Release what was pressed, not what the keysym resolves to
+            // now: a shortcut modifier let go first would otherwise turn
+            // the release of a scancode into a Unicode one, and the key
+            // would stay down on the target.
+            let Some(sent) = self.keys_down.remove(&keysym) else {
+                return Ok(());
+            };
+            return self.send_input(&sent.events(false)).await;
+        }
+
+        let Some(resolved) = resolve_key(keysym, self.shortcut_modifiers != 0, self.keymap) else {
+            return Ok(());
+        };
+
+        let mut events = Vec::new();
+        // Keypad digits re-sync every time: the target has no way to tell
+        // us it turned Num Lock off, and a stale guess types arrows.
+        let wants_sync = needs_num_lock(keysym)
+            || (self.locks_dirty && matches!(resolved, KeyEvent::Character(_)));
+        if wants_sync && self.keys_down.is_empty() {
+            self.locks_dirty = false;
+            events.push(FastPathInputEvent::SyncEvent(self.lock_flags()));
+        }
+
+        let sent = match resolved {
+            KeyEvent::Scancode(scancode) => {
+                if keysym == SCROLL_LOCK_KEYSYM {
+                    self.scroll_lock = !self.scroll_lock;
+                }
+                SentKey::Scancode(scancode)
+            }
+            KeyEvent::Unicode(ch) => SentKey::Unicode(ch),
+            KeyEvent::Character(stroke) => {
+                let held = |keysym| self.keys_down.contains_key(&keysym);
+                events.extend(character_events(
+                    stroke,
+                    [held(SHIFT_L_KEYSYM), held(SHIFT_R_KEYSYM)],
+                    held(ALTGR_KEYSYM),
+                ));
+                self.keys_down
+                    .insert(keysym, SentKey::Scancode(stroke.scancode));
+                return self.send_input(&events).await;
+            }
+        };
+        events.extend(sent.events(true));
+        self.keys_down.insert(keysym, sent);
+        self.send_input(&events).await
+    }
+
     async fn handle_input(&mut self, input: InputEvent) -> Result<(), EngineError> {
         // Resize keeps working read-only: it only affects what this
         // viewer sees, and blocking it would leave the desktop blurred.
@@ -1299,45 +1409,14 @@ impl RdpSession {
                 };
                 self.local_clipboard = Some(text);
                 // Delayed rendering: advertise only. The target asks for
-                // the data if and when someone pastes.
-                self.advertise_local_formats().await?;
-            }
-            InputEvent::Key { keysym, pressed } => {
-                if let Some(bit) = shortcut_modifier_bit(keysym) {
-                    if pressed {
-                        self.shortcut_modifiers |= bit;
-                    } else {
-                        self.shortcut_modifiers &= !bit;
-                    }
-                }
-                match resolve_key(keysym, self.shortcut_modifiers != 0) {
-                    Some(KeyEvent::Scancode(scancode)) => {
-                        let mut flags = KeyboardFlags::empty();
-                        if !pressed {
-                            flags |= KeyboardFlags::RELEASE;
-                        }
-                        if scancode.extended {
-                            flags |= KeyboardFlags::EXTENDED;
-                        }
-                        self.send_input(&[FastPathInputEvent::KeyboardEvent(flags, scancode.code)])
-                            .await?;
-                    }
-                    Some(KeyEvent::Unicode(ch)) => {
-                        let mut flags = KeyboardFlags::empty();
-                        if !pressed {
-                            flags |= KeyboardFlags::RELEASE;
-                        }
-                        let mut utf16_buf = [0u16; 2];
-                        let units = ch.encode_utf16(&mut utf16_buf);
-                        let events: Vec<FastPathInputEvent> = units
-                            .iter()
-                            .map(|&unit| FastPathInputEvent::UnicodeKeyboardEvent(flags, unit))
-                            .collect();
-                        self.send_input(&events).await?;
-                    }
-                    None => {}
+                // the data if and when someone pastes. Before Monitor Ready
+                // the list would go out ahead of the capability exchange;
+                // the Monitor Ready answer carries it instead.
+                if self.clipboard_ready {
+                    self.advertise_local_formats().await?;
                 }
             }
+            InputEvent::Key { keysym, pressed } => self.handle_key(keysym, pressed).await?,
             InputEvent::Resize { width, height, dpi } => {
                 let (requested_w, requested_h) = (width, height);
                 let (width, height) = (clamp_dimension(width), clamp_dimension(height));
@@ -1464,6 +1543,96 @@ impl EngineFactory for RdpEngineFactory {
         }
         Ok(Box::new(RdpEngine::connect(spec, &self.config).await?))
     }
+}
+
+const SHIFT_L_KEYSYM: u32 = 0xffe1;
+const SHIFT_R_KEYSYM: u32 = 0xffe2;
+/// Alt_R, which is AltGr on every layout whose keymap uses `+altgr`.
+const ALTGR_KEYSYM: u32 = 0xffea;
+const SCROLL_LOCK_KEYSYM: u32 = 0xff14;
+const SHIFT_L: Scancode = Scancode::plain(0x2a);
+const SHIFT_R: Scancode = Scancode::plain(0x36);
+const ALTGR: Scancode = Scancode::extended(0x38);
+
+/// What a held keysym was sent to the target as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SentKey {
+    Scancode(Scancode),
+    Unicode(char),
+}
+
+impl SentKey {
+    fn events(self, pressed: bool) -> Vec<FastPathInputEvent> {
+        match self {
+            Self::Scancode(scancode) => vec![key_event(scancode, pressed)],
+            Self::Unicode(ch) => {
+                let flags = if pressed {
+                    KeyboardFlags::empty()
+                } else {
+                    KeyboardFlags::RELEASE
+                };
+                let mut units = [0u16; 2];
+                ch.encode_utf16(&mut units)
+                    .iter()
+                    .map(|&unit| FastPathInputEvent::UnicodeKeyboardEvent(flags, unit))
+                    .collect()
+            }
+        }
+    }
+}
+
+fn key_event(scancode: Scancode, pressed: bool) -> FastPathInputEvent {
+    let mut flags = KeyboardFlags::empty();
+    if !pressed {
+        flags |= KeyboardFlags::RELEASE;
+    }
+    if scancode.extended {
+        flags |= KeyboardFlags::EXTENDED;
+    }
+    FastPathInputEvent::KeyboardEvent(flags, scancode.code)
+}
+
+/// Press a layout character, bringing Shift and AltGr into the state it
+/// needs and restoring the user's own afterwards.
+///
+/// The browser has already turned the user's modifiers into a character,
+/// so they no longer say what the target needs: Caps Lock plus Shift gives
+/// a lowercase keysym with Shift down, and a local layout puts `@` on a
+/// different chord than the target's. Only the press is wrapped; Windows
+/// resolves the character on key-down.
+fn character_events(
+    stroke: KeyStroke,
+    [shift_l_held, shift_r_held]: [bool; 2],
+    altgr_held: bool,
+) -> Vec<FastPathInputEvent> {
+    let mut before = Vec::new();
+    if stroke.shift && !shift_l_held && !shift_r_held {
+        before.push((SHIFT_L, true));
+    }
+    if !stroke.shift {
+        if shift_l_held {
+            before.push((SHIFT_L, false));
+        }
+        if shift_r_held {
+            before.push((SHIFT_R, false));
+        }
+    }
+    if stroke.altgr != altgr_held {
+        before.push((ALTGR, stroke.altgr));
+    }
+
+    let mut events: Vec<_> = before
+        .iter()
+        .map(|&(scancode, pressed)| key_event(scancode, pressed))
+        .collect();
+    events.push(key_event(stroke.scancode, true));
+    events.extend(
+        before
+            .iter()
+            .rev()
+            .map(|&(scancode, pressed)| key_event(scancode, !pressed)),
+    );
+    events
 }
 
 /// Translate a Guacamole button mask change into RDP pointer events.
@@ -1892,6 +2061,95 @@ fn describe_termination(reason: &GracefulDisconnectReason) -> (String, Disconnec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn key(code: u8, extended: bool, pressed: bool) -> FastPathInputEvent {
+        let scancode = if extended {
+            Scancode::extended(code)
+        } else {
+            Scancode::plain(code)
+        };
+        key_event(scancode, pressed)
+    }
+
+    fn stroke(code: u8, shift: bool, altgr: bool) -> KeyStroke {
+        KeyStroke {
+            scancode: Scancode::plain(code),
+            shift,
+            altgr,
+        }
+    }
+
+    #[test]
+    fn a_character_whose_modifiers_are_already_held_is_sent_bare() {
+        assert_eq!(
+            character_events(stroke(0x1e, false, false), [false, false], false),
+            vec![key(0x1e, false, true)]
+        );
+        assert_eq!(
+            character_events(stroke(0x28, true, false), [true, false], false),
+            vec![key(0x28, false, true)]
+        );
+    }
+
+    #[test]
+    fn a_missing_shift_is_pressed_around_the_key_only() {
+        // UK `@` typed from a layout where it needs no Shift.
+        assert_eq!(
+            character_events(stroke(0x28, true, false), [false, false], false),
+            vec![
+                key(0x2a, false, true),
+                key(0x28, false, true),
+                key(0x2a, false, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_held_shift_is_lifted_for_an_unshifted_character() {
+        // Caps Lock + Shift gives a lowercase keysym with Shift still down.
+        assert_eq!(
+            character_events(stroke(0x1e, false, false), [true, true], false),
+            vec![
+                key(0x2a, false, false),
+                key(0x36, false, false),
+                key(0x1e, false, true),
+                key(0x36, false, true),
+                key(0x2a, false, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn altgr_is_synthesised_as_extended_right_alt() {
+        // German `@` is AltGr+Q.
+        assert_eq!(
+            character_events(stroke(0x10, false, true), [false, false], false),
+            vec![
+                key(0x38, true, true),
+                key(0x10, false, true),
+                key(0x38, true, false),
+            ]
+        );
+        assert_eq!(
+            character_events(stroke(0x10, false, false), [false, false], true),
+            vec![
+                key(0x38, true, false),
+                key(0x10, false, true),
+                key(0x38, true, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_unicode_key_releases_with_the_same_code_units() {
+        assert_eq!(
+            SentKey::Unicode('😀').events(false),
+            vec![
+                FastPathInputEvent::UnicodeKeyboardEvent(KeyboardFlags::RELEASE, 0xd83d),
+                FastPathInputEvent::UnicodeKeyboardEvent(KeyboardFlags::RELEASE, 0xde00),
+            ]
+        );
+    }
 
     fn ended_with(info: ErrorInfo) -> (String, DisconnectCause) {
         describe_termination(&GracefulDisconnectReason::Other(info.description()))

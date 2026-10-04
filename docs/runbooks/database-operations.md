@@ -184,9 +184,18 @@ The backend compares each applied migration's SQL with the checksum
 stored in `_sqlx_migrations`. Before v2.3.0 it silently overwrote a
 different checksum, so an edited migration was accepted without its SQL
 ever running — a way to hide a schema change (SEC-22). It now refuses
-and names the versions. Two differences are still accepted on their own:
-line endings only, and the reviewed version 29 edit that shipped in
-0.11.1.
+and names the versions. Differences still accepted on their own: line
+endings only, the reviewed version 29 edit that shipped in 0.11.1, and
+(since v2.3.1) the version 96 edit described below.
+
+> **`relation "revoked_tokens" does not exist` on migration 96.** A
+> database created from an early 0.x build recorded migration 38 as the
+> duplicate `038_indexes_and_not_null`, so `038_revoked_tokens_and_indexes`
+> never ran and migration 96 failed. v2.3.1 makes 96 create
+> `revoked_tokens` and the other 038 indexes when they are missing, and
+> lists 96's earlier checksums as known, so this is **not** an
+> edited-migration refusal and needs no `STRATA_MIGRATION_REPAIR_VERSIONS`.
+> Upgrade to v2.3.1 and start normally.
 
 1. **Find out why the file changed.** Compare the file in this build with
    the one in the release that applied it:
@@ -250,4 +259,4 @@ If the compensating migration itself broke things:
 
 ---
 
-_Last reviewed: 2026-10-02 (v2.3.0)_
+_Last reviewed: 2026-10-04 (v2.3.1)_

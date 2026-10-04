@@ -20,7 +20,11 @@ open-source software. Each component retains its original license.
               Apache Guacamole server source code. The Dockerfile modifies
               build arguments (FreeRDP version) and adds Kerberos system
               packages. No source code of guacamole-server is committed to
-              this repository; it is cloned at build time.
+              this repository; it is cloned at build time. The exception is
+              the RDP keyboard layout tables in
+              `crates/strata-session/src/engine/rdp/keymaps/`, copied
+              unmodified from `src/protocols/rdp/keymaps/` with their
+              Apache License headers intact.
 
 2. guacamole-common-js
    - Source:  https://www.npmjs.com/package/guacamole-common-js

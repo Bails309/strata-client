@@ -5423,7 +5423,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "strata-backend"
-version = "2.3.0"
+version = "2.3.1"
 dependencies = [
  "aes 0.9.3",
  "aes-gcm 0.10.3",
@@ -5496,7 +5496,7 @@ dependencies = [
 
 [[package]]
 name = "strata-dmz"
-version = "2.3.0"
+version = "2.3.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -5532,7 +5532,7 @@ dependencies = [
 
 [[package]]
 name = "strata-protocol"
-version = "2.3.0"
+version = "2.3.1"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -5550,7 +5550,7 @@ dependencies = [
 
 [[package]]
 name = "strata-session"
-version = "2.3.0"
+version = "2.3.1"
 dependencies = [
  "alacritty_terminal",
  "async-trait",

@@ -21,6 +21,7 @@ import {
   sendClipboardToRemote,
   resetRemoteClipboardEcho,
   installClipboardDiagnostics,
+  prepareRemotePaste,
   type ClipboardTarget,
 } from "../components/clipboardSync";
 
@@ -132,5 +133,32 @@ describe("clipboardSync", () => {
     expect(trail).toContain("stream-end");
     // Contents must never reach the log — only lengths and a digest.
     expect(JSON.stringify(dump)).not.toContain("secret-value");
+  });
+
+  it("pushes the local clipboard before a paste shortcut is let through", async () => {
+    // Alt+Tab back into the browser fires no pointer or focus push, so the
+    // paste keystroke itself has to bring the remote up to date.
+    const target = makeTarget({ remoteClipboard: "stale" });
+    const clipboard = { readText: vi.fn(async () => "fresh") } as unknown as Clipboard;
+
+    await prepareRemotePaste(target, clipboard);
+
+    expect(target.remoteClipboard).toBe("fresh");
+    expect(events).toEqual(["open:0", "text:0", "end:0"]);
+  });
+
+  it("does not re-send or wait when the remote already holds the local text", async () => {
+    vi.useFakeTimers();
+    try {
+      const target = makeTarget({ remoteClipboard: "same" });
+      const clipboard = { readText: vi.fn(async () => "same") } as unknown as Clipboard;
+
+      // Resolves without the settle timer ever being advanced.
+      await prepareRemotePaste(target, clipboard);
+
+      expect(target.client.createClipboardStream).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

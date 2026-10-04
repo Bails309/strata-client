@@ -30,6 +30,38 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.3.1",
+    subtitle:
+      "Typing works again at a PowerShell prompt on Windows Server Core, the numeric keypad types in every session, and pressing Ctrl+V pastes what you have just copied on your own machine instead of whatever the remote computer held before.",
+    sections: [
+      {
+        title: "Typing on Server Core and in other console prompts",
+        description:
+          "Characters were being sent to Windows as Unicode events, which the PowerShell prompt on Server 2019 and 2022 ignores, so nothing you typed appeared there even though Notepad and the SConfig menu worked. Characters are now typed as real key presses on the remote user's keyboard layout, and characters that layout cannot type still arrive.",
+      },
+      {
+        title: "The numeric keypad works",
+        description:
+          "The keypad's digits and decimal point did nothing in remote desktop and SSH sessions. They now type, and they arrive as keypad keys, so Alt plus a number code works and the decimal key gives the remote computer's own separator. Strata keeps Num Lock on and Caps Lock off on the remote side; your own Caps Lock and Num Lock keys still decide what you type.",
+      },
+      {
+        title: "Paste what you just copied",
+        description:
+          "Your clipboard used to reach the session only when the pointer entered it or you clicked, so coming back with Alt+Tab and pressing Ctrl+V could paste the old contents. Ctrl+V and Shift+Insert now send your clipboard first and wait for it, for up to a second, before the keystroke goes through. This works in the main view, pop-out windows, multi-monitor windows and the tiled view.",
+      },
+      {
+        title: "Smaller fixes",
+        description:
+          "A managed credential lease no longer appears twice in expiry warnings and the lease manager. Recordings show which engine served them while they are still running, rather than Unknown.",
+      },
+      {
+        title: "For administrators",
+        description:
+          "A connection with no keyboard layout set now means UK English. Set the layout on any connection or AD sync source whose remote users type on a different layout, and avoid Failsafe (Unicode events) where people need a console prompt. AD sync sources can now attach a Trusted CA to every remote desktop connection they create. Recordings on volumes created before version 2 no longer fail with Permission denied. No migration or configuration change is needed.",
+      },
+    ],
+  },
+  {
     version: "2.3.0",
     subtitle:
       "This release closes an independent security and performance review of Strata. Sign-in, file transfers, recordings and the audit trail are harder to abuse, every connection secret is kept encrypted, and the app loads faster and asks the server for less, especially with many tabs open or thousands of connections.",

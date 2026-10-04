@@ -170,7 +170,7 @@ fn named_key(keysym: u32) -> Option<Vec<u8>> {
 
 /// Printable characters, including their Control-modified forms.
 fn printable(keysym: u32, mods: Modifiers) -> Option<Vec<u8>> {
-    let ch = keysym_to_char(keysym)?;
+    let ch = keysym_to_char(keysym).or_else(|| keypad_char(keysym))?;
 
     if mods.ctrl {
         return control_char(ch).map(|b| vec![b]);
@@ -188,6 +188,24 @@ pub(crate) fn keysym_to_char(keysym: u32) -> Option<char> {
     match keysym {
         0x20..=0xff => char::from_u32(keysym),
         0x0100_0000..=0x0110_ffff => char::from_u32(keysym - 0x0100_0000),
+        _ => None,
+    }
+}
+
+/// The character a numeric keypad key types with Num Lock on.
+///
+/// Kept out of [`keysym_to_char`]: the RDP engine uses that to decide what
+/// is text, and keypad keys must stay keypad positions there.
+fn keypad_char(keysym: u32) -> Option<char> {
+    match keysym {
+        0xffb0..=0xffb9 => char::from_digit(keysym - 0xffb0, 10),
+        0xffaa => Some('*'),
+        0xffab => Some('+'),
+        0xffac => Some(','),
+        0xffad => Some('-'),
+        0xffae => Some('.'),
+        0xffaf => Some('/'),
+        0xffbd => Some('='),
         _ => None,
     }
 }
@@ -291,6 +309,20 @@ mod tests {
         assert_eq!(plain(0x0100_4e2d).unwrap(), "中".as_bytes());
         // Latin-1 keysyms are their own codepoint.
         assert_eq!(plain(0xe9).unwrap(), "é".as_bytes());
+    }
+
+    #[test]
+    fn keypad_keys_type_their_characters() {
+        assert_eq!(plain(0xffb0).unwrap(), b"0");
+        assert_eq!(plain(0xffb9).unwrap(), b"9");
+        assert_eq!(plain(0xffae).unwrap(), b".");
+        assert_eq!(plain(0xffab).unwrap(), b"+");
+        assert_eq!(plain(0xffad).unwrap(), b"-");
+        assert_eq!(plain(0xffaa).unwrap(), b"*");
+        assert_eq!(plain(0xffaf).unwrap(), b"/");
+        assert_eq!(plain(0xff8d).unwrap(), b"\r");
+        // Not text as far as the RDP engine is concerned.
+        assert_eq!(keysym_to_char(0xffb1), None);
     }
 
     #[test]

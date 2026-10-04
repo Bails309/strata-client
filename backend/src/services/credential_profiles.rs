@@ -728,3 +728,163 @@ pub async fn expired_profile_for_connection(
     .await
     .unwrap_or(None)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ttl_helpers_combine_hours_and_minutes_and_pick_the_cap() {
+        assert_eq!(ttl_total_minutes(0, 15), 15);
+        assert_eq!(ttl_total_minutes(2, 30), 150);
+        assert_eq!(effective_ttl_max(8, false), 8);
+        assert_eq!(effective_ttl_max(8, true), EXTENDED_TTL_MAX_HOURS);
+    }
+
+    /// Needs `TEST_DATABASE_URL` pointing at a migrated database.
+    #[tokio::test]
+    async fn credentials_are_injected_only_while_live_and_only_for_their_owner() {
+        let Some(pool) = std::env::var("TEST_DATABASE_URL")
+            .ok()
+            .and_then(|url| PgPool::connect_lazy(&url).ok())
+        else {
+            eprintln!("TEST_DATABASE_URL unset, skipping");
+            return;
+        };
+        let tag = Uuid::new_v4().simple().to_string();
+        let role: Uuid = sqlx::query_scalar("INSERT INTO roles (name) VALUES ($1) RETURNING id")
+            .bind(format!("cp-{tag}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let user = |name: &'static str| {
+            let pool = pool.clone();
+            let tag = tag.clone();
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO users (username, email, role_id) VALUES ($1, $2, $3) RETURNING id",
+                )
+                .bind(format!("{name}-{tag}"))
+                .bind(format!("{name}-{tag}@example.test"))
+                .bind(role)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let owner = user("owner").await;
+        let other = user("other").await;
+        let folder: Uuid =
+            sqlx::query_scalar("INSERT INTO connection_folders (name) VALUES ($1) RETURNING id")
+                .bind(format!("cp-{tag}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let conn = |name: &'static str, folder: Option<Uuid>| {
+            let pool = pool.clone();
+            let tag = tag.clone();
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO connections (name, protocol, hostname, port, folder_id)
+                     VALUES ($1, 'rdp', 'h', 3389, $2) RETURNING id",
+                )
+                .bind(format!("{name}-{tag}"))
+                .bind(folder)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let granted = conn("granted", Some(folder)).await;
+        let ungranted = conn("ungranted", None).await;
+        sqlx::query("INSERT INTO role_folders (role_id, folder_id) VALUES ($1, $2)")
+            .bind(role)
+            .bind(folder)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Access follows the role grant; all-access still stops at soft-deleted rows.
+        assert!(user_has_connection_access(&pool, granted, owner, false)
+            .await
+            .unwrap());
+        assert!(!user_has_connection_access(&pool, ungranted, owner, false)
+            .await
+            .unwrap());
+        assert!(user_has_connection_access(&pool, ungranted, owner, true)
+            .await
+            .unwrap());
+
+        let sealed = SealedPayload {
+            ciphertext: vec![1],
+            encrypted_dek: vec![2],
+            nonce: vec![3],
+        };
+        let profile = insert(&pool, owner, "cp", &sealed, 1, 0, false)
+            .await
+            .unwrap();
+        insert_mapping(&pool, profile, granted).await.unwrap();
+        insert_mapping(&pool, profile, granted).await.unwrap();
+        assert_eq!(list_mappings(&pool, profile).await.unwrap().len(), 1);
+
+        assert!(user_owns(&pool, profile, owner).await.unwrap());
+        assert!(!user_owns(&pool, profile, other).await.unwrap());
+        assert!(has_live_creds_for_connection(&pool, granted, owner).await);
+        assert!(!has_live_creds_for_connection(&pool, granted, other).await);
+        assert!(expired_profile_for_connection(&pool, granted, owner)
+            .await
+            .is_none());
+
+        // An expired profile is never injected, and is offered for renewal instead.
+        set_expires_at(&pool, profile, Utc::now() - chrono::Duration::minutes(1))
+            .await
+            .unwrap();
+        assert!(!has_live_creds_for_connection(&pool, granted, owner).await);
+        let expired = expired_profile_for_connection(&pool, granted, owner)
+            .await
+            .expect("expired profile is reported");
+        assert_eq!(expired.0, profile.to_string());
+
+        // Renewing the TTL makes it live again.
+        update_metadata(&pool, profile, None, Some(1), Some(0), None)
+            .await
+            .unwrap();
+        assert!(has_live_creds_for_connection(&pool, granted, owner).await);
+
+        // Soft-deleting the connection removes even all-access.
+        sqlx::query("UPDATE connections SET soft_deleted_at = now() WHERE id = $1")
+            .bind(ungranted)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(!user_has_connection_access(&pool, ungranted, owner, true)
+            .await
+            .unwrap());
+
+        // Only the owner can delete, and doing so clears the mapping.
+        assert!(!delete(&pool, profile, other).await.unwrap());
+        assert!(delete(&pool, profile, owner).await.unwrap());
+        assert!(!has_live_creds_for_connection(&pool, granted, owner).await);
+
+        sqlx::query("DELETE FROM connections WHERE id = ANY($1)")
+            .bind(vec![granted, ungranted])
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM connection_folders WHERE id = $1")
+            .bind(folder)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+            .bind(vec![owner, other])
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM roles WHERE id = $1")
+            .bind(role)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+}

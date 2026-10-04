@@ -19,10 +19,12 @@ That isolation is important because:
 
 Tests that need Postgres should:
 
-1. Read `TEST_DATABASE_URL` from the env (CI sets this in `ci.yml` →
-   `migrations-check` job style; locally use `docker compose up -d
-   postgres` and export
-   `TEST_DATABASE_URL=postgres://strata:strata@localhost:5432/strata`).
+1. Read `TEST_DATABASE_URL` from the env. CI's `backend-check` job runs
+   a Postgres 16 service, applies every migration with `sqlx migrate run`
+   and sets it for `cargo test`; a follow-up step fails the job if the
+   audit sequence was never used, i.e. if the DB tests silently skipped.
+   Locally, start any migrated Postgres and export
+   `TEST_DATABASE_URL=postgres://strata:strata@localhost:5432/strata`.
 2. Skip themselves with `eprintln!` + early-return if the env var is
    missing — never panic, so contributors without a local DB still see
    a green `cargo test`.

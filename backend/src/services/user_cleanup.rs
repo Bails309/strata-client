@@ -81,39 +81,13 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
         let default_admin_username =
             std::env::var("DEFAULT_ADMIN_USERNAME").unwrap_or_else(|_| "admin".into());
 
-        // Collect candidates first so we can emit one audit-log entry per
-        // user (the worker has no acting-user id, so audit::log is called
-        // with `actor_id = None`).
-        let stale: Vec<(uuid::Uuid, String)> = sqlx::query_as(
-            "SELECT id, username
-             FROM users
-             WHERE deleted_at IS NULL
-               AND last_login_at IS NOT NULL
-               AND last_login_at < now() - make_interval(days => $1)
-               AND LOWER(username) <> LOWER($2)",
-        )
-        .bind(stale_days)
-        .bind(&default_admin_username)
-        .fetch_all(&db.pool)
-        .await?;
+        let (stale, swept) =
+            sweep_stale_users(&db.pool, stale_days, &default_admin_username).await?;
 
         if !stale.is_empty() {
-            let result = sqlx::query(
-                "UPDATE users
-                 SET deleted_at = now()
-                 WHERE deleted_at IS NULL
-                   AND last_login_at IS NOT NULL
-                   AND last_login_at < now() - make_interval(days => $1)
-                   AND LOWER(username) <> LOWER($2)",
-            )
-            .bind(stale_days)
-            .bind(&default_admin_username)
-            .execute(&db.pool)
-            .await?;
-
             tracing::info!(
                 "Soft-deleted {} stale user(s) (no login in >{} days)",
-                result.rows_affected(),
+                swept,
                 stale_days
             );
 
@@ -196,14 +170,9 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
     }
 
     // ── Hard-delete the users (CASCADE removes DB rows for recordings, tags, etc.) ──
-    let result =
-        sqlx::query("DELETE FROM users WHERE deleted_at < now() - make_interval(days => $1)")
-            .bind(days)
-            .execute(&db.pool)
-            .await?;
-
-    if result.rows_affected() > 0 {
-        tracing::info!("Hard-deleted {} user(s)", result.rows_affected());
+    let deleted = hard_delete_users(&db.pool, days).await?;
+    if deleted > 0 {
+        tracing::info!("Hard-deleted {} user(s)", deleted);
     }
 
     // Keep one-shot Safeguard enrolment codes bounded over time.
@@ -221,4 +190,144 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Soft-delete live users whose last login is older than `stale_days`.
+///
+/// Returns the swept users (collected first so the caller can audit each
+/// one; the worker has no acting-user id) and the number of rows updated.
+async fn sweep_stale_users(
+    pool: &sqlx::PgPool,
+    stale_days: i32,
+    default_admin_username: &str,
+) -> sqlx::Result<(Vec<(uuid::Uuid, String)>, u64)> {
+    let stale: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT id, username
+         FROM users
+         WHERE deleted_at IS NULL
+           AND last_login_at IS NOT NULL
+           AND last_login_at < now() - make_interval(days => $1)
+           AND LOWER(username) <> LOWER($2)",
+    )
+    .bind(stale_days)
+    .bind(default_admin_username)
+    .fetch_all(pool)
+    .await?;
+    if stale.is_empty() {
+        return Ok((stale, 0));
+    }
+
+    let result = sqlx::query(
+        "UPDATE users
+         SET deleted_at = now()
+         WHERE deleted_at IS NULL
+           AND last_login_at IS NOT NULL
+           AND last_login_at < now() - make_interval(days => $1)
+           AND LOWER(username) <> LOWER($2)",
+    )
+    .bind(stale_days)
+    .bind(default_admin_username)
+    .execute(pool)
+    .await?;
+    Ok((stale, result.rows_affected()))
+}
+
+/// Hard-delete users soft-deleted more than `days` ago.
+async fn hard_delete_users(pool: &sqlx::PgPool, days: i32) -> sqlx::Result<u64> {
+    let result =
+        sqlx::query("DELETE FROM users WHERE deleted_at < now() - make_interval(days => $1)")
+            .bind(days)
+            .execute(pool)
+            .await?;
+    Ok(result.rows_affected())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    /// Needs `TEST_DATABASE_URL` pointing at a migrated database. The
+    /// windows are years long so rows from other tests are never swept.
+    #[tokio::test]
+    async fn the_sweep_spares_the_admin_and_unused_accounts_and_purges_after_the_window() {
+        let Some(pool) = std::env::var("TEST_DATABASE_URL")
+            .ok()
+            .and_then(|url| sqlx::PgPool::connect_lazy(&url).ok())
+        else {
+            eprintln!("TEST_DATABASE_URL unset, skipping");
+            return;
+        };
+        let tag = Uuid::new_v4().simple().to_string();
+        let role: Uuid = sqlx::query_scalar("INSERT INTO roles (name) VALUES ($1) RETURNING id")
+            .bind(format!("cleanup-{tag}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let user = |name: &'static str, last_login: Option<i32>| {
+            let pool = pool.clone();
+            let tag = tag.clone();
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO users (username, email, role_id, last_login_at)
+                     VALUES ($1, $2, $3, now() - make_interval(days => $4)) RETURNING id",
+                )
+                .bind(format!("{name}-{tag}"))
+                .bind(format!("{name}-{tag}@example.test"))
+                .bind(role)
+                .bind(last_login)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let stale = user("stale", Some(4000)).await;
+        let recent = user("recent", Some(1)).await;
+        let never = user("never", None).await;
+        let admin = user("admin", Some(4000)).await;
+        let deleted_at = |id: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+                    "SELECT deleted_at FROM users WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_optional(&pool)
+                .await
+                .unwrap()
+            }
+        };
+
+        // The admin match is case-insensitive.
+        let (swept, count) = sweep_stale_users(&pool, 3650, &format!("ADMIN-{tag}"))
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(swept, vec![(stale, format!("stale-{tag}"))]);
+        assert!(deleted_at(stale).await.flatten().is_some());
+        for kept in [recent, never, admin] {
+            assert_eq!(deleted_at(kept).await, Some(None), "{kept} was swept");
+        }
+
+        // Soft-deleted rows stay until the retention window has passed.
+        assert_eq!(hard_delete_users(&pool, 3650).await.unwrap(), 0);
+        sqlx::query("UPDATE users SET deleted_at = now() - interval '4000 days' WHERE id = $1")
+            .bind(stale)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(hard_delete_users(&pool, 3650).await.unwrap(), 1);
+        assert_eq!(deleted_at(stale).await, None);
+
+        sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+            .bind(vec![recent, never, admin])
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM roles WHERE id = $1")
+            .bind(role)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
 }

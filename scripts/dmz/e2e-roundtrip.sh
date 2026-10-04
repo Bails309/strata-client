@@ -40,7 +40,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "[e2e] waiting for the DMZ link to report at least one session up"
-# shellcheck disable=SC1091
+# shellcheck disable=SC1090
 source "$ENV_FILE"
 DEADLINE=$(( $(date +%s) + 60 ))
 while :; do

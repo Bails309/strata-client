@@ -121,3 +121,112 @@ async fn send_udp(request: &NetworkRequest) -> ConnectorResult<Vec<u8>> {
     reply.extend_from_slice(&buf[..received]);
     Ok(reply)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    fn request(protocol: NetworkProtocol, url: &str, data: &[u8]) -> NetworkRequest {
+        NetworkRequest {
+            protocol,
+            url: url.parse().unwrap(),
+            data: data.to_vec(),
+        }
+    }
+
+    /// A TCP KDC that records what it was sent and answers with `reply`.
+    async fn tcp_kdc(reply: Vec<u8>) -> (String, tokio::task::JoinHandle<Vec<u8>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut length = [0u8; 4];
+            stream.read_exact(&mut length).await.unwrap();
+            let mut body = vec![0u8; u32::from_be_bytes(length) as usize];
+            stream.read_exact(&mut body).await.unwrap();
+            stream.write_all(&reply).await.unwrap();
+            [length.as_slice(), &body].concat()
+        });
+        (format!("tcp://{addr}"), task)
+    }
+
+    #[test]
+    fn a_kdc_url_without_a_port_uses_88() {
+        let req = request(NetworkProtocol::Tcp, "tcp://kdc.example.test", b"");
+        assert_eq!(target(&req), "kdc.example.test:88");
+        let req = request(NetworkProtocol::Udp, "udp://kdc.example.test:750", b"");
+        assert_eq!(target(&req), "kdc.example.test:750");
+    }
+
+    #[tokio::test]
+    async fn tcp_sends_the_request_verbatim_and_keeps_the_reply_prefix() {
+        let sent = [&5u32.to_be_bytes()[..], b"AS-RQ"].concat();
+        let reply = [&5u32.to_be_bytes()[..], b"AS-RP"].concat();
+        let (url, kdc) = tcp_kdc(reply.clone()).await;
+
+        let got = KdcNetworkClient
+            .send(&request(NetworkProtocol::Tcp, &url, &sent))
+            .await
+            .unwrap();
+
+        assert_eq!(kdc.await.unwrap(), sent, "request must not be re-framed");
+        assert_eq!(got, reply, "reply must keep its length prefix");
+    }
+
+    #[tokio::test]
+    async fn tcp_refuses_a_reply_longer_than_the_token_limit() {
+        let too_long = (MAX_KDC_REPLY as u32 + 1).to_be_bytes().to_vec();
+        let (url, _kdc) = tcp_kdc(too_long).await;
+        let sent = [&1u32.to_be_bytes()[..], b"x"].concat();
+        assert!(KdcNetworkClient
+            .send(&request(NetworkProtocol::Tcp, &url, &sent))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn tcp_reports_a_truncated_reply() {
+        let short = [&10u32.to_be_bytes()[..], b"abc"].concat();
+        let (url, _kdc) = tcp_kdc(short).await;
+        let sent = [&1u32.to_be_bytes()[..], b"x"].concat();
+        assert!(KdcNetworkClient
+            .send(&request(NetworkProtocol::Tcp, &url, &sent))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn udp_replies_get_the_prefix_tcp_would_have_carried() {
+        let kdc = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("udp://{}", kdc.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut buf = [0u8; 64];
+            let (n, peer) = kdc.recv_from(&mut buf).await.unwrap();
+            kdc.send_to(b"TGS-RP", peer).await.unwrap();
+            buf[..n].to_vec()
+        });
+
+        let got = KdcNetworkClient
+            .send(&request(NetworkProtocol::Udp, &url, b"TGS-RQ"))
+            .await
+            .unwrap();
+
+        assert_eq!(server.await.unwrap(), b"TGS-RQ");
+        assert_eq!(got, [&6u32.to_be_bytes()[..], b"TGS-RP"].concat());
+    }
+
+    #[tokio::test]
+    async fn kdc_proxy_urls_are_refused() {
+        for (protocol, url) in [
+            (NetworkProtocol::Http, "http://kdc.example.test/KdcProxy"),
+            (NetworkProtocol::Https, "https://kdc.example.test/KdcProxy"),
+        ] {
+            let err = KdcNetworkClient
+                .send(&request(protocol, url, b"x"))
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("KKDCP"), "{err}");
+        }
+    }
+}

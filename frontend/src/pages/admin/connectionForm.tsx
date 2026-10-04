@@ -282,7 +282,7 @@ export function RdpSections({
             <Select
               value={ex("server-layout")}
               onChange={(v) => setEx("server-layout", v)}
-              placeholder="Default (US English)"
+              placeholder="Default (UK English)"
               options={RDP_KEYBOARD_LAYOUTS}
             />
           </Field>

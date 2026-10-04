@@ -7,6 +7,8 @@ import Guacamole from "guacamole-common-js";
 import { GuacSession, sendSizeFromCss, sendSizeWithDpi } from "./SessionManager";
 import { notifySessionActivity } from "./sessionActivity";
 import { createWinKeyProxy } from "../utils/winKeyProxy";
+import { createPasteShortcutGate } from "../utils/pasteShortcutGate";
+import { prepareRemotePaste } from "./clipboardSync";
 import { installShortcutProxy } from "../utils/shortcutProxy";
 import { installKeyboardLock, requestFullscreenWithLock } from "../utils/keyboardLock";
 
@@ -460,7 +462,11 @@ export function useMultiMonitor(
 
       // ── Keyboard input ──
       const keyboard = new Guacamole.Keyboard(popup.document);
-      const winProxy = createWinKeyProxy((pressed, keysym) => client.sendKeyEvent(pressed, keysym));
+      const pasteGate = createPasteShortcutGate(
+        (pressed, keysym) => client.sendKeyEvent(pressed, keysym),
+        () => prepareRemotePaste(sess, popup.navigator.clipboard)
+      );
+      const winProxy = createWinKeyProxy(pasteGate.send);
       keyboard.onkeydown = (keysym: number) => {
         // Multi-monitor popouts host the same Guacamole client but in
         // separate browser windows; their keystrokes never reach the

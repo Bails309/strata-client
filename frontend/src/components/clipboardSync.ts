@@ -396,3 +396,50 @@ async function writeClipboardStream(
   });
   return true;
 }
+
+/**
+ * Pause after pushing new text before letting a paste keystroke through.
+ * The target's clipboard owner applies the new format list asynchronously,
+ * so a keystroke right behind it can still paste the previous contents.
+ */
+export const PASTE_SETTLE_MS = 150;
+
+/**
+ * Read the local clipboard and push it to the remote. Resolves `true` when
+ * new text was transmitted.
+ *
+ * `clipboard` defaults to this window's; a pop-out must pass its own,
+ * because only the focused document may read the clipboard.
+ */
+export async function pushLocalClipboard(
+  target: ClipboardTarget,
+  source: string,
+  clipboard: Clipboard | undefined = globalThis.navigator?.clipboard
+): Promise<boolean> {
+  try {
+    const text = await clipboard?.readText();
+    if (!text) return false;
+    return await sendClipboardToRemote(target, text, source);
+  } catch (err) {
+    // Denied (no transient activation, insecure context, blocked
+    // permission). Recorded rather than swallowed — a permanently
+    // denied read looks identical to "paste stopped working".
+    clipboardDiag(target.id, "out", "local-read-failed", { source, err: String(err) });
+    return false;
+  }
+}
+
+/**
+ * Bring the remote clipboard up to date before a paste shortcut reaches
+ * it. Without this, a paste only picked up text copied locally once the
+ * pointer had re-entered or clicked the session — returning to the
+ * browser with Alt+Tab and pressing Ctrl+V pasted the previous contents.
+ */
+export async function prepareRemotePaste(
+  target: ClipboardTarget,
+  clipboard?: Clipboard
+): Promise<void> {
+  if (await pushLocalClipboard(target, "paste-shortcut", clipboard)) {
+    await new Promise((resolve) => setTimeout(resolve, PASTE_SETTLE_MS));
+  }
+}

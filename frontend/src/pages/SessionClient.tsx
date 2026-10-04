@@ -33,6 +33,8 @@ import { useMultiMonitor } from "../components/useMultiMonitor";
 import SessionWatermark from "../components/SessionWatermark";
 import Select from "../components/Select";
 import { createWinKeyProxy } from "../utils/winKeyProxy";
+import { createPasteShortcutGate } from "../utils/pasteShortcutGate";
+import { prepareRemotePaste } from "../components/clipboardSync";
 import { installShortcutProxy } from "../utils/shortcutProxy";
 import { installKeyboardLock } from "../utils/keyboardLock";
 import { useCommandPalette } from "../components/CommandPaletteProvider";
@@ -1062,7 +1064,11 @@ export default function SessionClient() {
       };
     }
 
-    const winProxy = createWinKeyProxy((p, k) => client.sendKeyEvent(p, k));
+    const pasteGate = createPasteShortcutGate(
+      (p, k) => client.sendKeyEvent(p, k),
+      () => prepareRemotePaste(currentSession)
+    );
+    const winProxy = createWinKeyProxy(pasteGate.send);
     kb.onkeydown = (keysym: number) => {
       if (!containerFocusedRef.current || commandPaletteOpenRef.current) {
         winProxy.reset();

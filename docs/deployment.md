@@ -616,6 +616,28 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v2.3.2 → v2.3.3 (Rust 1.99, russh 0.64, dependency hygiene)
+
+Rebuild the backend and frontend images, and the **DMZ edge** for DMZ
+topologies so it is built with the same compiler. **No migration, no `.env`
+change, no behaviour change.**
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+| Change | Who notices |
+| ------ | ----------- |
+| Builder images move to Rust 1.99 (`rust:1.99-slim-trixie`, `rust:1.99-bookworm`, pinned by digest) | Anyone building outside Docker needs Rust 1.99 |
+| `russh` 0.64.0 in the SSH engine | Nobody directly; long SSH/SFTP sessions now rekey on the protocol's read and time limits |
+| `lint-staged` 17 in the root workspace | Contributors: Node.js 22.22.1+ and a root `npm install` for the pre-commit hook |
+
+**Verify post-upgrade:** the **What's New** modal shows the v2.3.3 card, and
+an SSH and an SFTP session connect as before.
+
 #### v2.3.1 → v2.3.2 (AD sync keeps approved host keys)
 
 Rebuild the backend and frontend images. **No migration, no `.env`

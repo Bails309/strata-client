@@ -7,10 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed — Rust 1.99 toolchain and `russh` 0.64
+## [2.3.3] — 2026-10-04
 
-Asked for with *"It looks like there is a new version of Rust 1.99 and
-Russh"* ([russh v0.64.0](https://github.com/Eugeny/russh/releases/tag/v0.64.0)).
+### Patch release — Rust 1.99 and `russh` 0.64, the `braces` advisory removed, and a pre-commit hook that lints what is staged
+
+### The ask
+
+Two requests, quoted as made:
+
+> - *"It looks like there is a new version of Rust 1.99 and Russh
+>   https://github.com/Eugeny/russh/releases/tag/v0.64.0"*
+> - Dependabot alert #52, *"braces vulnerable to stack-exhaustion denial of
+>   service through deeply nested patterns"* (`braces` 3.0.3 via
+>   `lint-staged` 15.5.2, no patched version)
+
+### Summary
+
+| Area | Change | Runtime effect |
+| ---- | ------ | -------------- |
+| Toolchain | Rust 1.95 / 1.98 → **1.99** in CI and both builder images | None; images are rebuilt with the new compiler |
+| SSH engine | `russh` 0.63.3 → **0.64.0** | Rekey limits enforced on long SSH/SFTP sessions; advisory GHSA-j7h2-66j4-ghjf is server-side and not reachable |
+| Supply chain | `lint-staged` 15 → **17**, removing `braces` (Dependabot #52) | None; developer tooling only |
+| Developer tooling | Pre-commit hook passes staged files to ESLint and Prettier | None; commits now lint only what is staged |
+
+### Changed — Rust 1.99 toolchain and `russh` 0.64
 
 **Rust 1.95 / 1.98 → 1.99 everywhere the toolchain is pinned.** The pins had
 drifted apart: CI used 1.95, the backend image 1.98 and the DMZ image 1.95.
@@ -82,6 +102,66 @@ The `backend/**/*.rs` task is unchanged.
 configuration change. lint-staged 17 needs **Node.js ≥ 22.22.1** to run the
 hook (CI and the images use Node 24); [CONTRIBUTING.md](CONTRIBUTING.md) now
 says so.
+
+### Scope & safety
+
+| Area | Change |
+| ---- | ------ |
+| Schema | None |
+| REST / WebSocket API | None |
+| Environment variables | None |
+| Runtime dependencies | `russh` 0.63.3 → 0.64.0; no other runtime crate or npm package moved |
+| Build | Rust **1.99** required for the backend, DMZ and session crates (the `try_update` rename does not compile on older toolchains) |
+| Developer tooling | Node.js **22.22.1+** required for the pre-commit hook; root `package-lock.json` 56 → 6 packages |
+| Behaviour | None for users or operators |
+
+### Testing
+
+All on `rust:1.99-slim-trixie` (`rustc 1.99.0 (b940084d7 2026-09-28)`), with
+`russh` 0.64.0 in the lockfile:
+
+| Check | Result |
+| ----- | ------ |
+| `cargo fmt -p strata-backend -p strata-session -- --check` | Clean |
+| `cargo clippy -p strata-backend --all-targets -- -D warnings` | Clean (after the `try_update` rename; it failed before it) |
+| `cargo clippy -p strata-session --all-features --all-targets -- -D warnings` | Clean |
+| `cargo test -p strata-backend -- --test-threads=1` | **1386 passed**, 2 ignored; 2 passed in the second test target |
+| `cargo test -p strata-session --lib` / `--all-features --lib` | **111** / **264** passed |
+| `cargo test -p strata-protocol`, `-p strata-dmz` | 46 and 79 passed |
+| `cargo check` of `crates/strata-session/fuzz` | Clean (needs a C++ compiler for `libfuzzer-sys`, as on CI runners) |
+| `cargo deny --all-features check bans licenses sources` | `bans ok, licenses ok, sources ok` |
+| **Live SSH** — `tests/ssh_live.rs` against the OpenSSH fixture in `docker-compose.session-test.yml` | **9 passed**: shell round trip, PTY resize, keysyms, Ctrl+C, remote exit, PNG rasterising, wrong password refused, unpinned and unknown host keys refused |
+| **Live SFTP** — `tests/sftp_live.rs` against the same fixture | **10 passed**: announce, list, upload/read back, replace, symlink and traversal refused, upload/download switches |
+| `npm audit` (root) | 0 vulnerabilities |
+| Pre-commit hook on a staged throwaway file | Prettier formatted only that file; ESLint resolved `frontend/eslint.config.js` from the repo root |
+
+### Documentation
+
+| Document | Change |
+| -------- | ------ |
+| [README.md](README.md) | Rust badge and build note 1.99; release row |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Rust 1.99, Node.js 22.22.1+, root `npm install` for the hook |
+| [docs/security.md](docs/security.md) | Handled advisories: GHSA-j7h2-66j4-ghjf (`russh`) and Dependabot #52 (`braces`); toolchain pinning note |
+| [docs/deployment.md](docs/deployment.md) | v2.3.2 → v2.3.3 upgrade notes |
+| [docs/faq.md](docs/faq.md) | Rust version for local builds |
+| `crates/strata-session/tests/*_live.rs` | Run instructions use `rust:1.99-slim-trixie` |
+| [ARCHITECTURE.md](ARCHITECTURE.md), [docs/architecture.md](docs/architecture.md), [docs/api-reference.md](docs/api-reference.md) | None — no component, data flow, trust boundary or API changed |
+
+### Deploy
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+DMZ topologies: rebuild `strata-dmz` as well, so the edge is compiled with
+the same toolchain (no protocol change; mixed versions interoperate). No
+migration and no `.env` change.
+
+**Contributors:** install Rust 1.99 and Node.js 22.22.1 or later, and run
+`npm install` at the repository root to pick up `lint-staged` 17.
 
 ## [2.3.2] — 2026-10-04
 

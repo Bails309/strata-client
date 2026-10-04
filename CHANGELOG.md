@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Rust 1.99 toolchain and `russh` 0.64
+
+Asked for with *"It looks like there is a new version of Rust 1.99 and
+Russh"* ([russh v0.64.0](https://github.com/Eugeny/russh/releases/tag/v0.64.0)).
+
+**Rust 1.95 / 1.98 → 1.99 everywhere the toolchain is pinned.** The pins had
+drifted apart: CI used 1.95, the backend image 1.98 and the DMZ image 1.95.
+
+| Where | Before | After |
+| ----- | ------ | ----- |
+| `.github/workflows/ci.yml` (audit, backend jobs), `dmz-deps.yml` (both jobs) | `dtolnay/rust-toolchain@e0818162… # 1.95.0` | `@70dec608… # 1.99.0` (head of the action's `1.99.0` branch) |
+| [`backend/Dockerfile`](backend/Dockerfile) builder | `rust:1.98-slim-trixie@sha256:bce1476d…` | `rust:1.99-slim-trixie@sha256:01dd4f9c…` |
+| [`crates/strata-dmz/Dockerfile`](crates/strata-dmz/Dockerfile) builder | `rust:1.95-bookworm@sha256:adab7941…` | `rust:1.99-bookworm@sha256:59037199…` |
+| README badge and build note, CONTRIBUTING, FAQ, live-test instructions | 1.95 / 1.98 | 1.99 |
+
+1.99 deprecates `Atomic*::fetch_update` in favour of `try_update`, which
+`-D warnings` turns into a build failure; the one call, the session memory
+budget in [`services/admission.rs`](backend/src/services/admission.rs), is
+renamed with identical semantics. Building the backend now needs Rust 1.99.
+
+**`russh` 0.63.3 → 0.64.0** (`crates/strata-session`). Only `russh` moved in
+`Cargo.lock`; no other crate changed. What the release means here:
+
+| Change | Effect on Strata |
+| ------ | ---------------- |
+| GHSA-j7h2-66j4-ghjf — the russh **server** did not check that a client's public-key signature used the negotiated algorithm | **Not reachable.** Strata is an SSH client only; it never verifies client signatures. Recorded in [docs/security.md](docs/security.md#handled-advisories) |
+| Rekey read and time limits now enforced (#766) | Long-lived SSH and SFTP sessions rekey on the limits the protocol intends |
+| `legacy-ed25519-pkcs8-parser` feature removed | **None.** It was an opt-in feature Strata never enabled, so private keys russh pre-0.43 wrote in its non-compliant format were already refused |
+| `hostkeys-prove`, client global requests, other fixes | Not used |
+
+The security-driven floor recorded in the manifest (≥ 0.60.3 for
+RUSTSEC-2026-0153/0154) still holds.
+
+**Scope.** No schema, API, environment-variable or behavioural change;
+operators rebuild images as usual.
+
 ## [2.3.2] — 2026-10-04
 
 ### Patch release — an AD sync no longer wipes approved SSH host keys and certificate pins

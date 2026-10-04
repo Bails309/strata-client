@@ -1902,6 +1902,7 @@ The suppression now rests on reachability rather than absence. The Marvin attack
 | `RUSTSEC-2026-0285` / `GHSA-2mjx-qc3c-rqvc`                | `rustls` (Rust)     | `0.23.41` → `0.23.45` | **None in the build**, which already resolved `0.23.45`. Reported from the stale `crates/vendor/ironrdp-connector/Cargo.lock`, now deleted. | 2.2.0 |
 | `RUSTSEC-2026-0118`, `RUSTSEC-2026-0119`                   | `hickory-proto` (Rust) | `0.25.2` → `0.26.1+` | **None in the build**, which resolves `0.26.3` via `hickory-resolver`. Reported from the stale `crates/vendor/sspi/Cargo.lock`, now deleted. | 2.2.0 |
 | `RUSTSEC-2023-0089`                                        | `atomic-polyfill` (Rust) | — (unmaintained) | **None.** Not compiled for the Linux target. Suppressed with justification (above). | —        |
+| `GHSA-j7h2-66j4-ghjf`                                      | `russh` (Rust)      | `0.63.3` → `0.64.0`   | **Not reachable, upgraded anyway.** The russh **server** did not check that a client's public-key signature used the negotiated algorithm (a client could downgrade its own `rsa-sha2-512` to `rsa-sha1`; no authentication bypass). Strata uses russh only as an SSH **client**, so it never verifies client signatures. | Unreleased |
 
 #### `h2` unbounded empty `DATA` frames — why this one was material (v1.14.5)
 

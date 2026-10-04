@@ -19,7 +19,7 @@
 //!     -e STRATA_SSH_TEST_USER=strata \
 //!     -e STRATA_SSH_TEST_PASSWORD=strata-test-password \
 //!     -e STRATA_SSH_TEST_FINGERPRINT="$FP" \
-//!     rust:1.98-slim-trixie \
+//!     rust:1.99-slim-trixie \
 //!     cargo test -p strata-session --all-features --test sftp_live -- --ignored
 //! docker compose -f docker-compose.session-test.yml down -v
 //! ```

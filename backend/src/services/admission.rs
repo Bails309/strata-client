@@ -86,7 +86,7 @@ impl Ledger {
         }
         let fits = self
             .reserved
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |r| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |r| {
                 (r + bytes <= self.limit).then_some(r + bytes)
             })
             .is_ok();

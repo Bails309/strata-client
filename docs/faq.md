@@ -292,7 +292,7 @@ About 250 MB on first download and 1.4 GB resident in memory once `clamd` loads 
 
 ### How do I set up a local dev environment?
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md). Backend needs Rust 1.95; frontend needs Node 26+ (the Dockerfile uses Node 26).
+See [CONTRIBUTING.md](../CONTRIBUTING.md). Backend needs Rust 1.99; frontend needs Node 26+ (the Dockerfile uses Node 26).
 
 ### Do you accept feature PRs from outside contributors?
 

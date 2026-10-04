@@ -61,6 +61,7 @@ vi.mock("../api", () => ({
   testAdSyncConnection: vi.fn(),
   testSsoConnection: vi.fn(),
   getAdSyncRuns: vi.fn(),
+  getFailingAdSyncs: vi.fn().mockResolvedValue([]),
   getSessionStats: vi.fn(),
   getRecordings: vi.fn(),
   getAdminTagsAdmin: vi.fn(),
@@ -147,6 +148,7 @@ import {
   triggerAdSync,
   testAdSyncConnection,
   getAdSyncRuns,
+  getFailingAdSyncs,
   updateAuthMethods,
   updateSettings,
   updateRoleMappings,
@@ -1991,6 +1993,31 @@ describe("AdSyncTab", () => {
     await screen.findByText("Corp AD");
     await user.click(screen.getByText("History"));
     expect(await screen.findByText(/No sync runs yet/)).toBeInTheDocument();
+  });
+
+  it("flags a failing source in a banner and on its card", async () => {
+    vi.mocked(getFailingAdSyncs).mockResolvedValueOnce([
+      {
+        config_id: "ad1",
+        label: "Corp AD",
+        protocol: "rdp",
+        failures: 2,
+        failing_since: new Date(Date.now() - 7_200_000).toISOString(),
+        last_failure_at: new Date().toISOString(),
+        last_error: "invalid credentials",
+      },
+    ]);
+    vi.mocked(getAdSyncRuns).mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText("AD Sync"));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("An AD sync source is failing");
+    expect(alert).toHaveTextContent("invalid credentials");
+    expect(screen.getByText("Sync failing")).toBeInTheDocument();
+
+    await user.click(within(alert).getByRole("button", { name: "History" }));
+    expect(getAdSyncRuns).toHaveBeenCalledWith("ad1");
   });
 
   it("back button returns from history to config list", async () => {

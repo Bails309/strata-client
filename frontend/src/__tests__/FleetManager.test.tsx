@@ -6,6 +6,7 @@ vi.mock("../api", () => ({
   deleteConnection: vi.fn(),
   getActiveSessions: vi.fn(),
   getAdSyncConfigs: vi.fn(),
+  getFailingAdSyncs: vi.fn().mockResolvedValue([]),
   getConnectionRefs: vi.fn(),
   getConnectionsPage: vi.fn(),
   getFleetSummary: vi.fn(),
@@ -20,6 +21,7 @@ import {
   getAdSyncConfigs,
   getConnectionRefs,
   getConnectionsPage,
+  getFailingAdSyncs,
   getFleetSummary,
   moveConnections,
   probeConnection,
@@ -146,9 +148,32 @@ describe("FleetManager", () => {
       .mockReset()
       .mockImplementation(async (f) => toRefs(adminMatches(CONNS, FOLDERS, f)));
     vi.mocked(getFleetSummary).mockReset().mockResolvedValue(fleetSummary(CONNS));
+    vi.mocked(getFailingAdSyncs).mockReset().mockResolvedValue([]);
     vi.mocked(moveConnections)
       .mockReset()
       .mockResolvedValue({ moved: 2 } as never);
+  });
+
+  it("warns about failing AD sync sources, for admins only", async () => {
+    vi.mocked(getFailingAdSyncs).mockResolvedValue([
+      {
+        config_id: "cfg",
+        label: "Corp RDP",
+        protocol: "rdp",
+        failures: 4,
+        failing_since: new Date(Date.now() - 86_400_000).toISOString(),
+        last_failure_at: new Date().toISOString(),
+        last_error: "rc=49",
+      },
+    ]);
+    mount();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Corp RDP");
+  });
+
+  it("does not ask for AD sync status without system permission", async () => {
+    mount({ user: { can_view_sessions: true } as MeResponse });
+    await screen.findByText("Jump");
+    expect(getFailingAdSyncs).not.toHaveBeenCalled();
   });
 
   it("renders the telemetry strip and two-tier endpoint cells", async () => {

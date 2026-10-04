@@ -60,6 +60,48 @@ pub async fn list_runs(pool: &PgPool, config_id: Uuid) -> Result<Vec<AdSyncRun>,
     Ok(rows)
 }
 
+/// An enabled config whose runs have failed since its last success.
+#[derive(Debug, serde::Serialize, sqlx::FromRow)]
+pub struct FailingSync {
+    pub config_id: Uuid,
+    pub label: String,
+    pub protocol: String,
+    /// Failed runs since the last successful one.
+    pub failures: i64,
+    /// Start of the first of those failures.
+    pub failing_since: chrono::DateTime<chrono::Utc>,
+    pub last_failure_at: chrono::DateTime<chrono::Utc>,
+    pub last_error: Option<String>,
+}
+
+/// Enabled configs that are currently failing, for the admin banners.
+pub async fn list_failing(pool: &PgPool) -> Result<Vec<FailingSync>, AppError> {
+    let rows = sqlx::query_as(
+        "WITH last_ok AS (
+             SELECT config_id, max(started_at) AS at
+             FROM ad_sync_runs WHERE status = 'success' GROUP BY config_id
+         ), failed AS (
+             SELECT r.config_id,
+                    count(*) AS failures,
+                    min(r.started_at) AS failing_since,
+                    max(r.started_at) AS last_failure_at,
+                    (array_agg(r.error_message ORDER BY r.started_at DESC))[1] AS last_error
+             FROM ad_sync_runs r
+             LEFT JOIN last_ok o ON o.config_id = r.config_id
+             WHERE r.status = 'error' AND (o.at IS NULL OR r.started_at > o.at)
+             GROUP BY r.config_id
+         )
+         SELECT c.id AS config_id, c.label, c.protocol, f.failures, f.failing_since,
+                f.last_failure_at, f.last_error
+         FROM ad_sync_configs c JOIN failed f ON f.config_id = c.id
+         WHERE c.enabled
+         ORDER BY f.failing_since",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn config_exists(pool: &PgPool, id: Uuid) -> Result<bool, AppError> {
     let exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ad_sync_configs WHERE id = $1)")
@@ -326,4 +368,90 @@ pub async fn apply_update(pool: &PgPool, id: Uuid, f: UpdateFields<'_>) -> Resul
 
     tx.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Needs `TEST_DATABASE_URL` pointing at a migrated database.
+    #[tokio::test]
+    async fn only_enabled_configs_failing_since_their_last_success_are_reported() {
+        let Some(pool) = std::env::var("TEST_DATABASE_URL")
+            .ok()
+            .and_then(|url| PgPool::connect_lazy(&url).ok())
+        else {
+            eprintln!("TEST_DATABASE_URL unset, skipping");
+            return;
+        };
+        let tag = Uuid::new_v4().simple().to_string();
+        let config = |name: &'static str, enabled: bool| {
+            let pool = pool.clone();
+            let tag = tag.clone();
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO ad_sync_configs (label, ldap_url, enabled)
+                     VALUES ($1, 'ldaps://dc.example.test', $2) RETURNING id",
+                )
+                .bind(format!("{name}-{tag}"))
+                .bind(enabled)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        // (config, minutes ago, status, error)
+        let run = |id: Uuid, ago: i32, status: &'static str, error: Option<&'static str>| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(
+                    "INSERT INTO ad_sync_runs (config_id, started_at, status, error_message)
+                     VALUES ($1, now() - make_interval(mins => $2), $3, $4)",
+                )
+                .bind(id)
+                .bind(ago)
+                .bind(status)
+                .bind(error)
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
+        };
+        let broken = config("broken", true).await;
+        run(broken, 300, "success", None).await;
+        run(broken, 120, "error", Some("bind failed: rc=49")).await;
+        run(broken, 60, "error", Some("invalid credentials, data 52e")).await;
+        let recovered = config("recovered", true).await;
+        run(recovered, 120, "error", Some("timeout")).await;
+        run(recovered, 60, "success", None).await;
+        let never_ok = config("never-ok", true).await;
+        run(never_ok, 30, "error", Some("no route")).await;
+        let disabled = config("disabled", false).await;
+        run(disabled, 30, "error", Some("no route")).await;
+
+        let failing: Vec<FailingSync> = list_failing(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|f| f.label.ends_with(&tag))
+            .collect();
+        let ids: Vec<Uuid> = failing.iter().map(|f| f.config_id).collect();
+        assert_eq!(
+            ids,
+            vec![broken, never_ok],
+            "ordered by how long they have failed"
+        );
+        assert_eq!(failing[0].failures, 2);
+        assert_eq!(
+            failing[0].last_error.as_deref(),
+            Some("invalid credentials, data 52e")
+        );
+        assert!(failing[0].failing_since < failing[0].last_failure_at);
+
+        sqlx::query("DELETE FROM ad_sync_configs WHERE id = ANY($1)")
+            .bind(vec![broken, recovered, never_ok, disabled])
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
 }

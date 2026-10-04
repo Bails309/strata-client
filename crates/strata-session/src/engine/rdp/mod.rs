@@ -53,6 +53,7 @@ use ironrdp_connector::connection_activation::{
 use ironrdp_connector::credssp::KerberosConfig;
 use ironrdp_connector::{
     BitmapConfig, ClientConnector, Config as ConnectorConfig, Credentials, DesktopSize,
+    Sequence as _,
 };
 use ironrdp_core::{IntoOwned, WriteBuf};
 use ironrdp_displaycontrol::client::DisplayControlClient;
@@ -65,10 +66,11 @@ use ironrdp_pdu::geometry::{InclusiveRectangle, Rectangle as _};
 use ironrdp_pdu::input::fast_path::{FastPathInputEvent, KeyboardFlags, SynchronizeFlags};
 use ironrdp_pdu::input::mouse::PointerFlags;
 use ironrdp_pdu::input::MousePdu;
+use ironrdp_pdu::mcs::decode_send_data_indication;
 use ironrdp_pdu::nego::NegoRequestData;
 use ironrdp_pdu::rdp::capability_sets::client_codecs_capabilities;
 use ironrdp_pdu::rdp::client_info::PerformanceFlags;
-use ironrdp_pdu::rdp::headers::ShareDataPdu;
+use ironrdp_pdu::rdp::headers::{decode_share_control, ShareControlPdu, ShareDataPdu};
 use ironrdp_pdu::rdp::refresh_rectangle::RefreshRectanglePdu;
 use ironrdp_pdu::rdp::server_error_info::{
     ErrorInfo, ProtocolIndependentCode, ProtocolIndependentConnectionBrokerCode,
@@ -83,7 +85,7 @@ use ironrdp_session::image::DecodedImage;
 use ironrdp_session::{
     ActiveStage, ActiveStageBuilder, ActiveStageOutput, GracefulDisconnectReason,
 };
-use ironrdp_tokio::{single_sequence_step, FramedWrite as _, TokioFramed};
+use ironrdp_tokio::{FramedWrite as _, TokioFramed};
 use secrecy::ExposeSecret;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
@@ -443,10 +445,10 @@ struct RdpSession {
     pending: VecDeque<TargetEvent>,
     width: u16,
     height: u16,
-    /// Size we last asked the target for, to avoid re-sending it. Kept
-    /// apart from `width`/`height`, which only ever track what the
-    /// target actually activated.
-    requested_size: Option<(u16, u16)>,
+    /// Paces resize requests to the target.
+    resize: ResizeThrottle,
+    /// Frames that arrived during a reactivation, processed after it.
+    deferred: VecDeque<(Action, BytesMut)>,
     /// Last Guacamole button mask, needed to derive press/release edges.
     mouse_mask: u8,
     clipboard: mpsc::UnboundedReceiver<ClipboardEvent>,
@@ -513,8 +515,14 @@ async fn session_task(
     }
 
     loop {
-        // Drain anything the connection already produced before waiting
-        // on the socket again.
+        // Frames the server sent during a reactivation, and drain anything
+        // the connection already produced, before waiting on the socket.
+        while let Some((action, frame)) = session.deferred.pop_front() {
+            if let Err(err) = session.process_frame(action, &frame).await {
+                let _ = events.send(Err(err)).await;
+                return;
+            }
+        }
         while let Some(event) = session.pending.pop_front() {
             if events.send(Ok(event)).await.is_err() {
                 return;
@@ -524,6 +532,11 @@ async fn session_task(
             return;
         }
 
+        // Only the reads race each other. Processing a frame can take
+        // several round trips (a reactivation) and writes responses; were
+        // it a select branch, any input arriving meanwhile would cancel
+        // it halfway, which is how a resize used to drop the session.
+        let resize_due = session.resize.deadline();
         tokio::select! {
             incoming = input.recv() => {
                 match incoming {
@@ -555,13 +568,27 @@ async fn session_task(
                     None => return,
                 }
             }
-            outcome = session.pump() => {
-                if let Err(err) = outcome {
+            frame = session.framed.read_pdu() => {
+                if let Err(err) = session.handle_frame(frame).await {
+                    let _ = events.send(Err(err)).await;
+                    return;
+                }
+            }
+            () = sleep_until_due(resize_due), if resize_due.is_some() => {
+                if let Err(err) = session.send_resize_if_due().await {
                     let _ = events.send(Err(err)).await;
                     return;
                 }
             }
         }
+    }
+}
+
+/// Sleep until `due`; never resolves for `None` (the branch is disabled).
+async fn sleep_until_due(due: Option<Instant>) {
+    match due {
+        Some(due) => tokio::time::sleep_until(due.into()).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -774,7 +801,8 @@ impl RdpSession {
             local_clipboard: None,
             clipboard_ready: false,
             pending_paste: None,
-            requested_size: None,
+            resize: ResizeThrottle::default(),
+            deferred: VecDeque::new(),
             read_only: config.read_only,
             disable_copy: config.disable_copy,
             disable_paste: config.disable_paste,
@@ -820,6 +848,7 @@ impl RdpSession {
         if let Some((width, height)) = resized_to {
             self.width = u16::try_from(width).unwrap_or(self.width);
             self.height = u16::try_from(height).unwrap_or(self.height);
+            self.resize.applied();
             self.request_full_repaint().await?;
         }
 
@@ -885,11 +914,27 @@ impl RdpSession {
     /// server stops painting the desktop.
     async fn reactivate(&mut self) -> Result<(), EngineError> {
         let mut activation = self.activation_factory.create();
+        let io_channel = activation.io_channel_id();
         let mut buf = WriteBuf::new();
         loop {
-            single_sequence_step(&mut self.framed, &mut activation, &mut buf)
-                .await
-                .map_err(map_connector)?;
+            buf.clear();
+            let written = if activation.next_pdu_hint().is_some() {
+                let finalizing = matches!(
+                    activation.connection_activation_state(),
+                    ConnectionActivationState::ConnectionFinalization { .. }
+                );
+                let frame = self.next_activation_frame(io_channel, finalizing).await?;
+                activation.step(&frame, &mut buf)
+            } else {
+                activation.step_no_input(&mut buf)
+            }
+            .map_err(map_connector)?;
+            if let Some(len) = written.size() {
+                self.framed
+                    .write_all(&buf.filled()[..len])
+                    .await
+                    .map_err(EngineError::Transport)?;
+            }
 
             let ConnectionActivationState::Finalized {
                 desktop_size,
@@ -922,7 +967,7 @@ impl RdpSession {
             // the size actually changed — otherwise a reactivation
             // would discard a desktop the server believes we still have.
             let resized = self.width != width || self.height != height;
-            self.requested_size = None;
+            self.resize.applied();
             if resized {
                 self.width = width;
                 self.height = height;
@@ -941,6 +986,34 @@ impl RdpSession {
             self.locks_dirty = true;
             self.request_full_repaint().await?;
             return Ok(());
+        }
+    }
+
+    /// The next frame for the reactivation sequence.
+    ///
+    /// The sequence can only parse its own PDUs, but the server does not
+    /// pause everything else while it runs: audio, clipboard and graphics
+    /// pipeline traffic keep arriving, and handing one of those to the
+    /// sequence ended the session. They are set aside and processed once
+    /// the sequence completes.
+    async fn next_activation_frame(
+        &mut self,
+        io_channel: u16,
+        finalizing: bool,
+    ) -> Result<BytesMut, EngineError> {
+        loop {
+            let (action, frame) = self
+                .framed
+                .read_pdu()
+                .await
+                .map_err(EngineError::Transport)?;
+            match classify_reactivation_frame(action, &frame, io_channel, finalizing) {
+                ReactivationFrame::Sequence => return Ok(frame),
+                ReactivationFrame::Defer => self.deferred.push_back((action, frame)),
+                ReactivationFrame::Drop => {
+                    tracing::debug!("dropped fast-path output received during reactivation");
+                }
+            }
         }
     }
 
@@ -1436,33 +1509,8 @@ impl RdpSession {
                 if let Some(scale) = dpi.and_then(desktop_scale_from_dpi) {
                     self.scale_factor = Some(scale);
                 }
-                if (width, height) == (self.width, self.height)
-                    || self.requested_size == Some((width, height))
-                {
-                    return Ok(());
-                }
-                // Only targets that negotiated the Display Control
-                // channel can resize; older hosts simply keep their
-                // original desktop size.
-                match self.stage.encode_resize(
-                    u32::from(width),
-                    u32::from(height),
-                    self.scale_factor,
-                    None,
-                ) {
-                    Some(Ok(frame)) => {
-                        self.framed
-                            .write_all(&frame)
-                            .await
-                            .map_err(EngineError::Transport)?;
-                        // Deliberately not touching `self.width`/`height`:
-                        // the target picks the real size and announces it
-                        // through the reactivation sequence.
-                        self.requested_size = Some((width, height));
-                    }
-                    Some(Err(e)) => return Err(EngineError::Protocol(e.to_string())),
-                    None => tracing::debug!("target does not support dynamic resize"),
-                }
+                self.resize.want((width, height), (self.width, self.height));
+                self.send_resize_if_due().await?;
             }
             // Handled by the SFTP decorator, which sits above this engine.
             InputEvent::File(_) => {}
@@ -1481,8 +1529,38 @@ impl RdpSession {
     }
 
     /// Read one PDU from the target and queue whatever it produced.
-    async fn pump(&mut self) -> Result<(), EngineError> {
-        let (action, payload) = match self.framed.read_pdu().await {
+    /// Send the newest wanted desktop size, if the pacing interval allows.
+    async fn send_resize_if_due(&mut self) -> Result<(), EngineError> {
+        let Some((width, height)) = self.resize.take_due(Instant::now()) else {
+            return Ok(());
+        };
+        // Only targets that negotiated the Display Control channel can
+        // resize; older hosts simply keep their original desktop size.
+        // `self.width`/`height` are left alone: the target picks the real
+        // size and announces it through reactivation or the graphics
+        // pipeline.
+        match self
+            .stage
+            .encode_resize(u32::from(width), u32::from(height), self.scale_factor, None)
+        {
+            Some(Ok(frame)) => self
+                .framed
+                .write_all(&frame)
+                .await
+                .map_err(EngineError::Transport),
+            Some(Err(e)) => Err(EngineError::Protocol(e.to_string())),
+            None => {
+                tracing::debug!("target does not support dynamic resize");
+                Ok(())
+            }
+        }
+    }
+
+    async fn handle_frame(
+        &mut self,
+        frame: std::io::Result<(Action, BytesMut)>,
+    ) -> Result<(), EngineError> {
+        let (action, payload) = match frame {
             Ok(pdu) => pdu,
             Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => {
                 self.finished = true;
@@ -1497,11 +1575,14 @@ impl RdpSession {
             }
             Err(err) => return Err(EngineError::Transport(err)),
         };
+        self.process_frame(action, &payload).await
+    }
 
+    async fn process_frame(&mut self, action: Action, payload: &[u8]) -> Result<(), EngineError> {
         let outputs = match action {
             Action::FastPath | Action::X224 => self
                 .stage
-                .process(&mut self.image, action, &payload)
+                .process(&mut self.image, action, payload)
                 .map_err(|e| EngineError::Protocol(e.to_string()))?,
         };
         self.absorb(outputs).await?;
@@ -1682,7 +1763,6 @@ fn mouse_events(previous: u8, mask: u8, x_position: u16, y_position: u16) -> Vec
 }
 
 /// RDP desktop dimensions are 16-bit and must be even.
-/// RDP desktop dimensions are 16-bit and must be even.
 ///
 /// The ceiling is the MS-RDPEDISP maximum. Multi-monitor asks for the
 /// aggregate width of every screen and slices it client side, so a
@@ -1691,6 +1771,109 @@ fn mouse_events(previous: u8, mask: u8, x_position: u16, y_position: u16) -> Vec
 fn clamp_dimension(value: u32) -> u16 {
     let clamped = value.clamp(200, 8192) as u16;
     clamped & !1
+}
+
+/// Shortest gap between two resize requests to the target.
+const RESIZE_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Paces Display Control resize requests.
+///
+/// Dragging a window edge produces a new size every animation frame, and
+/// each request makes Windows rebuild the desktop. At most one request
+/// goes out per [`RESIZE_INTERVAL`], always for the newest size, the way
+/// guacd paced them.
+#[derive(Debug, Default)]
+struct ResizeThrottle {
+    /// Newest size asked for and not yet sent.
+    wanted: Option<(u16, u16)>,
+    /// Size sent and not yet applied by the target.
+    in_flight: Option<(u16, u16)>,
+    last_sent_at: Option<Instant>,
+}
+
+impl ResizeThrottle {
+    /// Record the size the client wants; `current` is the target's desktop.
+    fn want(&mut self, size: (u16, u16), current: (u16, u16)) {
+        let expected = self.in_flight.unwrap_or(current);
+        self.wanted = (size != expected).then_some(size);
+    }
+
+    /// When the wanted size may be sent, if one is waiting.
+    fn deadline(&self) -> Option<Instant> {
+        self.wanted.map(|_| {
+            self.last_sent_at
+                .map_or_else(Instant::now, |at| at + RESIZE_INTERVAL)
+        })
+    }
+
+    /// The size to send now, if any is waiting and the interval has passed.
+    fn take_due(&mut self, now: Instant) -> Option<(u16, u16)> {
+        if self
+            .last_sent_at
+            .is_some_and(|at| now < at + RESIZE_INTERVAL)
+        {
+            return None;
+        }
+        let size = self.wanted.take()?;
+        self.in_flight = Some(size);
+        self.last_sent_at = Some(now);
+        Some(size)
+    }
+
+    /// The target has applied a new desktop size.
+    fn applied(&mut self) {
+        self.in_flight = None;
+    }
+}
+
+/// Where a frame received during reactivation should go.
+#[derive(Debug, PartialEq, Eq)]
+enum ReactivationFrame {
+    /// A PDU of the reactivation sequence itself.
+    Sequence,
+    /// Channel or session traffic, to process once the sequence completes.
+    Defer,
+    /// Fast-path output for the desktop being replaced; a full repaint
+    /// follows the reactivation anyway.
+    Drop,
+}
+
+fn classify_reactivation_frame(
+    action: Action,
+    frame: &[u8],
+    io_channel: u16,
+    finalizing: bool,
+) -> ReactivationFrame {
+    if matches!(action, Action::FastPath) {
+        return ReactivationFrame::Drop;
+    }
+    let Ok(indication) = decode_send_data_indication(frame) else {
+        return ReactivationFrame::Defer;
+    };
+    if indication.channel_id != io_channel {
+        return ReactivationFrame::Defer;
+    }
+    let Ok(control) = decode_share_control(indication) else {
+        // Let the sequence report what it cannot parse.
+        return ReactivationFrame::Sequence;
+    };
+    match control.pdu {
+        ShareControlPdu::Data(data) => {
+            let finalization = matches!(
+                data.share_data_pdu,
+                ShareDataPdu::Synchronize(_)
+                    | ShareDataPdu::Control(_)
+                    | ShareDataPdu::FontMap(_)
+                    | ShareDataPdu::ServerSetErrorInfo(_)
+            );
+            if finalizing && finalization {
+                ReactivationFrame::Sequence
+            } else {
+                ReactivationFrame::Defer
+            }
+        }
+        _ => ReactivationFrame::Sequence,
+    }
 }
 
 fn clamp_coord(value: i32, max: u16) -> u16 {
@@ -2334,6 +2517,128 @@ mod tests {
         assert_eq!(clamp_dimension(3840), 3840);
         assert_eq!(clamp_dimension(5760), 5760);
         assert_eq!(clamp_dimension(7680), 7680);
+    }
+
+    #[test]
+    fn a_drag_sends_one_resize_per_interval_and_always_the_newest_size() {
+        let t0 = Instant::now();
+        let mut resize = ResizeThrottle::default();
+
+        // Nothing to do for the size the target already has.
+        resize.want((1920, 1080), (1920, 1080));
+        assert_eq!(resize.deadline(), None);
+
+        resize.want((1600, 900), (1920, 1080));
+        assert_eq!(resize.take_due(t0), Some((1600, 900)));
+
+        // Sizes during the interval collapse into the last one.
+        resize.want((1500, 900), (1920, 1080));
+        resize.want((1400, 900), (1920, 1080));
+        assert_eq!(resize.take_due(t0 + RESIZE_INTERVAL / 2), None);
+        assert_eq!(resize.deadline(), Some(t0 + RESIZE_INTERVAL));
+        assert_eq!(resize.take_due(t0 + RESIZE_INTERVAL), Some((1400, 900)));
+        assert_eq!(resize.deadline(), None);
+    }
+
+    #[test]
+    fn a_resize_back_to_the_current_size_still_goes_out_while_another_is_pending() {
+        let t0 = Instant::now();
+        let mut resize = ResizeThrottle::default();
+        resize.want((1600, 900), (1920, 1080));
+        assert_eq!(resize.take_due(t0), Some((1600, 900)));
+
+        // The target is heading for 1600x900, so 1920x1080 must be asked for.
+        resize.want((1920, 1080), (1920, 1080));
+        assert_eq!(resize.take_due(t0 + RESIZE_INTERVAL), Some((1920, 1080)));
+
+        // Once applied, the same request is a no-op again.
+        resize.applied();
+        resize.want((1920, 1080), (1920, 1080));
+        assert_eq!(resize.deadline(), None);
+    }
+
+    fn indication(channel_id: u16, pdu: ShareControlPdu) -> Vec<u8> {
+        use ironrdp_pdu::mcs::{McsMessage, SendDataIndication};
+        use ironrdp_pdu::rdp::headers::ShareControlHeader;
+        use ironrdp_pdu::x224::X224;
+
+        let user_data = ironrdp_core::encode_vec(&ShareControlHeader {
+            share_control_pdu: pdu,
+            pdu_source: 1002,
+            share_id: 0x0001_03ea,
+        })
+        .unwrap();
+        ironrdp_core::encode_vec(&X224(McsMessage::SendDataIndication(SendDataIndication {
+            initiator_id: 1002,
+            channel_id,
+            user_data: user_data.into(),
+        })))
+        .unwrap()
+    }
+
+    fn data(pdu: ShareDataPdu) -> ShareControlPdu {
+        use ironrdp_pdu::rdp::client_info::CompressionType;
+        use ironrdp_pdu::rdp::headers::{CompressionFlags, ShareDataHeader, StreamPriority};
+
+        ShareControlPdu::Data(ShareDataHeader {
+            share_data_pdu: pdu,
+            stream_priority: StreamPriority::Medium,
+            compression_flags: CompressionFlags::empty(),
+            compression_type: CompressionType::K8,
+        })
+    }
+
+    #[test]
+    fn reactivation_takes_only_its_own_pdus_and_sets_the_rest_aside() {
+        use ironrdp_pdu::rdp::finalization_messages::SynchronizePdu;
+        use ironrdp_pdu::rdp::headers::ServerDeactivateAll;
+
+        const IO: u16 = 1003;
+        let classify = |frame: &[u8], finalizing| {
+            classify_reactivation_frame(Action::X224, frame, IO, finalizing)
+        };
+
+        // Output for the old desktop is not wanted.
+        assert_eq!(
+            classify_reactivation_frame(Action::FastPath, &[], IO, false),
+            ReactivationFrame::Drop
+        );
+        // Audio, clipboard and graphics pipeline traffic: other channels.
+        let channel = indication(
+            1005,
+            data(ShareDataPdu::Synchronize(SynchronizePdu {
+                target_user_id: 1002,
+            })),
+        );
+        assert_eq!(classify(&channel, true), ReactivationFrame::Defer);
+        // Share control on the I/O channel belongs to the sequence.
+        let deactivate = indication(
+            IO,
+            ShareControlPdu::ServerDeactivateAll(ServerDeactivateAll),
+        );
+        assert_eq!(classify(&deactivate, false), ReactivationFrame::Sequence);
+        // Finalization PDUs only once the sequence is finalizing.
+        let sync = indication(
+            IO,
+            data(ShareDataPdu::Synchronize(SynchronizePdu {
+                target_user_id: 1002,
+            })),
+        );
+        assert_eq!(classify(&sync, true), ReactivationFrame::Sequence);
+        assert_eq!(classify(&sync, false), ReactivationFrame::Defer);
+        // Other session data on the I/O channel waits for the active stage.
+        let refresh = indication(
+            IO,
+            data(ShareDataPdu::RefreshRectangle(RefreshRectanglePdu {
+                areas_to_refresh: vec![],
+            })),
+        );
+        assert_eq!(classify(&refresh, true), ReactivationFrame::Defer);
+        // Anything that is not a data indication is left for the stage.
+        assert_eq!(
+            classify(&[0x03, 0x00, 0x00, 0x04], true),
+            ReactivationFrame::Defer
+        );
     }
 
     #[test]

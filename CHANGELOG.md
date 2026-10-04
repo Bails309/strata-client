@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security — the runtime database role's password no longer reaches Postgres (CodeQL #342)
+
+CodeQL alert #342 (`rust/cleartext-storage-database`) flagged
+`provision_runtime_role` in [`backend/src/db/mod.rs`](backend/src/db/mod.rs):
+the `CREATE/ALTER ROLE … PASSWORD '…'` that provisions the least-privilege
+`<owner>_runtime` role (SEC-25) carried the role's password in the statement
+text. Postgres stores a hash, but the statement itself is written to the server
+log under `log_statement = ddl` (or `all`) and is visible in
+`pg_stat_activity` and `pg_stat_statements`.
+
+The statement now carries a SCRAM-SHA-256 verifier computed by the new
+`scram_verifier` (PBKDF2-HMAC-SHA256, 4096 iterations, a random 16-byte salt
+per start), which Postgres accepts and stores verbatim. Login is unchanged:
+the backend still connects as the runtime role with the HMAC-derived password,
+negotiating SCRAM as before. A barrier model,
+`.github/codeql/extensions/strata-rust-models/models/runtime-role-verifier.model.yml`,
+tells CodeQL the verifier is not cleartext; the pack moves to 0.0.2 so
+`codeql-model-pack.yml` republishes it.
+
+Testing: a unit test checks the verifier against an independent
+implementation (Python `hashlib`/`hmac`); the DB-backed
+`the_runtime_role_cannot_change_schema_or_audit_history` provisions the role
+through both `CREATE` and `ALTER` and logs in with it, against Postgres 16 with
+`log_statement = ddl`, whose log showed only the verifier.
+
 ## [2.3.4] — 2026-10-04
 
 ### Patch release — a rotated shared bind account no longer breaks the other AD syncs, failing syncs are flagged where admins look, and RDP sessions survive resizing

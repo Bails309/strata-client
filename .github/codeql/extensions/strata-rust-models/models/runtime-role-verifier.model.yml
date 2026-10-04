@@ -1,0 +1,18 @@
+# Barrier model for the runtime database role's password.
+#
+# `rust/cleartext-storage-database` follows the owner's password from
+# DATABASE_URL into the `CREATE/ALTER ROLE ... PASSWORD` statement that
+# provisions the least-privilege runtime role. That statement carries a
+# SCRAM-SHA-256 verifier from `scram_verifier` (PBKDF2, 4096 rounds, random
+# salt), the form Postgres stores, never the password itself.
+# CodeQL cannot see through the PBKDF2/HMAC calls, so the verifier is
+# declared a barrier for the query's `database-store` kind.
+#
+# Both canonical-path spellings are listed; see safeguard-request-forgery.
+extensions:
+  - addsTo:
+      pack: codeql/rust-all
+      extensible: barrierModel
+    data:
+      - ["strata_backend::db::scram_verifier", "ReturnValue", "database-store", "manual"]
+      - ["strata-backend::db::scram_verifier", "ReturnValue", "database-store", "manual"]

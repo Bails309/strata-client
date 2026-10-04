@@ -1565,7 +1565,7 @@ The backend migrates the schema with the credentials in `DATABASE_URL`, then ser
 - it can read but not change `_sqlx_migrations`;
 - it is `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`.
 
-The role's password is an HMAC of the owner's password, so every replica derives the same one without another stored secret; its grants are refreshed on every start. The owner must have `CREATEROLE` (the bundled Postgres user is a superuser). If it does not, or `DATABASE_URL` carries no password, or `STRATA_DB_RUNTIME_ROLE=off`, the backend logs a warning and keeps serving as the owner. The owner password remains in the backend's environment for migrations, so this separates what request-handling SQL can do rather than what a full process compromise can reach.
+The role's password is an HMAC of the owner's password, so every replica derives the same one without another stored secret; its grants are refreshed on every start. The password itself never reaches Postgres: `CREATE/ALTER ROLE` is sent a SCRAM-SHA-256 verifier (PBKDF2-HMAC-SHA256, 4096 iterations, a fresh random salt each start), which Postgres stores as-is, so DDL statement logging (`log_statement = ddl`), `pg_stat_activity` and `pg_stat_statements` see only the verifier. The owner must have `CREATEROLE` (the bundled Postgres user is a superuser). If it does not, or `DATABASE_URL` carries no password, or `STRATA_DB_RUNTIME_ROLE=off`, the backend logs a warning and keeps serving as the owner. The owner password remains in the backend's environment for migrations, so this separates what request-handling SQL can do rather than what a full process compromise can reach.
 
 ---
 

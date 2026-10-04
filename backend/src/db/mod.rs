@@ -258,6 +258,37 @@ fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
+/// The SCRAM-SHA-256 verifier Postgres would store for `password`.
+///
+/// Passing this to `CREATE/ALTER ROLE ... PASSWORD` instead of the password
+/// keeps the password itself off the server: out of statement logs
+/// (`log_statement = ddl`), `pg_stat_activity` and `pg_stat_statements`.
+/// Postgres stores a verifier in this form verbatim. `password` must be
+/// ASCII, for which SASLprep is the identity.
+fn scram_verifier(password: &str, salt: &[u8; 16]) -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use hmac::{KeyInit, Mac};
+    use sha2::{Digest, Sha256};
+
+    const ITERATIONS: u32 = 4096;
+    let mut salted = [0u8; 32];
+    pbkdf2::pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, ITERATIONS, &mut salted);
+    let hmac = |message: &[u8]| {
+        let mut mac =
+            hmac::Hmac::<Sha256>::new_from_slice(&salted).expect("HMAC accepts any key length");
+        mac.update(message);
+        mac.finalize().into_bytes()
+    };
+    let stored_key = Sha256::digest(hmac(b"Client Key"));
+    let server_key = hmac(b"Server Key");
+    format!(
+        "SCRAM-SHA-256${ITERATIONS}:{}${}:{}",
+        STANDARD.encode(salt),
+        STANDARD.encode(stored_key),
+        STANDARD.encode(server_key)
+    )
+}
+
 /// Create or update the runtime role and reset its grants: rows in every
 /// table, but no DDL, no rewriting audit history, no editing migration
 /// history.
@@ -278,9 +309,13 @@ async fn provision_runtime_role(
             .bind(role)
             .fetch_one(&mut *tx)
             .await?;
-    // `password` is hex, so it is safe inside the literal.
+    // A verifier is base64 and `$:` only, so it is safe inside the literal.
+    let verifier = {
+        use rand::RngExt;
+        scram_verifier(password, &rand::rng().random())
+    };
     let attrs = format!(
-        "LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+        "LOGIN PASSWORD '{verifier}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
     );
     let statements = [
         if exists {
@@ -627,6 +662,18 @@ mod tests {
         assert_eq!(v["storage_type"], "azure");
         // Predates migration 081, so the engine is genuinely unknown.
         assert!(v["engine"].is_null());
+    }
+
+    /// Reference value from Python's `hashlib.pbkdf2_hmac` and `hmac`.
+    #[test]
+    fn the_scram_verifier_matches_an_independent_implementation() {
+        let salt: [u8; 16] = std::array::from_fn(|i| i as u8);
+        assert_eq!(
+            scram_verifier("pencil", &salt),
+            "SCRAM-SHA-256$4096:AAECAwQFBgcICQoLDA0ODw==\
+             $zHCdol2044/ZyWzPLi7oxApCkamKw9Z+E4U/QApd/5Y=\
+             :dd5peBOitVnLNFu7VmwP+HiDaaw4OUCv396eVCWhYiE="
+        );
     }
 
     #[test]

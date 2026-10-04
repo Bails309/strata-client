@@ -4120,6 +4120,35 @@ List sync run history for a source (newest first, limit 50).
 ]
 ```
 
+### `GET /api/admin/ad-sync-status`
+
+_(v2.3.4)_ Enabled sources whose runs have failed since their last
+successful run, longest-failing first. Drives the failing-sync banner on
+**Fleet Manager** and **AD Sync**. Requires `can_manage_system`. A source
+drops out at its next successful run; disabled sources are never listed.
+
+**Response** `200 OK`
+
+```json
+{
+  "failing": [
+    {
+      "config_id": "uuid",
+      "label": "Corp SSH",
+      "protocol": "ssh",
+      "failures": 3,
+      "failing_since": "2026-10-04T09:00:00Z",
+      "last_failure_at": "2026-10-04T11:00:00Z",
+      "last_error": "LDAP bind failed: invalid credentials"
+    }
+  ]
+}
+```
+
+`failures` counts the failed runs since the last success; `failing_since` is
+the start of the first of them. An empty `failing` array means every enabled
+source is healthy.
+
 ### Kerberos Realms
 
 #### `GET /api/admin/kerberos-realms`

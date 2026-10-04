@@ -176,6 +176,23 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # Tests that need a database skip themselves when TEST_DATABASE_URL is
+    # unset. Without this service they all passed by skipping, including
+    # the audit-chain, least-privilege role and AD-sync pin tests.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strata
+          POSTGRES_PASSWORD: strata
+          POSTGRES_DB: strata
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strata"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -197,10 +214,12 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-v2-
 
       - name: Check formatting
-        # Backend and native session engine crates
+        # Every first-party crate; the vendored forks are not ours to format.
         run: |
           cargo fmt -p strata-backend -- --check
           cargo fmt -p strata-session -- --check
+          cargo fmt -p strata-protocol -- --check
+          cargo fmt -p strata-dmz -- --check
 
       - name: Clippy lint
         # --all-features on strata-session: the protocol engines (rdp, vnc,
@@ -209,9 +228,46 @@ jobs:
         run: |
           cargo clippy -p strata-backend --all-targets -- -D warnings
           cargo clippy -p strata-session --all-features --all-targets -- -D warnings
+          cargo clippy -p strata-protocol --all-targets -- -D warnings
+          cargo clippy -p strata-dmz --all-targets -- -D warnings
+
+      - name: Install fonts for the terminal rasteriser
+        # SSH and Kubernetes tests render through a real monospace font.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends fonts-dejavu-core
+
+      - name: Cache sqlx-cli binary
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/sqlx
+          key: ${{ runner.os }}-sqlx-cli-bin
+
+      - name: Install sqlx-cli
+        run: |
+          if ! command -v sqlx >/dev/null 2>&1; then
+            cargo install sqlx-cli --no-default-features --features postgres,rustls --locked
+          fi
+
+      - name: Migrate the test database
+        env:
+          DATABASE_URL: postgres://strata:strata@localhost:5432/strata
+        run: sqlx migrate run --source migrations
 
       - name: Run unit tests
+        env:
+          TEST_DATABASE_URL: postgres://strata:strata@localhost:5432/strata
         run: cargo test -p strata-backend -- --test-threads=1
+
+      - name: Prove the database tests ran
+        # A skipped DB test still reports "ok", so check for a side effect
+        # instead. The audit tests draw from this sequence, which advances
+        # even when the test's transaction is rolled back.
+        run: |
+          called=$(docker exec "${{ job.services.postgres.id }}" \
+            psql -U strata -d strata -tAc "SELECT is_called FROM audit_logs_id_seq")
+          if [ "$called" != "t" ]; then
+            echo "::error::DB-backed tests skipped: TEST_DATABASE_URL did not reach them"
+            exit 1
+          fi
 
       - name: Run strata-protocol unit tests
         # Pure-rust crate, runs fast and shares the cargo cache; doing
@@ -232,10 +288,10 @@ jobs:
 
       - name: Run strata-session unit tests
         # Native Rust session engine (ADR-0015) replacing guacd.
-        # Exercise protocol decoding, keystroke mapping, font rasteriser,
-        # and actor state machine unit tests on the PR critical path.
+        # --all-features: every protocol engine is opt-in, and the default
+        # feature set runs well under half of the crate's tests.
         working-directory: .
-        run: cargo test -p strata-session --lib
+        run: cargo test -p strata-session --all-features --lib
 
       - name: Check strata-session fuzz targets compile
         working-directory: .
@@ -258,6 +314,133 @@ jobs:
           name: backend-coverage
           path: backend/coverage/
           retention-days: 14
+
+  # ── Session engines against real servers ──────────────────────────
+  # The *_live.rs suites are #[ignore]d because they need targets.
+  # docker-compose.session-test.yml provides them (OpenSSH, a FreeRDP
+  # shadow server that speaks CredSSP, xrdp as the fail-closed target, and
+  # k3s); without this job those suites only ever ran on a developer's
+  # machine.
+  session-live:
+    name: Session engines (live targets)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@70dec6087f2cb6bab9fbac4da23160afbe848e91 # 1.99.0
+
+      - name: Cache Cargo registry & build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-live-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-live-
+
+      - name: Install fonts for the terminal rasteriser
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends fonts-dejavu-core
+
+      - name: Start live targets
+        run: docker compose -f docker-compose.session-test.yml up -d --build
+
+      - name: Build the live test binaries
+        # Compiles while k3s and the RDP targets finish starting.
+        run: cargo test -p strata-session --all-features --no-run --test ssh_live --test sftp_live --test rdp_live --test kube_live
+
+      - name: Wait for targets and export their details
+        run: |
+          set -euo pipefail
+          # The fixture publishes no ports. Reach each container on the
+          # bridge network under its own name, which is also the name the
+          # k3s certificate is issued for.
+          for c in strata-ssh-target strata-rdp-target strata-rdp-legacy strata-kube-target; do
+            ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$c")
+            echo "$ip $c" | sudo tee -a /etc/hosts
+          done
+          wait_port() {
+            timeout 120 bash -c "until (echo > /dev/tcp/$1/$2) 2>/dev/null; do sleep 2; done"
+          }
+          wait_port strata-ssh-target 22
+          wait_port strata-rdp-target 3389
+          wait_port strata-rdp-legacy 3389
+          # k3s fails the first manifest apply (no default service account
+          # yet) and retries, so wait for the pod rather than the apply.
+          timeout 300 bash -c 'until docker exec strata-kube-target kubectl get pod strata-exec-target >/dev/null 2>&1; do sleep 3; done'
+          docker exec strata-kube-target kubectl wait --for=condition=Ready pod/strata-exec-target --timeout=300s
+          docker cp strata-kube-target:/output/kubeconfig.yaml "$RUNNER_TEMP/kubeconfig.yaml"
+          fp=$(docker exec strata-ssh-target ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub | awk '{print $2}')
+          echo "STRATA_SSH_TEST_FINGERPRINT=$fp" >> "$GITHUB_ENV"
+          echo "STRATA_KUBE_TEST_CONFIG=$RUNNER_TEMP/kubeconfig.yaml" >> "$GITHUB_ENV"
+
+      - name: Run live engine tests
+        env:
+          STRATA_SSH_TEST_HOST: strata-ssh-target
+          STRATA_SSH_TEST_USER: strata
+          STRATA_SSH_TEST_PASSWORD: strata-test-password
+          STRATA_RDP_TEST_HOST: strata-rdp-target
+          STRATA_RDP_LEGACY_HOST: strata-rdp-legacy
+          STRATA_RDP_TEST_USER: strata
+          STRATA_RDP_TEST_PASSWORD: strata-test-password
+          STRATA_KUBE_TEST_HOST: strata-kube-target
+        run: cargo test -p strata-session --all-features --test ssh_live --test sftp_live --test rdp_live --test kube_live -- --ignored
+
+      - name: Show target logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.session-test.yml logs --tail=100
+
+      - name: Stop live targets
+        if: always()
+        run: docker compose -f docker-compose.session-test.yml down -v
+
+  # ── Repository lint: workflows, shell, Helm, Compose ─────────────
+  repo-lint:
+    name: Repo Lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: actionlint (workflows)
+        # The image bundles shellcheck, so `run:` blocks are checked too.
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" -w /repo \
+            rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            -color
+
+      - name: shellcheck (scripts)
+        run: |
+          # shellcheck disable=SC2046 # one argument per tracked script
+          docker run --rm -v "$PWD:/mnt:ro" -w /mnt \
+            koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d \
+            --severity=warning $(git ls-files '*.sh')
+
+      - name: Helm lint and render (strata-dmz chart)
+        run: |
+          set -euo pipefail
+          helm() {
+            docker run --rm -v "$PWD/deploy/helm:/charts:ro" \
+              alpine/helm:4.3.0@sha256:a6cf54599ccb99d90cf0712b30f03fdb3cab062e6b94e0418cc4db7e8a1464b2 "$@"
+          }
+          repo=registry.example.invalid/strata-dmz
+          helm lint --strict /charts/strata-dmz --set image.repository="$repo"
+          helm template ci /charts/strata-dmz --set image.repository="$repo" > /dev/null
+          # No public image is published, so a missing repository must fail.
+          if helm template ci /charts/strata-dmz > /dev/null 2>&1; then
+            echo "::error::chart rendered without image.repository"
+            exit 1
+          fi
+
+      - name: Compose files render
+        run: sh scripts/ci/validate-compose.sh
 
   # ── Frontend: lint, typecheck, unit tests ─────────────────────────
   frontend-check:
@@ -372,7 +555,7 @@ jobs:
 
       - name: Upload docker compose logs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: docker-compose-logs
           path: /tmp/docker-compose-logs.txt
@@ -397,7 +580,7 @@ jobs:
       - name: Enforce E2E test count floor
         working-directory: e2e
         env:
-          E2E_TEST_FLOOR: '157'
+          E2E_TEST_FLOOR: '162'
         run: |
           COUNT=$(npx playwright test --list --reporter=json | node -e "let s='';process.stdin.on('data',c=>s+=c).on('end',()=>{const j=JSON.parse(s);const walk=(suites,n=0)=>suites.reduce((acc,su)=>acc+(su.specs?.length||0)+walk(su.suites||[],0),n);console.log(walk(j.suites||[]));})")
           echo "Discovered $COUNT E2E tests (floor: $E2E_TEST_FLOOR)"
@@ -437,7 +620,15 @@ jobs:
     needs: [backend-check, frontend-check]
     strategy:
       matrix:
-        service: [backend, frontend]
+        include:
+          - service: backend
+            dockerfile: ./backend/Dockerfile
+          - service: frontend
+            dockerfile: ./frontend/Dockerfile
+          # The public edge. Its Dockerfile has broken before without
+          # any check noticing, because nothing else builds it.
+          - service: strata-dmz
+            dockerfile: ./crates/strata-dmz/Dockerfile
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -449,7 +640,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          file: ./${{ matrix.service }}/Dockerfile
+          file: ${{ matrix.dockerfile }}
           push: false
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}

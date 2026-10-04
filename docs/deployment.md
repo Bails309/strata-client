@@ -616,6 +616,34 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v2.3.3 → v2.3.4 (shared bind-account rotation, failing-sync banner, RDP resize)
+
+Rebuild the backend and frontend images. **No migration, no `.env` change.**
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+| Change | Who notices |
+| ------ | ----------- |
+| Rotating an AD sync bind account updates every source that binds as it | Admins with two sources for one domain (e.g. RDP and SSH) and auto-rotation on one |
+| Failing AD syncs flagged on **Fleet Manager** and **AD Sync** | Admins with `can_manage_system` |
+| RDP sessions no longer drop while the window is resized | Everyone using RDP |
+
+**Recovery for a source already broken by a rotation.** If one source fails
+every sync with `invalid credentials` since auto-rotation ran on another
+source for the same account, **Edit** the rotating source after upgrading and
+click **Test Rotation & Capabilities** once. The account is rotated again and
+the new password is stored on both sources; the banner clears at the next
+successful sync.
+
+**Verify post-upgrade:** the **What's New** modal shows the v2.3.4 card, and
+**Admin → AD Sync** shows no failing-sync banner (or names the sources that
+genuinely fail).
+
 #### v2.3.2 → v2.3.3 (Rust 1.99, russh 0.64, dependency hygiene)
 
 Rebuild the backend and frontend images, and the **DMZ edge** for DMZ

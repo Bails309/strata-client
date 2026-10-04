@@ -1195,27 +1195,26 @@ async fn auto_rotate_service_account_inner(
     //
     // When pm_bind_user names the SAME account we just rotated (bind_dn),
     // its pm_bind_password copy is now stale too — refresh both columns.
+    // Other configs that bind as the same account are refreshed with it.
     let pm_is_same_account = config
         .pm_bind_user
         .as_deref()
         .filter(|s| !s.is_empty())
         .is_some_and(|pm| pm.eq_ignore_ascii_case(&config.bind_dn));
-    if pm_is_same_account {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET bind_password = $1, pm_bind_password = $1, pm_last_rotated_at = now(), updated_at = now() WHERE id = $2",
-        )
-        .bind(&sealed)
-        .bind(config_id)
-        .execute(pool)
-        .await?;
-    } else {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET bind_password = $1, pm_last_rotated_at = now(), updated_at = now() WHERE id = $2",
-        )
-        .bind(&sealed)
-        .bind(config_id)
-        .execute(pool)
-        .await?;
+    let siblings = persist_rotated_password(
+        pool,
+        config_id,
+        &config.bind_dn,
+        pm_is_same_account,
+        &sealed,
+    )
+    .await?;
+    if !siblings.is_empty() {
+        tracing::info!(
+            "Rotated password for '{}' also stored on AD sync config(s) sharing the account: {}",
+            config.bind_dn,
+            siblings.join(", ")
+        );
     }
 
     // Courtesy verification on a fresh connection — non-fatal (v1.13.2).
@@ -1284,11 +1283,65 @@ async fn auto_rotate_service_account_inner(
         &serde_json::json!({
             "config_id": config_id,
             "label": config.label,
+            "shared_with": siblings,
         }),
     )
     .await?;
 
     Ok(())
+}
+
+/// Store a rotated service-account password on the rotated config and on
+/// every other config that binds (or manages passwords) as the same AD
+/// account, in one transaction. Two configs for one domain, say an RDP
+/// and an SSH sync, commonly share a bind account; updating only the
+/// rotated one left the other binding with a dead password.
+///
+/// Returns the labels of the other configs that were updated.
+async fn persist_rotated_password(
+    pool: &Pool<Postgres>,
+    config_id: Uuid,
+    rotated_dn: &str,
+    pm_is_same_account: bool,
+    sealed: &str,
+) -> Result<Vec<String>, AppError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "UPDATE ad_sync_configs
+         SET bind_password = $1,
+             pm_bind_password = CASE WHEN $3 THEN $1 ELSE pm_bind_password END,
+             pm_last_rotated_at = now(), updated_at = now()
+         WHERE id = $2",
+    )
+    .bind(sealed)
+    .bind(config_id)
+    .bind(pm_is_same_account)
+    .execute(&mut *tx)
+    .await?;
+
+    // The account was rotated for every config that binds as it, so they
+    // also take the rotation time; otherwise each would rotate it again.
+    let siblings: Vec<String> = sqlx::query_scalar(
+        "WITH account AS (SELECT lower(btrim($2)) AS dn)
+         UPDATE ad_sync_configs c
+         SET bind_password = CASE WHEN lower(btrim(c.bind_dn)) = a.dn THEN $1 ELSE c.bind_password END,
+             pm_bind_password = CASE WHEN lower(btrim(coalesce(c.pm_bind_user, ''))) = a.dn
+                                     THEN $1 ELSE c.pm_bind_password END,
+             pm_last_rotated_at = CASE WHEN lower(btrim(c.bind_dn)) = a.dn
+                                       THEN now() ELSE c.pm_last_rotated_at END,
+             updated_at = now()
+         FROM account a
+         WHERE c.id <> $3
+           AND (lower(btrim(c.bind_dn)) = a.dn OR lower(btrim(coalesce(c.pm_bind_user, ''))) = a.dn)
+         RETURNING c.label",
+    )
+    .bind(sealed)
+    .bind(rotated_dn)
+    .bind(config_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(siblings)
 }
 
 // ── Helper: extract CN from a DN ───────────────────────────────────────
@@ -2067,6 +2120,74 @@ pub async fn set_role_accounts(
 mod tests {
     use super::*;
 
+    /// Needs `TEST_DATABASE_URL` pointing at a migrated database.
+    #[tokio::test]
+    async fn a_rotated_password_reaches_every_config_that_binds_as_the_account() {
+        let Some(pool) = std::env::var("TEST_DATABASE_URL")
+            .ok()
+            .and_then(|url| sqlx::PgPool::connect_lazy(&url).ok())
+        else {
+            eprintln!("TEST_DATABASE_URL unset, skipping");
+            return;
+        };
+        let tag = Uuid::new_v4().simple().to_string();
+        let dn = format!("CN=svc-{tag},OU=Service,DC=example,DC=test");
+        let config = |label: &str, bind_dn: String, pm_bind_user: Option<String>| {
+            let pool = pool.clone();
+            let label = format!("{label}-{tag}");
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO ad_sync_configs (label, ldap_url, bind_dn, bind_password, pm_bind_user, pm_bind_password)
+                     VALUES ($1, 'ldaps://dc.example.test', $2, 'old', $3, 'old-pm') RETURNING id",
+                )
+                .bind(label)
+                .bind(bind_dn)
+                .bind(pm_bind_user)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let rdp = config("rdp", dn.clone(), None).await;
+        // Same account written with different case and padding.
+        let ssh = config("ssh", format!(" {} ", dn.to_lowercase()), None).await;
+        // Binds as someone else, but manages passwords as the rotated account.
+        let pm = config("pm", "CN=other,DC=example,DC=test".into(), Some(dn.clone())).await;
+        let other = config("other", "CN=other,DC=example,DC=test".into(), None).await;
+
+        let mut siblings = persist_rotated_password(&pool, rdp, &dn, false, "new")
+            .await
+            .unwrap();
+        siblings.sort();
+        assert_eq!(siblings, vec![format!("pm-{tag}"), format!("ssh-{tag}")]);
+
+        let row = |id: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_as::<_, (String, Option<String>, bool)>(
+                    "SELECT bind_password, pm_bind_password, pm_last_rotated_at IS NOT NULL
+                     FROM ad_sync_configs WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!(row(rdp).await, ("new".into(), Some("old-pm".into()), true));
+        assert_eq!(row(ssh).await, ("new".into(), Some("old-pm".into()), true));
+        assert_eq!(row(pm).await, ("old".into(), Some("new".into()), false));
+        assert_eq!(
+            row(other).await,
+            ("old".into(), Some("old-pm".into()), false)
+        );
+
+        sqlx::query("DELETE FROM ad_sync_configs WHERE id = ANY($1)")
+            .bind(vec![rdp, ssh, pm, other])
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
     #[test]
     fn one_account_has_one_lock_whatever_the_case_of_its_dn() {
         assert_eq!(

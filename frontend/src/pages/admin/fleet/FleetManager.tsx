@@ -23,6 +23,7 @@ import {
   type MeResponse,
 } from "../../../api";
 import { useOptionalToast } from "../../../components/ToastProvider";
+import AdSyncFailureBanner from "../../../components/AdSyncFailureBanner";
 import FleetTelemetryStrip from "./FleetTelemetryStrip";
 import FleetToolbar, { UNFILED, type FleetFilters } from "./FleetToolbar";
 import FleetTable from "./FleetTable";
@@ -409,6 +410,12 @@ export default function FleetManager({
       </div>
 
       <FleetTelemetryStrip t={telemetry} />
+
+      {user.can_manage_system && (
+        <div className="mb-4">
+          <AdSyncFailureBanner reloadKey={reloadKey + refresh} linkToAdSync />
+        </div>
+      )}
 
       <FleetToolbar
         filters={filters}

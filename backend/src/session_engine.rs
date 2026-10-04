@@ -1859,6 +1859,38 @@ mod tests {
         }
     }
 
+    /// Every layout the admin panel offers must type through a bundled
+    /// keymap. One that silently fell back to Unicode would break typing
+    /// in PSReadLine on Server Core, the bug fixed in 2.3.1.
+    #[test]
+    fn every_layout_the_admin_panel_offers_has_a_keymap() {
+        use strata_session::engine::rdp::layouts::keymap_for_layout;
+
+        let source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../frontend/src/pages/admin/rdpKeyboardLayouts.ts"
+        ))
+        .expect("frontend layout list");
+        let offered: Vec<&str> = source
+            .split("value: \"")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+            .collect();
+        assert!(offered.contains(&"") && offered.contains(&"failsafe"));
+        assert!(offered.len() > 10, "parsed {offered:?}");
+
+        let mut hs = handshake("rdp", None);
+        for name in offered {
+            if name.is_empty() || name == "failsafe" {
+                continue;
+            }
+            let id = keyboard_layout_id(name).unwrap_or_else(|| panic!("{name} has no layout id"));
+            assert!(keymap_for_layout(id).is_some(), "{name} has no keymap");
+            hs.extra.insert("server-layout".into(), name.into());
+            assert_eq!(rdp_keyboard(&hs), (id, false), "{name}");
+        }
+    }
+
     #[test]
     fn only_the_colour_depths_guacd_offers_are_accepted() {
         let mut hs = handshake("rdp", None);

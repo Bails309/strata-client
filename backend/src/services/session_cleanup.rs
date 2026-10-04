@@ -264,3 +264,93 @@ struct IdleVdiRow {
     idle_timeout_mins: i32,
     idle_secs: i64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    /// Needs `TEST_DATABASE_URL` pointing at a migrated database.
+    #[tokio::test]
+    async fn the_sweep_removes_expired_sessions_and_keys_and_keeps_live_ones() {
+        let Some(pool) = std::env::var("TEST_DATABASE_URL")
+            .ok()
+            .and_then(|url| sqlx::PgPool::connect_lazy(&url).ok())
+        else {
+            eprintln!("TEST_DATABASE_URL unset, skipping");
+            return;
+        };
+        let tag = Uuid::new_v4().simple().to_string();
+        let role: Uuid = sqlx::query_scalar("INSERT INTO roles (name) VALUES ($1) RETURNING id")
+            .bind(format!("sweep-{tag}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let user: Uuid = sqlx::query_scalar(
+            "INSERT INTO users (username, email, role_id) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind(format!("sweep-{tag}"))
+        .bind(format!("sweep-{tag}@example.test"))
+        .bind(role)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let (expired, live) = (Uuid::new_v4(), Uuid::new_v4());
+        for (jti, offset) in [(expired, "-1 minute"), (live, "1 hour")] {
+            sqlx::query(
+                "INSERT INTO active_sessions (jti, user_id, expires_at)
+                 VALUES ($1, $2, now() + $3::interval)",
+            )
+            .bind(jti)
+            .bind(user)
+            .bind(offset)
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO idempotency_keys (key, user_id, route, status_code, response_body, expires_at)
+                 VALUES ($1, $2, 'test', 200, '{}', now() + $3::interval)",
+            )
+            .bind(jti.to_string())
+            .bind(user)
+            .bind(offset)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        run_once(&pool).await.unwrap();
+
+        let sessions: Vec<Uuid> =
+            sqlx::query_scalar("SELECT jti FROM active_sessions WHERE user_id = $1")
+                .bind(user)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(sessions, vec![live]);
+        let keys: Vec<String> =
+            sqlx::query_scalar("SELECT key FROM idempotency_keys WHERE user_id = $1")
+                .bind(user)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(keys, vec![live.to_string()]);
+
+        sqlx::query("DELETE FROM idempotency_keys WHERE user_id = $1")
+            .bind(user)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM roles WHERE id = $1")
+            .bind(role)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+}

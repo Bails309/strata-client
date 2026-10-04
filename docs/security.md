@@ -795,6 +795,8 @@ This ensures approvers cannot see or act on checkout requests outside their expl
 
 When enabled, the service account's own password is automatically rotated on a configurable schedule (default: 90 days). The new password is generated, set via LDAP, and sealed in Vault — no human ever sees the password. The `pm_last_rotated_at` timestamp is recorded for audit purposes.
 
+**Sources that share the account (v2.3.4).** Two sources for one domain — an RDP and an SSH import, say — often bind as the same account. Because nobody knows the rotated password, a source still holding the old one could not be repaired by hand. Rotation therefore stores the new sealed password, in one transaction, on every source whose `bind_dn` names the rotated account (and as `pm_bind_password` where `pm_bind_user` does), and stamps their `pm_last_rotated_at` so they do not rotate it again. Accounts are matched by the configured string, case-insensitively; a source naming the same account in another form (a UPN instead of a DN) is not matched. The `password_management.auto_rotated` audit event lists the other sources updated in `shared_with`.
+
 ### Target Filter Preview
 
 The `POST /api/admin/ad-sync-configs/test-filter` endpoint allows administrators to preview which accounts a target filter would match before saving the configuration. This endpoint requires `can_manage_system` permission and uses the same bind credential resolution as production queries (including Vault unsealing and PM-specific credential fallback).

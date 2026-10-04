@@ -8,6 +8,7 @@ import {
   AdSyncConfig,
   AdSyncRun,
   ConnectionFolder,
+  FailingAdSync,
   createAdSyncConfig,
   deleteAdSyncConfig,
   getAdSyncConfigs,
@@ -20,6 +21,7 @@ import {
 } from "../../api";
 import { RDP_KEYBOARD_LAYOUTS } from "./rdpKeyboardLayouts";
 import { useTrustedCas } from "./connectionForm";
+import AdSyncFailureBanner from "../../components/AdSyncFailureBanner";
 
 export default function AdSyncTab({
   folders,
@@ -57,6 +59,8 @@ export default function AdSyncTab({
   } | null>(null);
   const certFileRef = useRef<HTMLInputElement>(null);
   const trustedCas = useTrustedCas();
+  const [failing, setFailing] = useState<FailingAdSync[]>([]);
+  const [statusKey, setStatusKey] = useState(0);
 
   const load = useCallback(() => {
     getAdSyncConfigs()
@@ -120,6 +124,7 @@ export default function AdSyncTab({
       onSave();
     } finally {
       setSyncing(null);
+      setStatusKey((k) => k + 1);
     }
   };
 
@@ -1214,6 +1219,12 @@ export default function AdSyncTab({
         </button>
       </div>
 
+      <AdSyncFailureBanner
+        reloadKey={statusKey}
+        onViewHistory={(id) => void handleViewRuns(id)}
+        onFailingChange={setFailing}
+      />
+
       {configs.length === 0 ? (
         <div className="card text-center py-12 opacity-60">
           <p className="text-lg mb-2">No AD sync sources configured</p>
@@ -1234,6 +1245,9 @@ export default function AdSyncTab({
                     >
                       {c.enabled ? "Enabled" : "Disabled"}
                     </span>
+                    {failing.some((f) => f.config_id === c.id) && (
+                      <span className="badge badge-error text-xs">Sync failing</span>
+                    )}
                   </div>
                   <p className="text-sm opacity-70 mt-1">{c.ldap_url}</p>
                   <p className="text-xs opacity-50 mt-1">

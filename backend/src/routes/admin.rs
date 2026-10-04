@@ -3700,6 +3700,19 @@ pub async fn list_ad_sync_runs(
     Ok(Json(rows))
 }
 
+/// `GET /api/admin/ad-sync-status` — enabled sources failing since their
+/// last successful run, so the admin pages can say so without opening
+/// each source's history.
+pub async fn ad_sync_status(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
+    let db = require_running(&state).await?;
+    let failing = crate::services::ad_sync_admin::list_failing(&db.pool).await?;
+    Ok(Json(json!({ "failing": failing })))
+}
+
 // ── Admin Tags (global, forced to all users) ──────────────────────────
 
 use crate::services::admin_tags::AdminTag;

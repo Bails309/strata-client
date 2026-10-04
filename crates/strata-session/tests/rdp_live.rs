@@ -89,14 +89,17 @@ async fn connect() -> RdpEngine {
 }
 
 /// Pump until an image update arrives, or fail with what was seen.
-async fn first_image(engine: &mut RdpEngine) -> (i32, i32, Vec<u8>) {
+async fn first_image(engine: &mut RdpEngine) -> (i32, i32, &'static str, Vec<u8>) {
     let mut seen = Vec::new();
     let outcome = tokio::time::timeout(CONNECT_TIMEOUT, async {
         loop {
             match engine.next_event().await {
-                Ok(Some(TargetEvent::ImageUpdate { x, y, data, .. })) => {
-                    return Ok((x, y, data.to_vec()))
-                }
+                Ok(Some(TargetEvent::ImageUpdate {
+                    x,
+                    y,
+                    mimetype,
+                    data,
+                })) => return Ok((x, y, mimetype, data.to_vec())),
                 Ok(Some(TargetEvent::Disconnected { reason, .. })) => {
                     return Err(format!("disconnected before any frame: {reason}"))
                 }
@@ -154,17 +157,29 @@ async fn the_layer_size_precedes_any_drawing() {
 
 #[tokio::test]
 #[ignore = "needs a live RDP server; see the module header"]
-async fn the_server_draws_real_png_frames() {
+async fn the_server_draws_real_image_frames() {
     let mut engine = connect().await;
-    let (x, y, png) = first_image(&mut engine).await;
+    let (x, y, mimetype, data) = first_image(&mut engine).await;
 
-    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "not a PNG");
+    // Lossless WebP by default, PNG when WebP is off or fails to encode;
+    // either way the bytes must be the format the frame declares.
+    let format = match mimetype {
+        "image/png" => image::ImageFormat::Png,
+        "image/webp" => image::ImageFormat::WebP,
+        other => panic!("unexpected frame mimetype {other}"),
+    };
+    assert_eq!(
+        image::guess_format(&data).ok(),
+        Some(format),
+        "{mimetype} frame"
+    );
     assert!(x >= 0 && y >= 0, "negative frame origin {x},{y}");
 
-    // The IHDR dimensions must fall inside the negotiated desktop, which
-    // is what proves the crop maths against a real framebuffer.
-    let width = u32::from_be_bytes(png[16..20].try_into().unwrap());
-    let height = u32::from_be_bytes(png[20..24].try_into().unwrap());
+    // The frame must fall inside the negotiated desktop, which is what
+    // proves the crop maths against a real framebuffer.
+    let (width, height) = image::ImageReader::with_format(std::io::Cursor::new(&data), format)
+        .into_dimensions()
+        .expect("frame header");
     let (desktop_w, desktop_h) = engine.desktop_size();
     assert!(width > 0 && height > 0);
     assert!(

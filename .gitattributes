@@ -2,3 +2,6 @@
 # otherwise the in-container parsers (freshclam, nginx, etc.) read
 # trailing \r as part of the value and reject the config.
 clamav/*.conf text eol=lf
+# Shell scripts are copied into Linux images; with CRLF the kernel looks
+# for an interpreter called "sh\r" and the container fails to start.
+*.sh text eol=lf

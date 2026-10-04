@@ -135,7 +135,10 @@ bytes_of() { # 8M-1K → 8 MiB minus 1 KiB
     local -A unit=([K]=1024 [M]=1048576)
     local r=("${BASH_REMATCH[@]}")
     local n=$(( r[1] * ${unit[${r[2]}]:-0} ))
-    [[ ${r[3]} ]] && n=$(( n ${r[4]} r[5] * ${unit[${r[6]}]:-0} ))
+    if [[ ${r[3]} ]]; then
+        local m=$(( r[5] * ${unit[${r[6]}]:-0} ))
+        if [[ ${r[4]} == + ]]; then n=$(( n + m )); else n=$(( n - m )); fi
+    fi
     echo "$n"
 }
 

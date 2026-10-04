@@ -812,6 +812,20 @@ export const parseKubeconfig = (kubeconfig: string, context?: string) =>
 export const getAdSyncRuns = (configId: string) =>
   request<AdSyncRun[]>(`/admin/ad-sync-configs/${configId}/runs`);
 
+/** An enabled AD sync source whose runs have failed since its last success. */
+export interface FailingAdSync {
+  config_id: string;
+  label: string;
+  protocol: string;
+  failures: number;
+  failing_since: string;
+  last_failure_at: string;
+  last_error?: string | null;
+}
+
+export const getFailingAdSyncs = () =>
+  request<{ failing: FailingAdSync[] }>("/admin/ad-sync-status").then((r) => r.failing);
+
 // ── Password Management ─────────────────────────────────────────────
 
 export interface ApprovalRole {

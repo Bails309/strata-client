@@ -294,6 +294,7 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/admin/ad-sync-configs/{id}/runs",
             get(admin::list_ad_sync_runs),
         )
+        .route("/api/admin/ad-sync-status", get(admin::ad_sync_status))
         .route(
             "/api/admin/tags",
             get(admin::list_admin_tags).post(admin::create_admin_tag),

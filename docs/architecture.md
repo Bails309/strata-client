@@ -2342,6 +2342,32 @@ resize; each pop-up canvas is backed in device pixels so its slice draws 1:1.
 Window *placement* stays in CSS pixels, because that is the unit
 `window.moveTo` speaks.
 
+### Resizing a live session (v2.3.4)
+
+A new size reaches the target as an MS-RDPEDISP monitor layout. Windows
+applies it either through a **Deactivation-Reactivation Sequence** (a fresh
+capability exchange and finalization) or, with the graphics pipeline on, by
+resetting its graphics output. Three rules in
+[`engine/rdp/mod.rs`](../crates/strata-session/src/engine/rdp/mod.rs) keep
+that from ending the session:
+
+- **Only reads race input.** The session loop's `tokio::select!` waits on
+  the input channel, the cancel-safe `Framed::read_pdu` and the resize
+  timer; the frame is then processed in the branch body. Processing a frame
+  can take several round trips (a reactivation) and writes responses, so
+  running it as a select branch let any input arriving meanwhile cancel it
+  halfway — the cause of sessions that sometimes dropped mid-resize.
+- **Reactivation takes only its own PDUs.** The activation sequence can
+  parse nothing else, but audio, clipboard and graphics-pipeline traffic
+  keeps arriving while it runs. `classify_reactivation_frame` hands it share
+  control PDUs on the I/O channel (and, once finalizing, Synchronize /
+  Control / Font Map / Set Error Info), queues everything else in
+  `RdpSession::deferred` for processing after the sequence, and drops
+  fast-path output for the desktop being replaced — a full repaint follows.
+- **Resizes are paced.** `ResizeThrottle` sends at most one layout per
+  500 ms, always the newest size, and treats a size as pending until the
+  target applies it, so dragging back to the current size still goes out.
+
 ### Audio: RDPSND needs RDPDR beside it
 
 Two independent faults each silenced RDP audio on their own:

@@ -30,6 +30,28 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.3.4",
+    subtitle:
+      "Two AD sync sources can share a service account with automatic rotation, failing syncs are flagged where you look, and RDP sessions no longer drop while you resize the window.",
+    sections: [
+      {
+        title: "Rotation keeps every AD sync source working",
+        description:
+          "Rotating a service account's password now stores the new password on every AD sync source that logs in as that account, so an RDP and an SSH source for the same domain both keep syncing. If one is already failing after a rotation, edit the source that rotates and click Test Rotation & Capabilities once.",
+      },
+      {
+        title: "Failing syncs are flagged",
+        description:
+          "A red banner on Fleet Manager and on the AD Sync page names each failing source, how long it has been failing and the last error, and its card on the AD Sync page shows a Sync failing badge. You no longer need to open each source's history to find out.",
+      },
+      {
+        title: "RDP survives resizing",
+        description:
+          "Resizing the browser window or panel no longer occasionally ends an RDP session. Resizes are also paced while you drag, and the final size is always applied.",
+      },
+    ],
+  },
+  {
     version: "2.3.3",
     subtitle:
       "A maintenance release: Strata is built with the latest Rust compiler and SSH library, and a dependency alert is closed by removing the package. Nothing changes in how you use Strata.",

@@ -30,6 +30,23 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.3.2",
+    subtitle:
+      "Approved SSH host keys and certificate pins now survive an Active Directory sync, so a connection you have verified stays verified instead of going back to Unpinned and being refused.",
+    sections: [
+      {
+        title: "Host keys stay approved after an AD sync",
+        description:
+          "Approving a host key with Verify Host Keys made an AD-synced SSH connection show Matches and connect, but the next AD sync removed the key, the connection showed Unpinned again and was refused. Each sync rebuilt the connection's settings from the AD source's defaults and threw the key away. A sync now keeps each connection's host key, SFTP host key and pinned remote desktop certificate, and only replaces the rest.",
+      },
+      {
+        title: "For administrators",
+        description:
+          "Connections that a sync has already stripped need their keys approved once more under Admin, Connections, Verify Host Keys. From then on they survive every sync. Removing a setting from an AD source's defaults still removes it from the connections that source created. No migration or configuration change is needed.",
+      },
+    ],
+  },
+  {
     version: "2.3.1",
     subtitle:
       "Typing works again at a PowerShell prompt on Windows Server Core, the numeric keypad types in every session, and pressing Ctrl+V pastes what you have just copied on your own machine instead of whatever the remote computer held before.",

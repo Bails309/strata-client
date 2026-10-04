@@ -616,6 +616,34 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v2.3.1 → v2.3.2 (AD sync keeps approved host keys)
+
+Rebuild the backend and frontend images. **No migration, no `.env`
+change, no DMZ edge rebuild.**
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+| Change | What operators notice |
+| ------ | --------------------- |
+| AD sync keeps per-host trust pins | An SSH key approved through **Verify Host Keys**, an RDP certificate pin or an SFTP host key on a synced connection is no longer removed by the next sync; the **Unpinned** badge and *Security alerts* count stay down |
+| Fewer rewrites | Synced connections that differ from the source's defaults only by a pin are no longer updated on every run, so the sync's *updated* count drops |
+
+**Operator action:** connections a sync stripped before this upgrade keep
+nothing to preserve. Run **Admin → Connections → Verify Host Keys**, approve
+the keys again, and re-enter any RDP certificate pins, then run the sync once
+to confirm they stay.
+
+**Verify post-upgrade:**
+
+1. The in-app **What's New** modal shows the v2.3.2 card.
+2. Approve a host key on an AD-synced SSH connection, click **Sync AD /
+   LDAP**, and confirm the connection does **not** return to **Unpinned**.
+
 #### v2.3.0 → v2.3.1 (keyboard on Server Core, numeric keypad, paste shortcuts)
 
 Rebuild the backend and frontend images. **No migration, no `.env`

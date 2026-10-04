@@ -980,6 +980,131 @@ TCP-probe one connection now, instead of waiting for the next 2-minute sweep, an
 | `403` | Caller lacks `can_manage_connections` |
 | `404` | No such connection, or it is soft-deleted |
 
+#### Host-key and certificate discovery (v2.0.0; documented v2.3.2)
+
+The native engine pins SSH host keys and, optionally, RDP certificates, with
+no trust-on-first-use. These four endpoints let an administrator read what a
+target presents and approve it, instead of obtaining fingerprints by hand.
+All require `can_manage_connections`. A key or certificate read over the
+network is returned for a **human decision** and never stored by the read
+endpoints; only `PUT /api/admin/connections/host-keys` stores anything. The
+host and port always come from the stored connection, so none of them can
+probe an arbitrary address.
+
+Stored values live in the connection's `extra` and, since v2.3.2, survive
+AD sync re-runs (see [Connection Defaults](#connection-defaults)).
+
+##### `POST /api/admin/connections/host-keys` — survey every SSH host
+
+Reads the host key of every non-deleted `ssh` connection, at most 16 at a
+time with a 10-second timeout each, and compares it with the key approved
+in `extra.host-key`. Nothing is stored. No request body.
+
+**Response** `200 OK`
+
+```json
+[
+  {
+    "id": "uuid",
+    "name": "cicsazvm038",
+    "hostname": "cicsazvm038.example.com",
+    "port": 22,
+    "status": "missing",
+    "algorithm": "ssh-ed25519",
+    "fingerprint": "SHA256:…",
+    "public_key": "ssh-ed25519 AAAA…",
+    "error": null
+  }
+]
+```
+
+| `status` | Meaning |
+| -------- | ------- |
+| `missing` | No key approved in `extra.host-key` (the fleet **Unpinned** badge) |
+| `matches` | The live key's fingerprint is one of the approved keys |
+| `differs` | A key is approved but the host presents a different one — a rebuilt host, or something worth stopping for |
+| `unreachable` | The key could not be read; `error` says why, and `algorithm`, `fingerprint`, `public_key` are `null` |
+
+`extra.host-key` may hold several keys, comma- or newline-separated; each is
+fingerprinted for the comparison. Fingerprints held only in
+`host-key-fingerprint` are not consulted by the survey.
+
+Audited as `connection.host_keys_surveyed` with `{ count, differs }`.
+
+##### `PUT /api/admin/connections/host-keys` — approve host keys
+
+Stores reviewed keys, one per connection, in `extra.host-key`
+(`jsonb_set`, other parameters untouched).
+
+**Request Body**
+
+```json
+[{ "id": "uuid", "public_key": "ssh-ed25519 AAAA…" }]
+```
+
+**Response** `200 OK`
+
+```json
+{ "approved": 1 }
+```
+
+`approved` counts connections actually updated: an id that is not a
+non-deleted `ssh` connection is skipped silently. Each stored key is audited
+as `connection.host_key_approved` with `{ id, fingerprint }`.
+
+| Status | When |
+| ------ | ---- |
+| `400` | *"the key offered for {id} is not an OpenSSH public key"*. Entries are processed in order, so keys for entries **before** the invalid one have already been stored |
+| `403` | Caller lacks `can_manage_connections` |
+
+##### `POST /api/admin/connections/{id}/host-key` — read one SSH host key
+
+**Response** `200 OK`
+
+```json
+{ "algorithm": "ssh-ed25519", "fingerprint": "SHA256:…", "public_key": "ssh-ed25519 AAAA…" }
+```
+
+Audited as `connection.host_key_read` with `{ id, hostname, fingerprint }`.
+
+| Status | When |
+| ------ | ---- |
+| `400` | *"host keys apply to ssh connections, not {protocol}"*, or the stored port is invalid |
+| `403` | Caller lacks `can_manage_connections` |
+| `404` | No such connection, or it is soft-deleted |
+| `500` | The key could not be read within 10 seconds (unreachable host, refused connection, key-exchange failure) |
+
+##### `POST /api/admin/connections/{id}/certificate` — read one RDP certificate
+
+RDP presents its certificate only after the X.224 negotiation, so
+`openssl s_client` cannot fetch it; this endpoint performs that negotiation.
+Applies to `rdp` and `vdi` connections. The hostname is resolved through the
+admin-configured DNS, as a session would resolve it.
+
+**Response** `200 OK`
+
+```json
+{
+  "fingerprint": "ab:cd:…",
+  "subject": "CN=host.example.com",
+  "issuer": "CN=host.example.com",
+  "not_after": "…",
+  "self_signed": true
+}
+```
+
+`fingerprint` is the SHA-256 of the DER as lowercase colon-separated hex,
+the form `openssl x509 -fingerprint -sha256` prints and the `cert-fingerprints`
+parameter accepts. Audited as `connection.certificate_read` with
+`{ id, hostname, fingerprint }`.
+
+| Status | When |
+| ------ | ---- |
+| `400` | *"certificates apply to rdp connections, not {protocol}"*, or the stored port is invalid |
+| `403` | Caller lacks `can_manage_connections` |
+| `404` | No such connection, or it is soft-deleted |
+| `500` | The certificate could not be read within 10 seconds |
+
 #### `GET /api/admin/connections/page` (v2.3.0)
 
 One page of connections, filtered and counted on the server, for the fleet table. Requires `can_manage_connections`. Secret `extra` values are redacted as in `GET /api/admin/connections`. Rows are ordered by name, then id.
@@ -3867,7 +3992,7 @@ Create a new AD sync source.
 
 #### Connection Defaults
 
-The `connection_defaults` field accepts a JSON object of connection parameter key-value pairs that are applied as the `extra` JSONB on every connection created or updated by this sync source. The per-host trust pins an existing connection holds (`host-key`, `host-key-fingerprint`, `sftp-host-key`, `cert-fingerprints`) are kept on every sync; every other key follows the defaults. Supported RDP parameters include:
+The `connection_defaults` field accepts a JSON object of connection parameter key-value pairs that are applied as the `extra` JSONB on every connection created or updated by this sync source. The per-host trust pins an existing connection holds (`host-key`, `host-key-fingerprint`, `sftp-host-key`, `cert-fingerprints`) are kept on every sync (v2.3.2; before that a sync deleted them, so a key approved through `PUT /api/admin/connections/host-keys` was lost at the next run); every other key follows the defaults, and a key removed from the defaults is removed from the source's connections. Supported RDP parameters include:
 
 | Parameter                    | Description                                                                                                                                                                                                                                                                                                   |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

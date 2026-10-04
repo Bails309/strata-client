@@ -7,6 +7,182 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.4] — 2026-10-04
+
+### Patch release — a rotated shared bind account no longer breaks the other AD syncs, failing syncs are flagged where admins look, and RDP sessions survive resizing
+
+### The ask
+
+> *"If I want to enable 2 ADSync profiles for the same domain (SSH and RDP
+> for example) This works fine. but, if I enable automatic password rotation
+> (using Use this AD source's bind credentials) on one of these profiles then
+> it stops the other from connecting anymore due to the password not being
+> correct for the ADSync. Can we find a solution for this? I also think we
+> should have a more noticable banner on either the fleet manager or the
+> ADSync page for if the syncs are failing as currently the only way you can
+> tell if by viewing the history"*
+>
+> *"I'm also noticing an occasional issue where the RDP disconnects when I
+> resize the screen but this isn't every time."*
+>
+> *"Put all of these fixes under a new branch for version 2.3.4 along with
+> the previous CI/CD changes we just made"*
+
+### Summary
+
+| Area | Change |
+| ---- | ------ |
+| AD sync / password management | Rotating a bind account stores the new password on **every** AD sync source that binds (or manages passwords) as that account |
+| AD sync visibility | New `GET /api/admin/ad-sync-status`; a banner on **Fleet Manager** and **AD Sync**, and a **Sync failing** badge on each failing source |
+| RDP engine | Resizing no longer ends sessions: frame processing can no longer be cancelled halfway, reactivation tolerates interleaved traffic, and resize requests are paced |
+| CI and tests | The test-gap work from `test/close-ci-test-gaps` (DB-backed tests in CI, live engine suites, repo lint, new unit and E2E tests) |
+
+### Fixed — rotating a shared bind account broke every other source using it
+
+**Symptom.** Two AD sync sources for one domain (one importing RDP hosts, one
+SSH — usually the second made with **Clone**) both bind as the same service
+account. With **Enable automatic rotation** (Service Account Auto-Rotation) on
+one of them, the
+other started failing every sync with `invalid credentials` after the first
+rotation, and stayed broken.
+
+**Root cause.** `auto_rotate_service_account`
+([`services/checkouts.rs`](backend/src/services/checkouts.rs)) resets the
+bind account's password in AD and then wrote the new sealed password to the
+`ad_sync_configs` row being rotated — and only that row. The other source
+still held the old password, which AD no longer accepted. Nobody could repair
+it by hand: the new password is generated and sealed without anyone seeing it.
+
+**Fix.** The rotated password is now persisted by `persist_rotated_password`,
+which in one transaction updates the rotated source and every other source
+that names the same account (compared case-insensitively, ignoring
+surrounding spaces):
+
+| Column on the other source | Updated when |
+| -------------------------- | ------------ |
+| `bind_password` and `pm_last_rotated_at` | its `bind_dn` is the rotated account |
+| `pm_bind_password` | its `pm_bind_user` is the rotated account |
+
+Setting `pm_last_rotated_at` on the siblings stops a second source with
+auto-rotation enabled from rotating the same account again on its own
+schedule. The `password_management.auto_rotated` audit event gains a
+`shared_with` list naming the other sources updated.
+
+Accounts are matched by the string configured, so a source that names the
+same account in a different form (`CN=…` DN on one, `svc@corp` UPN on the
+other) is not recognised as a sibling.
+
+**Recovery for a source that is already broken.** **Edit** the source that has
+automatic rotation enabled and click **Test Rotation & Capabilities**. That
+rotates the account once more and, with this release, stores the result on
+both sources.
+
+### Added — failing AD syncs are flagged on Fleet Manager and AD Sync
+
+A failing source was visible only in its **History**. Now:
+
+- **`GET /api/admin/ad-sync-status`** (`can_manage_system`) returns
+  `{ "failing": [...] }`: every **enabled** source whose runs have failed
+  since its last successful run, with `failures`, `failing_since`,
+  `last_failure_at` and `last_error`, longest-failing first
+  (`ad_sync_admin::list_failing`). A source that recovers drops out at its
+  next successful run; a disabled source is never reported.
+- **`AdSyncFailureBanner`** shows a red alert naming each failing source,
+  how long it has failed, the failed-run count and the last error. It polls
+  every 60 seconds while the tab is visible and renders nothing while all
+  sources are healthy or for a user without `can_manage_system`.
+- **Fleet Manager** shows the banner under the telemetry strip, with an
+  **Open AD Sync** link.
+- **AD Sync** shows it above the source list, with a **History** button per
+  source, and each failing source's card carries a **Sync failing** badge.
+
+### Fixed — RDP sessions occasionally ended while the window was resized
+
+Resizing a native RDP session sends the target a Display Control monitor
+layout; Windows applies it either through a Deactivation-Reactivation
+Sequence or, with the graphics pipeline on, by resetting its graphics. Three
+defects on that path in [`engine/rdp/mod.rs`](crates/strata-session/src/engine/rdp/mod.rs)
+could end the session, each only sometimes:
+
+| Defect | Why it was intermittent | Fix |
+| ------ | ----------------------- | --- |
+| The session loop raced **processing** a frame against new input in `tokio::select!`. Input arriving while a frame was being handled cancelled the handling halfway — mid-reactivation, or mid-write of a response | Only when input (a resize step, a mouse move) landed during the window of a multi-round-trip reactivation or a pending write | Only the cancel-safe `read_pdu` races input now; the frame is processed in the branch body, which cannot be cancelled |
+| Reactivation handed **every** frame to the activation sequence, which can only parse its own PDUs. Audio, clipboard or graphics-pipeline traffic arriving meanwhile failed the sequence | Only when such traffic happened to interleave | `classify_reactivation_frame` sets other channels' traffic and unrelated session data aside and processes it once the sequence completes; fast-path output for the outgoing desktop is dropped (a full repaint follows) |
+| Every new size during a drag went to the target at once — a monitor layout per animation frame | More likely the faster the drag | `ResizeThrottle` sends at most one request per 500 ms, always for the newest size, as guacd did |
+
+These were found by reading the resize path, not by reproducing the
+disconnect: the RDP test targets (FreeRDP shadow, xrdp) do not resize, and no
+Windows host is reachable from CI. If a disconnect on resize is still seen,
+the backend log line `rdp reactivation complete` (or its absence before the
+session-end reason) shows which path the target took.
+
+### CI and tests
+
+Everything committed on `test/close-ci-test-gaps` ships in this release:
+
+- **Database-backed backend tests now run in CI.** `backend-check` has a
+  Postgres 16 service, applies the migrations and sets `TEST_DATABASE_URL`;
+  the ~20 tests that need it (audit chain, runtime-role privileges, auth
+  limits, AD-sync pins, RBAC listings) had been passing by skipping. A
+  follow-up step fails the job if they skip again.
+- **All 264 session-engine unit tests run** (was 111): the test step now
+  enables every protocol feature.
+- **New `session-live` job** runs the SSH, SFTP, RDP and Kubernetes live
+  suites against `docker-compose.session-test.yml`. It found the RDP suite
+  had been failing unnoticed (it expected PNG frames; the engine sends WebP by
+  default) — fixed.
+- **New `repo-lint` job**: actionlint, shellcheck, Helm lint/render of the DMZ
+  chart, and `scripts/ci/validate-compose.sh` rendering every Compose
+  topology. `docker-build` also builds the DMZ image.
+- `fmt` and `clippy` cover `strata-protocol` and `strata-dmz`.
+- `*.sh` is checked out with LF on every platform (`.gitattributes`); a CRLF
+  entrypoint stopped the RDP test target starting from a Windows checkout.
+- New tests: Kerberos KDC framing; credential-profile live/expiry/ownership
+  rules; stale-user sweep and retention; session sweeper; keyboard layouts in
+  the admin UI against bundled keymaps; focus trap and four small UI modules;
+  E2E account lifecycle (logout, password reset and delete revoke held tokens;
+  user administration is audited).
+
+### Scope & safety
+
+- **No migration.** The new endpoint reads existing tables.
+- **No configuration change.**
+- **Rotation propagation writes only sealed values** — the same Vault-sealed
+  string the rotated source receives — and only to rows naming the rotated
+  account.
+- **The new endpoint** returns labels, protocol, counts, timestamps and the
+  last error message; no bind DN or password. It needs `can_manage_system`,
+  like the rest of the AD sync API.
+- **RDP pacing** delays a resize by at most 500 ms; the final size of a drag is
+  always sent.
+
+### Testing
+
+| Suite | Result |
+| ----- | ------ |
+| Backend (`cargo test -p strata-backend`, with `TEST_DATABASE_URL`) | 1393 + 2 passed, including the new rotation-propagation and failing-sync tests (confirmed to have written to the database) |
+| Session engine (`--all-features --lib`) | 273 passed, including resize pacing and reactivation classification |
+| Frontend (Vitest) | 1812 passed in 97 files, including the banner (5) and the AD Sync and Fleet Manager additions |
+| `cargo fmt`, `clippy -D warnings`, `tsc --noEmit` | Clean |
+
+### Documentation
+
+| File | Change |
+| ---- | ------ |
+| [docs/api-reference.md](docs/api-reference.md) | `GET /api/admin/ad-sync-status` |
+| [docs/security.md](docs/security.md) | Rotation reaches every source sharing the account |
+| [docs/architecture.md](docs/architecture.md) | RDP resize pacing and reactivation |
+| [docs/deployment.md](docs/deployment.md) | v2.3.3 → v2.3.4 upgrade notes and recovery for a broken sibling source |
+| `README.md`, `WHATSNEW.md`, What's New card | 2.3.4 |
+
+### Deploy
+
+Rebuild the backend and frontend images. No migration and no `.env` change.
+If a second AD sync source is already failing with `invalid credentials`
+after a rotation, **Edit** the rotating source and click **Test Rotation &
+Capabilities** once after upgrading.
+
+
 ## [2.3.3] — 2026-10-04
 
 ### Patch release — Rust 1.99 and `russh` 0.64, the `braces` advisory removed, and a pre-commit hook that lints what is staged

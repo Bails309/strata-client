@@ -30,6 +30,33 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.3.6",
+    subtitle:
+      "Switches and other network devices can be reached over SSH, each SSH connection can choose how its host key is verified, the capacity card says what to add, and My Connections notices when a host comes back.",
+    sections: [
+      {
+        title: "SSH to network devices",
+        description:
+          "Devices that identify themselves with an RSA key, such as Cisco switches, now connect. For older devices, tick Allow legacy SSH algorithms on the connection. If Fetch from server still cannot read a key, it now says exactly why instead of Internal server error.",
+      },
+      {
+        title: "Choose how a host is verified",
+        description:
+          "Each SSH connection has a Host Key Verification setting: Pinned key (the default and safest), Trust on first use, which saves the key seen at the first connection and refuses any other afterwards, or Don't verify, which accepts any key and should be kept for devices whose key changes by itself. The relaxed modes are audited and flagged on the Fleet Manager, and can be set as defaults on SSH AD sync sources.",
+      },
+      {
+        title: "Know what to add to the server",
+        description:
+          "On Admin, Sessions, the capacity card now says whether CPU or memory limits the recommended number of sessions, and how many sessions each would allow on its own.",
+      },
+      {
+        title: "Connections update themselves",
+        description:
+          "My Connections re-checks whether each host is reachable every 30 seconds, so a host that comes back online can be connected to without leaving the page.",
+      },
+    ],
+  },
+  {
     version: "2.3.5",
     subtitle:
       "Session capacity now grows with your server instead of stopping at about 23 sessions, a session that cannot start tells you why instead of reconnecting forever, and the capacity card shows real figures.",

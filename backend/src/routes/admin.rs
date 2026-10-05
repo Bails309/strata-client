@@ -2961,10 +2961,17 @@ pub async fn get_metrics(
 
     // Reserve 30% of CPU for the rest of the backend and the OS.
     const USABLE_FRACTION: f64 = 0.70;
-    // Weighted average across RDP/VNC/SSH: RDP ~0.25, VNC ~0.10, SSH ~0.02.
+    // Used until enough sessions have been measured.
     const CPU_PER_SESSION: f64 = 0.15;
+    // A near-idle measurement would otherwise promise unbounded capacity.
+    const MIN_CPU_PER_SESSION: f64 = 0.01;
 
-    let by_cpu = (f64::from(cpu_cores) * USABLE_FRACTION / CPU_PER_SESSION) as u32;
+    let measured = crate::services::capacity::model();
+    let cpu_per_session = measured
+        .cpu_per_session()
+        .map_or(CPU_PER_SESSION, |c| c.max(MIN_CPU_PER_SESSION));
+    metrics.native_cpu_per_session = cpu_per_session;
+    let by_cpu = (f64::from(cpu_cores) * USABLE_FRACTION / cpu_per_session) as u32;
 
     let mut sys = sysinfo::System::new();
     if let Ok(pid) = sysinfo::get_current_pid() {
@@ -2978,16 +2985,26 @@ pub async fn get_metrics(
 
     // ── Native engine capacity ──
     //
-    // Each session reserved its estimate at admission from its protocol and
-    // display size, so the average of those reflects the live mix. With no
-    // sessions, fall back to the estimate for a 1080p RDP session.
+    // What admission reserves (the average live reservation, or a 1080p RDP
+    // session when idle), or measured use if that is higher: admission
+    // never reserves less than its estimate, so a lower measurement would
+    // promise sessions the budget refuses.
     let admission = crate::services::admission::stats();
-    let native_ram_per_session = if admission.sessions > 0 {
-        admission.reserved_bytes as f64 / f64::from(admission.sessions) / 1_048_576.0
+    let reserved_per_session = if admission.sessions > 0 {
+        admission.reserved_bytes as f64 / f64::from(admission.sessions)
     } else {
-        crate::services::admission::estimate("rdp", None, None) as f64 / 1_048_576.0
+        crate::services::capacity::calibrate(crate::services::admission::estimate(
+            "rdp", None, None,
+        )) as f64
     };
+    let native_ram_per_session = (measured
+        .memory_per_session()
+        .map_or(reserved_per_session, |m| m.max(reserved_per_session))
+        / 1_048_576.0)
+        .max(1.0);
     metrics.native_ram_per_session_mb = native_ram_per_session.ceil() as u32;
+    metrics.native_measured =
+        measured.cpu_per_session().is_some() || measured.memory_per_session().is_some();
 
     // The admission budget is where sessions are actually refused.
     let native_by_mem =

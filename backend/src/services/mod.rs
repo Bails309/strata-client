@@ -9,6 +9,7 @@ pub mod audit_verify;
 pub mod auth;
 pub mod auth_limits;
 pub mod av;
+pub mod capacity;
 pub mod checkouts;
 pub mod circuit_breaker;
 pub mod client_ip;

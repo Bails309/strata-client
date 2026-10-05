@@ -346,6 +346,8 @@ async fn main() -> anyhow::Result<()> {
         services::audit_verify::spawn_verifier(db_pool.clone(), state.clone(), shutdown.clone()),
         // ── Renew the bundled Vault's runtime token (hourly) ──
         services::vault_provisioning::spawn_token_renewal(state.clone(), shutdown.clone()),
+        // ── Measure what sessions cost (every 30s) ──
+        services::capacity::spawn_sampler(shutdown.clone()),
     ];
 
     // ── Spawn SSO state pruner ──

@@ -198,6 +198,8 @@ const metricsOk = {
   native_capacity_by_cpu: 90,
   native_capacity_by_memory: 300,
   native_limited_by: "cpu" as const,
+  native_cpu_per_session: 0.15,
+  native_measured: false,
 };
 
 const defaultUser: import("../api").MeResponse = {
@@ -1808,6 +1810,22 @@ describe("SessionsTab", () => {
     await user.click(screen.getByText("Sessions"));
     expect(await screen.findByTestId("capacity-limited-by")).toHaveTextContent("Limited by Memory");
     expect(screen.getByText(/memory is the limit\. Add memory to this host/)).toBeInTheDocument();
+  });
+
+  it("labels figures measured from live sessions", async () => {
+    vi.mocked(getMetrics).mockResolvedValue({
+      ...metricsOk,
+      native_ram_per_session_mb: 50,
+      native_cpu_per_session: 0.041,
+      native_measured: true,
+    });
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText("Sessions"));
+    expect(await screen.findByText("RAM / Session (measured)")).toBeInTheDocument();
+    expect(screen.getByTestId("capacity-basis")).toHaveTextContent(
+      "(measured: 0.04 CPU, 50 MB per session)"
+    );
   });
 });
 

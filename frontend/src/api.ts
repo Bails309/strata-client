@@ -2148,6 +2148,10 @@ export interface MetricsSummary {
   native_capacity_by_memory: number;
   /** Which of the two sets native_recommended. */
   native_limited_by: "cpu" | "memory";
+  /** Cores one session uses: measured, or the 0.15 estimate. */
+  native_cpu_per_session: number;
+  /** Whether the per-session figures are measured from live sessions. */
+  native_measured: boolean;
 }
 
 export const getMetrics = () => request<MetricsSummary>("/admin/metrics");

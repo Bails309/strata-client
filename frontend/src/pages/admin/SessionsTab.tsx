@@ -159,7 +159,7 @@ function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
               style={{ background: "var(--color-surface-tertiary)" }}
             >
               <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
-                RAM / Session (est.)
+                {metrics.native_measured ? "RAM / Session (measured)" : "RAM / Session (est.)"}
               </p>
               <p className="text-lg font-bold text-txt-primary">{ramPerSession} MB</p>
             </div>
@@ -243,8 +243,18 @@ function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
                     : ""}
                 </span>
               )}
-              <span className="text-[0.55rem] text-txt-tertiary italic">
-                (in-process, no sidecar per session)
+              <span
+                className="text-[0.55rem] text-txt-tertiary italic"
+                data-testid="capacity-basis"
+                title={
+                  metrics.native_measured
+                    ? "Averaged over the last few minutes of live sessions"
+                    : "Fixed estimates, used until enough sessions have been measured"
+                }
+              >
+                ({metrics.native_measured ? "measured" : "estimated"}:{" "}
+                {(metrics.native_cpu_per_session ?? 0.15).toFixed(2)} CPU, {ramPerSession} MB per
+                session)
               </span>
             </div>
           )}

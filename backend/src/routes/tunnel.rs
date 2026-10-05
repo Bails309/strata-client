@@ -403,7 +403,11 @@ async fn open_tunnel(
     let admission = crate::services::admission::admit(
         user.id,
         crate::services::admission::user_limit(role_limit),
-        crate::services::admission::estimate(&protocol, query.width, query.height),
+        crate::services::capacity::calibrate(crate::services::admission::estimate(
+            &protocol,
+            query.width,
+            query.height,
+        )),
     )?;
 
     // Parse extra JSONB into a HashMap of connection parameters

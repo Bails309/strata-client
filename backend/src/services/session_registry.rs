@@ -91,6 +91,11 @@ static NVR_BUDGET: LazyLock<Arc<NvrBudget>> = LazyLock::new(|| {
     Arc::new(NvrBudget::new(mb.saturating_mul(1024 * 1024)))
 });
 
+/// Bytes of replay history held for observers across all sessions.
+pub(crate) fn replay_bytes_in_use() -> u64 {
+    NVR_BUDGET.used.load(Ordering::Relaxed) as u64
+}
+
 // ── Timestamped frame ──────────────────────────────────────────────
 
 struct BufferedFrame {
@@ -605,6 +610,8 @@ impl SessionRegistry {
             native_capacity_by_cpu: 0,
             native_capacity_by_memory: 0,
             native_limited_by: CapacityLimit::Cpu,
+            native_cpu_per_session: 0.0,
+            native_measured: false,
             memory: MemoryMetrics::current(),
         }
     }
@@ -670,7 +677,8 @@ pub struct MetricsSummary {
     pub system_cpu_cores: u32,
     /// Resident memory of the backend process, which hosts every session.
     pub backend_memory_bytes: u64,
-    /// Average reservation of the live sessions, or a 1080p RDP session when idle.
+    /// Average reservation of the live sessions, or a 1080p RDP session when idle;
+    /// measured use instead once [`crate::services::capacity`] has enough data.
     pub native_ram_per_session_mb: u32,
     /// Sessions this host could serve.
     pub native_recommended: u32,
@@ -680,6 +688,10 @@ pub struct MetricsSummary {
     pub native_capacity_by_memory: u32,
     /// Which of the two sets `native_recommended`.
     pub native_limited_by: CapacityLimit,
+    /// Cores one session uses: measured, or the 0.15 estimate.
+    pub native_cpu_per_session: f64,
+    /// Whether the per-session figures are measured rather than estimated.
+    pub native_measured: bool,
     pub memory: MemoryMetrics,
 }
 
@@ -895,6 +907,8 @@ mod tests {
             native_capacity_by_cpu: 40,
             native_capacity_by_memory: 470,
             native_limited_by: CapacityLimit::Cpu,
+            native_cpu_per_session: 0.15,
+            native_measured: false,
             memory: MemoryMetrics::default(),
         };
         let json = serde_json::to_value(&m).unwrap();

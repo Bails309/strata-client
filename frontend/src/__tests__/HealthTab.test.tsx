@@ -45,6 +45,8 @@ const metrics = (over: Partial<MetricsSummary> = {}): MetricsSummary => ({
   native_capacity_by_cpu: 90,
   native_capacity_by_memory: 300,
   native_limited_by: "cpu",
+  native_cpu_per_session: 0.15,
+  native_measured: false,
   ...over,
 });
 

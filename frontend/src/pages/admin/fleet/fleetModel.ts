@@ -24,6 +24,7 @@ export interface FleetRecord {
 }
 
 const flag = (c: Connection, key: string) => c.extra?.[key] === "true";
+const hostKeyMode = (c: Connection) => (c.extra?.["host-key-policy"] ?? "").trim().toLowerCase();
 
 export function policiesFor(c: Connection): PolicyBadge[] {
   const out: PolicyBadge[] = [];
@@ -55,8 +56,24 @@ export function policiesFor(c: Connection): PolicyBadge[] {
     }
   }
   if (c.protocol === "ssh") {
-    if (c.extra?.["host-key"]) {
+    if (hostKeyMode(c) === "none") {
+      out.push({
+        key: "unverified",
+        label: "Unverified",
+        tone: "amber",
+        title: "Host key verification is off — any key the target presents is accepted",
+        alert: true,
+      });
+    } else if (c.extra?.["host-key"]) {
       out.push({ key: "hostkey", label: "HostKey", tone: "emerald", title: "SSH host key pinned" });
+    } else if (hostKeyMode(c) === "tofu") {
+      out.push({
+        key: "unpinned",
+        label: "TOFU",
+        tone: "amber",
+        title: "Trust on first use — the key the target presents at the next connection is pinned",
+        alert: true,
+      });
     } else {
       out.push({
         key: "unpinned",
@@ -64,6 +81,14 @@ export function policiesFor(c: Connection): PolicyBadge[] {
         tone: "amber",
         title: "No SSH host key pinned — the target is not authenticated",
         alert: true,
+      });
+    }
+    if (flag(c, "ssh-legacy-algorithms")) {
+      out.push({
+        key: "legacy-ssh",
+        label: "Legacy SSH",
+        tone: "slate",
+        title: "Offers older algorithms (ssh-rsa, SHA-1 key exchange and MACs) for network devices",
       });
     }
   }
@@ -141,6 +166,7 @@ const sortCounts = (counts: [string, number][]) =>
 const ALERTS: [keyof FleetSummary, string][] = [
   ["legacy_sec", "Legacy Sec"],
   ["unpinned", "Unpinned"],
+  ["host_key_unverified", "Unverified"],
   ["cert_ignored", "Cert Ignored"],
 ];
 

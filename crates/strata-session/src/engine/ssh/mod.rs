@@ -14,6 +14,7 @@
 
 pub use crate::engine::keymap;
 
+use std::borrow::Cow;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,8 +22,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use russh::client::{self, Handle, KeyboardInteractiveAuthResponse, Msg};
-use russh::keys::{HashAlg, PublicKeyOrCertificate};
-use russh::{Channel, ChannelMsg, Disconnect};
+use russh::keys::{Algorithm, HashAlg, PublicKeyOrCertificate};
+use russh::{cipher, kex, mac, Channel, ChannelMsg, Disconnect, Preferred};
 use secrecy::{ExposeSecret, SecretString};
 use tokio::sync::{mpsc, Mutex};
 
@@ -38,24 +39,101 @@ pub enum HostKeyPolicy {
     /// Accept only these SHA-256 fingerprints, in OpenSSH's
     /// `SHA256:base64` rendering.
     ///
-    /// An empty list rejects every host. That is deliberate: there is no
-    /// "accept anything" variant, because an SSH gateway that skips host
-    /// key verification is a man-in-the-middle waiting to happen, and
-    /// this engine exists partly to close gaps like that one.
+    /// An empty list rejects every host: a pinned connection with nothing
+    /// pinned does not connect.
     Fingerprints(Vec<String>),
+    /// Accept whatever key the host presents.
+    ///
+    /// Never a default. An administrator opts a connection into it, either
+    /// to skip verification outright or for the first connection of a
+    /// trust-on-first-use host, whose key the caller then pins from
+    /// [`SshEngine::presented_host_key`]. The key is still recorded and
+    /// logged, so what was accepted can be traced afterwards.
+    AcceptAny,
 }
 
 impl HostKeyPolicy {
     /// Whether this policy would admit no host at all.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        let Self::Fingerprints(allowed) = self;
-        allowed.is_empty()
+        match self {
+            Self::Fingerprints(allowed) => allowed.is_empty(),
+            Self::AcceptAny => false,
+        }
     }
 
     fn accepts(&self, fingerprint: &str) -> bool {
-        let Self::Fingerprints(allowed) = self;
-        allowed.iter().any(|f| f == fingerprint)
+        match self {
+            Self::Fingerprints(allowed) => allowed.iter().any(|f| f == fingerprint),
+            Self::AcceptAny => true,
+        }
+    }
+}
+
+/// Which algorithms the client offers in key exchange.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Algorithms {
+    /// russh's defaults, which leave out SHA-1 key exchange and MACs, CBC
+    /// ciphers and `ssh-rsa` signatures. RSA host keys are still accepted
+    /// with SHA-2 signatures (`rsa-sha2-256` / `rsa-sha2-512`).
+    #[default]
+    Modern,
+    /// Also offers what older network devices (Cisco IOS, many switches and
+    /// appliances) still need: `ssh-rsa`, SHA-1 and NIST-curve key exchange,
+    /// `hmac-sha1` and AES-CBC. Offered after the modern algorithms, so a
+    /// host that supports both still negotiates the modern ones.
+    Legacy,
+}
+
+impl Algorithms {
+    /// The russh preference lists for this set.
+    #[must_use]
+    pub fn preferred(self) -> Preferred {
+        let defaults = Preferred::DEFAULT;
+        // `ssh-rsa` signs with SHA-1; RSA keys stay usable through rsa-sha2.
+        let modern_keys: Vec<Algorithm> = defaults
+            .key
+            .iter()
+            .filter(|a| !matches!(a, Algorithm::Rsa { hash: None }))
+            .cloned()
+            .collect();
+        match self {
+            Self::Modern => Preferred {
+                key: Cow::Owned(modern_keys),
+                ..defaults
+            },
+            Self::Legacy => {
+                // Before the extension markers (`ext-info-c`, strict kex),
+                // which must stay in the list but are not real algorithms.
+                let mut kex: Vec<kex::Name> = defaults.kex.to_vec();
+                let at = kex
+                    .iter()
+                    .position(|n| *n == kex::EXTENSION_SUPPORT_AS_CLIENT)
+                    .unwrap_or(kex.len());
+                kex.splice(
+                    at..at,
+                    [
+                        kex::ECDH_SHA2_NISTP256,
+                        kex::ECDH_SHA2_NISTP384,
+                        kex::ECDH_SHA2_NISTP521,
+                        kex::DH_G14_SHA1,
+                        kex::DH_GEX_SHA1,
+                        kex::DH_G1_SHA1,
+                    ],
+                );
+                let mut ciphers: Vec<cipher::Name> = defaults.cipher.to_vec();
+                ciphers.extend([cipher::AES_128_CBC, cipher::AES_256_CBC]);
+                let mut macs: Vec<mac::Name> = defaults.mac.to_vec();
+                macs.extend([mac::HMAC_SHA1_ETM, mac::HMAC_SHA1]);
+                Preferred {
+                    kex: Cow::Owned(kex),
+                    key: defaults.key.clone(),
+                    cipher: Cow::Owned(ciphers),
+                    mac: Cow::Owned(macs),
+                    ..defaults
+                }
+            }
+        }
     }
 }
 
@@ -64,6 +142,8 @@ impl HostKeyPolicy {
 pub struct SshConfig {
     /// Host key admission policy.
     pub host_keys: HostKeyPolicy,
+    /// Algorithms offered in key exchange.
+    pub algorithms: Algorithms,
     /// `TERM` value announced to the remote shell.
     pub term: String,
     /// What the BackSpace key sends, from `backspace`.
@@ -91,6 +171,7 @@ impl fmt::Debug for SshConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SshConfig")
             .field("host_keys", &self.host_keys)
+            .field("algorithms", &self.algorithms)
             .field("term", &self.term)
             .field("cell", &self.cell)
             .field("keepalive", &self.keepalive)
@@ -111,8 +192,15 @@ impl SshConfig {
     /// Config accepting exactly the supplied fingerprints.
     #[must_use]
     pub fn with_fingerprints(fingerprints: Vec<String>) -> Self {
+        Self::with_policy(HostKeyPolicy::Fingerprints(fingerprints))
+    }
+
+    /// Config admitting host keys by `policy`.
+    #[must_use]
+    pub fn with_policy(host_keys: HostKeyPolicy) -> Self {
         Self {
-            host_keys: HostKeyPolicy::Fingerprints(fingerprints),
+            host_keys,
+            algorithms: Algorithms::default(),
             term: "xterm-256color".to_owned(),
             backspace: Backspace::default(),
             command: None,
@@ -134,6 +222,13 @@ impl SshConfig {
     ) -> Self {
         self.private_key = key;
         self.passphrase = passphrase;
+        self
+    }
+
+    /// Algorithms offered in key exchange.
+    #[must_use]
+    pub fn with_algorithms(mut self, algorithms: Algorithms) -> Self {
+        self.algorithms = algorithms;
         self
     }
 
@@ -172,9 +267,20 @@ impl SshConfig {
     }
 }
 
-/// Verifies the target's host key against the configured policy.
+/// Verifies the target's host key against the configured policy, and
+/// records the key it was shown.
 pub(crate) struct HostKeyChecker {
     pub(crate) policy: HostKeyPolicy,
+    pub(crate) presented: Arc<std::sync::Mutex<Option<DiscoveredHostKey>>>,
+}
+
+impl HostKeyChecker {
+    pub(crate) fn new(policy: HostKeyPolicy) -> Self {
+        Self {
+            policy,
+            presented: Arc::default(),
+        }
+    }
 }
 
 impl client::Handler for HostKeyChecker {
@@ -184,21 +290,35 @@ impl client::Handler for HostKeyChecker {
         &mut self,
         server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        let fingerprint = match server_public_key {
-            PublicKeyOrCertificate::PublicKey { key, .. } => {
-                key.fingerprint(HashAlg::Sha256).to_string()
-            }
-            PublicKeyOrCertificate::Certificate(cert) => {
-                cert.public_key().fingerprint(HashAlg::Sha256).to_string()
-            }
-        };
+        let presented = describe_host_key(server_public_key);
+        let fingerprint = presented.fingerprint.clone();
+        *self
+            .presented
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(presented);
 
+        if matches!(self.policy, HostKeyPolicy::AcceptAny) {
+            tracing::warn!(%fingerprint, "accepting host key without verification");
+            return Ok(true);
+        }
         if self.policy.accepts(&fingerprint) {
             tracing::debug!(%fingerprint, "host key accepted");
             return Ok(true);
         }
         tracing::warn!(%fingerprint, "rejecting unknown host key");
         Ok(false)
+    }
+}
+
+fn describe_host_key(server_public_key: &PublicKeyOrCertificate) -> DiscoveredHostKey {
+    let key = match server_public_key {
+        PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
+        PublicKeyOrCertificate::Certificate(cert) => cert.public_key().clone().into(),
+    };
+    DiscoveredHostKey {
+        algorithm: key.algorithm().to_string(),
+        fingerprint: key.fingerprint(HashAlg::Sha256).to_string(),
+        public_key: key.to_openssh().unwrap_or_default(),
     }
 }
 
@@ -225,15 +345,7 @@ impl client::Handler for HostKeyRecorder {
         &mut self,
         server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        let key = match server_public_key {
-            PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
-            PublicKeyOrCertificate::Certificate(cert) => cert.public_key().clone().into(),
-        };
-        *self.seen.lock().await = Some(DiscoveredHostKey {
-            algorithm: key.algorithm().to_string(),
-            fingerprint: key.fingerprint(HashAlg::Sha256).to_string(),
-            public_key: key.to_openssh().unwrap_or_default(),
-        });
+        *self.seen.lock().await = Some(describe_host_key(server_public_key));
         // Refuse regardless. Discovery must never leave a usable session
         // behind, and nothing here has authenticated anything.
         Ok(false)
@@ -255,9 +367,11 @@ pub async fn discover_host_key(
     hostname: &str,
     port: u16,
     timeout: Duration,
+    algorithms: Algorithms,
 ) -> Result<DiscoveredHostKey, EngineError> {
     let client_config = Arc::new(client::Config {
         nodelay: true,
+        preferred: algorithms.preferred(),
         ..client::Config::default()
     });
     let seen = Arc::new(Mutex::new(None));
@@ -267,7 +381,7 @@ pub async fn discover_host_key(
 
     // The connect is expected to fail: the handler rejects every key. The
     // key is read from `seen` either way.
-    let _ = tokio::time::timeout(
+    let outcome = tokio::time::timeout(
         timeout,
         client::connect(client_config, (hostname, port), handler),
     )
@@ -276,8 +390,40 @@ pub async fn discover_host_key(
         EngineError::Protocol(format!("timed out reading the host key from {hostname}"))
     })?;
 
-    let discovered = seen.lock().await.clone();
-    discovered.ok_or_else(|| EngineError::Protocol(format!("{hostname} offered no host key")))
+    if let Some(key) = seen.lock().await.clone() {
+        return Ok(key);
+    }
+    // No key means negotiation failed before one was offered; say why.
+    match outcome {
+        Err(err) => Err(map_connect_error(err, algorithms)),
+        Ok(_) => Err(EngineError::Protocol(format!(
+            "{hostname} offered no host key"
+        ))),
+    }
+}
+
+/// [`map_russh`] for a failed connect, naming what a failed negotiation
+/// was missing and, when it would help, the setting that adds it.
+pub(crate) fn map_connect_error(err: russh::Error, algorithms: Algorithms) -> EngineError {
+    let russh::Error::NoCommonAlgo { kind, theirs, .. } = err else {
+        return map_russh(err);
+    };
+    let what = match kind {
+        russh::AlgorithmKind::Kex => "key exchange",
+        russh::AlgorithmKind::Key => "host key",
+        russh::AlgorithmKind::Cipher => "cipher",
+        russh::AlgorithmKind::Mac => "MAC",
+        russh::AlgorithmKind::Compression => "compression",
+    };
+    let hint = if algorithms == Algorithms::Modern {
+        "; if this is an older network device, enable \"Allow legacy SSH algorithms\" on the connection"
+    } else {
+        ""
+    };
+    EngineError::Protocol(format!(
+        "no {what} algorithm in common with the host, which offers {}{hint}",
+        theirs.join(", ")
+    ))
 }
 
 /// Which credential the login prompt is still waiting for.
@@ -391,6 +537,8 @@ enum Stage {
 /// A live SSH session with an interactive shell on a PTY.
 pub struct SshEngine {
     session: Handle<HostKeyChecker>,
+    /// The key the host presented during the handshake.
+    presented_host_key: Option<DiscoveredHostKey>,
     stage: Stage,
     config: Arc<SshConfig>,
     modifiers: Modifiers,
@@ -420,6 +568,12 @@ pub struct SshEngine {
 }
 
 impl SshEngine {
+    /// The key the host presented, whichever policy admitted it.
+    #[must_use]
+    pub fn presented_host_key(&self) -> Option<&DiscoveredHostKey> {
+        self.presented_host_key.as_ref()
+    }
+
     /// Connect, authenticate, and open an interactive shell.
     ///
     /// The credential is consumed here and dropped — and therefore
@@ -430,12 +584,12 @@ impl SshEngine {
             keepalive_interval: Some(config.keepalive),
             inactivity_timeout: Some(config.inactivity_timeout),
             nodelay: true,
+            preferred: config.algorithms.preferred(),
             ..client::Config::default()
         });
 
-        let handler = HostKeyChecker {
-            policy: config.host_keys.clone(),
-        };
+        let handler = HostKeyChecker::new(config.host_keys.clone());
+        let presented = Arc::clone(&handler.presented);
 
         let session = client::connect(
             client_config,
@@ -443,7 +597,11 @@ impl SshEngine {
             handler,
         )
         .await
-        .map_err(map_russh)?;
+        .map_err(|err| map_connect_error(err, config.algorithms))?;
+        let presented_host_key = presented
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
 
         let TargetSpec {
             username,
@@ -457,6 +615,7 @@ impl SshEngine {
         let (cols, rows) = config.cell.to_grid(width, height);
         let mut engine = Self {
             session,
+            presented_host_key,
             // Replaced by `Stage::Shell` the moment authentication lands.
             stage: Stage::Login(Login {
                 username: None,
@@ -1149,6 +1308,58 @@ mod tests {
         assert!(allowed.accepts("SHA256:abc"));
         assert!(!allowed.accepts("SHA256:abd"));
         assert!(!allowed.accepts(""));
+    }
+
+    #[test]
+    fn accept_any_is_never_empty_and_admits_every_key() {
+        assert!(!HostKeyPolicy::AcceptAny.is_empty());
+        assert!(HostKeyPolicy::AcceptAny.accepts("SHA256:whatever"));
+    }
+
+    fn names<T: AsRef<str>>(list: &[T]) -> Vec<String> {
+        list.iter().map(|n| n.as_ref().to_owned()).collect()
+    }
+
+    #[test]
+    fn modern_algorithms_take_rsa_keys_but_not_sha1() {
+        let p = Algorithms::Modern.preferred();
+        let keys: Vec<String> = p.key.iter().map(ToString::to_string).collect();
+        assert!(keys.contains(&"rsa-sha2-256".to_owned()), "{keys:?}");
+        assert!(!keys.contains(&"ssh-rsa".to_owned()), "{keys:?}");
+        assert!(!names(&p.kex).contains(&"diffie-hellman-group14-sha1".to_owned()));
+        assert!(!names(&p.mac).contains(&"hmac-sha1".to_owned()));
+    }
+
+    #[test]
+    fn legacy_algorithms_follow_the_modern_ones() {
+        let p = Algorithms::Legacy.preferred();
+        let keys: Vec<String> = p.key.iter().map(ToString::to_string).collect();
+        assert!(keys.contains(&"ssh-rsa".to_owned()), "{keys:?}");
+        let kex = names(&p.kex);
+        let sha1 = kex
+            .iter()
+            .position(|n| n == "diffie-hellman-group14-sha1")
+            .unwrap();
+        let modern = kex.iter().position(|n| n == "curve25519-sha256").unwrap();
+        let marker = kex.iter().position(|n| n == "ext-info-c").unwrap();
+        assert!(modern < sha1 && sha1 < marker, "{kex:?}");
+        assert!(names(&p.mac).ends_with(&["hmac-sha1".to_owned()]));
+        assert!(names(&p.cipher).contains(&"aes128-cbc".to_owned()));
+    }
+
+    #[test]
+    fn a_failed_negotiation_names_what_is_missing_and_the_fix() {
+        let err = || russh::Error::NoCommonAlgo {
+            kind: russh::AlgorithmKind::Kex,
+            ours: vec!["curve25519-sha256".to_owned()],
+            theirs: vec!["diffie-hellman-group14-sha1".to_owned()],
+        };
+        let modern = map_connect_error(err(), Algorithms::Modern).to_string();
+        assert!(modern.contains("key exchange"), "{modern}");
+        assert!(modern.contains("diffie-hellman-group14-sha1"), "{modern}");
+        assert!(modern.contains("Allow legacy SSH algorithms"), "{modern}");
+        let legacy = map_connect_error(err(), Algorithms::Legacy).to_string();
+        assert!(!legacy.contains("Allow legacy"), "{legacy}");
     }
 
     #[tokio::test]

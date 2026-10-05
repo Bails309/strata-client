@@ -1604,6 +1604,11 @@ pub async fn survey_ssh_host_keys(
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_owned();
+            let algorithms = crate::session_engine::ssh_algorithms_from(
+                extra
+                    .get(crate::session_engine::LEGACY_ALGORITHMS_PARAM)
+                    .and_then(serde_json::Value::as_str),
+            );
 
             let Ok(port) = u16::try_from(port) else {
                 return HostKeySurveyRow {
@@ -1623,6 +1628,7 @@ pub async fn survey_ssh_host_keys(
                 &hostname,
                 port,
                 std::time::Duration::from_secs(10),
+                algorithms,
             )
             .await
             {
@@ -1752,6 +1758,13 @@ pub struct DiscoveredHostKeyResponse {
     pub public_key: String,
 }
 
+/// Query for [`discover_connection_host_key`].
+#[derive(Deserialize)]
+pub struct HostKeyProbeQuery {
+    /// Overrides the stored `ssh-legacy-algorithms`, so an unsaved form can try it.
+    pub legacy: Option<bool>,
+}
+
 /// `POST /api/admin/connections/{id}/host-key` — read a target's SSH host key.
 ///
 /// Obtaining a fingerprint by hand does not scale past a handful of
@@ -1768,12 +1781,13 @@ pub async fn discover_connection_host_key(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
+    axum::extract::Query(probe): axum::extract::Query<HostKeyProbeQuery>,
 ) -> Result<Json<DiscoveredHostKeyResponse>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
 
-    let row: (String, String, i32) = sqlx::query_as(
-        "SELECT protocol, hostname, port FROM connections \
+    let row: (String, String, i32, Option<String>) = sqlx::query_as(
+        "SELECT protocol, hostname, port, extra->>'ssh-legacy-algorithms' FROM connections \
          WHERE id = $1 AND soft_deleted_at IS NULL",
     )
     .bind(id)
@@ -1781,7 +1795,12 @@ pub async fn discover_connection_host_key(
     .await?
     .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
-    let (protocol, hostname, port) = row;
+    let (protocol, hostname, port, legacy) = row;
+    let algorithms = match probe.legacy {
+        Some(true) => strata_session::engine::ssh::Algorithms::Legacy,
+        Some(false) => strata_session::engine::ssh::Algorithms::Modern,
+        None => crate::session_engine::ssh_algorithms_from(legacy.as_deref()),
+    };
     if !protocol.eq_ignore_ascii_case("ssh") {
         return Err(AppError::Validation(format!(
             "host keys apply to ssh connections, not {protocol}"
@@ -1789,13 +1808,16 @@ pub async fn discover_connection_host_key(
     }
 
     let port = u16::try_from(port).map_err(|_| AppError::Validation("invalid port".into()))?;
+    // A failure here is the target's answer (unreachable, nothing in common),
+    // which the administrator needs to read; a generic 500 hid it.
     let key = strata_session::engine::ssh::discover_host_key(
         &hostname,
         port,
         std::time::Duration::from_secs(10),
+        algorithms,
     )
     .await
-    .map_err(|e| AppError::Internal(format!("could not read the host key: {e}")))?;
+    .map_err(|e| AppError::Validation(format!("could not read the host key: {e}")))?;
 
     audit::log(
         &db.pool,

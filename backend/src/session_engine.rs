@@ -32,7 +32,9 @@ use strata_session::engine::kube::{KubeConfig, KubeEngineFactory};
 use strata_session::engine::rdp::layouts::keyboard_layout_id;
 use strata_session::engine::rdp::{RdpConfig, RdpEngineFactory, RdpPerformance};
 use strata_session::engine::sftp::{SftpConfig, SftpEngine};
-use strata_session::engine::ssh::{HostKeyPolicy, SshConfig, SshEngineFactory};
+use strata_session::engine::ssh::{
+    Algorithms, DiscoveredHostKey, HostKeyPolicy, SshConfig, SshEngine,
+};
 use strata_session::engine::vnc::{
     ClipboardEncoding, VncConfig, VncEngineFactory, DEFAULT_LISTEN_TIMEOUT,
 };
@@ -69,6 +71,72 @@ const HOST_KEY_PARAM: &str = "host-key-fingerprint";
 /// Read as a fallback beside [`HOST_KEY_PARAM`] so a connection
 /// configured before the engine was rewritten verifies the same host.
 pub(crate) const OPENSSH_HOST_KEY_PARAM: &str = "host-key";
+
+/// Connection parameter choosing how an SSH host key is verified:
+/// `pinned` (the default), `tofu` or `none`. See [`HostKeyMode`].
+pub(crate) const HOST_KEY_POLICY_PARAM: &str = "host-key-policy";
+
+/// Connection parameter offering older SSH algorithms, for network devices.
+pub(crate) const LEGACY_ALGORITHMS_PARAM: &str = "ssh-legacy-algorithms";
+
+/// How a connection's SSH host key is verified.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostKeyMode {
+    /// Only an approved key is accepted; with none the session is refused.
+    Pinned,
+    /// The first key seen is pinned; after that it behaves as `Pinned`.
+    TrustOnFirstUse,
+    /// Any key is accepted, and each one is audited.
+    Unverified,
+}
+
+impl HostKeyMode {
+    /// Read the parameter's value; anything unrecognised fails closed.
+    pub(crate) fn from_param(value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            Some(v) if v.eq_ignore_ascii_case("tofu") => Self::TrustOnFirstUse,
+            Some(v) if v.eq_ignore_ascii_case("none") => Self::Unverified,
+            _ => Self::Pinned,
+        }
+    }
+}
+
+fn host_key_mode(handshake: &HandshakeParams) -> HostKeyMode {
+    HostKeyMode::from_param(
+        handshake
+            .extra
+            .get(HOST_KEY_POLICY_PARAM)
+            .map(String::as_str),
+    )
+}
+
+/// The algorithm set a connection's parameter value asks for.
+pub(crate) fn ssh_algorithms_from(value: Option<&str>) -> Algorithms {
+    if value.is_some_and(|v| matches!(v.trim(), "true" | "1")) {
+        Algorithms::Legacy
+    } else {
+        Algorithms::Modern
+    }
+}
+
+fn ssh_algorithms(handshake: &HandshakeParams) -> Algorithms {
+    ssh_algorithms_from(
+        handshake
+            .extra
+            .get(LEGACY_ALGORITHMS_PARAM)
+            .map(String::as_str),
+    )
+}
+
+/// The host key policy for the session's own SSH connection.
+fn session_host_key_policy(handshake: &HandshakeParams) -> HostKeyPolicy {
+    let pins = host_key_fingerprints(handshake);
+    match host_key_mode(handshake) {
+        HostKeyMode::Unverified => HostKeyPolicy::AcceptAny,
+        HostKeyMode::TrustOnFirstUse if pins.is_empty() => HostKeyPolicy::AcceptAny,
+        _ => HostKeyPolicy::Fingerprints(pins),
+    }
+}
 
 /// Connection parameter naming the KDC for Kerberos authentication.
 ///
@@ -621,10 +689,13 @@ fn preflight(protocol: Protocol, handshake: &HandshakeParams) -> Result<(), Stri
     }
     match protocol {
         Protocol::Ssh => {
-            if host_key_fingerprints(handshake).is_empty() {
+            if host_key_mode(handshake) == HostKeyMode::Pinned
+                && host_key_fingerprints(handshake).is_empty()
+            {
                 return Err(format!(
-                    "connection has no `{HOST_KEY_PARAM}` parameter, and the native SSH \
-                     engine will not connect to an unverified host"
+                    "connection pins no host key (`{OPENSSH_HOST_KEY_PARAM}` or \
+                     `{HOST_KEY_PARAM}`) and requires one; approve the key with Fetch from \
+                     server, or set host key verification to trust on first use"
                 ));
             }
             // Only SSH needs the rasteriser, and only in wire mode.
@@ -869,7 +940,12 @@ pub async fn run_native(
         }
     };
     let engine = match connect_engine(protocol, &handshake).await {
-        Ok(engine) => engine,
+        Ok((engine, presented)) => {
+            if let (Some(ctx), Some(key)) = (nvr.as_ref(), presented.as_ref()) {
+                record_host_key(ctx, &handshake, user_id, key).await;
+            }
+            engine
+        }
         Err(e) => {
             mark_recording(
                 nvr.as_ref(),
@@ -1393,10 +1469,13 @@ async fn forward_guest_instructions(frame: &str, handle: &SessionHandle) -> Resu
 }
 
 /// Connect to the target, and attach file transfer if it was asked for.
+///
+/// Also returns the SSH host key the target presented, for the caller to
+/// pin (trust on first use) or audit (unverified).
 async fn connect_engine(
     protocol: Protocol,
     handshake: &HandshakeParams,
-) -> Result<Box<dyn ProtocolEngine>, AppError> {
+) -> Result<(Box<dyn ProtocolEngine>, Option<DiscoveredHostKey>), AppError> {
     wake_target(handshake).await;
 
     let spec = TargetSpec {
@@ -1410,18 +1489,94 @@ async fn connect_engine(
         height: handshake.height,
     };
 
-    let engine = connect_target(protocol, handshake, spec).await?;
+    let mut presented = None;
+    let engine = connect_target(protocol, handshake, spec, &mut presented).await?;
 
-    let Some(config) = sftp_config(handshake) else {
-        return Ok(engine);
+    let Some(mut config) = sftp_config(handshake) else {
+        return Ok((engine, presented));
     };
+    // First use of a same-host transfer: hold it to the key the session saw.
+    if matches!(config.host_keys, HostKeyPolicy::AcceptAny)
+        && host_key_mode(handshake) == HostKeyMode::TrustOnFirstUse
+    {
+        if let Some(key) = &presented {
+            config.host_keys = HostKeyPolicy::Fingerprints(vec![key.fingerprint.clone()]);
+        }
+    }
     // A failure here loses file transfer, not the session: the operator
     // is already connected to the target, and dropping them for a
     // secondary channel would be a worse trade than doing without it.
     match SftpEngine::attach(engine, Arc::new(config)).await {
-        Ok(engine) => Ok(Box::new(engine)),
+        Ok(engine) => Ok((Box::new(engine), presented)),
         Err(err) => Err(AppError::Internal(format!("native sftp connect: {err}"))),
     }
+}
+
+/// Pin a trust-on-first-use host's key, or audit one accepted unverified.
+async fn record_host_key(
+    ctx: &NvrContext,
+    handshake: &HandshakeParams,
+    user_id: Uuid,
+    key: &DiscoveredHostKey,
+) {
+    let details = |extra: serde_json::Value| {
+        let mut base = serde_json::json!({
+            "connection_id": ctx.connection_id.to_string(),
+            "hostname": handshake.hostname,
+            "algorithm": key.algorithm,
+            "fingerprint": key.fingerprint,
+        });
+        if let (Some(base), Some(extra)) = (base.as_object_mut(), extra.as_object()) {
+            base.extend(extra.clone());
+        }
+        base
+    };
+    let action = match host_key_mode(handshake) {
+        HostKeyMode::Pinned => return,
+        HostKeyMode::TrustOnFirstUse => {
+            if !host_key_fingerprints(handshake).is_empty() {
+                return;
+            }
+            match pin_first_host_key(&ctx.db_pool, ctx.connection_id, &key.public_key).await {
+                Ok(true) => "connection.host_key_pinned",
+                // Another session pinned a key first; this one was admitted on its own.
+                Ok(false) => return,
+                Err(err) => {
+                    tracing::warn!(error = %err, "could not pin a trust-on-first-use host key");
+                    return;
+                }
+            }
+        }
+        HostKeyMode::Unverified => "connection.host_key_unverified",
+    };
+    let method = if action == "connection.host_key_pinned" {
+        serde_json::json!({ "method": "trust_on_first_use" })
+    } else {
+        serde_json::json!({})
+    };
+    let _ =
+        crate::services::audit::log(&ctx.db_pool, Some(user_id), action, &details(method)).await;
+}
+
+/// Store `public_key` as the connection's host key if it still has none.
+/// Returns whether this call stored it.
+async fn pin_first_host_key(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    connection_id: Uuid,
+    public_key: &str,
+) -> Result<bool, sqlx::Error> {
+    let done = sqlx::query(
+        "UPDATE connections
+            SET extra = jsonb_set(COALESCE(extra, '{}'::jsonb), '{host-key}', to_jsonb($2::text))
+          WHERE id = $1
+            AND COALESCE(extra->>'host-key', '') = ''
+            AND COALESCE(extra->>'host-key-fingerprint', '') = ''",
+    )
+    .bind(connection_id)
+    .bind(public_key)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected() == 1)
 }
 
 /// Port used when the connection names no SFTP port of its own.
@@ -1464,28 +1619,30 @@ fn sftp_config(handshake: &HandshakeParams) -> Option<SftpConfig> {
     config.disable_download = flag(handshake, "sftp-disable-download");
     config.disable_upload = flag(handshake, "sftp-disable-upload");
     config.name = get("sftp-directory").unwrap_or_else(|| "Files".to_owned());
-    config.host_keys =
-        HostKeyPolicy::Fingerprints(sftp_host_key_fingerprints(handshake, &hostname));
+    config.host_keys = sftp_host_key_policy(handshake, &hostname);
+    config.algorithms = ssh_algorithms(handshake);
     config.gate = handshake.transfer_gate.clone();
     Some(config)
 }
 
-/// Fingerprints the file-transfer host is allowed to present.
+/// The host key policy for the file-transfer connection.
 ///
-/// An explicit `sftp-host-key` wins. Otherwise the session's own pinned
-/// key is reused, but only when the transfer goes to the same host —
-/// trusting it for a different one would pin the wrong server.
-fn sftp_host_key_fingerprints(handshake: &HandshakeParams, sftp_host: &str) -> Vec<String> {
-    if let Some(raw) = handshake.extra.get("sftp-host-key") {
-        let explicit = fingerprints_from(raw);
-        if !explicit.is_empty() {
-            return explicit;
-        }
+/// An explicit `sftp-host-key` wins. Otherwise a transfer to the session's
+/// own host follows the session's policy; a different host has nothing
+/// pinned and is refused.
+fn sftp_host_key_policy(handshake: &HandshakeParams, sftp_host: &str) -> HostKeyPolicy {
+    let explicit = handshake
+        .extra
+        .get("sftp-host-key")
+        .map(|raw| fingerprints_from(raw))
+        .unwrap_or_default();
+    if !explicit.is_empty() {
+        return HostKeyPolicy::Fingerprints(explicit);
     }
     if sftp_host == handshake.hostname {
-        return host_key_fingerprints(handshake);
+        return session_host_key_policy(handshake);
     }
-    Vec::new()
+    HostKeyPolicy::Fingerprints(Vec::new())
 }
 
 /// Open the server-side typescript a connection asked for.
@@ -1523,6 +1680,7 @@ async fn connect_target(
     protocol: Protocol,
     handshake: &HandshakeParams,
     spec: TargetSpec,
+    presented: &mut Option<DiscoveredHostKey>,
 ) -> Result<Box<dyn ProtocolEngine>, AppError> {
     match protocol {
         Protocol::Ssh => {
@@ -1535,35 +1693,34 @@ async fn connect_target(
             let font = TerminalFont::discover(terminal_font_size(handshake))
                 .map_err(|e| AppError::Internal(format!("terminal font: {e}")))?;
 
-            let factory = SshEngineFactory::new(
-                SshConfig::with_fingerprints(host_key_fingerprints(handshake))
-                    .with_cell_size(font.metrics().into())
-                    .with_private_key(
-                        handshake
-                            .extra
-                            .get("private-key")
-                            .filter(|k| !k.trim().is_empty())
-                            .map(|k| SecretString::from(k.clone())),
-                        handshake
-                            .extra
-                            .get("passphrase")
-                            .filter(|p| !p.is_empty())
-                            .map(|p| SecretString::from(p.clone())),
-                    )
-                    .with_terminal(
-                        handshake.extra.get("terminal-type").cloned(),
-                        handshake.extra.get("timezone").cloned(),
-                    )
-                    .with_backspace(backspace(handshake))
-                    .with_command(handshake.extra.get("command").cloned()),
-            );
-            let engine = factory
-                .connect(spec)
+            let config = SshConfig::with_policy(session_host_key_policy(handshake))
+                .with_algorithms(ssh_algorithms(handshake))
+                .with_cell_size(font.metrics().into())
+                .with_private_key(
+                    handshake
+                        .extra
+                        .get("private-key")
+                        .filter(|k| !k.trim().is_empty())
+                        .map(|k| SecretString::from(k.clone())),
+                    handshake
+                        .extra
+                        .get("passphrase")
+                        .filter(|p| !p.is_empty())
+                        .map(|p| SecretString::from(p.clone())),
+                )
+                .with_terminal(
+                    handshake.extra.get("terminal-type").cloned(),
+                    handshake.extra.get("timezone").cloned(),
+                )
+                .with_backspace(backspace(handshake))
+                .with_command(handshake.extra.get("command").cloned());
+            let engine = SshEngine::connect(spec, Arc::new(config))
                 .await
                 .map_err(|e| AppError::Internal(format!("native ssh connect: {e}")))?;
+            *presented = engine.presented_host_key().cloned();
 
             let mut rasteriser = RasterisingEngine::with_appearance(
-                engine,
+                Box::new(engine),
                 font,
                 handshake.width,
                 handshake.height,
@@ -2472,11 +2629,85 @@ mod tests {
         params
             .extra
             .insert("enable-sftp".to_owned(), "true".to_owned());
+        assert!(matches!(
+            sftp_host_key_policy(&params, &params.hostname.clone()),
+            HostKeyPolicy::Fingerprints(f) if f == vec!["SHA256:aaa".to_owned()]
+        ));
+        assert!(sftp_host_key_policy(&params, "elsewhere.internal").is_empty());
+    }
+
+    fn with_mode(pin: Option<&str>, mode: &str) -> HandshakeParams {
+        let mut params = handshake("ssh", pin);
+        params
+            .extra
+            .insert(HOST_KEY_POLICY_PARAM.to_owned(), mode.to_owned());
+        params
+    }
+
+    #[test]
+    fn trust_on_first_use_admits_the_first_key_then_holds_to_the_pin() {
+        let first = with_mode(None, "tofu");
+        assert!(preflight(Protocol::Ssh, &first).is_ok());
+        assert!(matches!(
+            session_host_key_policy(&first),
+            HostKeyPolicy::AcceptAny
+        ));
+
+        let pinned = with_mode(Some("SHA256:aaa"), "tofu");
+        assert!(matches!(
+            session_host_key_policy(&pinned),
+            HostKeyPolicy::Fingerprints(f) if f == vec!["SHA256:aaa".to_owned()]
+        ));
+    }
+
+    #[test]
+    fn unverified_accepts_any_key_even_when_one_is_pinned() {
+        let params = with_mode(Some("SHA256:aaa"), "none");
+        assert!(preflight(Protocol::Ssh, &params).is_ok());
+        assert!(matches!(
+            session_host_key_policy(&params),
+            HostKeyPolicy::AcceptAny
+        ));
+    }
+
+    #[test]
+    fn an_unknown_mode_fails_closed() {
+        for mode in ["", "pinned", "off", "skip"] {
+            assert_eq!(
+                HostKeyMode::from_param(Some(mode)),
+                HostKeyMode::Pinned,
+                "{mode:?}"
+            );
+            assert!(
+                preflight(Protocol::Ssh, &with_mode(None, mode)).is_err(),
+                "{mode:?}"
+            );
+        }
         assert_eq!(
-            sftp_host_key_fingerprints(&params, &params.hostname.clone()),
-            vec!["SHA256:aaa".to_owned()]
+            HostKeyMode::from_param(Some(" TOFU ")),
+            HostKeyMode::TrustOnFirstUse
         );
-        assert!(sftp_host_key_fingerprints(&params, "elsewhere.internal").is_empty());
+    }
+
+    #[test]
+    fn same_host_file_transfer_follows_the_session_mode() {
+        let mut params = with_mode(None, "tofu");
+        params
+            .extra
+            .insert("enable-sftp".to_owned(), "true".to_owned());
+        assert!(preflight(Protocol::Ssh, &params).is_ok());
+        assert!(matches!(
+            sftp_host_key_policy(&params, &params.hostname.clone()),
+            HostKeyPolicy::AcceptAny
+        ));
+        assert!(sftp_host_key_policy(&params, "elsewhere.internal").is_empty());
+    }
+
+    #[test]
+    fn legacy_algorithms_are_opt_in() {
+        assert_eq!(ssh_algorithms_from(None), Algorithms::Modern);
+        assert_eq!(ssh_algorithms_from(Some("false")), Algorithms::Modern);
+        assert_eq!(ssh_algorithms_from(Some("true")), Algorithms::Legacy);
     }
 
     #[test]

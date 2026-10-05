@@ -881,6 +881,7 @@ export function SshSections({
   const [probe, setProbe] = useState<DiscoveredHostKey | null>(null);
   const [probing, setProbing] = useState(false);
   const [probeError, setProbeError] = useState("");
+  const hostKeyMode = ex("host-key-policy") || "pinned";
 
   async function fetchHostKey() {
     if (!connectionId) return;
@@ -888,7 +889,7 @@ export function SshSections({
     setProbeError("");
     setProbe(null);
     try {
-      setProbe(await discoverHostKey(connectionId));
+      setProbe(await discoverHostKey(connectionId, ex("ssh-legacy-algorithms") === "true"));
     } catch (e) {
       setProbeError(e instanceof Error ? e.message : "Could not read the host key");
     } finally {
@@ -949,7 +950,11 @@ export function SshSections({
                   {probing ? "Reading…" : "Fetch from server"}
                 </button>
                 <span className="text-[0.6rem] text-txt-tertiary italic">
-                  Required by the native engine, which will not connect to an unverified host.
+                  {hostKeyMode === "none"
+                    ? "Not used while verification is off."
+                    : hostKeyMode === "tofu"
+                      ? "Pinned automatically at the first connection when left empty."
+                      : "Required: the session is refused until a key is approved."}
                 </span>
               </div>
               {probeError && (
@@ -987,6 +992,49 @@ export function SshSections({
               )}
             </div>
           </Field>
+          <Field
+            label="Host Key Verification"
+            title="How the SSH server's identity is checked before credentials are sent."
+          >
+            <Select
+              value={hostKeyMode}
+              onChange={(v) => setEx("host-key-policy", v === "pinned" ? "" : v)}
+              options={[
+                { value: "pinned", label: "Pinned key (recommended)" },
+                { value: "tofu", label: "Trust on first use" },
+                { value: "none", label: "Don't verify (insecure)" },
+              ]}
+            />
+            {hostKeyMode === "tofu" && (
+              <span className="mt-2 block text-[0.65rem]" style={{ color: "#f59e0b" }}>
+                The key the server presents at the next connection is pinned and audited; after that
+                a different key is refused. That first connection is not verified.
+              </span>
+            )}
+            {hostKeyMode === "none" && (
+              <span className="mt-2 block text-[0.65rem]" style={{ color: "#ef4444" }}>
+                Any key is accepted, so an attacker between Strata and this host could read the
+                credentials and the session. Every connection is audited with the key it saw.
+              </span>
+            )}
+          </Field>
+          <div className="form-group !mb-0">
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
+            <label
+              className="flex items-center gap-2"
+              title="Also offer ssh-rsa host keys, SHA-1 and NIST-curve key exchange, hmac-sha1 and AES-CBC. Needed by many switches and appliances (e.g. older Cisco IOS). Modern algorithms are still preferred when the host supports them."
+            >
+              <input
+                type="checkbox"
+                checked={ex("ssh-legacy-algorithms") === "true"}
+                onChange={(e) => setEx("ssh-legacy-algorithms", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Allow legacy SSH algorithms
+            </label>
+          </div>
         </FieldGrid>
       </Section>
 

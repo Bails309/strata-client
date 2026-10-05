@@ -506,6 +506,55 @@ export default function AdSyncTab({
             These settings are applied to every connection created or updated by this sync source.
           </p>
 
+          {editing.protocol === "ssh" && (
+            <>
+              <div className="text-xs font-semibold uppercase tracking-wider opacity-60 mb-2">
+                SSH Host Keys
+              </div>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-3 mb-4">
+                <div className="form-group !mb-0">
+                  <label
+                    htmlFor="ad-cd-host-key-policy"
+                    title="How each synced host's SSH key is verified. Keys already approved on a connection are kept by every sync."
+                  >
+                    Host Key Verification
+                  </label>
+                  <Select
+                    id="ad-cd-host-key-policy"
+                    value={(editing.connection_defaults ?? {})["host-key-policy"] || "pinned"}
+                    onChange={(v) => {
+                      const cd = { ...(editing.connection_defaults ?? {}) };
+                      if (v && v !== "pinned") cd["host-key-policy"] = v;
+                      else delete cd["host-key-policy"];
+                      setEditing({ ...editing, connection_defaults: cd });
+                    }}
+                    options={[
+                      { value: "pinned", label: "Pinned key (recommended)" },
+                      { value: "tofu", label: "Trust on first use" },
+                      { value: "none", label: "Don't verify (insecure)" },
+                    ]}
+                  />
+                </div>
+                <div className="form-group !mb-0 flex items-end">
+                  <EnterpriseCheckbox
+                    title="Also offer ssh-rsa host keys, SHA-1 and NIST-curve key exchange, hmac-sha1 and AES-CBC, for switches and appliances such as older Cisco IOS."
+                    checked={
+                      (editing.connection_defaults ?? {})["ssh-legacy-algorithms"] === "true"
+                    }
+                    onChange={(e) => {
+                      const cd = { ...(editing.connection_defaults ?? {}) };
+                      if (e.target.checked) cd["ssh-legacy-algorithms"] = "true";
+                      else delete cd["ssh-legacy-algorithms"];
+                      setEditing({ ...editing, connection_defaults: cd });
+                    }}
+                  >
+                    <span className="text-sm">Allow legacy SSH algorithms</span>
+                  </EnterpriseCheckbox>
+                </div>
+              </div>
+            </>
+          )}
+
           {(editing.protocol || "rdp") === "rdp" && (
             <>
               <div className="text-xs font-semibold uppercase tracking-wider opacity-60 mb-2">

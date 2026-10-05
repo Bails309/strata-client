@@ -38,6 +38,7 @@ vi.mock("../api", () => ({
   readCookie: vi.fn(),
   getMyConnections: vi.fn(),
   getMyConnectionsPage: vi.fn(),
+  getMyConnectionsByIds: vi.fn().mockResolvedValue([]),
   getMyConnectionFacets: vi.fn(),
   getConnectionInfo: vi.fn(),
   getFavorites: vi.fn(),

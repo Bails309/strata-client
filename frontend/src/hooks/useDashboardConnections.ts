@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getMyConnectionFacets,
+  getMyConnectionsByIds,
   getMyConnectionsPage,
   type Connection,
   type ConnectionFacets,
@@ -13,6 +14,23 @@ export const FOLDER_PAGE_SIZE = 200;
 /** Tree id of the bucket for connections in no folder. */
 export const UNGROUPED = "__ungrouped";
 const RECENT_COUNT = 5;
+/** How often on-screen rows re-read reachability; the server re-probes every 120 s. */
+export const HEALTH_REFRESH_MS = 30_000;
+
+type Health = Pick<Connection, "health_status" | "health_checked_at">;
+
+/** `items` with fresh reachability applied; the same array if nothing changed. */
+function patchHealth(items: Connection[], fresh: Map<string, Health>): Connection[] {
+  let changed = false;
+  const next = items.map((c) => {
+    const h = fresh.get(c.id);
+    if (!h || (h.health_status === c.health_status && h.health_checked_at === c.health_checked_at))
+      return c;
+    changed = true;
+    return { ...c, ...h };
+  });
+  return changed ? next : items;
+}
 
 export interface FolderRows {
   items: Connection[];
@@ -144,6 +162,56 @@ export default function useDashboardConnections({ filters, folderView, page, pag
   }, [recents, pageRows, rowsNow]);
 
   const reload = useCallback(() => setVersion((v) => v + 1), []);
+
+  // Reachability changes under a page that stays open. Patch the status of the
+  // loaded rows in place rather than reloading, which would collapse folders.
+  const loadedIds = useRef<string[]>([]);
+  useEffect(() => {
+    loadedIds.current = [...rowsById.keys()];
+  }, [rowsById]);
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      if (document.visibilityState === "hidden" || loadedIds.current.length === 0) return;
+      getMyConnectionsByIds(loadedIds.current)
+        .then((rows) => {
+          if (cancelled) return;
+          const fresh = new Map<string, Health>(
+            rows.map((c) => [
+              c.id,
+              { health_status: c.health_status, health_checked_at: c.health_checked_at },
+            ])
+          );
+          setPageRows((p) => {
+            if (!p) return p;
+            const items = patchHealth(p.items, fresh);
+            return items === p.items ? p : { ...p, items };
+          });
+          setRecents((r) => patchHealth(r, fresh));
+          setFolderRows((prev) => {
+            let changed = false;
+            const rows: Record<string, FolderRows> = {};
+            for (const [id, f] of Object.entries(prev.rows)) {
+              const items = patchHealth(f.items, fresh);
+              if (items !== f.items) changed = true;
+              rows[id] = items === f.items ? f : { ...f, items };
+            }
+            return changed ? { ...prev, rows } : prev;
+          });
+        })
+        .catch(() => {});
+    };
+    const timer = setInterval(refresh, HEALTH_REFRESH_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
 
   return {
     facets,

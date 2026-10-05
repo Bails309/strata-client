@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — the connections list never refreshed a host's reachability
+
+> *"when items are unreachable in the connections list, it correctly blocks
+> the connect button. However, this never automatically refreshes to the user
+> has to leave the page and go back to the page for it to update the connect
+> button and the UI so they can press connect."*
+
+**Cause.** The background health check re-probes every connection every
+2 minutes and writes any change at once, but **My Connections** read
+`health_status` only when it loaded its rows. A host that came back stayed
+**Unreachable**, with **Connect** disabled, until the page was reopened.
+Reloading the listing on a timer was rejected: `reload()` discards the rows
+of open folders, so folder view would collapse and flicker every cycle.
+
+**Fix.** [`useDashboardConnections`](frontend/src/hooks/useDashboardConnections.ts)
+now polls every 30 seconds (`HEALTH_REFRESH_MS`), and immediately when the tab
+becomes visible, for the status of the rows it has loaded — the page, open
+folders and recents — using the existing role-scoped
+`GET /api/user/connections/page?ids=…` (`getMyConnectionsByIds`, 200 ids per
+request). Only `health_status` and `health_checked_at` are patched into the
+rows, and only rows that changed are replaced, so nothing re-renders when
+nothing changed. It does not poll while the tab is hidden. A recovered host
+now re-enables **Connect** within about 2½ minutes (one probe pass plus one
+poll) without leaving the page.
+
+**Scope & safety.** Frontend only; no API, schema or environment change.
+Access is unchanged: the `ids` filter returns only connections the caller's
+role can open.
+
+**Testing.** New `useDashboardConnections.test.ts`: a host reported online
+after one interval is patched into the page rows without refetching the
+listing; no request is made while the tab is hidden. `Dashboard` suite
+passes (65 tests across both files).
+
 ## [2.3.5] — 2026-10-05
 
 ### Patch release — session capacity follows the host, a refused session says why instead of reconnecting forever, the capacity card reports real numbers, and russh 0.64.1

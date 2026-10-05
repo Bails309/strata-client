@@ -192,6 +192,7 @@ const metricsOk = {
   sessions_by_protocol: { rdp: 4, ssh: 3 },
   system_total_memory: 8589934592,
   system_cpu_cores: 4,
+  backend_memory_bytes: 0,
   native_ram_per_session_mb: 24,
   native_recommended: 90,
 };

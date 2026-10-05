@@ -136,9 +136,11 @@ function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
               style={{ background: "var(--color-surface-tertiary)" }}
             >
               <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
-                Processes
+                Backend Memory
               </p>
-              <p className="text-lg font-bold text-txt-primary">0</p>
+              <p className="text-lg font-bold text-txt-primary">
+                {metrics.backend_memory_bytes ? fmtBw(metrics.backend_memory_bytes) : "—"}
+              </p>
             </div>
             <div
               className="rounded-lg px-3 py-2"

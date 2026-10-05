@@ -2131,7 +2131,9 @@ export interface MetricsSummary {
   sessions_by_protocol: Record<string, number>;
   system_total_memory: number;
   system_cpu_cores: number;
-  /** Memory one session costs, from what the engine allocates. */
+  /** Resident memory of the backend process, which hosts every session. */
+  backend_memory_bytes: number;
+  /** Average reservation of the live sessions, or a 1080p RDP session when idle. */
   native_ram_per_session_mb: number;
   /** Sessions this host could serve. */
   native_recommended: number;

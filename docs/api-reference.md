@@ -1411,6 +1411,7 @@ Aggregate metrics across all active tunnel sessions.
   },
   "system_total_memory": 16365801472,
   "system_cpu_cores": 16,
+  "backend_memory_bytes": 734003200,
   "native_ram_per_session_mb": 24,
   "native_recommended": 74,
   "memory": {
@@ -1432,7 +1433,8 @@ Aggregate metrics across all active tunnel sessions.
 | `sessions_by_protocol`      | object  | Session count grouped by protocol (rdp, ssh, vnc, web, vdi, kubernetes) |
 | `system_total_memory`       | integer | Host physical memory in bytes                                           |
 | `system_cpu_cores`          | integer | Host logical CPU cores                                                  |
-| `native_ram_per_session_mb` | integer | Memory one session costs, from what the engine actually allocates       |
+| `backend_memory_bytes`      | integer | Resident memory of the backend process, which hosts every native session (Chromium/Xvnc children for web sessions are separate processes and not included) |
+| `native_ram_per_session_mb` | integer | Average admission estimate of the live sessions (protocol and display size); a 1080p RDP session when none are running |
 | `native_recommended`        | integer | Sessions this host could serve, reserving 30% headroom                  |
 | `memory.sessions_reserved_bytes` | integer | **(v2.3.0)** Memory reserved by admitted sessions, estimated from protocol and display size |
 | `memory.sessions_limit_bytes` | integer | The admission budget: `STRATA_SESSION_MEMORY_BUDGET_MB`, else three quarters of the container (or system) memory less the replay budget |

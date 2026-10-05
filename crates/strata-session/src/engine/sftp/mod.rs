@@ -24,7 +24,7 @@ use secrecy::{ExposeSecret, SecretString};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
-use crate::engine::ssh::{map_russh, HostKeyChecker, HostKeyPolicy};
+use crate::engine::ssh::{map_connect_error, map_russh, Algorithms, HostKeyChecker, HostKeyPolicy};
 use crate::engine::{FileEvent, FileRequest, InputEvent, Protocol, ProtocolEngine, TargetEvent};
 use crate::error::EngineError;
 
@@ -84,6 +84,8 @@ pub struct SftpConfig {
     pub passphrase: Option<SecretString>,
     /// Host key admission policy for this connection.
     pub host_keys: HostKeyPolicy,
+    /// Algorithms offered in key exchange.
+    pub algorithms: Algorithms,
     /// Directory the browser is confined to.
     pub root: String,
     /// Refuse to read files out of the target.
@@ -131,6 +133,7 @@ impl SftpConfig {
             private_key: None,
             passphrase: None,
             host_keys: HostKeyPolicy::Fingerprints(Vec::new()),
+            algorithms: Algorithms::default(),
             root: "/".to_owned(),
             disable_download: false,
             disable_upload: false,
@@ -222,16 +225,17 @@ impl SftpEngine {
         inner: Box<dyn ProtocolEngine>,
         config: Arc<SftpConfig>,
     ) -> Result<Self, EngineError> {
-        let checker = HostKeyChecker {
-            policy: config.host_keys.clone(),
-        };
+        let checker = HostKeyChecker::new(config.host_keys.clone());
         let dial_host = config
             .connect_addr
             .map_or_else(|| config.hostname.clone(), |ip| ip.to_string());
-        let ssh_config = Arc::new(client::Config::default());
+        let ssh_config = Arc::new(client::Config {
+            preferred: config.algorithms.preferred(),
+            ..client::Config::default()
+        });
         let mut handle = client::connect(ssh_config, (dial_host.as_str(), config.port), checker)
             .await
-            .map_err(map_russh)?;
+            .map_err(|err| map_connect_error(err, config.algorithms))?;
 
         authenticate(&mut handle, &config).await?;
 

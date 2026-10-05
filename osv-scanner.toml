@@ -31,6 +31,13 @@ engine only constructs `Credentials::UsernamePassword` (NTLM / Kerberos with
 symmetric etypes), so the private-key paths that would decrypt with `rsa`
 (PKINIT, PKU2U, smart-card credentials) are never reached.
 
+Since v2.3.6 the SSH engine also uses the same `rsa` build (russh `rsa`
+feature) so it can talk to devices with only RSA host keys. Verifying a
+host's RSA signature is a public-key operation. An administrator-supplied
+RSA *user* key signs once per login; the attack needs a very large number of
+timed private-key operations observed by the attacker, which one signature
+per session to the target being logged in to does not give.
+
 Remove when `rsa` ships a constant-time release, or revisit if smart-card or
 certificate-based RDP authentication is ever implemented.
 """

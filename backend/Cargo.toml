@@ -165,7 +165,7 @@ strata-protocol = { path = "../crates/strata-protocol" }
 
 # Native Rust session engine (ADR-0015). Dormant unless
 # STRATA_SESSION_NATIVE_PROTOCOLS narrows which protocols it will serve.
-strata-session = { path = "../crates/strata-session", features = ["ssh", "rdp", "vnc", "kubernetes", "sftp", "terminal"] }
+strata-session = { path = "../crates/strata-session", features = ["ssh", "ssh-rsa", "rdp", "vnc", "kubernetes", "sftp", "terminal"] }
 secrecy = { workspace = true }
 
 # Web Browser Sessions (shipped in v0.30.0).

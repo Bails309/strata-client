@@ -462,6 +462,8 @@ pub struct FleetCounts {
     pub alert_count: i64,
     pub legacy_sec: i64,
     pub unpinned: i64,
+    /// SSH connections set to accept any host key.
+    pub host_key_unverified: i64,
     pub cert_ignored: i64,
     pub last_sweep: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -486,16 +488,20 @@ pub async fn fleet_summary(pool: &Pool<Postgres>) -> Result<FleetSummary, AppErr
         "SELECT COUNT(*) AS total,
                 COUNT(*) FILTER (WHERE health_status = 'online') AS online,
                 COUNT(*) FILTER (WHERE health_status = 'offline') AS offline,
-                COUNT(*) FILTER (WHERE legacy OR unpinned OR cert) AS alert_count,
+                COUNT(*) FILTER (WHERE legacy OR unpinned OR unverified OR cert) AS alert_count,
                 COUNT(*) FILTER (WHERE legacy) AS legacy_sec,
                 COUNT(*) FILTER (WHERE unpinned) AS unpinned,
+                COUNT(*) FILTER (WHERE unverified) AS host_key_unverified,
                 COUNT(*) FILTER (WHERE cert) AS cert_ignored,
                 COALESCE((SELECT completed_at FROM worker_leases WHERE name = 'connection_health'),
                          MAX(health_checked_at)) AS last_sweep
          FROM (
              SELECT health_status, health_checked_at,
                     protocol IN ('rdp', 'vdi') AND COALESCE(extra->>'security', '') = 'rdp' AS legacy,
-                    protocol = 'ssh' AND COALESCE(extra->>'host-key', '') = '' AS unpinned,
+                    protocol = 'ssh' AND lower(trim(COALESCE(extra->>'host-key-policy', ''))) = 'none'
+                        AS unverified,
+                    protocol = 'ssh' AND COALESCE(extra->>'host-key', '') = ''
+                        AND lower(trim(COALESCE(extra->>'host-key-policy', ''))) <> 'none' AS unpinned,
                     COALESCE(extra->>'ignore-cert', '') = 'true' AS cert
              FROM connections WHERE soft_deleted_at IS NULL
          ) c",

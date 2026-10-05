@@ -101,7 +101,10 @@ export const toRefs = (rows: Connection[]): ConnectionRef[] =>
 export function fleetSummary(all: Connection[]): FleetSummary {
   const legacy = (c: Connection) =>
     (c.protocol === "rdp" || c.protocol === "vdi") && c.extra?.security === "rdp";
-  const unpinned = (c: Connection) => c.protocol === "ssh" && !c.extra?.["host-key"];
+  const mode = (c: Connection) => (c.extra?.["host-key-policy"] ?? "").trim().toLowerCase();
+  const unverified = (c: Connection) => c.protocol === "ssh" && mode(c) === "none";
+  const unpinned = (c: Connection) =>
+    c.protocol === "ssh" && !c.extra?.["host-key"] && mode(c) !== "none";
   const cert = (c: Connection) => c.extra?.["ignore-cert"] === "true";
   const protocols = new Map<string, number>();
   for (const c of all) protocols.set(c.protocol, (protocols.get(c.protocol) ?? 0) + 1);
@@ -110,9 +113,10 @@ export function fleetSummary(all: Connection[]): FleetSummary {
     total: all.length,
     online: all.filter((c) => c.health_status === "online").length,
     offline: all.filter((c) => c.health_status === "offline").length,
-    alert_count: all.filter((c) => legacy(c) || unpinned(c) || cert(c)).length,
+    alert_count: all.filter((c) => legacy(c) || unpinned(c) || unverified(c) || cert(c)).length,
     legacy_sec: all.filter(legacy).length,
     unpinned: all.filter(unpinned).length,
+    host_key_unverified: all.filter(unverified).length,
     cert_ignored: all.filter(cert).length,
     last_sweep: sweeps.sort().pop() ?? null,
     protocols: [...protocols].map(([protocol, count]) => ({ protocol, count })),

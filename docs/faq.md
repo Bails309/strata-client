@@ -180,6 +180,14 @@ The server has reached its session limit. Before v2.3.5 the refusal was invisibl
 
 Fixed in v2.3.2. Approving a host key with **Verify Host Keys** stores it in the connection's settings, and until v2.3.2 every Active Directory sync rebuilt a synced connection's settings from the source's defaults, deleting the key. Strata will not connect to an SSH host without a pinned key, so the connection was refused until the key was approved again. A sync now keeps each connection's host key, SFTP host key and RDP certificate pins. Connections stripped before the upgrade need their keys approved once more; after that they survive every sync.
 
+### A switch or other network device says *"offered no host key"*, and Fetch from server fails.
+
+Fixed in v2.3.6. Many network devices (older Cisco IOS among them) present only an RSA host key and use older key-exchange algorithms. Before v2.3.6 Strata could not use RSA host keys at all, so the handshake ended before any key was offered, and **Fetch from server** showed only *"Internal server error"*. Now RSA host keys work, and **Fetch from server** says what is missing. If it mentions legacy algorithms, tick **Allow legacy SSH algorithms** on the connection (or on its AD sync source under *Connection Defaults*) and fetch again, then **Approve** the key.
+
+### Can Strata connect to an SSH host without pinning its key?
+
+Yes, since v2.3.6, per connection under **Host Key Verification**. **Trust on first use** pins whatever key the host presents at its first connection and refuses a different key afterwards; it is a reasonable choice for a large fleet of devices on a network you trust. **Don't verify** accepts any key on every connection, so anyone able to intercept traffic between Strata and the host could read credentials and the session; use it only when the device's key changes on its own (some appliances regenerate it on reboot). Both are audited, and both are flagged on the Fleet Manager. **Pinned key** remains the default and the recommendation.
+
 ### There is no sound in my RDP session.
 
 RDP audio works from v2.1.1. Before that, every session told Windows not to send audio, and Windows additionally sends none unless a device-redirection channel is offered beside the audio one. If audio is still silent:

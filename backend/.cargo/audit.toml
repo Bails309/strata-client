@@ -11,6 +11,8 @@ ignore = [
     # winscard under the RDP engine (`rsa 0.9.10` is locked but not compiled on
     # Linux). The attack times RSA private-key decryption; the RDP engine only
     # builds Credentials::UsernamePassword, so no RSA private key is ever used.
+    # v2.3.6: russh's `rsa` feature (same rsa build) verifies RSA host keys —
+    # public-key operations — and signs once per login with an RSA user key.
     # Revisit if smart-card / certificate RDP auth is implemented, or when
     # `rsa` publishes a constant-time release.
     "RUSTSEC-2023-0071",

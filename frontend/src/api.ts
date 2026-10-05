@@ -1249,6 +1249,8 @@ export interface FleetSummary {
   alert_count: number;
   legacy_sec: number;
   unpinned: number;
+  /** SSH connections set to accept any host key. */
+  host_key_unverified: number;
   cert_ignored: number;
   last_sweep: string | null;
   protocols: { protocol: string; count: number }[];
@@ -1346,8 +1348,11 @@ export interface DiscoveredHostKey {
  * same unverified channel it is meant to protect, so a person still has
  * to decide whether to trust it.
  */
-export const discoverHostKey = (id: string) =>
-  request<DiscoveredHostKey>(`/admin/connections/${id}/host-key`, { method: "POST" });
+export const discoverHostKey = (id: string, legacy?: boolean) =>
+  request<DiscoveredHostKey>(
+    `/admin/connections/${id}/host-key${legacy === undefined ? "" : `?legacy=${legacy}`}`,
+    { method: "POST" }
+  );
 
 export interface DiscoveredCertificate {
   fingerprint: string;

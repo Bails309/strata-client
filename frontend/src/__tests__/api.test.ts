@@ -601,6 +601,12 @@ describe("API endpoint functions", () => {
     expect(res).toEqual(mockKey);
   });
 
+  it("discoverHostKey passes the unsaved legacy-algorithm choice", async () => {
+    const fn = mockFetch({ algorithm: "ssh-rsa", fingerprint: "SHA256:x", public_key: "k" });
+    await discoverHostKey("c1", true);
+    expect(lastCall(fn).url).toBe("/api/admin/connections/c1/host-key?legacy=true");
+  });
+
   it("discoverCertificate sends POST /api/admin/connections/:id/certificate", async () => {
     const mockCert = {
       fingerprint: "SHA256:def",

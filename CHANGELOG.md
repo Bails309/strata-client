@@ -7,6 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.6] — 2026-10-05
+
+### Patch release — SSH to network devices, per-connection host-key verification, a capacity card that says what to scale, and live reachability on My Connections
+
+### The ask
+
+> *"I tried to connect to this host but it doesn't get a host key. I get an
+> internal server error when trying to fetch one."*
+>
+> *"we have no bypass on the host connection settings to allow it to connect
+> if we wany to bypass the pinning of host key"*
+>
+> *"Can we make sure we have the ability to set these on the SSH connections
+> if they're manually create too and not just on the ADSync"*
+>
+> *"merge all of the branches we've been working on into one and make a
+> 2.3.6."*
+
+The host was a Cisco switch (`CICCOSWCORE01`, 10.94.89.253:22); the host-key
+survey listed some 25 switches as *"target protocol violation: … offered no
+host key"*, one as *"timed out reading the host key"*.
+
+### Summary
+
+| Area | Change |
+| ---- | ------ |
+| SSH engine | RSA host keys work (they could not before); a per-connection **Allow legacy SSH algorithms** adds `ssh-rsa`, SHA-1/NIST key exchange, `hmac-sha1` and AES-CBC |
+| SSH host keys | Per-connection **Host Key Verification**: Pinned (default) / Trust on first use / Don't verify, on the connection form and as an AD sync default; audited and flagged on the Fleet Manager |
+| Host key discovery | **Fetch from server** and the survey report why a key could not be read, instead of *"Internal server error"* / *"offered no host key"* |
+| Admin capacity card | Says whether CPU or memory sets **Max Recommended** |
+| My Connections | Reachability refreshes every 30 s without leaving the page |
+
+### Fixed — SSH hosts with only RSA host keys could not be reached
+
+**Symptom.** Every Cisco switch failed. **Verify Host Keys** reported
+*"offered no host key"*; **Fetch from server** on the connection showed
+*"Internal server error"*; a session was refused for having no pinned key, and
+there was no key to pin.
+
+**Root cause — three layers.**
+
+| # | Defect | Effect |
+| - | ------ | ------ |
+| 1 | The backend built `strata-session` without its `ssh-rsa` feature (russh's `rsa`). It had been left off since v2.0.0 to keep the `rsa` crate (RUSTSEC-2023-0071) out of the build | russh lists RSA in its host-key preferences but cannot use them, so a host offering **only** RSA keys shares no host-key algorithm with Strata and negotiation fails before any key is offered |
+| 2 | russh's defaults also leave out SHA-1 key exchange and MACs, which older IOS images require | Even with RSA, some devices would still fail to negotiate |
+| 3 | `discover_host_key` discarded the connect error and reported *"offered no host key"*; the read-one endpoint mapped any failure to `AppError::Internal`, a `500` whose client text is *"Internal server error"* | The operator could not see the cause |
+
+The comment that kept RSA off was also out of date: `rsa 0.10.0-rc.18` has
+been compiled into the backend since v2.0.0 through the RDP stack (`picky`,
+`sspi`), so it was already present, with its own documented suppression.
+
+**Fix.**
+
+- The backend enables `strata-session/ssh-rsa`. russh's `rsa` dependency is
+  pinned to `=0.10.0-rc.18`, the version already compiled, so **no crate is
+  added** and `Cargo.lock` is unchanged. The default (`Algorithms::Modern`)
+  accepts `rsa-sha2-256`/`rsa-sha2-512` but not `ssh-rsa` (SHA-1 signatures).
+- `ssh-legacy-algorithms = true` selects `Algorithms::Legacy`: `ssh-rsa`,
+  `ecdh-sha2-nistp256/384/521`, `diffie-hellman-group14-sha1`,
+  `diffie-hellman-group-exchange-sha1`, `diffie-hellman-group1-sha1`,
+  `hmac-sha1(-etm)`, `aes128-cbc`, `aes256-cbc` — inserted **after** the modern
+  algorithms (and before the `ext-info-c`/strict-kex markers), so a host that
+  supports both negotiates the modern set. Applies to the session, its SFTP
+  connection, the survey and **Fetch from server**.
+- `map_connect_error` turns russh's `NoCommonAlgo` into *"no {key exchange |
+  host key | cipher | MAC} algorithm in common with the host, which offers …"*
+  and, when legacy algorithms are off, adds *"enable \"Allow legacy SSH
+  algorithms\" on the connection"*. `discover_host_key` now returns it. The
+  read-one endpoint returns `400` with that text, and accepts `?legacy=` so the
+  form can try the checkbox before saving.
+
+The survey row that *timed out* is a different problem (no SSH answer within
+10 s) and is not addressed by this change.
+
+### Added — per-connection SSH host-key verification modes
+
+`extra.host-key-policy` (UI: **Host Key Verification**):
+
+| Value | Behaviour | Audit |
+| ----- | --------- | ----- |
+| absent / `pinned` | Unchanged: approved keys only; refused with none | — |
+| `tofu` | No key pinned: the session accepts the presented key and `pin_first_host_key` stores it in `extra.host-key` **only if still empty** (one conditional `UPDATE`, so concurrent first sessions cannot overwrite each other). Afterwards identical to `pinned` | `connection.host_key_pinned` `{ connection_id, hostname, algorithm, fingerprint, method }`, actor = connecting user |
+| `none` | `HostKeyPolicy::AcceptAny`; stored pins ignored | `connection.host_key_unverified` per session, with the key seen |
+| anything else | `pinned` (fails closed) | — |
+
+Engine: `HostKeyPolicy` gains `AcceptAny`; `HostKeyChecker` records the
+presented key under every policy and `SshEngine::presented_host_key()`
+exposes it, which is how the backend pins or audits without a second
+connection. SFTP to the session's own host follows the session's mode; on a
+TOFU first connection it is held to the key the session itself saw. Preflight
+refuses only `pinned` with nothing pinned; its message now names both ways
+forward.
+
+UI: the SSH section of the connection form (create and edit) has **Host Key
+Verification** with an explanation of each risk and **Allow legacy SSH
+algorithms**; SSH AD sync sources have the same two under *Connection
+Defaults → SSH Host Keys* (neither is a per-host pin, so both follow the
+defaults on every sync). The Fleet Manager shows **Unverified** (security
+alert, new `host_key_unverified` in `GET /api/admin/connections/summary`,
+excluded from `unpinned`), **TOFU** until the first pin, and **Legacy SSH**.
+
+**Rejected.** Making trust-on-first-use a separate discovery connection
+before each session (doubles connections to devices with few VTY lines);
+a gateway-wide switch (one setting would silently de-authenticate every
+host); turning legacy algorithms on for everyone.
+
 ### Added — the capacity card says whether CPU or memory sets the recommended maximum
 
 > *"I definitely think we should say if it's CPU or memory setting the max
@@ -34,6 +140,88 @@ dependency change.
 serialisation test. Frontend: two new `SessionsTab` cases (CPU-limited label
 and per-resource figures; memory-limited label and warning); `AdminSettings`
 and `HealthTab` suites, 233 tests.
+
+### Fixed — the connections list never refreshed a host's reachability
+
+> *"when items are unreachable in the connections list, it correctly blocks
+> the connect button. However, this never automatically refreshes to the user
+> has to leave the page and go back to the page for it to update the connect
+> button and the UI so they can press connect."*
+
+**Cause.** The background health check re-probes every connection every
+2 minutes and writes any change at once, but **My Connections** read
+`health_status` only when it loaded its rows. A host that came back stayed
+**Unreachable**, with **Connect** disabled, until the page was reopened.
+Reloading the listing on a timer was rejected: `reload()` discards the rows
+of open folders, so folder view would collapse and flicker every cycle.
+
+**Fix.** [`useDashboardConnections`](frontend/src/hooks/useDashboardConnections.ts)
+now polls every 30 seconds (`HEALTH_REFRESH_MS`), and immediately when the tab
+becomes visible, for the status of the rows it has loaded — the page, open
+folders and recents — using the existing role-scoped
+`GET /api/user/connections/page?ids=…` (`getMyConnectionsByIds`, 200 ids per
+request). Only `health_status` and `health_checked_at` are patched into the
+rows, and only rows that changed are replaced, so nothing re-renders when
+nothing changed. It does not poll while the tab is hidden. A recovered host
+now re-enables **Connect** within about 2½ minutes (one probe pass plus one
+poll) without leaving the page.
+
+**Scope & safety.** Frontend only; no API, schema or environment change.
+Access is unchanged: the `ids` filter returns only connections the caller's
+role can open.
+
+**Testing.** New `useDashboardConnections.test.ts`: a host reported online
+after one interval is patched into the page rows without refetching the
+listing; no request is made while the tab is hidden. `Dashboard` suite
+passes (65 tests across both files).
+
+### Scope & safety
+
+| Surface | Change |
+| ------- | ------ |
+| Schema | None |
+| REST API | `POST /api/admin/connections/{id}/host-key`: optional `?legacy=`; a failed read is `400` with the reason (was `500`). `GET /api/admin/connections/summary`: new `host_key_unverified`, which is no longer counted in `unpinned`. `GET /api/admin/metrics`: new `native_capacity_by_cpu`, `native_capacity_by_memory`, `native_limited_by` |
+| Connection parameters | New `extra` keys `host-key-policy` and `ssh-legacy-algorithms`. Absent means the previous behaviour |
+| Audit events | New `connection.host_key_pinned`, `connection.host_key_unverified` |
+| Environment | None |
+| Dependencies | russh `rsa` feature enabled; resolves to the `rsa 0.10.0-rc.18` already compiled — `Cargo.lock` unchanged except the version bump. `osv-scanner.toml` and `backend/.cargo/audit.toml` justifications for RUSTSEC-2023-0071 extended to the SSH use |
+| Behaviour | RSA host keys (SHA-2 signatures) now accepted by default. Existing SSH connections stay **Pinned**; nothing is relaxed until an administrator chooses a mode |
+| Trust boundaries | Backend ↔ SSH target, post-authentication. `tofu` and `none` weaken it per connection by explicit choice, both audited and flagged — see [security.md § SSH host-key modes](docs/security.md#ssh-host-key-modes-v236) |
+
+### Testing
+
+- Backend (Rust 1.99): `cargo fmt --check`, `cargo clippy --all-targets
+  --all-features -D warnings` for `strata-backend` and `strata-session`,
+  backend unit suite **1402 passed**, session engine **277 passed**. New:
+  `accept_any_is_never_empty_and_admits_every_key`,
+  `modern_algorithms_take_rsa_keys_but_not_sha1`,
+  `legacy_algorithms_follow_the_modern_ones`,
+  `a_failed_negotiation_names_what_is_missing_and_the_fix`,
+  `trust_on_first_use_admits_the_first_key_then_holds_to_the_pin`,
+  `unverified_accepts_any_key_even_when_one_is_pinned`,
+  `an_unknown_mode_fails_closed`, `same_host_file_transfer_follows_the_session_mode`,
+  `legacy_algorithms_are_opt_in`, `the_scarcer_resource_sets_the_recommendation`.
+- Frontend: `tsc --noEmit`, ESLint; new `SshSections.test.tsx` (both controls
+  on a manually created SSH connection; Fetch passes the unsaved legacy
+  choice), `useDashboardConnections.test.ts`, API and Fleet Manager suites.
+- **Not exercised live:** no Cisco IOS device is reachable from CI or the
+  development host, so the algorithm sets are verified by unit tests against
+  russh's real name lists, not a handshake with a switch. Confirm on the first
+  device with **Fetch from server**.
+
+### Deploy
+
+```bash
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+⚠ Recreating the backend ends live sessions. **No migration, no `.env`
+change.** Then, for network devices: tick **Allow legacy SSH algorithms** where
+**Fetch from server** asks for it, and approve the key (or choose **Trust on
+first use**). See
+[deployment.md § v2.3.5 → v2.3.6](docs/deployment.md#v235--v236-ssh-host-key-modes-and-network-devices-capacity-limiter-live-reachability).
 
 ## [2.3.5] — 2026-10-05
 

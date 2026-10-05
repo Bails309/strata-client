@@ -2626,6 +2626,41 @@ the limiting one, and words the over-75% warning for that resource: add
 vCPUs (CPU is advisory — sessions slow down) or add memory (memory is
 enforced — sessions are refused).
 
+#### Measured session cost (v2.3.7)
+
+The 0.15 CPU and two-framebuffer figures were guesses. A busy hour in
+production measured ~0.04 CPU and ~50 MB per session, so the card
+under-stated CPU headroom by about 3.5× and admission reserved about half
+what a session really used.
+[`services/capacity.rs`](../backend/src/services/capacity.rs) now samples
+the backend container every 30 s (`capacity_sampler` worker):
+
+| Reading | Source (first that works) |
+| ------- | ------------------------- |
+| CPU time | cgroup v2 `cpu.stat` `usage_usec`, cgroup v1 `cpuacct.usage`, the process's accumulated CPU time |
+| Memory | cgroup v2 `memory.stat` `anon`, cgroup v1 `total_rss`, the process's RSS |
+
+The cgroup is preferred so a web session's Chromium and Xvnc count toward
+its cost; anonymous memory excludes reclaimable page cache. From each
+reading with at least 5 sessions it derives, as exponentially weighted
+averages (α = 0.1, about five minutes):
+
+- **CPU per session** — CPU-time delta ÷ elapsed ÷ sessions. A counter that
+  goes backwards (container restart) is skipped, not read as negative.
+- **Memory per session** — (memory − idle baseline − replay history) ÷
+  sessions. The baseline is the lowest reading with no sessions (256 MiB
+  until one is seen); replay history has its own budget.
+- **Calibration** — measured memory ÷ the average *uncalibrated* estimate,
+  clamped to 1–4. `routes/tunnel.rs` multiplies each admission estimate by
+  it (`capacity::calibrate`), so reservations grow to match reality but
+  never shrink below the formula. Reservations are divided by the current
+  factor before comparison, so the factor does not chase itself.
+
+`get_metrics` uses measured CPU (floor 0.01) in place of 0.15, and for
+memory the larger of the measured figure and what admission reserves, so
+the card never promises a session the budget would refuse. Below 5
+sessions since start nothing changes and `native_measured` is `false`.
+
 ### Shared state across replicas
 
 Everything a second backend replica must agree on is now in PostgreSQL:

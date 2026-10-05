@@ -66,6 +66,11 @@ For large deployments, consider:
 > **Corrected in v2.3.5:** earlier editions of this note said the figure was
 > "measured from what the engine allocates, not estimated". It is a fixed
 > formula applied at admission; the measured figure is **Backend Memory**.
+>
+> **Since v2.3.7** the backend also measures what its sessions use. Once it
+> has run 5 at once, the card shows measured CPU and memory per session,
+> and admission scales its estimate up (never down, at most 4×) when
+> sessions use more than the formula predicts.
 
 ## Quick Start (Development / Evaluation)
 
@@ -621,6 +626,29 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 ## Upgrading
 
 ### Version-specific upgrade notes
+
+#### v2.3.6 → v2.3.7 (measured session capacity)
+
+Rebuild the backend and frontend images. **No migration, no `.env` change.**
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+⚠ Recreating the backend ends live sessions.
+
+| Change | Who notices |
+| ------ | ----------- |
+| The capacity card's per-session CPU and memory are measured once 5 sessions run at once; it says *measured* or *estimated* | Admins reading **Admin → Sessions** — expect **Max Recommended** to change, and possibly **Limited by** to flip |
+| Admission reserves up to 4× its formula when sessions are measured to use more | Hosts near their memory budget: refusals arrive earlier than on v2.3.6, but before the host itself runs short |
+| `GET /api/admin/metrics` gains `native_cpu_per_session` and `native_measured`; `native_ram_per_session_mb` and `native_capacity_by_cpu` may now come from measurement | Monitoring that alerts on these figures |
+
+The figures start as estimates after every restart and settle after a few
+minutes of load. Compare before and after in a busy hour, not straight after
+the upgrade.
 
 #### v2.3.5 → v2.3.6 (SSH host-key modes and network devices, capacity limiter, live reachability)
 
@@ -1599,21 +1627,32 @@ with **Session Limit Reached** before any credential is checked out or the
 target contacted.
 
 **CPU — advisory.** The **Max Recommended** figure on the admin **Sessions**
-tab is the lower of the memory budget ÷ the average live reservation and
-70% of the CPUs the backend can use ÷ 0.15 CPU per session. Nothing is
+tab is the lower of the memory budget ÷ the memory per session and
+70% of the CPUs the backend can use ÷ the CPU per session. Nothing is
 refused on CPU grounds; treat a backend that sits near the CPU figure as
 due for more cores.
+
+**Measured, not guessed (v2.3.7).** Once the backend has run 5 or more
+sessions at once, both per-session figures come from the container's own
+CPU and memory use, averaged over about five minutes, and the card reads
+**RAM / Session (measured)** with a line such as *(measured: 0.04 CPU,
+50 MB per session)*. Until then it uses the estimates (0.15 CPU; the
+admission formula for memory) and says *estimated*. If sessions use more
+memory than the formula predicts, admission reserves proportionally more
+for each new session (up to 4×), so the budget refuses before the host
+runs out rather than after. Figures settle after a few minutes of steady
+load; read them in a busy hour.
 
 **Which one to scale.** The card says **Limited by CPU** or **Limited by
 Memory** under Max Recommended, and the host-resources line shows how many
 sessions each resource allows on its own (e.g. *8 vCPUs → 37 sessions*,
 *15.6 GB RAM → 470 sessions*), highlighting the limiting one. Add that
-resource to raise capacity; adding the other changes nothing. To check the
-CPU estimate against reality, divide the backend's `CPU %` from
-`docker stats` by 100 and by the session count: a busy-hour figure well
-under 0.15 cores per session means the CPU recommendation is cautious.
+resource to raise capacity; adding the other changes nothing.
 
-Rule of thumb for 1080p RDP sessions with no container limit:
+Rule of thumb for 1080p RDP sessions with no container limit, using the
+**estimates** (a backend that has measured its sessions will show its own
+figures — in production CPU was ~0.04 per session, so the CPU column is
+cautious, and memory ~50 MB, so the admission column is optimistic):
 
 | Host | Memory budget | Admission limit | CPU guidance |
 | ---- | ------------- | --------------- | ------------ |

@@ -33,7 +33,7 @@ rebuild for weekly.
 | Control | Before | v2.0.0 |
 | ------- | ------ | ------ |
 | **RDP NLA** | The connector advertised CredSSP *and* the legacy TLS security layer, so a target could negotiate down to a layer where the RDP connection completes **before any credential is checked** — authentication moving to an in-session login screen. A live test against a non-NLA xrdp produced a healthy, apparently authenticated session from a deliberately wrong password. | CredSSP is advertised **only**. A target that will not do NLA is refused. This is also why NLA cannot be optional: RDP certificates are self-signed as a matter of course, so it is CredSSP's binding to the server's public key that authenticates the target at all. |
-| **SSH host keys** | Verification depended on connection configuration. | Mandatory. The engine accepts a list of SHA-256 fingerprints and nothing else — there is deliberately no accept-anything mode, because an SSH gateway that skips host-key verification is a man-in-the-middle waiting to happen. Every key a host offers can be pinned, since which one is used comes out of negotiation. |
+| **SSH host keys** | Verification depended on connection configuration. | Mandatory by default. The engine accepts a list of SHA-256 fingerprints, and a connection with none pinned is refused. Every key a host offers can be pinned, since which one is used comes out of negotiation. **Changed in v2.3.6:** an administrator can opt a single connection into trust on first use or no verification — see [SSH host-key modes](#ssh-host-key-modes-v236). |
 
 **Certificate trust for RDP.** A connection can verify its target against
 an uploaded CA bundle or a pinned SHA-256 fingerprint, with precedence
@@ -41,6 +41,39 @@ an uploaded CA bundle or a pinned SHA-256 fingerprint, with precedence
 target's certificate over the very channel it is meant to protect and is
 deliberately **not** verified — it is the starting point for a human
 decision, not proof of anything.
+
+### SSH host-key modes (v2.3.6)
+
+Host-key pinning stays the default and the recommendation. Version 2.3.6
+adds two per-connection opt-outs, because a fleet of network devices that
+cannot be pinned one by one otherwise ended up unreachable or managed
+outside the gateway altogether. Both are set by someone with
+`can_manage_connections`, on the connection or as an AD sync default, and
+both are visible and audited:
+
+| Mode (`host-key-policy`) | What is authenticated | Exposure | Evidence |
+| ------------------------ | --------------------- | -------- | -------- |
+| `pinned` (default) | Every session, against approved keys | None beyond the approval itself | `connection.host_key_approved` |
+| `tofu` | Every session after the first | An attacker on the path at the **first** connection is pinned in place of the real host, and sees that session's credentials | `connection.host_key_pinned` with the key and the user whose session pinned it; **TOFU** fleet badge until then |
+| `none` | Nothing | Every session can be intercepted: credentials, keystrokes and output | `connection.host_key_unverified` on every session; **Unverified** security alert on the Fleet Manager and in `host_key_unverified` |
+
+The trust boundary is the network between the backend and the target, and
+the code path is post-authentication (a Strata user opening a session).
+Unrecognised mode values fail closed to `pinned`. A trust-on-first-use pin
+is written only while the connection still has no key, so two first sessions
+cannot replace each other's pin, and a changed key afterwards is refused
+exactly as for an approved key. To re-pin after a genuine host rebuild,
+clear the key (**Clear pinned host key** in the fleet menu) or approve the
+new one.
+
+**Algorithms.** RSA host keys with SHA-2 signatures are accepted by default
+since v2.3.6. The per-connection `ssh-legacy-algorithms` adds `ssh-rsa`
+(SHA-1 signatures), SHA-1 and NIST-curve key exchange (including the 1024-bit
+`diffie-hellman-group1-sha1`), `hmac-sha1` and AES-CBC. They are offered
+**after** the modern algorithms, so a host supporting both still negotiates
+the modern set; enabling the flag on a modern host changes nothing on the
+wire. These algorithms are weak against a well-resourced attacker on the
+path; enable the flag only for devices that need it.
 
 **Controls removed rather than reimplemented,** each because it widened
 the gateway's exposure for a capability that could be met another way:
@@ -641,6 +674,8 @@ against the production database to measure before changing the design.
 | `connection.host_keys_surveyed` | Admin ran the SSH host-key survey. `details`: `{ count, differs }` |
 | `connection.host_key_read`      | Admin read one SSH target's host key for review. `details`: `{ id, hostname, fingerprint }` |
 | `connection.host_key_approved`  | Admin stored a reviewed SSH host key. `details`: `{ id, fingerprint }` |
+| `connection.host_key_pinned`    | **(v2.3.6)** A trust-on-first-use connection pinned the key its first session saw; actor is the connecting user. `details`: `{ connection_id, hostname, algorithm, fingerprint, method }` |
+| `connection.host_key_unverified` | **(v2.3.6)** A session accepted a host key without verification (`host-key-policy` = `none`). `details`: `{ connection_id, hostname, algorithm, fingerprint }` |
 | `connection.certificate_read`   | Admin read one RDP target's TLS certificate for review. `details`: `{ id, hostname, fingerprint }` |
 | `connection_folder.created`     | Folder created. `details`: `{ id, name }` (`id` added in v2.2.0) |
 | `connection_folder.updated`     | Folder renamed or moved. `details`: `{ id, name, parent_id }`. **Added in v2.2.0** — renames and moves were previously unaudited |
@@ -1901,6 +1936,8 @@ When a gate fires, the finding is classified before anything is changed:
 > **Corrected after v2.1.1.** This entry previously called `rsa` a lockfile artefact that is never compiled. That stopped being true when the RDP engine arrived in v2.0.0: `rsa 0.10.0-rc.18` **is** compiled into `strata-backend` through `picky`, `sspi` and `winscard` under the vendored `ironrdp-connector` and `sspi` forks. (`rsa 0.9.10` is still locked but not compiled for the Linux target — `jsonwebtoken` uses `aws_lc_rs`, and `sqlx` excludes `sqlx-mysql`.)
 
 The suppression now rests on reachability rather than absence. The Marvin attack recovers plaintext by timing RSA PKCS#1 v1.5 **decryption with a private key**. Strata never hands these crates an RSA private key: the RDP engine constructs only `Credentials::UsernamePassword` (NTLM, or Kerberos with symmetric encryption types), so the paths that would decrypt with `rsa` — PKINIT, PKU2U, smart-card credentials — are never reached. The suppression is removed when `rsa` ships a constant-time release, and **must be revisited** if smart-card or certificate-based RDP authentication is ever implemented.
+
+**Since v2.3.6** the SSH engine uses the same `rsa 0.10.0-rc.18` (russh's `rsa` feature) so it can reach devices that present only RSA host keys; no new crate was added. Verifying a host's RSA signature is a **public-key** operation and outside the attack. An administrator-supplied RSA **user** key signs once per login, and the attack needs a very large number of timed private-key operations observed by the attacker, which one signature per session to the target being logged in to does not provide.
 
 **`RUSTSEC-2023-0089` — `atomic-polyfill` is unmaintained** (informational; no vulnerability). Locked via `sspi[scard]` → `winscard` → `iso7816` → `heapless 0.7`, and not compiled for the Linux target. No `winscard` / `iso7816` release moves to `heapless 0.8`, which dropped the shim, so it cannot be updated away. Suppressed in both `osv-scanner.toml` and `backend/.cargo/audit.toml`; the OSV entry was missing until after v2.1.1, which left it counted against the OpenSSF Scorecard `Vulnerabilities` check.
 

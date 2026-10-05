@@ -622,6 +622,44 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v2.3.5 → v2.3.6 (SSH host-key modes and network devices, capacity limiter, live reachability)
+
+Rebuild the backend and frontend images. **No migration, no `.env` change.**
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+⚠ Recreating the backend ends live sessions.
+
+| Change | Who notices |
+| ------ | ----------- |
+| SSH hosts with only RSA host keys (e.g. Cisco switches) can now be reached; **Allow legacy SSH algorithms** adds SHA-1/CBC for older devices | Admins of network devices that showed *"offered no host key"* |
+| **Host Key Verification** per SSH connection: Pinned (default), Trust on first use, Don't verify | Admins of SSH connections and SSH AD sync sources |
+| **Fetch from server** reports why a key could not be read instead of *"Internal server error"* | Admins |
+| The capacity card says **Limited by CPU / Memory** | Admins with `can_manage_system` |
+| **My Connections** updates reachability every 30 s without leaving the page | Everyone |
+
+Nothing changes for existing connections: every SSH connection stays
+**Pinned** until an administrator chooses otherwise.
+
+**Bringing network devices in.** For each device, or once on its AD sync
+source under *Connection Defaults → SSH Host Keys*:
+
+1. Tick **Allow legacy SSH algorithms** if the device is older (the error
+   from **Fetch from server** says so when it is needed).
+2. Either click **Fetch from server** and **Approve** the key (recommended),
+   or set **Host Key Verification** to **Trust on first use**, so the first
+   connection pins it.
+
+**Verify post-upgrade:** **Admin → Connections → Verify Host Keys** no longer
+reports *"offered no host key"*; any remaining failure names the missing
+algorithm. Audit log entries `connection.host_key_pinned` and
+`connection.host_key_unverified` show what the new modes accepted.
+
 #### v2.3.4 → v2.3.5 (capacity follows the host, refusals are shown, russh 0.64.1)
 
 Rebuild the backend and frontend images and recreate the backend so the new

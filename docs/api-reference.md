@@ -926,7 +926,7 @@ List all remote connections.
 ]
 ```
 
-`health_status` is one of `"online"`, `"offline"`, or `"unknown"` (not checked yet, nothing to probe, or not confirmed for 15 minutes). The background health check probes every connection every 2 minutes; with several backend replicas, one of them runs each pass. `health_checked_at` is when the current status was last confirmed: an unchanged status is written again only every 5 minutes. **(Unreleased note)** Strata's dashboard keeps these current by re-requesting the rows it is showing with the `ids` filter every 30 seconds while the tab is visible; a client doing the same should poll no faster than that, since the value only changes once per 2-minute pass.
+`health_status` is one of `"online"`, `"offline"`, or `"unknown"` (not checked yet, nothing to probe, or not confirmed for 15 minutes). The background health check probes every connection every 2 minutes; with several backend replicas, one of them runs each pass. `health_checked_at` is when the current status was last confirmed: an unchanged status is written again only every 5 minutes. **(v2.3.6 note)** Strata's dashboard keeps these current by re-requesting the rows it is showing with the `ids` filter every 30 seconds while the tab is visible; a client doing the same should poll no faster than that, since the value only changes once per 2-minute pass.
 
 **Credential extras.** `password`, `private-key`, `passphrase`, `sftp-password`, `sftp-private-key` and `sftp-passphrase` are sealed with Vault on save and returned as `"********"` by list, create and update. Sending `"********"` back keeps the stored value, an empty string clears it, and a new value requires Vault to be configured (`400` otherwise).
 
@@ -982,8 +982,10 @@ TCP-probe one connection now, instead of waiting for the next 2-minute sweep, an
 
 #### Host-key and certificate discovery (v2.0.0; documented v2.3.2)
 
-The native engine pins SSH host keys and, optionally, RDP certificates, with
-no trust-on-first-use. These four endpoints let an administrator read what a
+The native engine pins SSH host keys and, optionally, RDP certificates. Since
+v2.3.6 an SSH connection can instead opt into trust on first use or no
+verification (see [SSH host-key parameters](#ssh-host-key-parameters-v236)).
+These four endpoints let an administrator read what a
 target presents and approve it, instead of obtaining fingerprints by hand.
 All require `can_manage_connections`. A key or certificate read over the
 network is returned for a **human decision** and never stored by the read
@@ -993,6 +995,28 @@ probe an arbitrary address.
 
 Stored values live in the connection's `extra` and, since v2.3.2, survive
 AD sync re-runs (see [Connection Defaults](#connection-defaults)).
+
+##### SSH host-key parameters (v2.3.6)
+
+Two `extra` keys on an `ssh` connection (also settable as AD sync
+`connection_defaults`) control how the engine authenticates the target:
+
+| Key | Values | Behaviour |
+| --- | ------ | --------- |
+| `host-key-policy` | absent / `pinned` (default) | Only a key in `host-key` or `host-key-fingerprint` is accepted. With neither, the session is refused before the target is dialled |
+| | `tofu` | Trust on first use. With no key pinned, the first session accepts the key presented, stores it in `host-key` (only if still empty, so concurrent first sessions cannot overwrite each other) and audits `connection.host_key_pinned`. From then on it behaves as `pinned` |
+| | `none` | Any key is accepted. Every session audits `connection.host_key_unverified` with the key seen. Any stored pin is ignored |
+| | anything else | Treated as `pinned` (fails closed) |
+| `ssh-legacy-algorithms` | `true` | Also offers `ssh-rsa` host-key signatures, `diffie-hellman-group14-sha1`, `diffie-hellman-group-exchange-sha1`, `diffie-hellman-group1-sha1`, `ecdh-sha2-nistp256/384/521`, `hmac-sha1(-etm)` and `aes128/256-cbc`, after the modern algorithms. For network devices such as older Cisco IOS |
+
+RSA host keys signed with SHA-2 (`rsa-sha2-256`, `rsa-sha2-512`) are accepted
+without `ssh-legacy-algorithms` since v2.3.6; before that, a host offering only
+RSA keys could not be reached at all. An SFTP transfer to the session's own
+host follows the same policy and algorithms; on the trust-on-first-use first
+connection it is held to the key the session itself was shown.
+
+The fleet badges are **HostKey** (pinned), **TOFU** (trust on first use, not
+yet pinned), **Unpinned** and **Unverified** (`none`), plus **Legacy SSH**.
 
 ##### `POST /api/admin/connections/host-keys` — survey every SSH host
 
@@ -1027,7 +1051,13 @@ in `extra.host-key`. Nothing is stored. No request body.
 
 `extra.host-key` may hold several keys, comma- or newline-separated; each is
 fingerprinted for the comparison. Fingerprints held only in
-`host-key-fingerprint` are not consulted by the survey.
+`host-key-fingerprint` are not consulted by the survey. Since v2.3.6 each
+host is read with the connection's own `ssh-legacy-algorithms` setting, and
+an `unreachable` row's `error` names what negotiation was missing — for
+example *"no key exchange algorithm in common with the host, which offers
+diffie-hellman-group14-sha1; if this is an older network device, enable
+\"Allow legacy SSH algorithms\" on the connection"* — where it used to say
+*"offered no host key"*.
 
 Audited as `connection.host_keys_surveyed` with `{ count, differs }`.
 
@@ -1059,6 +1089,10 @@ as `connection.host_key_approved` with `{ id, fingerprint }`.
 
 ##### `POST /api/admin/connections/{id}/host-key` — read one SSH host key
 
+**Query** (v2.3.6, optional): `legacy=true|false` overrides the connection's
+stored `ssh-legacy-algorithms`, so the connection form can try the setting
+before it is saved.
+
 **Response** `200 OK`
 
 ```json
@@ -1069,10 +1103,9 @@ Audited as `connection.host_key_read` with `{ id, hostname, fingerprint }`.
 
 | Status | When |
 | ------ | ---- |
-| `400` | *"host keys apply to ssh connections, not {protocol}"*, or the stored port is invalid |
+| `400` | *"host keys apply to ssh connections, not {protocol}"*, or the stored port is invalid. **(v2.3.6)** Also *"could not read the host key: …"* when the key could not be read within 10 seconds — unreachable host, refused connection, or no algorithm in common, with the reason. This was a `500` reading *"Internal server error"*, which hid the cause |
 | `403` | Caller lacks `can_manage_connections` |
 | `404` | No such connection, or it is soft-deleted |
-| `500` | The key could not be read within 10 seconds (unreachable host, refused connection, key-exchange failure) |
 
 ##### `POST /api/admin/connections/{id}/certificate` — read one RDP certificate
 
@@ -1142,13 +1175,14 @@ Whole-fleet counts for the telemetry strip. Requires `can_manage_connections`.
   "alert_count": 12,
   "legacy_sec": 3,
   "unpinned": 8,
+  "host_key_unverified": 1,
   "cert_ignored": 2,
   "last_sweep": "2026-09-25T10:02:00Z",
   "protocols": [{ "protocol": "rdp", "count": 900 }]
 }
 ```
 
-`alert_count` counts connections with at least one alert, so it can be less than the sum of `legacy_sec`, `unpinned` and `cert_ignored`.
+`alert_count` counts connections with at least one alert, so it can be less than the sum of `legacy_sec`, `unpinned`, `host_key_unverified` and `cert_ignored`. **(v2.3.6)** `host_key_unverified` counts SSH connections with `host-key-policy` = `none`; those are no longer counted in `unpinned`, which still includes trust-on-first-use connections awaiting their first key.
 
 #### `POST /api/admin/connections/move` (v2.3.0)
 
@@ -1439,9 +1473,9 @@ Aggregate metrics across all active tunnel sessions.
 | `backend_memory_bytes`      | integer | **(v2.3.5)** Resident memory of the backend process, which hosts every native session (Chromium/Xvnc children for web sessions are separate processes and not included) |
 | `native_ram_per_session_mb` | integer | **(v2.3.5)** Average admission estimate of the live sessions (protocol and display size); a 1080p RDP session when none are running (was a fixed 1080p figure) |
 | `native_recommended`        | integer | **(v2.3.5)** Sessions this backend could serve: the lower of the admission budget ÷ `native_ram_per_session_mb` and a CPU estimate (0.15 CPU per session, 30% headroom). Was sized from 70% of host RAM, which over-reported capacity under a container limit |
-| `native_capacity_by_cpu`    | integer | **(Unreleased)** Sessions the CPUs allow: `system_cpu_cores` × 0.70 ÷ 0.15. **Advisory** — CPU never refuses a session; past this figure sessions slow down |
-| `native_capacity_by_memory` | integer | **(Unreleased)** Sessions the admission budget allows: `memory.sessions_limit_bytes` ÷ `native_ram_per_session_mb`. **Enforced** — a session that does not fit is refused |
-| `native_limited_by`         | string  | **(Unreleased)** `"cpu"` or `"memory"`: which of the two sets `native_recommended` (the smaller; `"cpu"` on a tie). Tells you what to add to the host to raise capacity |
+| `native_capacity_by_cpu`    | integer | **(v2.3.6)** Sessions the CPUs allow: `system_cpu_cores` × 0.70 ÷ 0.15. **Advisory** — CPU never refuses a session; past this figure sessions slow down |
+| `native_capacity_by_memory` | integer | **(v2.3.6)** Sessions the admission budget allows: `memory.sessions_limit_bytes` ÷ `native_ram_per_session_mb`. **Enforced** — a session that does not fit is refused |
+| `native_limited_by`         | string  | **(v2.3.6)** `"cpu"` or `"memory"`: which of the two sets `native_recommended` (the smaller; `"cpu"` on a tie). Tells you what to add to the host to raise capacity |
 | `memory.sessions_reserved_bytes` | integer | **(v2.3.0)** Memory reserved by admitted sessions, estimated from protocol and display size |
 | `memory.sessions_limit_bytes` | integer | The admission budget: `STRATA_SESSION_MEMORY_BUDGET_MB`, else three quarters of the container (or host) memory less the replay budget. **(v2.3.5)** Re-read on every call and every admission, so it follows a resized host or container |
 | `memory.sessions_refused` | integer | Sessions refused since start because the budget or a per-user limit was reached |
@@ -3878,6 +3912,8 @@ required, but the response intentionally omits the PEM bytes.
 | `connection.host_keys_surveyed`   | SSH host-key survey run. `details`: `{ count, differs }` |
 | `connection.host_key_read`        | One SSH host key read for review. `details`: `{ id, hostname, fingerprint }` |
 | `connection.host_key_approved`    | Reviewed SSH host key stored. `details`: `{ id, fingerprint }` |
+| `connection.host_key_pinned`      | **(v2.3.6)** A trust-on-first-use connection pinned the key its first session was shown; the actor is the connecting user. `details`: `{ connection_id, hostname, algorithm, fingerprint, method: "trust_on_first_use" }` |
+| `connection.host_key_unverified`  | **(v2.3.6)** A session to a connection with verification off accepted a key without checking it. One per session. `details`: `{ connection_id, hostname, algorithm, fingerprint }` |
 | `connection.certificate_read`     | One RDP TLS certificate read for review. `details`: `{ id, hostname, fingerprint }` |
 | `role.updated`                    | Role saved. `details`: `{ id, name }` — changed flags are not recorded |
 | `role.deleted`                    | Role deleted. `details`: `{ id, name }` |

@@ -38,7 +38,7 @@ optionally scaled with round-robin sidecars. **None of that exists now.**
 | Location | `crates/strata-session`, linked into the backend binary |
 | Concurrency | One Tokio task per session. RDP ran on a dedicated thread with its own current-thread runtime until the `ironrdp` 0.17 upgrade, because `ironrdp-async` 0.7's connection future was not `Send`; since 0.10 made it `Send`, an RDP session is an ordinary `tokio::spawn` like the others |
 | RDP | `ironrdp` — CredSSP/NLA only, PNG/WebP-encoded damage regions, opt-in MS-RDPEGFX H.264 passthrough (v2.1.0), RDPSND audio paired with an empty RDPDR channel (v2.1.1), printable characters typed on the target's layout with a Unicode fallback (v2.3.1; Unicode-only in v2.1.1–v2.3.0), numeric keypad as keypad scancodes (v2.3.1), Display Control resize, CLIPRDR clipboard, Set Error Info codes translated for the user (v2.1.1) |
-| SSH | `russh` — interactive PTY, mandatory host-key pinning, key or password auth, keyboard-interactive |
+| SSH | `russh` — interactive PTY, host-key pinning by default with per-connection trust-on-first-use or no-verification (v2.3.6), RSA host keys and an opt-in legacy algorithm set for network devices (v2.3.6), key or password auth, keyboard-interactive |
 | VNC | `vnc-rs` — standard RFB security types, repeaters, reverse connections |
 | Kubernetes | native exec client over `v4.channel.k8s.io` with client-certificate auth |
 | File transfer | `russh-sftp`, decorating any protocol rather than being one |
@@ -202,7 +202,7 @@ The central orchestrator. Responsibilities:
 - **Config push** — generates `krb5.conf` (multi-realm), toggles recordings, manages SSO settings
 - **AD sync** — scheduled LDAP/LDAPS queries against Active Directory to discover and import computer accounts; supports simple bind and Kerberos keytab auth, custom CA certificates, multiple search bases per source, gMSA/MSA exclusion filters, and configurable connection defaults (RDP performance flags, session recording parameters, keyboard layout, and since v2.3.1 a stored Trusted CA that every synced RDP connection verifies its host against). Since v2.3.2 a sync replaces a connection's parameters with the defaults **except** the per-host trust pins the connection already holds (`host-key`, `host-key-fingerprint`, `sftp-host-key`, `cert-fingerprints`), so keys approved through **Verify Host Keys** survive re-syncs (`PER_HOST_PINS` / `merged_extra_sql()` in [`services/ad_sync.rs`](../backend/src/services/ad_sync.rs))
 - **Password management** — privileged account password checkout and rotation for AD-managed service accounts; configurable password generation policy, LDAP `unicodePwd` reset, Vault-sealed credential storage, approval workflows with explicit account-to-role scoping (each approval role is mapped to specific managed AD accounts), dedicated "Search Base OUs" for user discovery (allowing separate scoping from device discovery), **scheduled future-dated checkouts** (requests between now + 30 s and now + 14 days sit idle with no credential material until the scheduled moment, at which point the existing 60-second expiration worker activates them), **emergency approval bypass (break-glass)** per AD sync config — gated by `pm_allow_emergency_bypass`, requires ≥ 10-character justification, **hard-capped at 30 minutes** server-side, writes a dedicated `checkout.emergency_bypass` audit event, surfaces an ⚡ Emergency badge across Credentials and Approvals views, background workers for checkout expiration and zero-knowledge auto-rotation, requester username resolution for approver visibility, and decided-by tracking with self-approval detection
-- **Connection health checks** — background TCP probing of every connection's hostname:port every 2 minutes; results (online/offline/unknown) persisted and exposed via API for dashboard status indicators. The dashboard re-reads the status of the rows on screen every 30 seconds and when the tab becomes visible again (`useDashboardConnections`, via `GET /api/user/connections/page?ids=…`), patching them in place, so a host coming back online re-enables **Connect** within about 2½ minutes without leaving the page (Unreleased; before, the page showed the status it loaded with until it was reopened). Since v2.2.0 `POST /api/admin/connections/{id}/probe` runs the same check for one connection on demand (`health_check::probe_one`) and also returns the TCP connect latency; see [Admin console](#admin-console-fleet-folders-and-roles-v220)
+- **Connection health checks** — background TCP probing of every connection's hostname:port every 2 minutes; results (online/offline/unknown) persisted and exposed via API for dashboard status indicators. The dashboard re-reads the status of the rows on screen every 30 seconds and when the tab becomes visible again (`useDashboardConnections`, via `GET /api/user/connections/page?ids=…`), patching them in place, so a host coming back online re-enables **Connect** within about 2½ minutes without leaving the page (v2.3.6; before, the page showed the status it loaded with until it was reopened). Since v2.2.0 `POST /api/admin/connections/{id}/probe` runs the same check for one connection on demand (`health_check::probe_one`) and also returns the TCP connect latency; see [Admin console](#admin-console-fleet-folders-and-roles-v220)
 - **DNS configuration** — admin-configurable nameservers and search suffixes used by the session engine to resolve **target** hostnames in-process; applies to new sessions with no restart. Strata's own infrastructure lookups stay on Docker's embedded resolver. See [Target hostname resolution](#target-hostname-resolution-v200).
 - **Quick Share (file store)** — session-scoped temporary file CDN; files uploaded via multipart POST are stored on disk, each keyed by a random unguessable token. Download endpoint is unauthenticated (the token is the capability). Files are automatically cleaned up when the tunnel disconnects. Limits: 20 files per session, 500 MB each. The frontend Quick Share panel is **protocol-aware (v1.3.0+)**: SSH / Telnet sessions render the copy-snippet as `curl -fLOJ '<url>'` (paste-into-shell friendly); RDP / VNC / web kiosks render the bare HTTPS URL. A "Copy as" `Select` dropdown lets the operator override per-session: `URL`, `curl`, `wget --content-disposition`, or `Invoke-WebRequest -Uri … -OutFile … (Windows)`. **v1.12.0+:** every upload is streamed through a pluggable antivirus scanner before it lands in the session file store. Three backends ship (`off` default, `clamav` over the `clamd` INSTREAM TCP wire protocol against the opt-in bundled sidecar, and `command` for exec-driven engines like Defender / Sophos / ESET). Fail-closed by default; infected verdicts always reject; blocked uploads emit a `file.av_blocked` audit event with the signature name. See [av-scanning.md](av-scanning.md) and [ADR-0011](adr/ADR-0011-av-scanning.md). **v1.12.1+ refinements:** (1) `AppError::AvScanFailed` is now mapped to a friendly, engine-classified user-facing message via `Verdict::user_facing_block_message()` (infected → "Your file was blocked by the antivirus scanner (<signature>)", timeout → "the scanner did not respond in time", transport error → "the scanner is unreachable", missing signatures → "the scanner's signature database isn't loaded yet", everything else → a generic "the scanner returned an error"), so end users never see raw stderr or `clamd` panic strings. (2) The frontend exposes scanner health without `docker exec` via a new `GET /api/admin/health/av` endpoint and an **AV Health** card on the Admin → Health tab (engine, version, signature freshness, last-seen, error-since timestamp). (3) The Admin → **AV-Blocked Files** tab unifies inbound `file.av_blocked` audit rows and outbound `outbound_shares` rows with `av_scan_status IN ('infected','error')` into a single audit grid keyed off `GET /api/admin/files/av-blocked`. (4) The Quick Share outbound copy-snippet flow now renders an indeterminate **Awaiting AV scan** progress bar on each pending row, and the curl / PowerShell snippets explicitly disable `Expect: 100-continue` (`-H 'Expect:'` on curl, `$client.DefaultRequestHeaders.ExpectContinue = $false` on .NET `HttpClient`) so a stale-token 400 from the public ingest router doesn't swallow the byte-stream before the progress meter has anything to draw.
 - **Outbound Quick-Share (approval-gated, v1.11.0+)** — separate, audited pipeline for files **leaving** a remote session. Two ingest paths feed the same backend service:
@@ -677,6 +677,35 @@ behaves sensibly without admin configuration:
 > usable monospace face was found. `false` breaks SSH and Kubernetes
 > rendering outright, which is why it is surfaced on the Health page rather
 > than left to a log line.
+
+### SSH host keys and algorithms (v2.3.6)
+
+```mermaid
+flowchart LR
+    P[preflight] -->|pinned, no key| X[refused]
+    P --> C[SshEngine::connect]
+    C --> K{HostKeyChecker}
+    K -->|Fingerprints: match| OK[session]
+    K -->|Fingerprints: no match| R[refused: UnknownKey]
+    K -->|AcceptAny| OK
+    OK --> H[record_host_key]
+    H -->|tofu, first key| PIN[pin_first_host_key + connection.host_key_pinned]
+    H -->|none| AUD[connection.host_key_unverified]
+```
+
+| Piece | Where | Behaviour |
+| ----- | ----- | --------- |
+| `HostKeyMode` | [`session_engine.rs`](../backend/src/session_engine.rs) | Parsed from `host-key-policy`: `Pinned` (default and fallback), `TrustOnFirstUse`, `Unverified` |
+| `session_host_key_policy` | same | `Unverified` → `AcceptAny`; `TrustOnFirstUse` with no pin → `AcceptAny`; otherwise `Fingerprints(pins)` |
+| `HostKeyChecker` | [`engine/ssh/mod.rs`](../crates/strata-session/src/engine/ssh/mod.rs) | Records the presented key (`DiscoveredHostKey`) whatever the policy, so `SshEngine::presented_host_key()` can hand it back |
+| `record_host_key` / `pin_first_host_key` | `session_engine.rs` | After connect: a TOFU pin is a conditional `UPDATE … WHERE host-key and host-key-fingerprint are empty`; `none` audits every session |
+| `Algorithms::{Modern, Legacy}` | `engine/ssh/mod.rs` | `Modern` = russh defaults minus `ssh-rsa`; `Legacy` inserts SHA-1/NIST KEX before the extension markers and appends AES-CBC and `hmac-sha1` |
+| `map_connect_error` | `engine/ssh/mod.rs` | Turns `russh::Error::NoCommonAlgo` into *"no {kind} algorithm in common with the host, which offers …"*, with a hint to enable legacy algorithms when they are off |
+| SFTP | `sftp_host_key_policy` | Same host: the session's policy and algorithms; on a TOFU first connection, held to the key the session saw |
+
+The backend enables `strata-session`'s `ssh-rsa` feature (russh `rsa`),
+which reuses the `rsa 0.10.0-rc.18` already compiled for RDP; see
+[security.md](security.md#ssh-host-key-modes-v236).
 
 #### H.264 GFX reference-frame corruption (recovery path in v0.27.0)
 
@@ -2432,7 +2461,7 @@ getActiveSessions() ────┘   (health, policy     │
 
 | Piece | Behaviour |
 | ----- | --------- |
-| `fleetModel.policiesFor()` | Badges derived only from `extra` keys the engine honours: `security`, `auth-pkg`, `host-key`, `ignore-cert`, `read-only`, `disable-copy`, `disable-paste`. Alert tone for legacy RDP security, an unpinned SSH host key and an ignored certificate |
+| `fleetModel.policiesFor()` | Badges derived only from `extra` keys the engine honours: `security`, `auth-pkg`, `host-key`, `host-key-policy`, `ssh-legacy-algorithms`, `ignore-cert`, `read-only`, `disable-copy`, `disable-paste`. Alert tone for legacy RDP security, an unpinned or trust-on-first-use SSH host key, an unverified SSH host key (v2.3.6) and an ignored certificate |
 | `computeTelemetry()` | Total and protocol mix; reachability over **probed** connections only (`unknown` is excluded, not counted as down); alert count; sessions and distinct live users; latest `health_checked_at` |
 | Probe | `POST /api/admin/connections/{id}/probe`, at most **4** in flight from a client-side worker pool; the returned latency is shown in the health cell until the page reloads |
 | Bulk move | `PUT /api/admin/connections/{id}` per connection with `connectionPayload()`, which re-sends every field because the PUT replaces the row |

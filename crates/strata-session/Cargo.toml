@@ -112,12 +112,13 @@ tracing = { workspace = true }
 # current `ironrdp` would otherwise force us onto; see the version note
 # on the RDP dependencies below. 0.64 also enforces rekey read/time limits
 # (#766); its `legacy-ed25519-pkcs8-parser` removal changes nothing here,
-# because that opt-in feature was never enabled.
+# because that opt-in feature was never enabled. 0.64.1 fixes
+# GHSA-4wc5-f2rc-q74m (agent server; unreachable here, agent forwarding is declined).
 #
 # `ring` rather than the default `aws-lc-rs`: aws-lc is a C library, and
 # removing C from the session tier is the point of this crate. rustls
 # already standardises the workspace on ring.
-russh = { version = "0.64", optional = true, default-features = false, features = [
+russh = { version = "0.64.1", optional = true, default-features = false, features = [
     "ring",
     "flate2",
 ] }

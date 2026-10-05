@@ -30,6 +30,28 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.3.7",
+    subtitle:
+      "The capacity card measures what your sessions really use instead of relying on fixed estimates.",
+    sections: [
+      {
+        title: "Measured, not guessed",
+        description:
+          "Once five or more sessions run at the same time, the Native Engine Capacity card on Admin, Sessions works out CPU and memory per session from what the server actually uses, averaged over the last few minutes. It says whether its figures are measured or estimated.",
+      },
+      {
+        title: "A truer recommended maximum",
+        description:
+          "Sessions turned out to need much less CPU and more memory than assumed, so the recommended maximum and the Limited by CPU or Memory label now reflect your own server.",
+      },
+      {
+        title: "Safer admission",
+        description:
+          "If sessions need more memory than predicted, each new session reserves more, so the server refuses a session before it runs short rather than after. It never reserves less than before.",
+      },
+    ],
+  },
+  {
     version: "2.3.6",
     subtitle:
       "Switches and other network devices can be reached over SSH, each SSH connection can choose how its host key is verified, the capacity card says what to add, and My Connections notices when a host comes back.",

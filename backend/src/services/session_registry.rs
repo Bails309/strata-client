@@ -602,8 +602,29 @@ impl SessionRegistry {
             backend_memory_bytes: 0,
             native_ram_per_session_mb: 0, // placeholder — overridden by admin handler
             native_recommended: 0,        // placeholder — overridden by admin handler
+            native_capacity_by_cpu: 0,
+            native_capacity_by_memory: 0,
+            native_limited_by: CapacityLimit::Cpu,
             memory: MemoryMetrics::current(),
         }
+    }
+}
+
+/// The resource that sets the recommended session count.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CapacityLimit {
+    Cpu,
+    Memory,
+}
+
+/// The recommended session count and the resource that sets it.
+#[must_use]
+pub fn recommended_capacity(by_cpu: u32, by_memory: u32) -> (u32, CapacityLimit) {
+    if by_memory < by_cpu {
+        (by_memory.max(1), CapacityLimit::Memory)
+    } else {
+        (by_cpu.max(1), CapacityLimit::Cpu)
     }
 }
 
@@ -653,6 +674,12 @@ pub struct MetricsSummary {
     pub native_ram_per_session_mb: u32,
     /// Sessions this host could serve.
     pub native_recommended: u32,
+    /// Sessions the CPUs allow (advisory: CPU never refuses a session).
+    pub native_capacity_by_cpu: u32,
+    /// Sessions the admission memory budget allows (enforced).
+    pub native_capacity_by_memory: u32,
+    /// Which of the two sets `native_recommended`.
+    pub native_limited_by: CapacityLimit,
     pub memory: MemoryMetrics,
 }
 
@@ -865,12 +892,24 @@ mod tests {
             backend_memory_bytes: 0,
             native_ram_per_session_mb: 24,
             native_recommended: 40,
+            native_capacity_by_cpu: 40,
+            native_capacity_by_memory: 470,
+            native_limited_by: CapacityLimit::Cpu,
             memory: MemoryMetrics::default(),
         };
         let json = serde_json::to_value(&m).unwrap();
         assert_eq!(json["active_sessions"], 3);
         assert_eq!(json["native_ram_per_session_mb"], 24);
         assert_eq!(json["native_recommended"], 40);
+        assert_eq!(json["native_limited_by"], "cpu");
+    }
+
+    #[test]
+    fn the_scarcer_resource_sets_the_recommendation() {
+        assert_eq!(recommended_capacity(37, 470), (37, CapacityLimit::Cpu));
+        assert_eq!(recommended_capacity(37, 23), (23, CapacityLimit::Memory));
+        assert_eq!(recommended_capacity(30, 30), (30, CapacityLimit::Cpu));
+        assert_eq!(recommended_capacity(0, 0), (1, CapacityLimit::Cpu));
     }
 
     #[test]

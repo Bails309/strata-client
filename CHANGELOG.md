@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the capacity card says whether CPU or memory sets the recommended maximum
+
+> *"I definitely think we should say if it's CPU or memory setting the max
+> recommended so we can scale accordingly"*
+
+**Why.** Max Recommended is the smaller of two independent figures — 70% of
+the backend's CPUs ÷ 0.15 CPU per session, and the admission memory budget ÷
+the average live reservation — but the card showed only the result. On the
+production host that prompted this (8 vCPUs, 15.6 GB, 29 sessions) it read
+**37**, which was CPU (memory alone allowed ~470), so the right action was to
+add vCPUs, not memory or a host. `docker stats` there measured 3.79 cores
+for 29 sessions, ~0.13 cores each, close to the 0.15 estimate.
+
+**What changed.**
+
+| Where | Change |
+| ----- | ------ |
+| `GET /api/admin/metrics` | New `native_capacity_by_cpu`, `native_capacity_by_memory`, and `native_limited_by` (`"cpu"` / `"memory"`), decided by `session_registry::recommended_capacity` (smaller wins, CPU on a tie). `native_recommended` is unchanged |
+| **Admin → Sessions** card | **Limited by CPU / Memory** under Max Recommended; each host resource shows the sessions it allows on its own (*8 vCPUs → 37 sessions*), the limiting one highlighted; the over-75% warning names what to add and whether exceeding it slows sessions (CPU) or refuses them (memory) |
+
+**Scope & safety.** Additive API fields only; no schema, environment or
+dependency change.
+
+**Testing.** Backend: `the_scarcer_resource_sets_the_recommendation` and the
+serialisation test. Frontend: two new `SessionsTab` cases (CPU-limited label
+and per-resource figures; memory-limited label and warning); `AdminSettings`
+and `HealthTab` suites, 233 tests.
+
 ## [2.3.5] — 2026-10-05
 
 ### Patch release — session capacity follows the host, a refused session says why instead of reconnecting forever, the capacity card reports real numbers, and russh 0.64.1

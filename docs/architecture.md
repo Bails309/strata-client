@@ -2588,6 +2588,15 @@ budget ÷ the average live reservation and 70% of the CPUs ÷ 0.15 CPU per
 session. **Backend Memory** is the backend process's resident memory (web
 sessions' Chromium and Xvnc are separate processes and not included).
 
+Both figures are reported (`native_capacity_by_cpu`,
+`native_capacity_by_memory`), and `native_limited_by` names the smaller —
+`session_registry::recommended_capacity` decides, with CPU winning a tie.
+The card prints **Limited by CPU** or **Limited by Memory** under Max
+Recommended, shows each resource with the sessions it allows and highlights
+the limiting one, and words the over-75% warning for that resource: add
+vCPUs (CPU is advisory — sessions slow down) or add memory (memory is
+enforced — sessions are refused).
+
 ### Shared state across replicas
 
 Everything a second backend replica must agree on is now in PostgreSQL:

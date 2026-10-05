@@ -19,11 +19,23 @@ function escapeSvgText(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
+function resourceChipStyle(limiting: boolean): React.CSSProperties {
+  return limiting
+    ? {
+        background: "rgba(245,158,11,0.12)",
+        color: "#f59e0b",
+        border: "1px solid rgba(245,158,11,0.35)",
+      }
+    : { background: "var(--color-surface-tertiary)", color: "var(--color-txt-secondary)" };
+}
+
 function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
   const activeSessions = metrics.active_sessions;
   const totalCapacity = metrics.native_recommended || 1;
   const ramPerSession = metrics.native_ram_per_session_mb;
   const usagePercent = Math.min((activeSessions / totalCapacity) * 100, 100);
+  const limitedBy = metrics.native_limited_by;
+  const limitLabel = limitedBy === "cpu" ? "CPU" : limitedBy === "memory" ? "Memory" : null;
 
   const fmtBw = (b: number) => {
     if (b < 1024) return `${b} B`;
@@ -159,6 +171,11 @@ function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
                 Max Recommended
               </p>
               <p className="text-lg font-bold text-txt-primary">{totalCapacity}</p>
+              {limitLabel && (
+                <p className="text-[0.6rem] text-txt-tertiary" data-testid="capacity-limited-by">
+                  Limited by {limitLabel}
+                </p>
+              )}
             </div>
           </div>
 
@@ -205,23 +222,25 @@ function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
               {cpuCores && (
                 <span
                   className="text-[0.6rem] font-bold tracking-wider px-2 py-0.5 rounded"
-                  style={{
-                    background: "var(--color-surface-tertiary)",
-                    color: "var(--color-txt-secondary)",
-                  }}
+                  style={resourceChipStyle(limitedBy === "cpu")}
+                  title="Advisory: CPU slows sessions down but never refuses one"
                 >
                   {cpuCores} vCPUs
+                  {metrics.native_capacity_by_cpu
+                    ? ` → ${metrics.native_capacity_by_cpu} sessions`
+                    : ""}
                 </span>
               )}
               {memGB && (
                 <span
                   className="text-[0.6rem] font-bold tracking-wider px-2 py-0.5 rounded"
-                  style={{
-                    background: "var(--color-surface-tertiary)",
-                    color: "var(--color-txt-secondary)",
-                  }}
+                  style={resourceChipStyle(limitedBy === "memory")}
+                  title="Enforced: a session that does not fit the memory budget is refused"
                 >
                   {memGB} GB RAM
+                  {metrics.native_capacity_by_memory
+                    ? ` → ${metrics.native_capacity_by_memory} sessions`
+                    : ""}
                 </span>
               )}
               <span className="text-[0.55rem] text-txt-tertiary italic">
@@ -284,8 +303,11 @@ function NativeCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
                 <line x1="12" y1="17" x2="12.01" y2="17" />
               </svg>
               <span style={{ color: "#f59e0b" }}>
-                Capacity is above 75%. Plan to add a host before sustained load reaches the
-                recommended maximum.
+                {limitedBy === "memory"
+                  ? "Capacity is above 75% and memory is the limit. Add memory to this host (or raise STRATA_BACKEND_MEMORY if it is set), or add a host: new sessions are refused once the memory budget is full."
+                  : limitedBy === "cpu"
+                    ? "Capacity is above 75% and CPU is the limit. Add vCPUs to this host, or add a host, before sustained load reaches the recommended maximum: sessions are not refused, but they slow down."
+                    : "Capacity is above 75%. Plan to add a host before sustained load reaches the recommended maximum."}
               </span>
             </div>
           )}

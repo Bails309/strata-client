@@ -1566,6 +1566,15 @@ tab is the lower of the memory budget ÷ the average live reservation and
 refused on CPU grounds; treat a backend that sits near the CPU figure as
 due for more cores.
 
+**Which one to scale.** The card says **Limited by CPU** or **Limited by
+Memory** under Max Recommended, and the host-resources line shows how many
+sessions each resource allows on its own (e.g. *8 vCPUs → 37 sessions*,
+*15.6 GB RAM → 470 sessions*), highlighting the limiting one. Add that
+resource to raise capacity; adding the other changes nothing. To check the
+CPU estimate against reality, divide the backend's `CPU %` from
+`docker stats` by 100 and by the session count: a busy-hour figure well
+under 0.15 cores per session means the CPU recommendation is cautious.
+
 Rule of thumb for 1080p RDP sessions with no container limit:
 
 | Host | Memory budget | Admission limit | CPU guidance |

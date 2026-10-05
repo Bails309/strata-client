@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.7] — 2026-10-05
+
+### Patch release — session capacity measured from real use instead of fixed estimates
+
+### The ask
+
+> *"We are in a busy hour now so these stats are busy"*
+>
+> *"Lets make a 2.3.7 release and go with your suggestion"*
+
+The busy-hour figures from the production backend (8 vCPUs, 15.6 GB, no
+container limit): **39 sessions**, host CPU about 20% (≈ 1.6 cores), backend
+memory **2.13 GB**. The capacity card assumed 0.15 CPU per session and
+reserved about 23 MB per 1080p RDP session; the real figures were about
+**0.04 CPU** and **50 MB** (replay history included). A Checkmk alert of
+*−218%* CPU on the container in the same window was a counter artefact
+(container restart / removed CPU quota), not load.
+
+### Summary
+
+| Area | Change |
+| ---- | ------ |
+| Capacity model | New `services::capacity`: samples the backend container's CPU time and anonymous memory every 30 s and keeps smoothed per-session averages |
+| Capacity card | CPU and memory per session are measured once 5 sessions run at once; the card says **(measured)** or **(est.)** and shows e.g. *(measured: 0.04 CPU, 50 MB per session)* |
+| Admission | Estimates are scaled up (1–4×, never down) when sessions use more memory than the formula predicts |
+| API | `GET /api/admin/metrics` adds `native_cpu_per_session` and `native_measured` |
+
+### Changed — capacity figures come from measurement
+
+**Symptom.** The card under-stated what the CPUs could carry by about 3.5×
+(**Limited by CPU** at 37 sessions on a host running 39 at 20% CPU), while
+admission reserved roughly half the memory a session really used, so the
+memory budget would have admitted more sessions than the host could hold.
+
+**Root cause.** Both per-session figures were constants chosen before the
+native engine had run at scale: 0.15 CPU, and two framebuffers plus 8 MB
+for RDP/VNC. Neither was ever checked against the running process.
+
+**Fix.**
+
+- [`services/capacity.rs`](backend/src/services/capacity.rs) reads the
+  container every 30 s (`capacity_sampler` worker): CPU time from cgroup v2
+  `cpu.stat` `usage_usec` (v1 `cpuacct.usage`, else the process), memory
+  from cgroup v2 `memory.stat` `anon` (v1 `total_rss`, else the process's
+  RSS). The cgroup counts a web session's Chromium and Xvnc; anonymous
+  memory leaves out reclaimable page cache.
+- From readings with **at least 5 sessions** it keeps exponentially
+  weighted averages (α = 0.1, about five minutes) of CPU per session and of
+  (memory − idle baseline − replay history) per session. The baseline is
+  the quietest reading with no sessions (256 MiB until one is seen). A CPU
+  counter that goes backwards is skipped.
+- **Calibration** = measured memory ÷ the average uncalibrated estimate,
+  clamped to 1–4 and smoothed. `routes/tunnel.rs` passes every admission
+  estimate through `capacity::calibrate`. Reservations are divided by the
+  current factor before comparing, so a calibrated reservation does not
+  pull the factor back down.
+- `get_metrics` uses measured CPU per session (floor 0.01) in place of
+  0.15, and for memory the **larger** of measured use and what admission
+  reserves, so the card never promises a session the budget would refuse.
+  70% CPU headroom and the ¾ memory budget are unchanged.
+- The card labels **RAM / Session (measured)** or **(est.)** and replaces
+  *(in-process, no sidecar per session)* with the basis and both figures.
+
+With the busy-hour figures above, the card would read about **140, Limited
+by CPU** (8 × 0.7 ÷ 0.04) with memory allowing about 220 (≈ 10.7 GB ÷
+50 MB), against 37 before.
+
+**Scope & safety.** No schema, environment or dependency change. Below 5
+concurrent sessions since start nothing changes. Calibration can only make
+admission stricter, never looser, and is capped at 4×. Two additive API
+fields; `native_ram_per_session_mb` and `native_capacity_by_cpu` keep their
+meaning but may now be measured.
+
+**Testing.** Backend: seven `capacity::tests` (production figures per
+session; fewer than 5 sessions ignored; calibration clamped to 1–4;
+calibrated reservations do not pull the factor down; replay not charged to
+sessions; counter reset skipped; baseline is the quietest idle reading);
+full suite 1409 passed. Frontend: `AdminSettings` *labels figures measured
+from live sessions*; `AdminSettings` and `HealthTab` suites, 234 tests.
+
+**Deploy.** Rebuild the backend and frontend images and recreate them
+(ends live sessions). Figures start as estimates after every restart and
+settle after a few minutes of load.
+
 ## [2.3.6] — 2026-10-05
 
 ### Patch release — SSH to network devices, per-connection host-key verification, a capacity card that says what to scale, and live reachability on My Connections

@@ -2970,7 +2970,12 @@ pub async fn get_metrics(
     // The admission budget is where sessions are actually refused.
     let native_by_mem =
         (admission.limit_bytes as f64 / 1_048_576.0 / native_ram_per_session) as u32;
-    metrics.native_recommended = native_by_mem.min(by_cpu).max(1);
+    let (recommended, limited_by) =
+        crate::services::session_registry::recommended_capacity(by_cpu, native_by_mem);
+    metrics.native_recommended = recommended;
+    metrics.native_capacity_by_cpu = by_cpu;
+    metrics.native_capacity_by_memory = native_by_mem;
+    metrics.native_limited_by = limited_by;
 
     Ok(Json(metrics))
 }

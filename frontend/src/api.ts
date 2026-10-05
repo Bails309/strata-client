@@ -2137,6 +2137,12 @@ export interface MetricsSummary {
   native_ram_per_session_mb: number;
   /** Sessions this host could serve. */
   native_recommended: number;
+  /** Sessions the CPUs allow (advisory: CPU never refuses a session). */
+  native_capacity_by_cpu: number;
+  /** Sessions the admission memory budget allows (enforced). */
+  native_capacity_by_memory: number;
+  /** Which of the two sets native_recommended. */
+  native_limited_by: "cpu" | "memory";
 }
 
 export const getMetrics = () => request<MetricsSummary>("/admin/metrics");

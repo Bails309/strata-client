@@ -1414,6 +1414,9 @@ Aggregate metrics across all active tunnel sessions.
   "backend_memory_bytes": 734003200,
   "native_ram_per_session_mb": 24,
   "native_recommended": 74,
+  "native_capacity_by_cpu": 74,
+  "native_capacity_by_memory": 448,
+  "native_limited_by": "cpu",
   "memory": {
     "sessions_reserved_bytes": 201326592,
     "sessions_limit_bytes": 11274289152,
@@ -1436,6 +1439,9 @@ Aggregate metrics across all active tunnel sessions.
 | `backend_memory_bytes`      | integer | **(v2.3.5)** Resident memory of the backend process, which hosts every native session (Chromium/Xvnc children for web sessions are separate processes and not included) |
 | `native_ram_per_session_mb` | integer | **(v2.3.5)** Average admission estimate of the live sessions (protocol and display size); a 1080p RDP session when none are running (was a fixed 1080p figure) |
 | `native_recommended`        | integer | **(v2.3.5)** Sessions this backend could serve: the lower of the admission budget ÷ `native_ram_per_session_mb` and a CPU estimate (0.15 CPU per session, 30% headroom). Was sized from 70% of host RAM, which over-reported capacity under a container limit |
+| `native_capacity_by_cpu`    | integer | **(Unreleased)** Sessions the CPUs allow: `system_cpu_cores` × 0.70 ÷ 0.15. **Advisory** — CPU never refuses a session; past this figure sessions slow down |
+| `native_capacity_by_memory` | integer | **(Unreleased)** Sessions the admission budget allows: `memory.sessions_limit_bytes` ÷ `native_ram_per_session_mb`. **Enforced** — a session that does not fit is refused |
+| `native_limited_by`         | string  | **(Unreleased)** `"cpu"` or `"memory"`: which of the two sets `native_recommended` (the smaller; `"cpu"` on a tie). Tells you what to add to the host to raise capacity |
 | `memory.sessions_reserved_bytes` | integer | **(v2.3.0)** Memory reserved by admitted sessions, estimated from protocol and display size |
 | `memory.sessions_limit_bytes` | integer | The admission budget: `STRATA_SESSION_MEMORY_BUDGET_MB`, else three quarters of the container (or host) memory less the replay budget. **(v2.3.5)** Re-read on every call and every admission, so it follows a resized host or container |
 | `memory.sessions_refused` | integer | Sessions refused since start because the budget or a per-user limit was reached |

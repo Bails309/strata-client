@@ -195,6 +195,9 @@ const metricsOk = {
   backend_memory_bytes: 0,
   native_ram_per_session_mb: 24,
   native_recommended: 90,
+  native_capacity_by_cpu: 90,
+  native_capacity_by_memory: 300,
+  native_limited_by: "cpu" as const,
 };
 
 const defaultUser: import("../api").MeResponse = {
@@ -1780,6 +1783,31 @@ describe("SessionsTab", () => {
     await user.click(screen.getByText("Sessions"));
     const noDataEls = await screen.findAllByText("No data yet.");
     expect(noDataEls.length).toBe(2);
+  });
+
+  it("says which resource sets the recommended maximum", async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText("Sessions"));
+    expect(await screen.findByTestId("capacity-limited-by")).toHaveTextContent("Limited by CPU");
+    expect(screen.getByText(/4 vCPUs → 90 sessions/)).toBeInTheDocument();
+    expect(screen.getByText(/8\.0 GB RAM → 300 sessions/)).toBeInTheDocument();
+  });
+
+  it("tells the admin to add memory when memory is the limit", async () => {
+    vi.mocked(getMetrics).mockResolvedValue({
+      ...metricsOk,
+      active_sessions: 20,
+      native_recommended: 23,
+      native_capacity_by_cpu: 37,
+      native_capacity_by_memory: 23,
+      native_limited_by: "memory",
+    });
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText("Sessions"));
+    expect(await screen.findByTestId("capacity-limited-by")).toHaveTextContent("Limited by Memory");
+    expect(screen.getByText(/memory is the limit\. Add memory to this host/)).toBeInTheDocument();
   });
 });
 

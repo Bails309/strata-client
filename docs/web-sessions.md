@@ -267,8 +267,11 @@ the same kiosk. Every attached tunnel holds a lease on it; the kiosk's
 slot, and removes the profile tempdir) runs when the last lease goes.
 
 `max_web_sessions` in `system_settings` caps the kiosks one backend runs
-at once. When it is reached, opening a new web session returns `429`
-before anything is launched; joining an existing kiosk is still allowed.
+at once. When it is reached, opening a new web session is refused before
+anything is launched — since v2.3.5 as a Guacamole `error` (`0x031D`) on the
+socket, shown as **Session Limit Reached** with *"All web browser sessions
+are in use. Try again shortly."*; before that as an HTTP `429` the browser
+could not read. Joining an existing kiosk is still allowed.
 Unset, the display range (100 displays) is the only limit.
 
 1. **Tunnel disconnect (v1.3.0+).** When `tunnel::proxy` returns, the

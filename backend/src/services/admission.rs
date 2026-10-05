@@ -11,12 +11,14 @@
 //! would exceed either is refused cleanly instead of pushing the process
 //! towards its container memory limit.
 //!
-//! The budget defaults to three quarters of the container (cgroup) memory
-//! limit, or of system memory without one, less the session replay
-//! budget, which bounds itself. `STRATA_SESSION_MEMORY_BUDGET_MB`
-//! overrides it.
+//! The budget defaults to three quarters of the memory available to the
+//! backend (the container's cgroup limit if it has one, else the host's),
+//! less the session replay budget, which bounds itself. It is re-read on
+//! every admission, so it grows and shrinks with the host or container.
+//! `STRATA_SESSION_MEMORY_BUDGET_MB` fixes it instead.
 
 use std::collections::HashMap;
+use std::num::NonZero;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
@@ -51,18 +53,18 @@ pub struct AdmissionStats {
 }
 
 struct Ledger {
-    limit: u64,
+    limit: Box<dyn Fn() -> u64 + Send + Sync>,
     reserved: AtomicU64,
     rejected: AtomicU64,
     per_user: Mutex<HashMap<Uuid, u32>>,
 }
 
-static LEDGER: LazyLock<Ledger> = LazyLock::new(|| Ledger::new(default_limit()));
+static LEDGER: LazyLock<Ledger> = LazyLock::new(|| Ledger::new(budget));
 
 impl Ledger {
-    fn new(limit: u64) -> Self {
+    fn new(limit: impl Fn() -> u64 + Send + Sync + 'static) -> Self {
         Self {
-            limit,
+            limit: Box::new(limit),
             reserved: AtomicU64::new(0),
             rejected: AtomicU64::new(0),
             per_user: Mutex::new(HashMap::new()),
@@ -75,6 +77,7 @@ impl Ledger {
         user_limit: Option<u32>,
         bytes: u64,
     ) -> Result<Reservation, AppError> {
+        let budget = (self.limit)();
         let mut per_user = self.per_user.lock().unwrap_or_else(|e| e.into_inner());
         let held = per_user.get(&user).copied().unwrap_or(0);
         if let Some(limit) = user_limit {
@@ -89,14 +92,14 @@ impl Ledger {
         let fits = self
             .reserved
             .try_update(Ordering::AcqRel, Ordering::Acquire, |r| {
-                (r + bytes <= self.limit).then_some(r + bytes)
+                (r + bytes <= budget).then_some(r + bytes)
             })
             .is_ok();
         if !fits {
             self.rejected.fetch_add(1, Ordering::Relaxed);
             tracing::warn!(
                 reserved_mb = self.reserved.load(Ordering::Relaxed) / MIB,
-                limit_mb = self.limit / MIB,
+                limit_mb = budget / MIB,
                 request_mb = bytes / MIB,
                 "session refused: memory budget exhausted"
             );
@@ -124,10 +127,11 @@ impl Ledger {
     }
 
     fn stats(&self) -> AdmissionStats {
+        let limit_bytes = (self.limit)();
         let per_user = self.per_user.lock().unwrap_or_else(|e| e.into_inner());
         AdmissionStats {
             reserved_bytes: self.reserved.load(Ordering::Relaxed),
-            limit_bytes: self.limit,
+            limit_bytes,
             rejected: self.rejected.load(Ordering::Relaxed),
             sessions: per_user.values().sum(),
         }
@@ -186,25 +190,39 @@ pub fn user_limit(role_limit: Option<i32>) -> Option<u32> {
         .filter(|n| *n > 0)
 }
 
-fn default_limit() -> u64 {
-    if let Some(mb) = std::env::var("STRATA_SESSION_MEMORY_BUDGET_MB")
+fn budget() -> u64 {
+    if let Some(mb) = env_mb("STRATA_SESSION_MEMORY_BUDGET_MB") {
+        return mb * MIB;
+    }
+    let nvr = env_mb("STRATA_NVR_MEMORY_BUDGET_MB").unwrap_or(1024) * MIB;
+    (memory_capacity() / 4 * 3)
+        .saturating_sub(nvr)
+        .max(256 * MIB)
+}
+
+fn env_mb(name: &str) -> Option<u64> {
+    std::env::var(name)
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .filter(|mb| *mb > 0)
-    {
-        return mb * MIB;
-    }
-    let total = cgroup_limit().unwrap_or_else(|| {
-        let mut sys = sysinfo::System::new();
-        sys.refresh_memory();
-        sys.total_memory()
-    });
-    let nvr = std::env::var("STRATA_NVR_MEMORY_BUDGET_MB")
-        .ok()
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .unwrap_or(1024)
-        * MIB;
-    (total / 4 * 3).saturating_sub(nvr).max(256 * MIB)
+}
+
+/// Memory available to the backend: the container limit, capped at the host's.
+#[must_use]
+pub fn memory_capacity() -> u64 {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    let host = sys.total_memory();
+    cgroup_limit().map_or(host, |limit| limit.min(host))
+}
+
+/// CPUs available to the backend; std honours cgroup quotas and affinity.
+#[must_use]
+pub fn cpu_capacity() -> u32 {
+    std::thread::available_parallelism()
+        .map_or(1, NonZero::get)
+        .try_into()
+        .unwrap_or(u32::MAX)
 }
 
 /// The container's memory limit, from cgroup v2 or v1.
@@ -225,7 +243,7 @@ mod tests {
     use super::*;
 
     fn ledger(limit_mb: u64) -> &'static Ledger {
-        Box::leak(Box::new(Ledger::new(limit_mb * MIB)))
+        Box::leak(Box::new(Ledger::new(move || limit_mb * MIB)))
     }
 
     #[test]
@@ -254,6 +272,18 @@ mod tests {
         assert_eq!(ledger.stats().reserved_bytes, 0);
         assert_eq!(ledger.stats().sessions, 0);
         let _b = ledger.admit(user, None, 60 * MIB).unwrap();
+    }
+
+    #[test]
+    fn the_budget_follows_a_resized_host() {
+        static LIMIT: AtomicU64 = AtomicU64::new(100 * MIB);
+        let ledger: &'static Ledger =
+            Box::leak(Box::new(Ledger::new(|| LIMIT.load(Ordering::Relaxed))));
+        let _a = ledger.admit(Uuid::new_v4(), None, 60 * MIB).unwrap();
+        assert!(ledger.admit(Uuid::new_v4(), None, 60 * MIB).is_err());
+        LIMIT.store(200 * MIB, Ordering::Relaxed);
+        assert_eq!(ledger.stats().limit_bytes, 200 * MIB);
+        let _b = ledger.admit(Uuid::new_v4(), None, 60 * MIB).unwrap();
     }
 
     #[test]

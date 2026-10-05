@@ -30,6 +30,33 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.3.5",
+    subtitle:
+      "Session capacity now grows with your server instead of stopping at about 23 sessions, a session that cannot start tells you why instead of reconnecting forever, and the capacity card shows real figures.",
+    sections: [
+      {
+        title: "No more endless Reconnecting",
+        description:
+          "When the server is full, or you already have as many sessions open as your role allows, a new session now shows Session Limit Reached with the reason. Before, it kept retrying as Reconnecting and never connected. Close a session you no longer need or try again in a few minutes.",
+      },
+      {
+        title: "Capacity follows the server",
+        description:
+          "The backend was limited to 2 GB of memory by default, which allowed about 23 RDP sessions however large the server was. That limit is gone: capacity now follows the memory the server has, and adding memory takes effect for the next session without a restart. Administrators can still set a ceiling.",
+      },
+      {
+        title: "An honest capacity card",
+        description:
+          "On Admin, Sessions, the Native Engine Capacity card now shows the backend's real memory use in place of a Processes count that was always 0, an average RAM per session taken from the sessions actually running, and a maximum based on what the backend can really use.",
+      },
+      {
+        title: "Security updates",
+        description:
+          "The SSH library is updated for an advisory that only affects SSH agents, which Strata never runs, and the password Strata sets for its own restricted database account no longer appears in database logs.",
+      },
+    ],
+  },
+  {
     version: "2.3.4",
     subtitle:
       "Two AD sync sources can share a service account with automatic rotation, failing syncs are flagged where you look, and RDP sessions no longer drop while you resize the window.",

@@ -2929,33 +2929,22 @@ pub async fn get_metrics(
     };
     let mut metrics = registry.metrics().await;
 
-    // ── Dynamic capacity recommendation based on host resources ──
+    // ── Dynamic capacity recommendation ──
     //
-    // Read system CPU and memory via sysinfo.  Reserve 30% headroom for
-    // other processes (backend, nginx, postgres, OS).  Use the more
-    // constraining of the CPU-bound and memory-bound estimates.
-    use sysinfo::System;
-    let mut sys = System::new();
-    sys.refresh_memory();
-    let total_mem = sys.total_memory(); // bytes
-    let cpu_cores = {
-        sys.refresh_cpu_list(sysinfo::CpuRefreshKind::default());
-        sys.cpus().len() as u64
-    };
+    // Sized from what the backend can actually use (container limits if set,
+    // else the host), re-read on every call so it follows a resized host.
+    let cpu_cores = crate::services::admission::cpu_capacity();
+    metrics.system_total_memory = crate::services::admission::memory_capacity();
+    metrics.system_cpu_cores = cpu_cores;
 
-    metrics.system_total_memory = total_mem;
-    metrics.system_cpu_cores = cpu_cores as u32;
-
-    // Reserve 30% for OS / sidecar processes.
+    // Reserve 30% of CPU for the rest of the backend and the OS.
     const USABLE_FRACTION: f64 = 0.70;
     // Weighted average across RDP/VNC/SSH: RDP ~0.25, VNC ~0.10, SSH ~0.02.
     const CPU_PER_SESSION: f64 = 0.15;
 
-    let usable_mem_mb = (total_mem as f64 / 1_048_576.0) * USABLE_FRACTION;
-    let usable_cpu = cpu_cores as f64 * USABLE_FRACTION;
+    let by_cpu = (f64::from(cpu_cores) * USABLE_FRACTION / CPU_PER_SESSION) as u32;
 
-    let by_cpu = (usable_cpu / CPU_PER_SESSION) as u32;
-
+    let mut sys = sysinfo::System::new();
     if let Ok(pid) = sysinfo::get_current_pid() {
         sys.refresh_processes_specifics(
             sysinfo::ProcessesToUpdate::Some(&[pid]),
@@ -2978,7 +2967,9 @@ pub async fn get_metrics(
     };
     metrics.native_ram_per_session_mb = native_ram_per_session.ceil() as u32;
 
-    let native_by_mem = (usable_mem_mb / native_ram_per_session) as u32;
+    // The admission budget is where sessions are actually refused.
+    let native_by_mem =
+        (admission.limit_bytes as f64 / 1_048_576.0 / native_ram_per_session) as u32;
     metrics.native_recommended = native_by_mem.min(by_cpu).max(1);
 
     Ok(Json(metrics))

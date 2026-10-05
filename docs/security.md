@@ -1673,7 +1673,7 @@ All services in the Docker Compose stack apply security constraints:
 | `read_only: true` + `tmpfs`            | `frontend`, `vault-tls-init`                                                                                                                                                                       |
 | `network_mode: none`                   | `vault-tls-init` (one-shot certificate issuer; needs no network)                                                                                                                                    |
 | Custom seccomp profile                 | `backend` — [`seccomp-chromium.json`](../backend/seccomp-chromium.json), Docker's default plus `clone` / `unshare` / `chroot`, so Chromium's sandbox can start without `CAP_SYS_ADMIN` (v2.3.0) |
-| Resource limits (`cpus`, `memory`)     | `backend`, `postgres-local`                                                                                                                                                               |
+| Resource limits (`cpus`, `memory`)     | `postgres-local`; `backend` only when `STRATA_BACKEND_CPUS` / `STRATA_BACKEND_MEMORY` are set (v2.3.5 — every session runs in the backend, so a fixed cap capped session capacity). Memory exhaustion in the backend is guarded by session admission instead |
 
 ---
 
@@ -1752,16 +1752,31 @@ the operator's session.
 
 Capacity is admitted before anything is opened. A new session reserves an
 estimate of its memory (by protocol and display size; a web session counts
-its browser) against a process-wide budget — three quarters of the
-container memory limit less the replay budget, or
+its browser) against a process-wide budget — three quarters of the memory
+available to the backend (its container limit, else the host's RAM) less
+the replay budget, re-read on every admission since v2.3.5, or
 `STRATA_SESSION_MEMORY_BUDGET_MB` — and against the role's
 `max_concurrent_sessions` (migration 101) or `STRATA_MAX_SESSIONS_PER_USER`.
 Replay history for observers shares one budget
 (`STRATA_NVR_MEMORY_BUDGET_MB`, default 1 GiB). Over any limit the session
-is refused with `429` **before** a credential is checked out, a container
-or browser started, or the target contacted. `max_web_sessions` is now
-enforced the same way. Reserved, used and limit figures are under `memory`
-in `GET /api/admin/metrics`.
+is refused **before** a credential is checked out, a container or browser
+started, or the target contacted. `max_web_sessions` is now enforced the
+same way. Reserved, used and limit figures are under `memory` in
+`GET /api/admin/metrics`.
+
+Since v2.3.5 a refusal on the tunnel endpoint is delivered **in band**: the
+WebSocket is accepted, one Guacamole `error` instruction is sent and the
+socket is closed (`refuse_over_socket` in
+[`routes/tunnel.rs`](../backend/src/routes/tunnel.rs)). Before that it was an
+HTTP `429` the browser could not read, so the client retried with
+exponential back-off; the per-user tunnel rate limit (30 upgrades a minute)
+bounded that, but each retry still cost an authenticated upgrade. The trust
+boundary is unchanged: the upgrade is only accepted after the authentication
+middleware has validated the caller, so an unauthenticated client still gets
+an HTTP `401` and never a socket. The message sent is the same client-safe
+text `error_status_and_message` produces for an HTTP response — internal
+errors are reduced to *"Internal server error"* — and the full error is
+logged server-side as `tunnel refused`.
 
 ### Quick Share upload lifecycle (SEC-14)
 
@@ -1905,6 +1920,7 @@ The suppression now rests on reachability rather than absence. The Marvin attack
 | `RUSTSEC-2026-0118`, `RUSTSEC-2026-0119`                   | `hickory-proto` (Rust) | `0.25.2` → `0.26.1+` | **None in the build**, which resolves `0.26.3` via `hickory-resolver`. Reported from the stale `crates/vendor/sspi/Cargo.lock`, now deleted. | 2.2.0 |
 | `RUSTSEC-2023-0089`                                        | `atomic-polyfill` (Rust) | — (unmaintained) | **None.** Not compiled for the Linux target. Suppressed with justification (above). | —        |
 | `GHSA-j7h2-66j4-ghjf`                                      | `russh` (Rust)      | `0.63.3` → `0.64.0`   | **Not reachable, upgraded anyway.** The russh **server** did not check that a client's public-key signature used the negotiated algorithm (a client could downgrade its own `rsa-sha2-512` to `rsa-sha1`; no authentication bypass). Strata uses russh only as an SSH **client**, so it never verifies client signatures. | 2.3.3 |
+| `GHSA-4wc5-f2rc-q74m`                                      | `russh` (Rust)      | `0.64.0` → `0.64.1`   | **Not reachable, upgraded anyway.** russh's SSH **agent server** (`russh::keys::agent::server`) allocated without bound when a crafted agent message carried constraint records; the attacker is a local process or a remote server the agent is forwarded to. Strata never runs an agent server and declines agent forwarding (`enable-agent` is ignored by design), but the module is compiled in. `strata-session` now requires `>= 0.64.1`. | 2.3.5 |
 | Dependabot #52 (stack exhaustion via nested brace patterns) | `braces` (npm)      | `≤ 3.0.3` → no fix; **removed** | **None at runtime.** Root-workspace `dev` transitive of the pre-commit hook (`lint-staged` → `micromatch` → `braces`), fed only the repository's own `.lintstagedrc.json` globs; never in `frontend/`, `e2e/`, a bundle or an image. Removed by upgrading `lint-staged` 15 → 17, which uses `picomatch`. | 2.3.3 |
 
 #### `h2` unbounded empty `DATA` frames — why this one was material (v1.14.5)

@@ -1431,13 +1431,13 @@ Aggregate metrics across all active tunnel sessions.
 | `total_bytes_down`          | integer | Cumulative bytes sent downstream (engine → browser) across all sessions |
 | `total_bytes_up`            | integer | Cumulative bytes received upstream (browser → engine) across all sessions |
 | `sessions_by_protocol`      | object  | Session count grouped by protocol (rdp, ssh, vnc, web, vdi, kubernetes) |
-| `system_total_memory`       | integer | Host physical memory in bytes                                           |
-| `system_cpu_cores`          | integer | Host logical CPU cores                                                  |
-| `backend_memory_bytes`      | integer | Resident memory of the backend process, which hosts every native session (Chromium/Xvnc children for web sessions are separate processes and not included) |
-| `native_ram_per_session_mb` | integer | Average admission estimate of the live sessions (protocol and display size); a 1080p RDP session when none are running |
-| `native_recommended`        | integer | Sessions this host could serve, reserving 30% headroom                  |
+| `system_total_memory`       | integer | **(v2.3.5)** Memory the backend can use: its container limit if set, else the host's (was always the host's) |
+| `system_cpu_cores`          | integer | **(v2.3.5)** CPUs the backend can use: its container quota if set, else the host's (was always the host's) |
+| `backend_memory_bytes`      | integer | **(v2.3.5)** Resident memory of the backend process, which hosts every native session (Chromium/Xvnc children for web sessions are separate processes and not included) |
+| `native_ram_per_session_mb` | integer | **(v2.3.5)** Average admission estimate of the live sessions (protocol and display size); a 1080p RDP session when none are running (was a fixed 1080p figure) |
+| `native_recommended`        | integer | **(v2.3.5)** Sessions this backend could serve: the lower of the admission budget ÷ `native_ram_per_session_mb` and a CPU estimate (0.15 CPU per session, 30% headroom). Was sized from 70% of host RAM, which over-reported capacity under a container limit |
 | `memory.sessions_reserved_bytes` | integer | **(v2.3.0)** Memory reserved by admitted sessions, estimated from protocol and display size |
-| `memory.sessions_limit_bytes` | integer | The admission budget: `STRATA_SESSION_MEMORY_BUDGET_MB`, else three quarters of the container (or system) memory less the replay budget |
+| `memory.sessions_limit_bytes` | integer | The admission budget: `STRATA_SESSION_MEMORY_BUDGET_MB`, else three quarters of the container (or host) memory less the replay budget. **(v2.3.5)** Re-read on every call and every admission, so it follows a resized host or container |
 | `memory.sessions_refused` | integer | Sessions refused since start because the budget or a per-user limit was reached |
 | `memory.replay_used_bytes` / `replay_limit_bytes` | integer | Replay history held for observers, against `STRATA_NVR_MEMORY_BUDGET_MB` |
 | `memory.clipboard_bytes` | integer | Clipboard data currently being received from clients (capped at 256 MiB process-wide) |
@@ -2821,6 +2821,31 @@ Upgrades to a WebSocket connection carrying the Guacamole-style instruction stre
    - Username from the JWT
 4. Instructions flow bidirectionally until either side closes
 
+> **Refusals are sent in band (v2.3.5 note).** Any failure after
+> authentication but before the session starts — session admission (memory
+> budget or the role's session limit), the per-user tunnel rate limit (30
+> upgrades a minute), no role access, an unknown connection, a ticket for
+> another user, setup not complete — **accepts the upgrade**, sends a single
+> `error,<message>,<status>;` instruction and closes the socket. Before
+> v2.3.5 these were HTTP `4xx`/`5xx` responses to the upgrade, which browsers
+> do not expose to the page, so Strata's own client saw only a failed
+> connection and retried with back-off (**Reconnecting…**). Third-party
+> clients should treat an `error` before any `size`/`ready` as final:
+>
+> | Status | Name | Refusal |
+> | ------ | ---- | ------- |
+> | `797` (`0x031D`) | `CLIENT_TOO_MANY` | Memory budget full (*"The server is at capacity. Try again in a few minutes."*), role session limit (*"You already have N open session(s), the most your role allows. …"*), tunnel rate limit |
+> | `513` (`0x0201`) | `SERVER_BUSY` | Setup not complete |
+> | `768` (`0x0300`) | `CLIENT_BAD_REQUEST` | Invalid request (e.g. a malformed domain from the credential prompt) |
+> | `769` (`0x0301`) | `CLIENT_UNAUTHORIZED` | Ticket issued to a different user or connection |
+> | `771` (`0x0303`) | `CLIENT_FORBIDDEN` | The user's role does not grant the connection |
+> | `516` (`0x0204`) | `RESOURCE_NOT_FOUND` | Connection not found |
+> | `512` (`0x0200`) | `SERVER_ERROR` | Anything else; the text is the generic *"Internal server error"* and the detail is in the backend log (`tunnel refused`) |
+>
+> A request rejected by the authentication middleware (missing or expired
+> token) is still a plain HTTP `401`, and a request that is not a WebSocket
+> handshake is still rejected by the upgrade extractor.
+
 > **Clipboard streaming.** The remote → local clipboard is not a single instruction but a stream: the engine sends `clipboard,<idx>,text/plain;`, then one or more `blob,<idx>,<base64>;` instructions, and finally `end,<idx>;`. The browser client (`SessionManager.tsx`) commits the payload to `navigator.clipboard` when it receives `end`. Because RDP's CLIPRDR channel can occasionally open a clipboard stream and never terminate it (delayed-rendering clipboard owners whose format-data request is interrupted), the client applies a **per-stream stall watchdog** with two windows: **2 s** while no `blob` has been received (`CLIPBOARD_OPEN_STALL_MS` — the wedged-channel signature) and **10 s** between blobs once data is flowing (`CLIPBOARD_BLOB_STALL_MS` — a gap there is transport backpressure on a large payload, not a wedge). A window that fires after real progress publishes the partial and **keeps listening**, so a transfer that merely paused still completes; only a window that sees no new data at all abandons the transfer and `sendAck`s the stream so the server can free the index. A zero-blob stall is not flushed (no-clobber guard). This is entirely client-side. The engine's own per-instruction pending-buffer cap remains **16 MiB**.
 
 > **Clipboard size ceiling (rewritten in v2.0.0).** The ceiling is **8 MiB per direction**, applied symmetrically — `MAX_CLIPBOARD_BYTES` in [`crates/strata-session/src/actor/session.rs`](../crates/strata-session/src/actor/session.rs). Overrunning it **truncates and logs**, in both directions.
@@ -3563,6 +3588,14 @@ All errors follow this format:
 | 500    | Internal server error                       |
 | 502    | Vault communication failure                 |
 | 503    | System not initialized (setup required)     |
+
+**(v2.3.5 note)** `GET /api/tunnel/{connection_id}` is the exception: once the upgrade request
+is a valid WebSocket handshake, a refusal (session admission, tunnel rate
+limit, access, missing connection) is sent over the socket as a Guacamole
+`error` instruction and the socket is closed, because browsers do not expose
+an upgrade's HTTP status. Status `0x031D` = a rate, session or capacity limit;
+`0x0300` bad request; `0x0301` unauthorized; `0x0303` forbidden; `0x0204` not
+found; `0x0201` setup required; `0x0200` anything else (message is generic).
 
 ---
 

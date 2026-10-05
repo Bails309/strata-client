@@ -50,6 +50,8 @@ logs backend`).
 | Connection Refused   | `520` `UPSTREAM_UNAVAILABLE` | The remote computer (refusal, licensing, broker, memory)                          | Step 2 |
 | Access Denied        | `769` `CLIENT_UNAUTHORIZED`  | The remote computer's access policy                                               | Step 2 |
 | Connection Error     | `512` `SERVER_ERROR`         | A protocol violation or a crashed component on the target                         | Step 3 |
+| Session Limit Reached | `797` `CLIENT_TOO_MANY`     | **Strata** refused to start the session: server at capacity, per-user session limit or tunnel rate limit (v2.3.5) | [session-capacity.md](session-capacity.md) |
+| Server Unavailable   | `513` `SERVER_BUSY`          | **Strata** has not finished setup, so no session can start (v2.3.5)               | Complete setup |
 
 The status code itself is not written to the backend log; the heading is the
 user-visible form of it, which is why the exact heading matters.

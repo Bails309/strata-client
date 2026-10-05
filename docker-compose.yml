@@ -117,6 +117,13 @@ services:
       - STRATA_AV_MAX_SCAN_SIZE=${STRATA_AV_MAX_SCAN_SIZE:-524288000}
       - STRATA_AV_TIMEOUT_MS=${STRATA_AV_TIMEOUT_MS:-120000}
       - STRATA_AV_COMMAND=${STRATA_AV_COMMAND:-}
+      # ── Session capacity ──
+      # Blank = scale with the host: the admission budget is ¾ of the
+      # memory the container can use, less the replay budget, re-read on
+      # every session start.
+      - STRATA_SESSION_MEMORY_BUDGET_MB=${STRATA_SESSION_MEMORY_BUDGET_MB:-}
+      - STRATA_NVR_MEMORY_BUDGET_MB=${STRATA_NVR_MEMORY_BUDGET_MB:-}
+      - STRATA_MAX_SESSIONS_PER_USER=${STRATA_MAX_SESSIONS_PER_USER:-}
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/api/health || exit 1"]
       interval: 10s
@@ -126,8 +133,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2"
-          memory: 2G
+          # 0 = no limit, so session capacity follows the host. Every
+          # session runs inside this container; a fixed cap here caps them.
+          cpus: "${STRATA_BACKEND_CPUS:-0}"
+          memory: ${STRATA_BACKEND_MEMORY:-0}
     depends_on:
       vault:
         condition: service_healthy

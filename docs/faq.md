@@ -167,8 +167,14 @@ Since v2.1.1 the heading tells you what kind of end it was, and the sentence und
 | **Connection Refused** | The remote computer refused the session — including Remote Desktop licensing and connection-broker problems. | Usually needs the remote computer's administrator. |
 | **Access Denied** | The remote computer does not let this account in over Remote Desktop, or rejected the credentials. | Check the account's Remote Desktop rights and the credential profile. |
 | **Connection Error** | Something failed unexpectedly. | Reconnect; if it recurs, report it with the time and connection name. |
+| **Session Limit Reached** | Strata did not start the session: the server is at capacity, or you already have as many sessions open as your role allows (v2.3.5). The sentence underneath says which. | Close a session you no longer need, or try again in a few minutes. If it persists, tell your administrator. |
+| **Server Unavailable** | Strata has not finished its initial setup. | Contact your administrator. |
 
 A separate **Reconnecting…** overlay means the connection between *your browser* and Strata dropped; that one retries automatically. Operators can trace any of these to a log line with the [session-disconnects runbook](runbooks/session-disconnects.md).
+
+### New sessions keep saying *Reconnecting…* (or *Session Limit Reached*) while existing ones work.
+
+The server has reached its session limit. Before v2.3.5 the refusal was invisible to the browser, which kept retrying as if the network had dropped; since v2.3.5 it says **Session Limit Reached** with the reason. Before v2.3.5 the bundled `docker-compose.yml` also capped the backend container at 2 GB, which allowed only about 23 RDP sessions however large the host was; since v2.3.5 there is no cap by default and capacity follows the host's memory. Operators: see the [session-capacity runbook](runbooks/session-capacity.md).
 
 ### An SSH connection goes back to *Unpinned* after an AD sync and is refused.
 

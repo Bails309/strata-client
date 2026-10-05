@@ -65,14 +65,19 @@ against a process-wide budget, and counts against the user's
 concurrent-session limit:
 
 - **Budget:** `STRATA_SESSION_MEMORY_BUDGET_MB`, else three quarters of the
-  container (cgroup) memory limit, or of system memory without one, less
-  the replay budget (`STRATA_NVR_MEMORY_BUDGET_MB`, default 1024).
+  container (cgroup) memory limit, or of host memory without one, less
+  the replay budget (`STRATA_NVR_MEMORY_BUDGET_MB`, default 1024). It is
+  re-read on every session start, so adding memory takes effect at once.
 - **Per user:** the role's `max_concurrent_sessions` (migration 101), else
   `STRATA_MAX_SESSIONS_PER_USER`; unset or `0` means no limit.
 - **Web kiosks:** `max_web_sessions` in system settings.
 
-A refused session gets `429` before any credential is checked out or
-container or browser started.
+A refused session is told why before any credential is checked out or
+container or browser started. The refusal is delivered over the WebSocket
+as a Guacamole `error` (status `0x031D`), not as an HTTP 429: browsers hide
+an upgrade's HTTP status, so a 429 looked like a dropped connection and the
+client retried for minutes. Users now see **Session Limit Reached** with the
+reason, and the backend logs `tunnel refused`.
 
 ## 4. Safety checks
 
@@ -162,6 +167,9 @@ has spare cores; each hash uses one CPU for roughly its Argon2 cost.
 
 ### 5.5 Sessions refused at capacity
 
+Follow [session-capacity.md](session-capacity.md), which covers finding the
+limit (container, host, budget override or role) and raising it with or
+without a restart. The quick check is:
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" https://strata.example.com/api/admin/metrics | jq .memory
 ```
@@ -180,9 +188,11 @@ Expected output (example):
 ```
 
 - `sessions_reserved_bytes` near `sessions_limit_bytes`: the backend is
-  full. Add memory to the container (the budget follows its limit), add a
-  replica, or set `STRATA_SESSION_MEMORY_BUDGET_MB` if the default
-  estimate is too cautious for your workload.
+  full. Check for a container limit first
+  (`docker inspect -f '{{.HostConfig.Memory}}' $(docker compose ps -q backend)`,
+  `0` = none); unset `STRATA_BACKEND_MEMORY` or raise it, add memory to
+  the host, add a replica, or set `STRATA_SESSION_MEMORY_BUDGET_MB` if the
+  default estimate is too cautious for your workload.
 - Budget not full but users refused: their role's
   `max_concurrent_sessions` (or `STRATA_MAX_SESSIONS_PER_USER`) is
   reached. Raise it in the role editor, or ask the user to close a

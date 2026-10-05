@@ -62,3 +62,4 @@ The runbooks listed below cover §26/§28 of the Coding Standards.
 | session-disconnects.md   | Unexpected session ends: on-screen message → cause → log    | Active |
 | keyboard-input.md        | Wrong characters, console prompt ignores typing, keypad, stuck keys | Active |
 | login-rate-limiting.md   | `429` on sign-in, password change or session capacity       | Active |
+| session-capacity.md      | New sessions refused at capacity or a per-user limit; raising the budget | Active |

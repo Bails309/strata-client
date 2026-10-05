@@ -99,7 +99,8 @@ backend memory, RAM per session and the recommended maximum. From the shell:
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" https://strata.example.com/api/admin/metrics \
-  | jq '{active_sessions, native_ram_per_session_mb, native_recommended,
+  | jq '{active_sessions, native_measured, native_cpu_per_session,
+         native_ram_per_session_mb, native_recommended,
          native_limited_by, native_capacity_by_cpu, native_capacity_by_memory,
          backend_memory_mb: (.backend_memory_bytes / 1048576 | floor),
          system_total_memory_mb: (.system_total_memory / 1048576 | floor),
@@ -115,7 +116,9 @@ curl -s -H "Authorization: Bearer $TOKEN" https://strata.example.com/api/admin/m
 CPU figure is guidance. If the card says CPU but sessions are being refused,
 the host is already running past its CPU guidance as well — add both.
 `system_total_memory_mb` is the memory the backend can use — the container
-limit if one is set.
+limit if one is set. `native_measured: true` means the per-session figures
+are measured from this backend's own sessions (v2.3.7); `false` means it has
+not yet run 5 at once and is using estimates.
 
 ### 3. Check for a container limit
 

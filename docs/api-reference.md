@@ -1451,6 +1451,8 @@ Aggregate metrics across all active tunnel sessions.
   "native_capacity_by_cpu": 74,
   "native_capacity_by_memory": 448,
   "native_limited_by": "cpu",
+  "native_cpu_per_session": 0.15,
+  "native_measured": false,
   "memory": {
     "sessions_reserved_bytes": 201326592,
     "sessions_limit_bytes": 11274289152,
@@ -1471,12 +1473,14 @@ Aggregate metrics across all active tunnel sessions.
 | `system_total_memory`       | integer | **(v2.3.5)** Memory the backend can use: its container limit if set, else the host's (was always the host's) |
 | `system_cpu_cores`          | integer | **(v2.3.5)** CPUs the backend can use: its container quota if set, else the host's (was always the host's) |
 | `backend_memory_bytes`      | integer | **(v2.3.5)** Resident memory of the backend process, which hosts every native session (Chromium/Xvnc children for web sessions are separate processes and not included) |
-| `native_ram_per_session_mb` | integer | **(v2.3.5)** Average admission estimate of the live sessions (protocol and display size); a 1080p RDP session when none are running (was a fixed 1080p figure) |
-| `native_recommended`        | integer | **(v2.3.5)** Sessions this backend could serve: the lower of the admission budget ÷ `native_ram_per_session_mb` and a CPU estimate (0.15 CPU per session, 30% headroom). Was sized from 70% of host RAM, which over-reported capacity under a container limit |
-| `native_capacity_by_cpu`    | integer | **(v2.3.6)** Sessions the CPUs allow: `system_cpu_cores` × 0.70 ÷ 0.15. **Advisory** — CPU never refuses a session; past this figure sessions slow down |
+| `native_ram_per_session_mb` | integer | **(v2.3.7)** Memory one session costs: the average live reservation (a 1080p RDP session when none are running), or the **measured** per-session memory when that is higher. Was the reservation alone (v2.3.5) |
+| `native_recommended`        | integer | **(v2.3.5)** Sessions this backend could serve: the lower of `native_capacity_by_cpu` and `native_capacity_by_memory`. Was sized from 70% of host RAM, which over-reported capacity under a container limit |
+| `native_capacity_by_cpu`    | integer | **(v2.3.7)** Sessions the CPUs allow: `system_cpu_cores` × 0.70 ÷ `native_cpu_per_session`. **Advisory** — CPU never refuses a session; past this figure sessions slow down. Was ÷ a fixed 0.15 (v2.3.6) |
 | `native_capacity_by_memory` | integer | **(v2.3.6)** Sessions the admission budget allows: `memory.sessions_limit_bytes` ÷ `native_ram_per_session_mb`. **Enforced** — a session that does not fit is refused |
 | `native_limited_by`         | string  | **(v2.3.6)** `"cpu"` or `"memory"`: which of the two sets `native_recommended` (the smaller; `"cpu"` on a tie). Tells you what to add to the host to raise capacity |
-| `memory.sessions_reserved_bytes` | integer | **(v2.3.0)** Memory reserved by admitted sessions, estimated from protocol and display size |
+| `native_cpu_per_session`    | number  | **(v2.3.7)** Cores one session uses: the backend container's CPU time ÷ live sessions, smoothed over about five minutes and never below 0.01; 0.15 until measured |
+| `native_measured`           | boolean | **(v2.3.7)** `true` once the per-session figures come from measurement (at least 5 concurrent sessions seen since start); `false` while they are the fixed estimates |
+| `memory.sessions_reserved_bytes` | integer | **(v2.3.0)** Memory reserved by admitted sessions, estimated from protocol and display size. **(v2.3.7)** Each estimate is scaled up by the measured calibration factor (1–4×) when sessions are seen to use more than estimated |
 | `memory.sessions_limit_bytes` | integer | The admission budget: `STRATA_SESSION_MEMORY_BUDGET_MB`, else three quarters of the container (or host) memory less the replay budget. **(v2.3.5)** Re-read on every call and every admission, so it follows a resized host or container |
 | `memory.sessions_refused` | integer | Sessions refused since start because the budget or a per-user limit was reached |
 | `memory.replay_used_bytes` / `replay_limit_bytes` | integer | Replay history held for observers, against `STRATA_NVR_MEMORY_BUDGET_MB` |

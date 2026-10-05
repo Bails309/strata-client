@@ -1797,7 +1797,10 @@ Replay history for observers shares one budget
 is refused **before** a credential is checked out, a container or browser
 started, or the target contacted. `max_web_sessions` is now enforced the
 same way. Reserved, used and limit figures are under `memory` in
-`GET /api/admin/metrics`.
+`GET /api/admin/metrics`. Since v2.3.7 the estimate is multiplied by a
+factor measured from the container's own memory use (1–4×, never below
+the formula), so sessions that cost more than predicted cannot overrun the
+host before the budget refuses them.
 
 Since v2.3.5 a refusal on the tunnel endpoint is delivered **in band**: the
 WebSocket is accepted, one Guacamole `error` instruction is sent and the

@@ -1,12 +1,14 @@
+use axum::extract::ws::Message;
 use axum::extract::{ConnectInfo, Extension, OriginalUri, Path, Query, State, WebSocketUpgrade};
 use axum::http::HeaderMap;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::Instant;
+use strata_session::protocol::ServerInstruction;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -204,13 +206,75 @@ pub async fn create_tunnel_ticket(
     Ok(Json(serde_json::json!({ "ticket": ticket_id })))
 }
 
+#[allow(clippy::too_many_arguments)]
+pub async fn ws_tunnel(
+    ws: WebSocketUpgrade,
+    state: State<SharedState>,
+    user: Extension<AuthUser>,
+    path: Path<Uuid>,
+    query: Query<TunnelQuery>,
+    addr: ConnectInfo<SocketAddr>,
+    uri: OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    let mut ws = Some(ws);
+    match open_tunnel(&mut ws, state, user, path, query, addr, uri, headers).await {
+        Ok(response) => response,
+        Err(err) => match ws {
+            Some(ws) => refuse_over_socket(ws, &err),
+            None => err.into_response(),
+        },
+    }
+}
+
+/// Refuse a tunnel over the socket: browsers hide an upgrade's HTTP status,
+/// so the client would see only a failed connection and keep retrying.
+fn refuse_over_socket(ws: WebSocketUpgrade, err: &AppError) -> Response {
+    let (_, _, message) = crate::error::error_status_and_message(err);
+    let status = guac_status(err);
+    let err_str = err.to_string();
+    tracing::warn!(status, "tunnel refused: {err_str}");
+    ws.protocols(["guacamole"])
+        .on_upgrade(move |mut socket| async move {
+            let instruction = ServerInstruction::Error {
+                text: message,
+                status,
+            }
+            .to_bytes();
+            if let Ok(text) = String::from_utf8(instruction.to_vec()) {
+                let _ = socket.send(Message::Text(text.into())).await;
+            }
+            let _ = socket.send(Message::Close(None)).await;
+        })
+}
+
+/// Guacamole status code for a refused tunnel.
+fn guac_status(err: &AppError) -> i32 {
+    const SERVER_ERROR: i32 = 0x0200;
+    const SERVER_BUSY: i32 = 0x0201;
+    const RESOURCE_NOT_FOUND: i32 = 0x0204;
+    const CLIENT_BAD_REQUEST: i32 = 0x0300;
+    const CLIENT_UNAUTHORIZED: i32 = 0x0301;
+    const CLIENT_FORBIDDEN: i32 = 0x0303;
+    const CLIENT_TOO_MANY: i32 = 0x031D;
+    match err {
+        AppError::RateLimited(_) | AppError::TooManyAttempts { .. } => CLIENT_TOO_MANY,
+        AppError::SetupRequired => SERVER_BUSY,
+        AppError::Validation(_) => CLIENT_BAD_REQUEST,
+        AppError::Auth(_) => CLIENT_UNAUTHORIZED,
+        AppError::Forbidden => CLIENT_FORBIDDEN,
+        AppError::NotFound(_) => RESOURCE_NOT_FOUND,
+        _ => SERVER_ERROR,
+    }
+}
+
 // CodeQL note: `rust/unused-variable` misfires here on `e` bindings that are
 // interpolated into `tracing::error!("… {e}")` macros inside `async move`
 // closures; see alerts #81, #74. The variables are used; suppress the lint.
 #[allow(unused_variables)]
 #[allow(clippy::too_many_arguments)]
-pub async fn ws_tunnel(
-    ws: WebSocketUpgrade,
+async fn open_tunnel(
+    ws: &mut Option<WebSocketUpgrade>,
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
     Path(connection_id): Path<Uuid>,
@@ -218,7 +282,7 @@ pub async fn ws_tunnel(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     OriginalUri(original_uri): OriginalUri,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     // Capture the access token used to authenticate this upgrade so the
     // tunnel watchdog (below) can react to explicit logout / admin
     // revocation while the long-lived WebSocket is open. The middleware
@@ -266,7 +330,7 @@ pub async fn ws_tunnel(
         let attempts = map.entry(user.id).or_default();
         attempts.retain(|t| *t > cutoff);
         if attempts.len() >= MAX_TUNNEL_PER_USER {
-            return Err(AppError::Validation(
+            return Err(AppError::RateLimited(
                 "Too many tunnel connections. Please try again later.".into(),
             ));
         }
@@ -1391,6 +1455,9 @@ pub async fn ws_tunnel(
     } else {
         false
     };
+    let Some(ws) = ws.take() else {
+        return Err(AppError::Internal("tunnel upgrade already consumed".into()));
+    };
     Ok(ws
         .protocols(["guacamole"])
         .max_message_size(1024 * 1024)
@@ -1506,6 +1573,13 @@ pub async fn ws_tunnel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refusals_carry_a_status_the_client_will_not_retry_on() {
+        assert_eq!(guac_status(&AppError::RateLimited("full".into())), 0x031D);
+        assert_eq!(guac_status(&AppError::Forbidden), 0x0303);
+        assert_eq!(guac_status(&AppError::Internal("x".into())), 0x0200);
+    }
 
     #[test]
     fn the_prompt_domain_is_trimmed_bounded_and_printable() {

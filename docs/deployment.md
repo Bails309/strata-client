@@ -48,18 +48,24 @@ For large deployments, consider:
 
 | Container        | CPU        | RAM        | Notes                                                                  |
 | ---------------- | ---------- | ---------- | ---------------------------------------------------------------------- |
-| `backend`        | Medium     | See below  | Serves every session in-process; NVR buffers add ~50 MB per active session |
+| `backend`        | Medium     | See below  | Serves every session in-process; observer replay history shares one 1 GiB budget (`STRATA_NVR_MEMORY_BUDGET_MB`) |
 | `frontend`       | Minimal    | 30 MB      | Static file serving + reverse proxy via nginx                          |
 | `postgres-local` | Low–Medium | 200–500 MB | Depends on audit log volume                                            |
 | `vault`          | Minimal    | 50 MB      | Transit encrypt/decrypt only                                           |
 
-> **Sizing a session (v2.0.0+).** A session costs **two 1920×1080 framebuffers
-> at 4 bytes per pixel plus about 8 MB of channel and encoder state — roughly
-> 24 MB** — rather than a process carrying FreeRDP, cairo surfaces and a worker
-> thread per core. This figure is measured from what the engine allocates, not
-> estimated, and the admin **Sessions** tab reports the host's capacity from it
-> directly. SSH, VNC and Kubernetes sessions are lighter still: a terminal
-> session holds a character grid, not a framebuffer.
+> **Sizing a session (v2.0.0+).** An RDP or VNC session is admitted with an
+> **estimate** of two framebuffers at 4 bytes per pixel plus 8 MB of channel
+> and encoder state — about **24 MB at 1920×1080** — rather than a process
+> carrying FreeRDP, cairo surfaces and a worker thread per core. SSH, Telnet
+> and Kubernetes sessions are admitted at 4 MB (a character grid, not a
+> framebuffer); a web session at 384 MB plus framebuffers for its Chromium.
+> The admin **Sessions** tab reports the average of the live sessions'
+> estimates and the backend's measured resident memory side by side. See
+> [Session capacity planning](#session-capacity-planning).
+>
+> **Corrected in v2.3.5:** earlier editions of this note said the figure was
+> "measured from what the engine allocates, not estimated". It is a fixed
+> formula applied at admission; the measured figure is **Backend Memory**.
 
 ## Quick Start (Development / Evaluation)
 
@@ -616,6 +622,52 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v2.3.4 → v2.3.5 (capacity follows the host, refusals are shown, russh 0.64.1)
+
+Rebuild the backend and frontend images and recreate the backend so the new
+`docker-compose.yml` applies. **No migration. No required `.env` change.**
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+⚠ Recreating the backend ends every live session; do it in a quiet period.
+
+| Change | Who notices |
+| ------ | ----------- |
+| The backend container is no longer capped at 2 GB / 2 CPUs; session capacity follows the host | Deployments that hit ~23 concurrent RDP sessions |
+| A refused session shows **Session Limit Reached** with the reason instead of retrying as **Reconnecting…** | Users who open a session while the server is full or at their role's limit |
+| The capacity card reports the container's real limits, backend memory and the live RAM-per-session average | Admins with `can_manage_system` |
+| `russh` 0.64.1 (agent-server advisory, not reachable here) | Nobody |
+
+**Decide whether to keep a cap.** Before v2.3.5 the backend always had
+`memory: 2G` and `cpus: "2"`. After the upgrade it has none. If the host
+also runs other heavy workloads and you want to keep the old ceiling, add to
+`.env` before `up`:
+
+```env
+STRATA_BACKEND_MEMORY=2G
+STRATA_BACKEND_CPUS=2
+```
+
+**Local edits to `docker-compose.yml`.** If you changed the backend's
+`deploy.resources.limits` by hand, `git pull` will conflict on those lines;
+keep the new `${STRATA_BACKEND_CPUS:-0}` / `${STRATA_BACKEND_MEMORY:-0}` form
+and put your values in `.env`.
+
+**Verify post-upgrade:**
+
+```bash
+docker inspect -f 'memory={{.HostConfig.Memory}} nano_cpus={{.HostConfig.NanoCpus}}' "$(docker compose ps -q backend)"
+```
+
+Expected output: `memory=0 nano_cpus=0` (or your configured values). The
+**What's New** modal shows the v2.3.5 card, and **Admin → Sessions** shows
+**Backend Memory** and a **Max Recommended** sized to the host.
+
 #### v2.3.3 → v2.3.4 (shared bind-account rotation, failing-sync banner, RDP resize)
 
 Rebuild the backend and frontend images. **No migration, no `.env` change.**
@@ -829,9 +881,10 @@ Transit-only token. Nothing needs re-entering.
 | `STRATA_LOGIN_ATTEMPTS_PER_MINUTE` | 600 | Sign-in attempts per minute for the whole deployment |
 | `STRATA_PASSWORD_HASH_CONCURRENCY` | One per CPU, up to 4 | Argon2 hashes at once |
 | `STRATA_FILE_CRYPTO_CONCURRENCY` | One per CPU, up to 4 | Files encrypted or verified at once |
-| `STRATA_SESSION_MEMORY_BUDGET_MB` | ¾ of container memory less the replay budget | Session admission budget |
+| `STRATA_SESSION_MEMORY_BUDGET_MB` | ¾ of container (or host) memory less the replay budget, re-read per session | Session admission budget |
 | `STRATA_MAX_SESSIONS_PER_USER` | unset (no limit) | Per-user session limit where the role sets none |
 | `STRATA_NVR_MEMORY_BUDGET_MB` | 1024 | Replay history for observers, across all sessions |
+| `STRATA_BACKEND_MEMORY` / `STRATA_BACKEND_CPUS` | `0` (no limit) | Compose limits on the backend container; every session runs in it, so these cap session capacity |
 | `STRATA_WEB_CHROMIUM_SANDBOX` | on | `disabled` runs Chromium without its sandbox (warns on every launch) |
 
 **Removed:** `STRATA_WEB_VNC_HOST` (kiosk Xvnc listens on loopback only).
@@ -1485,26 +1538,57 @@ Use a managed PostgreSQL service (e.g., AWS RDS, Azure Database for PostgreSQL, 
 
 ### Session capacity planning
 
-A session's cost is **measured rather than estimated** since v2.0.0, because
-the engine's allocations are known: two 1920×1080 framebuffers at four bytes
-per pixel — the live one and the previous frame used to narrow the target's
-damage rectangles — plus roughly 8 MB of channel and encoder state. About
-**24 MB per RDP session**. Terminal protocols hold a character grid rather
-than a framebuffer and are much lighter.
+Every session runs inside the `backend` container, so session capacity is
+whatever memory and CPU that container can use. Since v2.3.5 the bundled
+`docker-compose.yml` sets **no** limit on it by default, and capacity scales
+with the host.
 
-The admin **Sessions** tab computes the host's recommended maximum from this
-figure and the host's actual CPU and memory, reserving 30% headroom, so
-prefer that number over a table. As a rule of thumb:
+**Memory — enforced.** Each session reserves an estimate when it starts
+(RDP/VNC: 8 MB + width × height × 8 bytes, about 24 MB at 1080p; terminal
+protocols: 4 MB; web: 384 MB + framebuffers) against the admission budget:
 
-| Host | Approx. concurrent RDP sessions |
-| ---- | ------------------------------- |
-| 2 vCPU / 4 GB   | ~9 (CPU-bound)  |
-| 4 vCPU / 8 GB   | ~18 (CPU-bound) |
-| 8 vCPU / 16 GB  | ~37 (CPU-bound) |
-| 16 vCPU / 32 GB | ~74 (CPU-bound) |
+| Setting | Budget |
+| ------- | ------ |
+| `STRATA_SESSION_MEMORY_BUDGET_MB` set | exactly that |
+| otherwise | ¾ × available memory − `STRATA_NVR_MEMORY_BUDGET_MB` (default 1024 MB), at least 256 MB |
 
-CPU is the binding constraint at these ratios, not memory. Add hosts behind
-the load balancer to go further.
+*Available memory* is the backend container's limit if it has one
+(`STRATA_BACKEND_MEMORY`, or a limit set by your orchestrator), otherwise the
+host's RAM. The budget is re-read on every session start, so adding memory to
+the host or raising the container limit with `docker update` takes effect for
+the next session without a restart. A session that does not fit is refused
+with **Session Limit Reached** before any credential is checked out or the
+target contacted.
+
+**CPU — advisory.** The **Max Recommended** figure on the admin **Sessions**
+tab is the lower of the memory budget ÷ the average live reservation and
+70% of the CPUs the backend can use ÷ 0.15 CPU per session. Nothing is
+refused on CPU grounds; treat a backend that sits near the CPU figure as
+due for more cores.
+
+Rule of thumb for 1080p RDP sessions with no container limit:
+
+| Host | Memory budget | Admission limit | CPU guidance |
+| ---- | ------------- | --------------- | ------------ |
+| 2 vCPU / 4 GB   | ~2 GB  | ~85  | ~9  |
+| 4 vCPU / 8 GB   | ~5 GB  | ~210 | ~18 |
+| 8 vCPU / 16 GB  | ~11 GB | ~460 | ~37 |
+| 16 vCPU / 32 GB | ~23 GB | ~960 | ~74 |
+
+CPU is the binding constraint at these ratios. The memory limits assume
+nothing else large shares the host; on a host that also runs PostgreSQL,
+ClamAV or VDI containers, set `STRATA_BACKEND_MEMORY` or
+`STRATA_SESSION_MEMORY_BUDGET_MB` to what the backend may really use.
+
+**Capping the backend.** Set `STRATA_BACKEND_MEMORY` (e.g. `8G`) and/or
+`STRATA_BACKEND_CPUS` (e.g. `4`) in `.env` to reserve the rest of the host
+for other workloads. The budget follows the cap automatically. A 2 GB cap —
+the hard-coded default before v2.3.5 — leaves a 512 MB budget, about 23
+browser-sized RDP sessions.
+
+To go beyond one host, add backend replicas behind the load balancer. For
+refusals in production, follow the
+[session-capacity runbook](runbooks/session-capacity.md).
 
 > **Changed in v2.0.0.** This section previously documented adding `guacd`
 > sidecars via `GUACD_INSTANCES` and the `scale` compose profile, sized at

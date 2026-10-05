@@ -23,6 +23,15 @@ describe("describeSessionEnd", () => {
     );
   });
 
+  it("titles a refusal at admission as a limit, not a lost connection", () => {
+    const end = describeSessionEnd(
+      "The server is at capacity. Try again in a few minutes.",
+      SessionEndStatus.CLIENT_TOO_MANY
+    );
+    expect(end.title).toBe("Session Limit Reached");
+    expect(end.terminatedByAdmin).toBe(false);
+  });
+
   it("still recognises an administrator kill by its text", () => {
     const end = describeSessionEnd(
       "Session terminated by administrator",

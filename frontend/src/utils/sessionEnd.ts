@@ -10,6 +10,7 @@
 /** Guacamole status codes the gateway ends sessions with. */
 export const SessionEndStatus = {
   SERVER_ERROR: 0x0200,
+  SERVER_BUSY: 0x0201,
   UPSTREAM_TIMEOUT: 0x0202,
   UPSTREAM_ERROR: 0x0203,
   UPSTREAM_NOT_FOUND: 0x0207,
@@ -19,6 +20,8 @@ export const SessionEndStatus = {
   SESSION_CLOSED: 0x020b,
   CLIENT_UNAUTHORIZED: 0x0301,
   CLIENT_FORBIDDEN: 0x0303,
+  /** Refused at admission: the server is at capacity or the user is at their session limit. */
+  CLIENT_TOO_MANY: 0x031d,
 } as const;
 
 export interface SessionEndInfo {
@@ -40,6 +43,8 @@ const BY_STATUS: Record<number, [title: string, label: string]> = {
   [SessionEndStatus.UPSTREAM_UNAVAILABLE]: ["Connection Refused", "Connection Refused"],
   [SessionEndStatus.CLIENT_UNAUTHORIZED]: ["Access Denied", "Access Denied"],
   [SessionEndStatus.CLIENT_FORBIDDEN]: ["Access Denied", "Access Denied"],
+  [SessionEndStatus.CLIENT_TOO_MANY]: ["Session Limit Reached", "Limit Reached"],
+  [SessionEndStatus.SERVER_BUSY]: ["Server Unavailable", "Unavailable"],
 };
 
 export function describeSessionEnd(message: string, code?: number): SessionEndInfo {

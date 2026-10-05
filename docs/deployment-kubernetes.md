@@ -116,7 +116,7 @@ must provide them itself.
 | `CREATEROLE` for the database owner | The backend creates and uses the least-privilege `<owner>_runtime` role (SEC-25) | `ALTER ROLE <owner> CREATEROLE;` on the managed database. Otherwise it serves as the owner and logs a warning; `STRATA_DB_RUNTIME_ROLE=off` silences that deliberately |
 | Audit anchor storage | Signed audit checkpoints must outlive the database (SEC-17) | A small RWO PVC (or object-storage sidecar with write-once retention) mounted on the backend, with `STRATA_AUDIT_ANCHOR_PATH` pointing at a file in it. Only one replica writes per pass |
 | Trusted proxies | Client addresses for limits and audit come from `X-Forwarded-For` only when the peer is trusted (SEC-20) | `STRATA_TRUST_XFF=1` and `STRATA_TRUSTED_PROXIES=<ingress controller pod CIDR>` on the backend |
-| Memory limit on the backend | Session admission sizes its budget from the cgroup limit (PERF-04) | Set `resources.limits.memory`; optionally `STRATA_SESSION_MEMORY_BUDGET_MB` |
+| Memory limit on the backend | Session admission sizes its budget from the cgroup limit (PERF-04), re-read on every session start since v2.3.5, so a resized limit applies without a restart | Set `resources.limits.memory`; optionally `STRATA_SESSION_MEMORY_BUDGET_MB` |
 | Web egress allow-list | Kiosks are refused until *Allowed Networks* is set (SEC-02) | *Admin → Network → Web Browser Sessions* after first boot |
 
 Sign-in limits, refresh-token rotation, revocations and the health-check

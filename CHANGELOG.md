@@ -7,7 +7,127 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Security — the runtime database role's password no longer reaches Postgres (CodeQL #342)
+## [2.3.5] — 2026-10-05
+
+### Patch release — session capacity follows the host, a refused session says why instead of reconnecting forever, the capacity card reports real numbers, and russh 0.64.1
+
+### The ask
+
+> *"can we look at this version compare to ours
+> https://github.com/Eugeny/russh/releases/tag/v0.64.1"*
+>
+> *"I have 15 sessions native running but 0 processes and the RAM/Sessions
+> seems to always be at 24 MB"*
+>
+> *"I seem to have hit 23 connections in my native engine and now it will not
+> let any more sessions connect"*
+>
+> *"We need the limits to scale accordingly based on the host capacity not a
+> hard limit as the host could scale"*
+>
+> *"when the resource limit is exhausted, is it possible to say this rather
+> than have users try connecting to an RDP which then doesn't work and just
+> says that it's constantly reconnecting for them?"*
+
+### Summary
+
+| Area | Change | PR |
+| ---- | ------ | -- |
+| Session capacity | The bundled `docker-compose.yml` no longer caps the backend at 2 GB / 2 CPUs; the admission budget is re-read on every session start, so it follows the host or container | this release |
+| Refusals | A session refused before it starts (capacity, role limit, rate limit, access) is told why over the WebSocket — **Session Limit Reached** — instead of failing silently and retrying as **Reconnecting…** | this release |
+| Admin capacity card | **Processes** (a hard-coded `0`) replaced by measured **Backend Memory**; **RAM / Session** follows the live sessions; capacity sized from the container's real limits | #482, this release |
+| Security | `russh` 0.64.0 → 0.64.1 (GHSA-4wc5-f2rc-q74m, not reachable); the runtime database role's password no longer appears in Postgres statement text (CodeQL #342) | #481, #477 |
+| CI | Prettier failure on `AdSyncFailureBanner.tsx`; flaky `kube_live` PTY-resize test | #477 |
+| Dependencies | nginx `1.31.6-alpine`, frontend dev tooling group, `release-drafter` 7.9.0 | #478–#480 |
+
+### Fixed — new sessions refused after ~23, with no explanation
+
+**Symptom.** With 23 RDP sessions open, every further session showed
+**Reconnecting…** indefinitely and never connected; existing sessions were
+unaffected. The admin capacity card meanwhile reported **Max Recommended 37**
+and a 15.6 GB host, so nothing on screen suggested a limit had been reached.
+
+**Root cause — three defects compounding.**
+
+| # | Defect | Effect |
+| - | ------ | ------ |
+| 1 | `docker-compose.yml` hard-coded `deploy.resources.limits` of `cpus: "2"` and `memory: 2G` on the `backend` service | Since v2.0.0 every session runs **inside** the backend, so this capped the whole session tier at 2 GB regardless of the host |
+| 2 | Session admission ([`services/admission.rs`](backend/src/services/admission.rs)) sizes its budget from the cgroup limit: ¾ × 2048 MB − the 1024 MB replay budget = **512 MB**. An RDP session at a 1920×969 browser viewport reserves 8 MB + 1920 × 969 × 8 bytes ≈ 22 MB; 512 ÷ 22 ≈ **23** | The 24th session was refused — correctly, by the budget's own rules |
+| 3 | The refusal was returned as HTTP `429` on the WebSocket **upgrade**. Browsers do not expose an upgrade's HTTP status to the page | The client saw a generic connection failure, took it for a network drop and retried with exponential back-off — the endless **Reconnecting…** |
+
+The budget was also computed **once**, at the first admission, so even a
+container limit raised live with `docker update` was ignored until the
+backend restarted.
+
+**Fix.**
+
+- **Limits scale with the host.** The backend's Compose limits are now
+  `cpus: "${STRATA_BACKEND_CPUS:-0}"` and `memory: ${STRATA_BACKEND_MEMORY:-0}`.
+  `0` is Docker's "no limit" — verified by running a probe container through
+  the same Compose interpolation and reading `/sys/fs/cgroup/memory.max`
+  (`max`) and `cpu.max` (`max 100000`), and with values set (`2147483648`,
+  `200000 100000`). Operators who want a ceiling set the variables in `.env`.
+- **The budget is live.** `Ledger` now holds a limit *function* rather than a
+  number, and `budget()` re-reads `STRATA_SESSION_MEMORY_BUDGET_MB`, the cgroup
+  limit and host RAM on every `admit` and every `stats` call. Memory available
+  is `memory_capacity()`: the cgroup limit capped at host RAM (a cgroup limit
+  larger than the host is meaningless). Shrinking the budget below what is
+  reserved refuses new sessions and leaves running ones alone.
+- **Refusals are delivered in band.** `ws_tunnel` in
+  [`routes/tunnel.rs`](backend/src/routes/tunnel.rs) now wraps `open_tunnel`,
+  which holds the `WebSocketUpgrade` in an `Option` and takes it only once the
+  session is ready. Any error before that is passed to `refuse_over_socket`,
+  which accepts the upgrade, sends one Guacamole `error` instruction —
+  the client-safe message from `error_status_and_message` and a status from
+  `guac_status` — and closes. The browser already treats an `error`
+  instruction as a server-side end: it shows the overlay and does not retry.
+  `CLIENT_TOO_MANY` (`0x031D`) is titled **Session Limit Reached** and
+  `SERVER_BUSY` (`0x0201`) **Server Unavailable** in
+  [`utils/sessionEnd.ts`](frontend/src/utils/sessionEnd.ts). The per-user
+  tunnel rate limit (30 upgrades a minute) is now `RateLimited` rather than
+  `Validation`, so it is titled the same way.
+- **Compose passes the budget variables through.** `STRATA_SESSION_MEMORY_BUDGET_MB`,
+  `STRATA_NVR_MEMORY_BUDGET_MB` and `STRATA_MAX_SESSIONS_PER_USER` were
+  documented since v2.3.0 but never listed in the backend's `environment:`,
+  so setting them in `.env` had no effect. They are now passed through, empty
+  by default (empty is treated as unset).
+
+**Rejected.**
+
+- *Raising the default cap to 4 GB.* Still a fixed number on a host that may
+  be resized; the requirement was that capacity follow the host.
+- *Checking capacity at ticket creation* (`POST /api/tunnel/ticket`, an
+  ordinary HTTP call whose error the client can read). The ticket and the
+  upgrade are separate requests, so the answer could change in between; and
+  the auto-reconnect path would still hit the invisible upgrade refusal.
+- *Mapping refusals by message text in the client.* Status codes are already
+  the contract for session ends (v2.1.1).
+
+### Fixed — the Native Engine Capacity card showed placeholders (#482 and this release)
+
+| Tile | Was | Now |
+| ---- | --- | --- |
+| **Processes** | A literal `0` in `SessionsTab.tsx`, left from `guacd` (one process per session) | **Backend Memory**: resident memory of the backend process, via `sysinfo` (`backend_memory_bytes`) |
+| **RAM / Session (est.)** | A constant: two 1920×1080 framebuffers + 8 MB = 24 MB, whatever was running | The average reservation of the live sessions (`reserved_bytes ÷ sessions`, with a new `sessions` count on `AdmissionStats`); the 1080p RDP estimate when idle |
+| **Max Recommended** | 70% of **host** RAM ÷ 24 MB, and **host** CPUs | The admission budget ÷ RAM per session, and `available_parallelism()` CPUs (which honours cgroup quotas); still the lower of memory and CPU |
+| **Host Resources** | Host totals | `memory_capacity()` / `cpu_capacity()`: the container's limits when set |
+
+Under the old 2 GB cap the card read *8 vCPUs, 15.6 GB, Max Recommended 37*
+while the real limit was 23 — the card was the main reason the cap went
+unnoticed.
+
+### Security — `russh` 0.64.0 → 0.64.1 (#481)
+
+| Advisory | Component | Exposure in Strata |
+| -------- | --------- | ------------------ |
+| [GHSA-4wc5-f2rc-q74m](https://github.com/Eugeny/russh/security/advisories/GHSA-4wc5-f2rc-q74m) — unbounded allocation from crafted agent constraint records | `russh::keys::agent::server` | **Not reachable.** Strata uses russh only as an SSH client, never runs an agent server, and declines agent forwarding (`enable-agent` is in `SSH_PARAMS_IGNORED_NATIVELY` by design). Upgraded because the module is compiled in and `cargo deny` would flag 0.64.0 |
+
+The requirement in `crates/strata-session/Cargo.toml` is raised to
+`0.64.1` so a regenerated lockfile cannot fall back. Only `russh` moved in
+`Cargo.lock` (the update was run with the project's Rust 1.99; a host
+toolchain at 1.95 re-resolved unrelated crates and was discarded).
+
+### Security — the runtime database role's password no longer reaches Postgres (CodeQL #342, #477)
 
 CodeQL alert #342 (`rust/cleartext-storage-database`) flagged
 `provision_runtime_role` in [`backend/src/db/mod.rs`](backend/src/db/mod.rs):
@@ -31,6 +151,102 @@ implementation (Python `hashlib`/`hmac`); the DB-backed
 `the_runtime_role_cannot_change_schema_or_audit_history` provisions the role
 through both `CREATE` and `ALTER` and logs in with it, against Postgres 16 with
 `log_statement = ddl`, whose log showed only the verifier.
+
+### CI (#477)
+
+- `frontend format:check` failed on
+  [`AdSyncFailureBanner.tsx`](frontend/src/components/AdSyncFailureBanner.tsx)
+  (a `<code>` block Prettier keeps on one line); the pre-commit hook had not
+  caught it. Reformatted.
+- `kube_live::the_pty_takes_a_new_size` failed on its first CI run with
+  `stty size` still reporting `24 80`: the kubelet applies resize messages to
+  the PTY asynchronously, so a command sent straight after the resize could
+  run first. The test now polls inside the pod until `stty` reports `40 100`,
+  still asserting on what the pod believes its window is.
+
+### Dependencies (#478–#480)
+
+| Package | From | To | Where |
+| ------- | ---- | -- | ----- |
+| `nginx` image | digest `adad2ae` | `df221db` (`1.31.6-alpine`) | `frontend/Dockerfile` (runtime) |
+| `@vitest/coverage-v8`, `vitest` | 5.0.1 | 5.0.3 | frontend dev |
+| `eslint-plugin-security` | 4.0.1 | 4.2.0 | frontend dev |
+| `globals` | 17.12.0 | 17.13.0 | frontend dev |
+| `typescript-eslint` | 8.70.1 | 8.71.0 | frontend dev |
+| `vite` | 8.3.1 | 8.3.2 | frontend dev (build) |
+| `release-drafter/release-drafter` | 7.7.0 | 7.9.0 | GitHub Actions |
+| `russh` | 0.64.0 | 0.64.1 | backend (see above) |
+
+### Documentation
+
+- **New runbook** [`docs/runbooks/session-capacity.md`](docs/runbooks/session-capacity.md):
+  confirm an admission refusal, read the live budget, find a container limit,
+  and raise it with or without a restart (including `docker update` live).
+  Indexed in `docs/runbooks/README.md` and the runbook table in
+  `docs/architecture.md`.
+- `docs/architecture.md` § Session admission gains *How a refusal reaches the
+  browser* (the error-to-status table) and *Capacity reporting*.
+- `docs/api-reference.md`: the in-band refusal statuses on
+  `GET /api/tunnel/:connection_id`, the changed `GET /api/admin/metrics`
+  fields (tagged v2.3.5), and the exception noted under the error-status table.
+- `docs/security.md`: admission and the in-band refusal (trust boundary
+  unchanged — the upgrade is only accepted after authentication), the backend
+  resource-limit row, and GHSA-4wc5-f2rc-q74m under handled advisories.
+- `docs/deployment.md`: *Session capacity planning* rewritten, v2.3.4 → v2.3.5
+  upgrade notes, and the new variables in the environment table.
+- `docs/faq.md`, `docs/runbooks/session-disconnects.md`: the **Session Limit
+  Reached** and **Server Unavailable** headings.
+- `.env.example`: a *Session capacity* section.
+
+**Corrections (backfill).** Since v2.0.0, `docs/deployment.md` and the
+`native_ram_per_session_mb` API description said the per-session figure was
+*"measured from what the engine allocates, not estimated"*. It was always a
+fixed formula; the text now says so and points at the measured
+**Backend Memory**. `docs/security.md` and `docs/architecture.md` described
+the refusal as an HTTP `429`; that stopped being what a browser sees in this
+release. `docs/deployment.md`'s container table said NVR buffers add ~50 MB
+per session; since v2.3.0 they share one 1 GiB budget.
+
+### Scope & safety
+
+| Surface | Change |
+| ------- | ------ |
+| Schema | None |
+| REST API | `GET /api/admin/metrics`: new `backend_memory_bytes`; `system_total_memory`, `system_cpu_cores`, `native_ram_per_session_mb`, `native_recommended` and `memory.sessions_limit_bytes` change meaning as described above. No field removed |
+| WebSocket API | `GET /api/tunnel/:connection_id` refusals after authentication are now an in-band `error` instruction + close instead of an HTTP status on the upgrade. Unauthenticated requests are unchanged (HTTP `401`) |
+| Environment | New: `STRATA_BACKEND_MEMORY`, `STRATA_BACKEND_CPUS` (Compose only, default `0` = no limit). Now actually passed through by Compose: `STRATA_SESSION_MEMORY_BUDGET_MB`, `STRATA_NVR_MEMORY_BUDGET_MB`, `STRATA_MAX_SESSIONS_PER_USER` |
+| Deployment | **Behavioural:** the backend container loses its 2 GB / 2 CPU cap unless the new variables are set |
+| Dependencies | `russh` 0.64.1; frontend dev tooling and `nginx` base image as listed |
+| Trust boundaries | None moved. The refusal path runs after the authentication middleware; error text sent to the client is the existing client-safe text |
+
+### Testing
+
+- Backend (Rust 1.99 container): `cargo fmt --check`, `cargo clippy
+  --all-targets -D warnings`, and the full unit suite — **1396 passed**, 0
+  failed. New: `the_budget_follows_a_resized_host` (the ledger re-reads a
+  changing limit), session counts in
+  `the_budget_refuses_what_does_not_fit_and_frees_on_drop`, and
+  `refusals_carry_a_status_the_client_will_not_retry_on`.
+- `strata-session` with `ssh,sftp,terminal` against `russh` 0.64.1 (#481).
+- Frontend: `tsc --noEmit`; `sessionEnd.test.ts` (new case for
+  `CLIENT_TOO_MANY`), `HealthTab` and `AdminSettings` suites (231 tests).
+- Compose: a probe container through the same `${VAR:-0}` interpolation
+  confirmed `0` yields no cgroup limit and a set value is applied.
+- Not exercised end to end: 24 live RDP sessions against a capped backend.
+  The arithmetic in the runbook reproduces the reported limit of 23 exactly.
+
+### Deploy
+
+```bash
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+⚠ Recreating the backend ends live sessions. **No migration.** To keep the
+old ceiling, set `STRATA_BACKEND_MEMORY=2G` and `STRATA_BACKEND_CPUS=2` in
+`.env` before `up`. See
+[deployment.md § v2.3.4 → v2.3.5](docs/deployment.md#v234--v235-capacity-follows-the-host-refusals-are-shown-russh-0641).
 
 ## [2.3.4] — 2026-10-04
 

@@ -1798,7 +1798,8 @@ Step-by-step procedures for on-call engineers live under
 | [session-disconnects.md](runbooks/session-disconnects.md)     | A user reports an unexpected or unexplained session end — map the on-screen message to its cause and log line |
 | [keyboard-input.md](runbooks/keyboard-input.md)               | Wrong characters, nothing typed at a console prompt, dead keypad, stuck keys in an RDP or SSH session (v2.3.1) |
 | [dmz-production-certs.md](runbooks/dmz-production-certs.md)   | Issue and install production certificates for the DMZ link (replace the development certificates)            |
-| [login-rate-limiting.md](runbooks/login-rate-limiting.md)     | Users get `429` on sign-in or password change; session refused with `429` at capacity (v2.3.0)               |
+| [login-rate-limiting.md](runbooks/login-rate-limiting.md)     | Users get `429` on sign-in or password change; session admission summary (v2.3.0)                             |
+| [session-capacity.md](runbooks/session-capacity.md)           | New sessions refused with **Session Limit Reached** (before v2.3.5: endless **Reconnecting…**); find and raise the limit (v2.3.5) |
 
 ## Session-activity bus and proactive token refresh (v1.6.1)
 
@@ -2528,16 +2529,18 @@ is released when the session ends.
 ```mermaid
 flowchart LR
     T[Tunnel request] --> A{admission::admit}
-    A -- role limit reached --> R1[429: session limit]
-    A -- budget full --> R2[429: at capacity]
+    A -- role limit reached --> R1[error 0x031D: session limit]
+    A -- budget full --> R2[error 0x031D: at capacity]
     A -- reserved --> C[Credential checkout / VDI container / Chromium]
     C --> E[Session engine]
     E -- session ends --> D[Reservation dropped]
 ```
 
 - Budget: `STRATA_SESSION_MEMORY_BUDGET_MB`, else three quarters of the
-  cgroup memory limit (or system memory) less the replay budget, never
-  below 256 MiB.
+  cgroup memory limit (or host memory) less the replay budget, never
+  below 256 MiB. Re-read on every admission, so it follows a resized host
+  or `docker update --memory` without a restart. The Compose file sets no
+  backend limit by default (`STRATA_BACKEND_MEMORY` / `STRATA_BACKEND_CPUS`).
 - Per user: `roles.max_concurrent_sessions` (migration 101), else
   `STRATA_MAX_SESSIONS_PER_USER`; `max_web_sessions` caps kiosks.
 - Observer replay history shares one budget (`STRATA_NVR_MEMORY_BUDGET_MB`,
@@ -2547,6 +2550,43 @@ flowchart LR
   at 256 MiB across all sessions (SEC-15).
 - Reserved, limit, refused, replay and clipboard figures are reported
   under `memory` in `GET /api/admin/metrics`.
+
+#### How a refusal reaches the browser (v2.3.5)
+
+A browser does not expose the HTTP status of a failed WebSocket upgrade to
+the page, so a refusal sent as `429` looked to the client exactly like a
+dropped network and it retried — the user saw **Reconnecting…** for minutes.
+`ws_tunnel` in [`routes/tunnel.rs`](../backend/src/routes/tunnel.rs) now
+holds the `WebSocketUpgrade` until the session is ready (`open_tunnel`), and
+any error before that point is delivered by `refuse_over_socket`: it accepts
+the upgrade, sends one Guacamole `error` instruction carrying the
+client-safe message from `error_status_and_message` and a status from
+`guac_status`, and closes. The browser treats an `error` instruction as a
+server-side end, shows the overlay and does not retry.
+
+| Refusal | `AppError` | Guacamole status | Overlay heading |
+| ------- | ---------- | ---------------- | --------------- |
+| Budget full, per-user limit, tunnel rate limit | `RateLimited` / `TooManyAttempts` | `0x031D` `CLIENT_TOO_MANY` | Session Limit Reached |
+| Setup not complete | `SetupRequired` | `0x0201` `SERVER_BUSY` | Server Unavailable |
+| Bad request | `Validation` | `0x0300` `CLIENT_BAD_REQUEST` | Connection Error |
+| Ticket for another user or connection | `Auth` | `0x0301` `CLIENT_UNAUTHORIZED` | Access Denied |
+| No role access to the connection | `Forbidden` | `0x0303` `CLIENT_FORBIDDEN` | Access Denied |
+| Connection not found | `NotFound` | `0x0204` `RESOURCE_NOT_FOUND` | Connection Error |
+| Anything else | other | `0x0200` `SERVER_ERROR` (generic text) | Connection Error |
+
+Failures of the authentication middleware (no or expired token) happen
+before the handler and are still plain HTTP responses.
+
+#### Capacity reporting
+
+The admin **Native Engine Capacity** card (`GET /api/admin/metrics`) sizes
+itself from what the backend can actually use — `admission::memory_capacity`
+(the cgroup limit capped at host RAM) and `admission::cpu_capacity`
+(`std::thread::available_parallelism`, which honours cgroup CPU quotas) —
+not the host's totals. **Max Recommended** is the lower of the admission
+budget ÷ the average live reservation and 70% of the CPUs ÷ 0.15 CPU per
+session. **Backend Memory** is the backend process's resident memory (web
+sessions' Chromium and Xvnc are separate processes and not included).
 
 ### Shared state across replicas
 

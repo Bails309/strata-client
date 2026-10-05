@@ -39,6 +39,7 @@ const metrics = (over: Partial<MetricsSummary> = {}): MetricsSummary => ({
   sessions_by_protocol: { ssh: 2 },
   system_total_memory: 8 * 1024 * 1024 * 1024,
   system_cpu_cores: 4,
+  backend_memory_bytes: 0,
   native_ram_per_session_mb: 24,
   native_recommended: 90,
   ...over,

@@ -46,6 +46,8 @@ pub struct AdmissionStats {
     pub reserved_bytes: u64,
     pub limit_bytes: u64,
     pub rejected: u64,
+    /// Sessions currently holding a reservation.
+    pub sessions: u32,
 }
 
 struct Ledger {
@@ -122,10 +124,12 @@ impl Ledger {
     }
 
     fn stats(&self) -> AdmissionStats {
+        let per_user = self.per_user.lock().unwrap_or_else(|e| e.into_inner());
         AdmissionStats {
             reserved_bytes: self.reserved.load(Ordering::Relaxed),
             limit_bytes: self.limit,
             rejected: self.rejected.load(Ordering::Relaxed),
+            sessions: per_user.values().sum(),
         }
     }
 }
@@ -245,8 +249,10 @@ mod tests {
         let a = ledger.admit(user, None, 60 * MIB).unwrap();
         assert!(ledger.admit(Uuid::new_v4(), None, 60 * MIB).is_err());
         assert_eq!(ledger.stats().rejected, 1);
+        assert_eq!(ledger.stats().sessions, 1);
         drop(a);
         assert_eq!(ledger.stats().reserved_bytes, 0);
+        assert_eq!(ledger.stats().sessions, 0);
         let _b = ledger.admit(user, None, 60 * MIB).unwrap();
     }
 

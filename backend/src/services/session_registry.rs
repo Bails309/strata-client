@@ -599,6 +599,7 @@ impl SessionRegistry {
             sessions_by_protocol: by_protocol,
             system_total_memory: 0,
             system_cpu_cores: 0,
+            backend_memory_bytes: 0,
             native_ram_per_session_mb: 0, // placeholder — overridden by admin handler
             native_recommended: 0,        // placeholder — overridden by admin handler
             memory: MemoryMetrics::current(),
@@ -646,7 +647,9 @@ pub struct MetricsSummary {
     pub system_total_memory: u64,
     /// Number of logical CPU cores (for display).
     pub system_cpu_cores: u32,
-    /// Memory one session costs, from what the engine actually allocates.
+    /// Resident memory of the backend process, which hosts every session.
+    pub backend_memory_bytes: u64,
+    /// Average reservation of the live sessions, or a 1080p RDP session when idle.
     pub native_ram_per_session_mb: u32,
     /// Sessions this host could serve.
     pub native_recommended: u32,
@@ -859,6 +862,7 @@ mod tests {
             },
             system_total_memory: 0,
             system_cpu_cores: 0,
+            backend_memory_bytes: 0,
             native_ram_per_session_mb: 24,
             native_recommended: 40,
             memory: MemoryMetrics::default(),

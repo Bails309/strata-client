@@ -2956,18 +2956,26 @@ pub async fn get_metrics(
 
     let by_cpu = (usable_cpu / CPU_PER_SESSION) as u32;
 
+    if let Ok(pid) = sysinfo::get_current_pid() {
+        sys.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::Some(&[pid]),
+            false,
+            sysinfo::ProcessRefreshKind::nothing().with_memory(),
+        );
+        metrics.backend_memory_bytes = sys.process(pid).map_or(0, |p| p.memory());
+    }
+
     // ── Native engine capacity ──
     //
-    // The native engine's footprint is known rather than estimated: a
-    // session holds two framebuffers, the live one and the previous
-    // frame used to narrow the target's damage rectangles, at four bytes
-    // a pixel. Everything else — decoder state, channel buffers, the
-    // encode scratch — is small beside that.
-    const NATIVE_FRAMEBUFFERS_PER_SESSION: f64 = 2.0;
-    const NATIVE_OVERHEAD_MB: f64 = 8.0;
-    let framebuffer_mb = (1920.0 * 1080.0 * 4.0) / 1_048_576.0;
-    let native_ram_per_session =
-        framebuffer_mb * NATIVE_FRAMEBUFFERS_PER_SESSION + NATIVE_OVERHEAD_MB;
+    // Each session reserved its estimate at admission from its protocol and
+    // display size, so the average of those reflects the live mix. With no
+    // sessions, fall back to the estimate for a 1080p RDP session.
+    let admission = crate::services::admission::stats();
+    let native_ram_per_session = if admission.sessions > 0 {
+        admission.reserved_bytes as f64 / f64::from(admission.sessions) / 1_048_576.0
+    } else {
+        crate::services::admission::estimate("rdp", None, None) as f64 / 1_048_576.0
+    };
     metrics.native_ram_per_session_mb = native_ram_per_session.ceil() as u32;
 
     let native_by_mem = (usable_mem_mb / native_ram_per_session) as u32;

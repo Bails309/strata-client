@@ -30,6 +30,27 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.3.9",
+    subtitle: "Select and copy text in SSH and Kubernetes terminals.",
+    sections: [
+      {
+        title: "Copy from the terminal",
+        description:
+          "Drag with the left mouse button to select text in an SSH session or a Kubernetes pod console. Double-click selects a word and triple-click a whole line. When you let go, the text is on your clipboard.",
+      },
+      {
+        title: "Pasting is unchanged",
+        description:
+          "Right-click or middle-click still pastes into the terminal. A single click clears the selection.",
+      },
+      {
+        title: "Copy restrictions still apply",
+        description:
+          "On connections where an administrator has turned copying off, the text is highlighted but never reaches your clipboard.",
+      },
+    ],
+  },
+  {
     version: "2.3.8",
     subtitle:
       "A wrong password is reported instead of retried, sessions ride out short network blips, and a connection that keeps dropping stops reconnecting on its own.",

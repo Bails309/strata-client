@@ -1155,7 +1155,19 @@ pub async fn run_native(
         }
     };
 
-    tracing::info!(%reason, "native session ending");
+    let duration_secs = started_at.elapsed().as_secs();
+    match nvr.as_ref() {
+        Some(ctx) => tracing::info!(
+            %reason,
+            session = %ctx.session_id,
+            connection = %ctx.connection_id,
+            user = %ctx.username,
+            client_ip = %ctx.client_ip,
+            duration_secs,
+            "native session ending"
+        ),
+        None => tracing::info!(%reason, duration_secs, "native session ending"),
+    }
     let _ = handle.terminate(reason).await;
     let _ = sink.close().await;
     // The recording's outcome is only known once the actor has finalised it.

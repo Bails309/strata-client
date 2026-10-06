@@ -30,6 +30,28 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.3.8",
+    subtitle:
+      "Sessions ride out short network blips, and a connection that keeps dropping stops reconnecting on its own.",
+    sections: [
+      {
+        title: "Fewer Reconnecting blips",
+        description:
+          "A pause of more than 10 seconds on your network, such as a Wi-Fi hiccup or a VPN stall, used to drop the session and show Reconnecting for a few seconds. Strata now waits up to a minute before giving up on the connection.",
+      },
+      {
+        title: "No endless reconnecting",
+        description:
+          "If a connection keeps dropping, Strata now stops after five automatic reconnects in ten minutes and shows Connection Lost. This usually points at a VPN, proxy or network problem. Press Reconnect to try again.",
+      },
+      {
+        title: "Clearer logs for administrators",
+        description:
+          "Each session end in the backend log now names the user, connection, address and how long the session lasted.",
+      },
+    ],
+  },
+  {
     version: "2.3.7",
     subtitle:
       "The capacity card measures what your sessions really use instead of relying on fixed estimates.",

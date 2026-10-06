@@ -273,6 +273,33 @@ describe("SessionClient", () => {
     expect(root.queryByText("Connection Error")).not.toBeInTheDocument();
   });
 
+  it("does not retry a session whose credentials the target rejected", async () => {
+    await renderSessionClient();
+    await waitFor(() => {
+      expect(typeof mockSession.tunnel.oninstruction).toBe("function");
+    });
+    vi.mocked(api.createTunnelTicket).mockClear();
+
+    const message =
+      "The remote computer rejected the username or password. Check the credentials before trying again: repeated attempts can lock the account.";
+    await rtlAct(async () => {
+      mockSession.tunnel.oninstruction("error", [message, "769"]);
+      mockSession.client.onerror({ code: 0x0301, message });
+    });
+    await rtlAct(async () => {
+      mockSession.tunnel.onstatechange(2);
+    });
+    await rtlAct(async () => {
+      await new Promise((r) => setTimeout(r, 1200));
+    });
+
+    const root = within(document.getElementById("root")!);
+    expect(root.getByText(message)).toBeInTheDocument();
+    expect(root.getByText("Access Denied")).toBeInTheDocument();
+    expect(root.queryByText("Reconnecting\u2026")).not.toBeInTheDocument();
+    expect(api.createTunnelTicket).not.toHaveBeenCalled();
+  });
+
   it("focuses container on mouseDown", async () => {
     await renderSessionClient();
 

@@ -47,6 +47,7 @@ use strata_session::terminal::{
 use strata_session::tls::CertPolicy;
 use strata_session::transport::{ClientFrame, GuacDecoder, GuacWireEncoder};
 use strata_session::wol;
+use strata_session::EngineError;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -920,7 +921,7 @@ fn cert_fingerprints(handshake: &HandshakeParams) -> Result<Vec<Vec<u8>>, String
 /// audit trail just because it was routed to the new engine.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_native(
-    ws: WebSocket,
+    mut ws: WebSocket,
     handshake: HandshakeParams,
     protocol: Protocol,
     nvr: Option<NvrContext>,
@@ -934,6 +935,12 @@ pub async fn run_native(
         Err(e) => {
             recording_failed(nvr.as_ref(), &handshake, user_id, "open", &e.to_string()).await;
             if handshake.recording_required {
+                refuse(
+                    &mut ws,
+                    "This connection must be recorded, and the recording could not be started. Contact your administrator.",
+                    SERVER_ERROR,
+                )
+                .await;
                 return Err(e);
             }
             (Box::new(NullAuditSink) as Box<dyn AuditSink>, None)
@@ -947,11 +954,16 @@ pub async fn run_native(
             engine
         }
         Err(e) => {
+            // Without a reason the browser takes the close for a network
+            // drop and retries, and every retry is another failed sign-in.
+            let (notice, status) = e.notice();
+            refuse(&mut ws, notice, status).await;
+            let e = AppError::from(e);
             mark_recording(
                 nvr.as_ref(),
                 &handshake,
                 "failed",
-                "the session did not connect",
+                &format!("the session did not connect: {e}"),
             )
             .await;
             return Err(e);
@@ -995,6 +1007,12 @@ pub async fn run_native(
             None => {
                 tracing::error!("Session limit reached — rejecting native tunnel");
                 mark_recording(nvr.as_ref(), &handshake, "failed", "session limit reached").await;
+                refuse(
+                    &mut ws,
+                    "Strata is running as many sessions as it allows. Try again in a few minutes.",
+                    CLIENT_TOO_MANY,
+                )
+                .await;
                 return Err(AppError::Internal(
                     "Maximum concurrent session limit reached".into(),
                 ));
@@ -1364,6 +1382,10 @@ fn watchdog_verdict(
 const SESSION_CONFLICT: i32 = 0x0209;
 /// Guacamole `SESSION_CLOSED`: the session ended by design.
 const SESSION_CLOSED: i32 = 0x020B;
+const SERVER_ERROR: i32 = 0x0200;
+const UPSTREAM_UNAVAILABLE: i32 = 0x0208;
+const CLIENT_UNAUTHORIZED: i32 = 0x0301;
+const CLIENT_TOO_MANY: i32 = 0x031D;
 
 /// Tell the client why it is being disconnected, best effort.
 async fn send_error<S>(sink: &mut S, message: &str, status: i32)
@@ -1379,6 +1401,60 @@ where
         return;
     };
     let _ = sink.send(Message::Text(text.into())).await;
+}
+
+/// End a session that never started, saying why.
+async fn refuse(ws: &mut WebSocket, message: &str, status: i32) {
+    send_error(ws, message, status).await;
+    let _ = SinkExt::close(ws).await;
+}
+
+/// A session that could not reach its target, and why.
+enum ConnectError {
+    /// The protocol engine failed; the label names the protocol for the log.
+    Engine(&'static str, EngineError),
+    Other(AppError),
+}
+
+impl From<AppError> for ConnectError {
+    fn from(e: AppError) -> Self {
+        Self::Other(e)
+    }
+}
+
+impl From<ConnectError> for AppError {
+    fn from(e: ConnectError) -> Self {
+        match e {
+            ConnectError::Engine(protocol, e) => {
+                AppError::Internal(format!("native {protocol} connect: {e}"))
+            }
+            ConnectError::Other(e) => e,
+        }
+    }
+}
+
+impl ConnectError {
+    /// What the user is told, and the Guacamole status that titles it.
+    fn notice(&self) -> (&'static str, i32) {
+        match self {
+            Self::Engine(_, EngineError::AuthRejected) => (
+                "The remote computer rejected the username or password. Check the credentials before trying again: repeated attempts can lock the account.",
+                CLIENT_UNAUTHORIZED,
+            ),
+            Self::Engine(_, EngineError::Transport(_) | EngineError::Closed(_)) => (
+                "Could not connect to the remote computer. It may be switched off, unreachable from Strata, or not accepting connections.",
+                UPSTREAM_UNAVAILABLE,
+            ),
+            Self::Engine(_, EngineError::Protocol(_) | EngineError::Unsupported(_)) => (
+                "The remote computer answered in a way Strata could not use, so the session could not start.",
+                SERVER_ERROR,
+            ),
+            Self::Other(_) => (
+                "The session could not be started. Contact your administrator if this continues.",
+                SERVER_ERROR,
+            ),
+        }
+    }
 }
 
 /// Wake viewers, unregister, clean up shared files, and finalise the
@@ -1487,7 +1563,7 @@ async fn forward_guest_instructions(frame: &str, handle: &SessionHandle) -> Resu
 async fn connect_engine(
     protocol: Protocol,
     handshake: &HandshakeParams,
-) -> Result<(Box<dyn ProtocolEngine>, Option<DiscoveredHostKey>), AppError> {
+) -> Result<(Box<dyn ProtocolEngine>, Option<DiscoveredHostKey>), ConnectError> {
     wake_target(handshake).await;
 
     let spec = TargetSpec {
@@ -1520,7 +1596,7 @@ async fn connect_engine(
     // secondary channel would be a worse trade than doing without it.
     match SftpEngine::attach(engine, Arc::new(config)).await {
         Ok(engine) => Ok((Box::new(engine), presented)),
-        Err(err) => Err(AppError::Internal(format!("native sftp connect: {err}"))),
+        Err(err) => Err(AppError::Internal(format!("native sftp connect: {err}")).into()),
     }
 }
 
@@ -1693,7 +1769,7 @@ async fn connect_target(
     handshake: &HandshakeParams,
     spec: TargetSpec,
     presented: &mut Option<DiscoveredHostKey>,
-) -> Result<Box<dyn ProtocolEngine>, AppError> {
+) -> Result<Box<dyn ProtocolEngine>, ConnectError> {
     match protocol {
         Protocol::Ssh => {
             warn_ignored_params(handshake, SSH_PARAMS_IGNORED_NATIVELY, "ssh");
@@ -1728,7 +1804,7 @@ async fn connect_target(
                 .with_command(handshake.extra.get("command").cloned());
             let engine = SshEngine::connect(spec, Arc::new(config))
                 .await
-                .map_err(|e| AppError::Internal(format!("native ssh connect: {e}")))?;
+                .map_err(|e| ConnectError::Engine("ssh", e))?;
             *presented = engine.presented_host_key().cloned();
 
             let mut rasteriser = RasterisingEngine::with_appearance(
@@ -1797,7 +1873,7 @@ async fn connect_target(
             factory
                 .connect(spec)
                 .await
-                .map_err(|e| AppError::Internal(format!("native rdp connect: {e}")))
+                .map_err(|e| ConnectError::Engine("rdp", e))
         }
         Protocol::Vnc => {
             warn_ignored_params(handshake, VNC_PARAMS_IGNORED_NATIVELY, "vnc");
@@ -1826,7 +1902,7 @@ async fn connect_target(
             factory
                 .connect(spec)
                 .await
-                .map_err(|e| AppError::Internal(format!("native vnc connect: {e}")))
+                .map_err(|e| ConnectError::Engine("vnc", e))
         }
         Protocol::KubeExec => {
             warn_ignored_params(handshake, KUBE_PARAMS_IGNORED_NATIVELY, "kubernetes");
@@ -1874,7 +1950,7 @@ async fn connect_target(
             let engine = factory
                 .connect(spec)
                 .await
-                .map_err(|e| AppError::Internal(format!("native kubernetes connect: {e}")))?;
+                .map_err(|e| ConnectError::Engine("kubernetes", e))?;
 
             let mut rasteriser = RasterisingEngine::with_appearance(
                 engine,
@@ -1955,6 +2031,37 @@ fn desktop_scale_factor_from_dpi(dpi: u32) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rejected_password_is_named_and_keeps_its_log_text() {
+        let e = ConnectError::Engine("rdp", EngineError::AuthRejected);
+        let (notice, status) = e.notice();
+        assert!(
+            notice.contains("rejected the username or password"),
+            "{notice}"
+        );
+        assert_eq!(status, CLIENT_UNAUTHORIZED);
+        assert_eq!(
+            AppError::from(e).to_string(),
+            "native rdp connect: authentication rejected by target"
+        );
+    }
+
+    #[test]
+    fn an_unreachable_target_is_not_blamed_on_the_credentials() {
+        let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        let (notice, status) =
+            ConnectError::Engine("ssh", EngineError::Transport(refused)).notice();
+        assert!(!notice.contains("password"), "{notice}");
+        assert_eq!(status, UPSTREAM_UNAVAILABLE);
+    }
+
+    #[test]
+    fn other_start_up_failures_stay_generic() {
+        let e = ConnectError::from(AppError::Internal("terminal font: missing".into()));
+        assert_eq!(e.notice().1, SERVER_ERROR);
+        assert_eq!(AppError::from(e).to_string(), "terminal font: missing");
+    }
 
     fn handshake(protocol: &str, fingerprint: Option<&str>) -> HandshakeParams {
         let mut extra = std::collections::HashMap::new();

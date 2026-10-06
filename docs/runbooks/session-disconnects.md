@@ -32,9 +32,8 @@ logs backend`).
    runs inside the backend process; a restart ends all of them.
 2. Confirm the user saw the **session-ended overlay** (a card with **Exit to
    Dashboard** / **Reconnect**) and not the **Reconnecting…** spinner. The
-   spinner means the link between the _browser_ and Strata dropped, which
-   this runbook does not cover — check the user's network and any proxy in
-   front of Strata first.
+   spinner means the link between the _browser_ and Strata dropped; see
+   [Reconnecting… spinner](#reconnecting-spinner) below.
 
 ## Procedure
 
@@ -48,13 +47,38 @@ logs backend`).
 | Session Terminated   | `521` + _terminated_         | A **Strata** administrator                                                        | Step 4 |
 | Connection Lost      | `515` `UPSTREAM_ERROR`       | The network between Strata and the target, or the target closing without a reason | Step 3 |
 | Connection Refused   | `520` `UPSTREAM_UNAVAILABLE` | The remote computer (refusal, licensing, broker, memory)                          | Step 2 |
-| Access Denied        | `769` `CLIENT_UNAUTHORIZED`  | The remote computer's access policy                                               | Step 2 |
+| Access Denied        | `769` `CLIENT_UNAUTHORIZED`  | The remote computer's access policy, or (v2.3.8) the target rejected the credentials before the session started — *"rejected the username or password"*. Not retried, to avoid an account lockout | Step 2; for a rejected password, step 1a |
 | Connection Error     | `512` `SERVER_ERROR`         | A protocol violation or a crashed component on the target                         | Step 3 |
 | Session Limit Reached | `797` `CLIENT_TOO_MANY`     | **Strata** refused to start the session: server at capacity, per-user session limit or tunnel rate limit (v2.3.5) | [session-capacity.md](session-capacity.md) |
 | Server Unavailable   | `513` `SERVER_BUSY`          | **Strata** has not finished setup, so no session can start (v2.3.5)               | Complete setup |
 
 The status code itself is not written to the backend log; the heading is the
 user-visible form of it, which is why the exact heading matters.
+
+### 1a. A session that never started
+
+**Admin → Recordings** lists such a session as **FAILED**; hovering the badge
+shows *"the session did not connect: …"* (v2.3.8; earlier versions show
+only *"the session did not connect"*). The audit log has the engine's reason
+for every version:
+
+```sql
+SELECT created_at, details->>'error' AS error
+FROM audit_logs
+WHERE action_type = 'tunnel.failed'
+  AND user_id = (SELECT id FROM users WHERE username = '<user>')
+  AND created_at > now() - interval '3 hours'
+ORDER BY created_at DESC;
+```
+
+| `error` | Cause | Action |
+| ------- | ----- | ------ |
+| `native rdp connect: authentication rejected by target` (or `ssh`) | Wrong or expired password, or the account is locked or not allowed to sign in | Fix the credential profile or checkout. Check whether the account is locked in AD: before v2.3.8 each failure was retried up to 10 times |
+| `native rdp connect: target transport failed: …` | The target is off, unreachable or refusing the port | `nc -vz <host> 3389` from inside the backend container |
+| `native rdp connect: target protocol violation: …` | An RDP negotiation problem (security layer, certificate, Kerberos) | Capture the line and the backend `warn` lines just before it |
+
+On v2.3.7 and earlier, a run of these rows seconds apart for the same user
+is the browser's automatic retry, not the user clicking again.
 
 ### 2. Target-reported ends (RDP)
 
@@ -147,6 +171,55 @@ WHERE action_type = 'tunnel.watchdog_closed'
   AND created_at > now() - interval '2 hours'
 ORDER BY created_at DESC;
 ```
+
+### Reconnecting… spinner
+
+The spinner appears only when the WebSocket between the browser and Strata
+closes **without** Strata saying why. Every Strata-initiated end sends a
+reason first and shows the overlay instead. The browser retries after 1 s,
+and an RDP retry reattaches to the same Windows session, so the user sees a
+few seconds of **Reconnecting…** and then their desktop as they left it.
+A tab reconnects automatically at most 5 times in any 10 minutes; after
+that it stops and shows **Connection Lost** with a **Reconnect** button.
+
+Something between the browser and the backend cut the connection. Start
+with the backend, which logs every end:
+
+```bash
+docker compose logs --since 2h backend | grep "native session ending"
+```
+
+After v2.3.7 each line also carries `session`, `connection`, `user`,
+`client_ip` and `duration_secs`. Up to v2.3.7 the line has only the
+reason; take the per-session detail from the database instead — sessions
+that keep ending within two minutes, by user and connection:
+
+```bash
+docker compose exec postgres-local psql -U strata -d strata -c "
+SELECT username, connection_name, client_ip, count(*) AS sessions,
+       round(avg(duration_secs)) AS avg_secs, min(started_at), max(started_at)
+FROM recordings
+WHERE started_at > now() - interval '2 hours' AND duration_secs < 120
+GROUP BY 1, 2, 3 HAVING count(*) >= 3
+ORDER BY sessions DESC;"
+```
+
+| Evidence | Cause | Fix |
+| -------- | ----- | --- |
+| `client closed the socket` lines exactly 60 s apart, at the same second of each minute, for many minutes | Most likely one browser tab in a reconnect loop, each attempt opening a session that the tab closes again. A fixed one-minute rhythm points at a browser clock (Chrome runs the timers of a long-backgrounded tab once a minute) or a VPN that caps WebSocket connections at a minute, rather than a general network fault | Find the user and connection with the query above, confirm the short `avg_secs`, and have them close that tab. Note their browser, version and VPN. After v2.3.7 the tab gives up after 5 automatic reconnects in 10 minutes and shows **Connection Lost** — *"The connection kept dropping, so automatic reconnection has stopped"* |
+| `client closed the socket` or `client socket error` at irregular times, `duration_secs` minutes or hours | The browser or something between it and nginx closed a working connection: the client's 30 s receive watchdog, a proxy or load balancer idle timeout, nginx's `send_timeout` (10 s up to v2.3.7), or the network | A load balancer or reverse proxy in front of Strata: set its WebSocket idle timeout to at least 60 s. Otherwise the user's network |
+| `gateway shutting down` | The backend restarted | Expected during a deploy |
+| Nothing in the backend log at that time | The connection never reached Strata (corporate proxy, VPN gateway) | The proxy's logs |
+
+nginx logs a write timeout to the browser (`client timed out ... while
+proxying upgraded connection`) at `info` level, which the stock `notice`
+error log does not record, so its absence from `docker compose logs
+frontend` proves nothing.
+
+The browser console records the close: `[guac-vendor] close_tunnel called
+code= 514` is the 30 s receive watchdog (`UPSTREAM_TIMEOUT`); `code= 519`
+(`UPSTREAM_NOT_FOUND`) is the socket closing abnormally, which is what an
+nginx or proxy cut looks like.
 
 ## Verification
 

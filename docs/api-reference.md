@@ -2890,6 +2890,24 @@ Upgrades to a WebSocket connection carrying the Guacamole-style instruction stre
 > token) is still a plain HTTP `401`, and a request that is not a WebSocket
 > handshake is still rejected by the upgrade extractor.
 
+> **Failures while the session starts (v2.3.8 note).** The refusals above
+> happen before the upgrade is accepted. Connecting the engine to the target
+> happens after it, and up to v2.3.7 a failure there closed the socket with
+> **no** instruction — which Strata's client took for a network drop and
+> retried with the same credentials, so a wrong password was tried up to 10
+> times and could lock the account. The gateway now sends one `error`
+> instruction before closing in these cases too:
+>
+> | Status | Name | Cause | `<text>` |
+> | ------ | ---- | ----- | -------- |
+> | `769` (`0x0301`) | `CLIENT_UNAUTHORIZED` | The target rejected the username or password | *The remote computer rejected the username or password. Check the credentials before trying again: repeated attempts can lock the account.* |
+> | `520` (`0x0208`) | `UPSTREAM_UNAVAILABLE` | The target could not be reached or closed the connection | *Could not connect to the remote computer. It may be switched off, unreachable from Strata, or not accepting connections.* |
+> | `797` (`0x031D`) | `CLIENT_TOO_MANY` | The engine's own concurrent-session limit | *Strata is running as many sessions as it allows. Try again in a few minutes.* |
+> | `512` (`0x0200`) | `SERVER_ERROR` | Protocol failure, a required recording that could not be opened, anything else | *The remote computer answered in a way Strata could not use, so the session could not start.* · *This connection must be recorded, and the recording could not be started. Contact your administrator.* · *The session could not be started. Contact your administrator if this continues.* |
+>
+> **Never retry a `769` automatically**: each attempt is a sign-in on the
+> target.
+
 > **Clipboard streaming.** The remote → local clipboard is not a single instruction but a stream: the engine sends `clipboard,<idx>,text/plain;`, then one or more `blob,<idx>,<base64>;` instructions, and finally `end,<idx>;`. The browser client (`SessionManager.tsx`) commits the payload to `navigator.clipboard` when it receives `end`. Because RDP's CLIPRDR channel can occasionally open a clipboard stream and never terminate it (delayed-rendering clipboard owners whose format-data request is interrupted), the client applies a **per-stream stall watchdog** with two windows: **2 s** while no `blob` has been received (`CLIPBOARD_OPEN_STALL_MS` — the wedged-channel signature) and **10 s** between blobs once data is flowing (`CLIPBOARD_BLOB_STALL_MS` — a gap there is transport backpressure on a large payload, not a wedge). A window that fires after real progress publishes the partial and **keeps listening**, so a transfer that merely paused still completes; only a window that sees no new data at all abandons the transfer and `sendAck`s the stream so the server can free the index. A zero-blob stall is not flushed (no-clobber guard). This is entirely client-side. The engine's own per-instruction pending-buffer cap remains **16 MiB**.
 
 > **Clipboard size ceiling (rewritten in v2.0.0).** The ceiling is **8 MiB per direction**, applied symmetrically — `MAX_CLIPBOARD_BYTES` in [`crates/strata-session/src/actor/session.rs`](../crates/strata-session/src/actor/session.rs). Overrunning it **truncates and logs**, in both directions.
@@ -2945,6 +2963,12 @@ Client guidance:
 - **Do not auto-reconnect on `521`.** A `SESSION_CONFLICT` end usually means
   the same Windows session was opened elsewhere; reconnecting automatically
   would take it back and start a tug-of-war between the two clients.
+- **Do not auto-reconnect on `769`.** The account was refused; retrying
+  repeats a failed sign-in on the target (v2.3.8).
+- **Bound your own reconnects.** Strata's client retries a socket that
+  closes *without* an `error` at most 5 times in any 10 minutes (v2.3.8) and
+  then asks the user. A connection that keeps dropping is a network problem
+  that blind retries only hide.
 
 > **Changed in v2.1.1.** Up to v2.1.0 every native session end carried
 > status `519` (`UPSTREAM_NOT_FOUND`, mis-commented in the source as

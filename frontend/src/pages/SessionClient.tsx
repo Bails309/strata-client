@@ -67,6 +67,13 @@ interface ReconnectState {
 const RECONNECT_MAX_ATTEMPTS = 10;
 const RECONNECT_BASE_DELAY = 1000; // 1 second
 const RECONNECT_MAX_DELAY = 30000; // 30 seconds
+/** Automatic reconnects allowed within RECONNECT_WINDOW_MS before giving up. */
+const RECONNECT_WINDOW_LIMIT = 5;
+const RECONNECT_WINDOW_MS = 10 * 60 * 1000;
+const RECONNECT_LOOP_MESSAGE =
+  "Connection lost. The connection kept dropping, so automatic reconnection has stopped. " +
+  "This is usually a VPN, proxy or network problem between your browser and Strata. " +
+  "Reconnect to try again.";
 
 export default function SessionClient() {
   const { connectionId } = useParams<{ connectionId: string }>();
@@ -202,6 +209,8 @@ export default function SessionClient() {
   const userDisconnectRef = useRef(false);
   const serverDisconnectRef = useRef(false);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** When each automatic reconnect started, for the rolling-window cap. */
+  const autoReconnectsRef = useRef<number[]>([]);
   const wireHandlersRef = useRef<((session: GuacSession, attempt: number) => void) | undefined>(
     undefined
   );
@@ -318,6 +327,7 @@ export default function SessionClient() {
       setPhase("loading");
       serverDisconnectRef.current = false;
       userDisconnectRef.current = false;
+      autoReconnectsRef.current = [];
     }
   }, [connectionId]);
 
@@ -522,6 +532,7 @@ export default function SessionClient() {
 
       const delay = Math.min(RECONNECT_BASE_DELAY * Math.pow(2, attempt - 1), RECONNECT_MAX_DELAY);
 
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = setTimeout(async () => {
         if (userDisconnectRef.current) return;
         const container = containerRef.current;
@@ -632,13 +643,23 @@ export default function SessionClient() {
         }
 
         // Error-based closure (network drop, timeout) → attempt reconnection.
-        const elapsed = Date.now() - session.createdAt;
+        const now = Date.now();
+        const elapsed = now - session.createdAt;
         const nextAttempt = elapsed > 10000 ? 1 : attempt + 1;
+
+        // A session that survives past the backoff reset but keeps dropping
+        // would otherwise reconnect forever.
+        const recent = autoReconnectsRef.current.filter((t) => now - t < RECONNECT_WINDOW_MS);
+        autoReconnectsRef.current = recent;
 
         if (nextAttempt > RECONNECT_MAX_ATTEMPTS) {
           setReconnecting(null);
           setError("Connection lost. Automatic reconnection failed after multiple attempts.");
+        } else if (recent.length >= RECONNECT_WINDOW_LIMIT) {
+          setReconnecting(null);
+          setError(RECONNECT_LOOP_MESSAGE);
         } else {
+          recent.push(now);
           attemptReconnect(nextAttempt);
         }
       };
@@ -719,6 +740,7 @@ export default function SessionClient() {
     errorRef.current = "";
     setReconnecting(null);
     serverDisconnectRef.current = false;
+    autoReconnectsRef.current = [];
 
     // Mark user-initiated so tunnel-close handlers don't fire error overlays
     // or redirect to other sessions.

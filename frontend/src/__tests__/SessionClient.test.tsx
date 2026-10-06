@@ -273,6 +273,33 @@ describe("SessionClient", () => {
     expect(root.queryByText("Connection Error")).not.toBeInTheDocument();
   });
 
+  it("does not retry a session whose credentials the target rejected", async () => {
+    await renderSessionClient();
+    await waitFor(() => {
+      expect(typeof mockSession.tunnel.oninstruction).toBe("function");
+    });
+    vi.mocked(api.createTunnelTicket).mockClear();
+
+    const message =
+      "The remote computer rejected the username or password. Check the credentials before trying again: repeated attempts can lock the account.";
+    await rtlAct(async () => {
+      mockSession.tunnel.oninstruction("error", [message, "769"]);
+      mockSession.client.onerror({ code: 0x0301, message });
+    });
+    await rtlAct(async () => {
+      mockSession.tunnel.onstatechange(2);
+    });
+    await rtlAct(async () => {
+      await new Promise((r) => setTimeout(r, 1200));
+    });
+
+    const root = within(document.getElementById("root")!);
+    expect(root.getByText(message)).toBeInTheDocument();
+    expect(root.getByText("Access Denied")).toBeInTheDocument();
+    expect(root.queryByText("Reconnecting\u2026")).not.toBeInTheDocument();
+    expect(api.createTunnelTicket).not.toHaveBeenCalled();
+  });
+
   it("focuses container on mouseDown", async () => {
     await renderSessionClient();
 
@@ -350,6 +377,53 @@ describe("SessionClient", () => {
 
     expect(api.createTunnelTicket).toHaveBeenCalled();
     expect(mockCreateSession).toHaveBeenCalled();
+  });
+
+  it("stops reconnecting automatically when the connection keeps dropping", async () => {
+    // Each reconnect yields a fresh session, as SessionManager does.
+    let latest = mockSession;
+    mockCreateSession.mockImplementation(() => {
+      latest = {
+        ...mockSession,
+        id: `sess-${mockCreateSession.mock.calls.length}`,
+        tunnel: { onerror: null, onstatechange: null, oninstruction: null },
+        // Older than the 10 s backoff reset, like a session that ran a minute.
+        createdAt: Date.now() - 60_000,
+      };
+      state.sessions = [latest];
+      state.activeId = latest.id;
+      return latest;
+    });
+    await renderSessionClient();
+    await waitFor(() => expect(typeof latest.tunnel.onerror).toBe("function"));
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.mocked(api.createTunnelTicket).mockClear();
+      for (let drop = 1; drop <= 6; drop++) {
+        const dropped = latest;
+        await rtlAct(async () => {
+          dropped.tunnel.onerror({ code: 0x0207, message: "" });
+          dropped.tunnel.onstatechange(2);
+        });
+        await rtlAct(async () => {
+          await vi.advanceTimersByTimeAsync(1100);
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // Five automatic reconnects, then the sixth drop gives up.
+    expect(api.createTunnelTicket).toHaveBeenCalledTimes(5);
+    const root = within(document.getElementById("root")!);
+    await waitFor(() =>
+      expect(
+        root.getByText(/kept dropping, so automatic reconnection has stopped/)
+      ).toBeInTheDocument()
+    );
+    expect(root.getByText("Connection Lost")).toBeInTheDocument();
+    expect(root.getByText("Reconnect")).toBeInTheDocument();
   });
 
   it("shows Reconnecting\u2026 text while reconnect is in progress", async () => {

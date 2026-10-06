@@ -543,6 +543,25 @@ reserved for the browser-side tunnel failing (receive timeout, WebSocket
 error) with no instruction received, which is the only case where retrying
 without asking is always safe.
 
+**Reconnect cap (v2.3.8).** The attempt counter resets whenever the dropped
+session had lived more than 10 s, so a connection that runs for a minute and
+drops again used to reconnect forever — in production, one VPN user's tab
+opened 47 sessions in 85 minutes. `SessionClient` now also records when each
+automatic reconnect started (`autoReconnectsRef`) and, once 5 fall within a
+rolling 10 minutes, stops and shows **Connection Lost** with **Reconnect**.
+A manual reconnect or switching connection clears the record.
+
+**Failures before the session starts (v2.3.8).** The WebSocket is already
+open when `run_native` connects the engine, so a failure there used to close
+it without an instruction — the browser's cue to retry — and a rejected
+password was retried until the target locked the account. `connect_target`
+now returns `ConnectError`, which keeps the `EngineError`, and `refuse` sends
+an `error` instruction before closing: `CLIENT_UNAUTHORIZED` for
+`AuthRejected`, `UPSTREAM_UNAVAILABLE` for `Transport`/`Closed`,
+`SERVER_ERROR` otherwise. The texts are fixed; the engine's own error goes
+only to the log, the `tunnel.failed` audit row and the recording's failure
+column.
+
 #### H.264 GFX passthrough (v0.28.0 – v1.14.6; removed in v2.0.0)
 
 > **Restored in v2.1.0** as opt-in native passthrough on `ironrdp-egfx`. The
@@ -1824,7 +1843,7 @@ Step-by-step procedures for on-call engineers live under
 | [dmz-incident.md](runbooks/dmz-incident.md)                   | DMZ link flap, links-up:0, edge-HMAC/PSK rotation, suspected DMZ host compromise                              |
 | [av-operations.md](runbooks/av-operations.md)                 | AV scanner outage, signature update failure, false-positive triage, EICAR smoke test, capacity check          |
 | [clipboard-diagnostics.md](runbooks/clipboard-diagnostics.md) | RDP copy/paste reported broken — classify stalled-transfer vs wedged `rdpclip.exe`, recover, capture evidence |
-| [session-disconnects.md](runbooks/session-disconnects.md)     | A user reports an unexpected or unexplained session end — map the on-screen message to its cause and log line |
+| [session-disconnects.md](runbooks/session-disconnects.md)     | A user reports an unexpected or unexplained session end — map the on-screen message to its cause and log line; a session that never started; the **Reconnecting…** spinner and reconnect loops (v2.3.8) |
 | [keyboard-input.md](runbooks/keyboard-input.md)               | Wrong characters, nothing typed at a console prompt, dead keypad, stuck keys in an RDP or SSH session (v2.3.1) |
 | [dmz-production-certs.md](runbooks/dmz-production-certs.md)   | Issue and install production certificates for the DMZ link (replace the development certificates)            |
 | [login-rate-limiting.md](runbooks/login-rate-limiting.md)     | Users get `429` on sign-in or password change; session admission summary (v2.3.0)                             |
@@ -2605,6 +2624,27 @@ server-side end, shows the overlay and does not retry.
 
 Failures of the authentication middleware (no or expired token) happen
 before the handler and are still plain HTTP responses.
+
+**After the upgrade (v2.3.8).** The refusals above are decided before the
+upgrade is accepted. `run_native` connects the engine *after* it, and its
+failures used to drop the socket silently — the cause of a wrong password
+being retried until the account locked. `refuse` in
+[`session_engine.rs`](../backend/src/session_engine.rs) now covers them:
+
+| Failure | Source | Guacamole status | Overlay heading |
+| ------- | ------ | ---------------- | --------------- |
+| Target rejected the credentials | `ConnectError::Engine(_, EngineError::AuthRejected)` | `0x0301` `CLIENT_UNAUTHORIZED` | Access Denied |
+| Target unreachable or closed the connection | `EngineError::Transport` / `Closed` | `0x0208` `UPSTREAM_UNAVAILABLE` | Connection Refused |
+| Target spoke the protocol wrongly; no engine | `EngineError::Protocol` / `Unsupported` | `0x0200` `SERVER_ERROR` | Connection Error |
+| Required recording could not be opened | `open_recording` | `0x0200` `SERVER_ERROR` | Connection Error |
+| Engine's own session registry full | `SessionRegistry::register` | `0x031D` `CLIENT_TOO_MANY` | Session Limit Reached |
+| Anything else before the session starts | `ConnectError::Other` | `0x0200` `SERVER_ERROR` | Connection Error |
+
+`ConnectError` converts back to the same `AppError::Internal` text as before
+(*"native rdp connect: authentication rejected by target"*), so the
+`tunnel.failed` audit row and the `Tunnel error` log line are unchanged;
+the recording's failure column gains the same text after *"the session did
+not connect: "*.
 
 #### Capacity reporting
 

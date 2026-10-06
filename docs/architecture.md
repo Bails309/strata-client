@@ -697,6 +697,29 @@ behaves sensibly without admin configuration:
 > rendering outright, which is why it is surfaced on the Health page rather
 > than left to a log line.
 
+### Terminal text selection (v2.3.9)
+
+The terminal reaches the browser as PNG tiles, so the browser cannot select
+its text; under guacd the terminal emulator handled the mouse instead.
+`RasterisingEngine` in
+[`terminal/mod.rs`](../crates/strata-session/src/terminal/mod.rs) now does
+the same, using the selection `alacritty_terminal` already maintains
+(`Term::selection`), so selection follows scrolling and wrapped lines
+without code of its own.
+
+| Left button | Effect |
+| ----------- | ------ |
+| Down | Start `SelectionType::Simple` at the cell under the pointer (`cell_at`, with the cell half as `Side`); a second or third press on the same cell within 400 ms (`MULTI_CLICK`) starts `Semantic` (word) or `Lines` instead |
+| Held, moving | `Selection::update` to the cell under the pointer |
+| Up | `selection_to_string()`; non-empty text becomes `TargetEvent::Clipboard` unless `disable-copy`; empty clears the selection |
+
+`snapshot()` swaps foreground and background for cells in
+`renderable_content().selection`. A selection change does not damage the
+`Term`, so `selection_changed` queues the rows the highlight covered before
+and covers now (`selection_damage`), and `take_damage` adds them to the
+emulator's own damage; unchanged rows are skipped as usual. Every mouse event
+is still passed to the inner engine, which keeps right/middle-click paste.
+
 ### SSH host keys and algorithms (v2.3.6)
 
 ```mermaid

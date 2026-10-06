@@ -230,6 +230,10 @@ To capture evidence for a bug report, run `strataClipboard.print()` in the sessi
 
 If clipboard access is denied outright (nothing transfers in either direction), check that Strata is served over **HTTPS** — browsers refuse Clipboard API reads on insecure origins — and that the connection does not have `disable-copy` / `disable-paste` set in its guacd parameters.
 
+### How do I copy text from an SSH session?
+
+Since v2.3.9, drag across it with the left mouse button — or double-click a word, triple-click a line. The text is highlighted while you select and is on your clipboard as soon as you let go. Right-click or middle-click pastes into the terminal. A single click clears the selection. If the text highlights but never reaches your clipboard, the connection has `disable-copy` set. The same applies to Kubernetes pod consoles.
+
 ---
 
 ## Recording & audit

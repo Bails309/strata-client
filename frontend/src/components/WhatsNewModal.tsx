@@ -32,8 +32,13 @@ export const RELEASE_CARDS: ReleaseCard[] = [
   {
     version: "2.3.8",
     subtitle:
-      "Sessions ride out short network blips, and a connection that keeps dropping stops reconnecting on its own.",
+      "A wrong password is reported instead of retried, sessions ride out short network blips, and a connection that keeps dropping stops reconnecting on its own.",
     sections: [
+      {
+        title: "Wrong passwords are not retried",
+        description:
+          "If the remote computer rejects the username or password, the session now stops with Access Denied and says so. It used to show Reconnecting and try again and again, and each attempt could count towards locking the account.",
+      },
       {
         title: "Fewer Reconnecting blips",
         description:

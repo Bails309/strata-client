@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.3.8] — 2026-10-06
 
-### Patch release — sessions survive short network stalls, and a connection that keeps dropping stops reconnecting
+### Patch release — a rejected password is reported instead of retried, sessions survive short network stalls, and a connection that keeps dropping stops reconnecting
 
 ### The ask
 
@@ -17,15 +17,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > seconds for users"*
 >
 > *"I think we need to cap the auto reconnect."*
+>
+> *"the users password was rejected. can we state this in the connect window
+> rather than it trying to reconnect over and over when they have used an
+> incorrect password? reconnecting over and over can cause a lockout"*
 
 ### Summary
 
 | Area | Change |
 | ---- | ------ |
+| Session start | A session that cannot start says why (**Access Denied** for rejected credentials) and is not retried; the recording's failure tooltip gives the reason |
 | nginx | `send_timeout 60s` on `/api/` (was the server-wide 10 s), so a session survives a network stall of up to a minute |
 | Browser | Automatic reconnects capped at 5 in any 10 minutes, then **Connection Lost** with **Reconnect** |
 | Backend log | `native session ending` names the session, connection, user, client IP and duration |
 | Runbook | [session-disconnects.md](docs/runbooks/session-disconnects.md) covers the **Reconnecting…** spinner |
+
+### Fixed — a rejected password was retried until the account locked
+
+**Symptom.** A user whose password the target rejected saw **Reconnecting…**
+over and over. **Recordings** listed a **FAILED** row per attempt, several a
+minute, each with the tooltip *"the session did not connect"*; the audit log
+held `tunnel.failed` — *"native rdp connect: authentication rejected by
+target"* — for each. Every retry was another failed sign-in on the target,
+which counts towards the domain's lockout threshold.
+
+**Root cause.** The WebSocket is already open when the engine connects to the
+target. When the connect failed, `run_native` returned the error and dropped
+the socket without a word, so the browser saw an abnormal close — a network
+drop as far as it could tell — and auto-reconnected with the same
+credentials. These attempts fail within 10 s, so the v2.3.8 reconnect cap's
+rolling window did not apply; only the 10-attempt limit did.
+
+**Fix.** `connect_target` keeps the engine's error type (`ConnectError`), and
+`run_native` sends the browser a Guacamole `error` instruction before
+closing. Any `error` instruction marks the end as server-initiated, so the
+browser shows an overlay and does not retry:
+
+| Engine error | Status | Overlay | Message |
+| ------------ | ------ | ------- | ------- |
+| `AuthRejected` | `0x0301` | **Access Denied** | *"The remote computer rejected the username or password. Check the credentials before trying again: repeated attempts can lock the account."* |
+| `Transport`, `Closed` | `0x0208` | **Connection Refused** | *"Could not connect to the remote computer. It may be switched off, unreachable from Strata, or not accepting connections."* |
+| `Protocol`, `Unsupported` | `0x0200` | **Connection Error** | *"The remote computer answered in a way Strata could not use, so the session could not start."* |
+| Anything else before the session starts | `0x0200` | **Connection Error** | *"The session could not be started. Contact your administrator if this continues."* |
+
+A required recording that cannot be opened and the engine's own session
+limit are refused the same way. The recording's failure text is now *"the
+session did not connect: native rdp connect: authentication rejected by
+target"*; the `tunnel.failed` audit text and the log are unchanged.
 
 ### Fixed — nginx dropped a session after a 10-second stall
 
@@ -85,15 +123,34 @@ query for the same detail on earlier versions.
 **Scope & safety.** No schema, API or environment change. The longer
 `send_timeout` applies only to `/api/` and is still bounded. The reconnect
 cap only stops automatic retries; nothing a user can do manually changes.
+The session-start messages are fixed strings: the engine's error text stays
+in the log and audit, never in the browser.
 
-**Testing.** Frontend: `SessionClient` *stops reconnecting automatically
-when the connection keeps dropping* (six drops → exactly five reconnects,
-then the message); `SessionClient`, `SessionRedirect` and `SessionManager`
-suites pass. nginx: the rendered fragment passes `nginx -t` on
-`nginx:1.31.6-alpine`. Backend: fmt, clippy and the full suite.
+**Testing.** Backend: `a_rejected_password_is_named_and_keeps_its_log_text`,
+`an_unreachable_target_is_not_blamed_on_the_credentials`,
+`other_start_up_failures_stay_generic`. Frontend: `SessionClient` *does not
+retry a session whose credentials the target rejected* and *stops
+reconnecting automatically when the connection keeps dropping* (six drops →
+exactly five reconnects, then the message); `SessionClient`,
+`SessionRedirect` and `SessionManager` suites pass. nginx: the rendered
+fragment passes `nginx -t` on `nginx:1.31.6-alpine`. Backend: fmt, clippy
+and the full suite.
 
 **Deploy.** Rebuild the backend and frontend images and recreate them
 (recreating the backend ends live sessions).
+
+### Documentation
+
+| Document | Change |
+| -------- | ------ |
+| [docs/api-reference.md](docs/api-reference.md) | *Failures while the session starts* note with the four statuses and texts; client guidance: never auto-retry `769`, bound your own reconnects |
+| [docs/architecture.md](docs/architecture.md) | *After the upgrade* table (`ConnectError` → status → overlay); *Reconnect cap*; *Failures before the session starts* |
+| [docs/security.md](docs/security.md) | *Rejected-credential retry safeguard*; *Tunnel transport timeouts and the reconnect cap* (incl. personal data in the session-end log); `tunnel.failed` in Logged Events; start-up failures in the disclosure table |
+| [docs/threat-model.md](docs/threat-model.md) | Tunnel rows: target-account lockout, slow reader, PII in the session-end log |
+| [docs/deployment.md](docs/deployment.md) | `send_timeout` among the nginx settings; external-proxy timeout requirements; v2.3.7 → v2.3.8 upgrade notes |
+| [docs/faq.md](docs/faq.md) | **Access Denied** row; reconnect cap |
+| [docs/runbooks/session-disconnects.md](docs/runbooks/session-disconnects.md) | *1a. A session that never started* (`tunnel.failed` query); *Reconnecting… spinner* with the `recordings` loop query |
+| [ARCHITECTURE.md](ARCHITECTURE.md), [README.md](README.md) | Session-end bullet; *Sessions that explain themselves*; measured capacity (v2.3.7) in *Capacity admission* |
 
 ## [2.3.7] — 2026-10-05
 

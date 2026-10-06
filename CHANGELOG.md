@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.8] — 2026-10-06
+
+### Patch release — sessions survive short network stalls, and a connection that keeps dropping stops reconnecting
+
+### The ask
+
+> *"Can you investigate random disconnects that sit reconnecting for a few
+> seconds for users"*
+>
+> *"I think we need to cap the auto reconnect."*
+
+### Summary
+
+| Area | Change |
+| ---- | ------ |
+| nginx | `send_timeout 60s` on `/api/` (was the server-wide 10 s), so a session survives a network stall of up to a minute |
+| Browser | Automatic reconnects capped at 5 in any 10 minutes, then **Connection Lost** with **Reconnect** |
+| Backend log | `native session ending` names the session, connection, user, client IP and duration |
+| Runbook | [session-disconnects.md](docs/runbooks/session-disconnects.md) covers the **Reconnecting…** spinner |
+
+### Fixed — nginx dropped a session after a 10-second stall
+
+**Symptom.** Users saw **Reconnecting…** for a few seconds, then their
+desktop exactly as they left it.
+
+**How the spinner arises.** It appears only when the browser's WebSocket
+closes without Strata sending a reason; every Strata-initiated end sends one
+and shows an overlay instead. The browser retries after 1 s and RDP
+reattaches to the same Windows session.
+
+**Root cause.** On an upgraded (WebSocket) connection nginx times writes to
+the browser with `send_timeout`, not `proxy_send_timeout`
+(`ngx_http_upstream_process_upgraded`). `common.fragment` set `send_timeout
+10s` server-wide, and a session always has output pending (the engine sends
+a `sync` every 5 s), so any stall longer than 10 s on the user's side —
+Wi-Fi roaming, a VPN hiccup — cut the tunnel without a close frame. The
+browser itself tolerates 30 s and the DMZ relay 60 s.
+
+**Fix.** `location /api/` sets `send_timeout 60s`. Other locations keep 10 s.
+
+nginx logs this timeout (`client timed out ... while proxying upgraded
+connection`) at `info`, below the stock `notice` level, so it never showed
+in `docker compose logs frontend`; that is why it went unseen.
+
+### Fixed — a connection that kept dropping reconnected forever
+
+**Symptom.** In production, one user on a VPN with Chrome had two sessions
+that the browser closed after about 58 s each and reopened about 2 s later:
+47 RDP sessions (and recordings) in 85 minutes, the backend logging
+`client closed the socket` exactly 60 s apart.
+
+**Root cause.** `SessionClient` reset its attempt counter whenever the
+dropped session had lived more than 10 s, so the 10-attempt limit never
+applied to a connection that survives a minute and then drops.
+
+**Fix.** `SessionClient` records when each automatic reconnect started and,
+after 5 within a rolling 10 minutes, stops and shows **Connection Lost**:
+*"The connection kept dropping, so automatic reconnection has stopped. This
+is usually a VPN, proxy or network problem between your browser and Strata.
+Reconnect to try again."* A manual **Reconnect** or switching connection
+resets the count, and a pending retry is cleared before another is set.
+
+What closes that user's connection after about a minute is still open: the
+likeliest causes are the VPN capping WebSocket connections or Chrome
+throttling a background tab. The browser console line `[guac-vendor]
+close_tunnel called code=` tells them apart (`519` cut from outside, `514`
+receive watchdog).
+
+### Changed — the session-end log line identifies the session
+
+`native session ending` carried only the reason, so a reconnect loop could
+not be tied to a user from the log. It now also has `session`, `connection`,
+`user`, `client_ip` and `duration_secs`. The runbook gives a `recordings`
+query for the same detail on earlier versions.
+
+**Scope & safety.** No schema, API or environment change. The longer
+`send_timeout` applies only to `/api/` and is still bounded. The reconnect
+cap only stops automatic retries; nothing a user can do manually changes.
+
+**Testing.** Frontend: `SessionClient` *stops reconnecting automatically
+when the connection keeps dropping* (six drops → exactly five reconnects,
+then the message); `SessionClient`, `SessionRedirect` and `SessionManager`
+suites pass. nginx: the rendered fragment passes `nginx -t` on
+`nginx:1.31.6-alpine`. Backend: fmt, clippy and the full suite.
+
+**Deploy.** Rebuild the backend and frontend images and recreate them
+(recreating the backend ends live sessions).
+
 ## [2.3.7] — 2026-10-05
 
 ### Patch release — session capacity measured from real use instead of fixed estimates

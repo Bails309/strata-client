@@ -165,7 +165,7 @@ Since v2.1.1 the heading tells you what kind of end it was, and the sentence und
 | **Session Terminated** | A Strata administrator ended the session. | Reconnect is not offered. Contact your administrator. |
 | **Connection Lost** | The network path between Strata and the remote computer failed, or the remote computer closed the connection without saying why (typically a restart). | Reconnect once the remote computer is reachable. |
 | **Connection Refused** | The remote computer refused the session — including Remote Desktop licensing and connection-broker problems. | Usually needs the remote computer's administrator. |
-| **Access Denied** | The remote computer does not let this account in over Remote Desktop, or rejected the credentials. | Check the account's Remote Desktop rights and the credential profile. |
+| **Access Denied** | The remote computer does not let this account in over Remote Desktop, or rejected the username or password. Since v2.3.8 a rejected password is not retried automatically, so it cannot lock the account by itself. | Check the account's Remote Desktop rights and the credential profile (or checkout) before pressing **Reconnect**: each attempt is a sign-in on the remote computer. |
 | **Connection Error** | Something failed unexpectedly. | Reconnect; if it recurs, report it with the time and connection name. |
 | **Session Limit Reached** | Strata did not start the session: the server is at capacity, or you already have as many sessions open as your role allows (v2.3.5). The sentence underneath says which. | Close a session you no longer need, or try again in a few minutes. If it persists, tell your administrator. |
 | **Server Unavailable** | Strata has not finished its initial setup. | Contact your administrator. |

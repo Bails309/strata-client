@@ -629,7 +629,7 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
-#### v2.3.7 → v2.3.8 (dropped sessions and reconnect loops)
+#### v2.3.7 → v2.3.8 (rejected passwords, dropped sessions and reconnect loops)
 
 Rebuild the backend and frontend images. **No migration, no `.env` change.**
 
@@ -644,6 +644,7 @@ docker compose up -d
 
 | Change | Who notices |
 | ------ | ----------- |
+| A session that cannot start says why and is not retried: **Access Denied** when the target rejects the username or password, **Connection Refused** when it cannot be reached | Users with a wrong or expired password, who used to see **Reconnecting…** until the account locked |
 | nginx allows a write to the browser 60 s without progress on `/api/` (was 10 s), so a short Wi-Fi or VPN stall no longer drops the session | Users on unreliable networks: fewer **Reconnecting…** blips |
 | A tab reconnects automatically at most 5 times in 10 minutes, then shows **Connection Lost** with **Reconnect** | Users whose connection keeps dropping (it used to reconnect forever, opening a new session each time) |
 | The backend's `native session ending` log line carries `session`, `connection`, `user`, `client_ip` and `duration_secs` | Anyone searching backend logs |

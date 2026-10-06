@@ -47,13 +47,38 @@ logs backend`).
 | Session Terminated   | `521` + _terminated_         | A **Strata** administrator                                                        | Step 4 |
 | Connection Lost      | `515` `UPSTREAM_ERROR`       | The network between Strata and the target, or the target closing without a reason | Step 3 |
 | Connection Refused   | `520` `UPSTREAM_UNAVAILABLE` | The remote computer (refusal, licensing, broker, memory)                          | Step 2 |
-| Access Denied        | `769` `CLIENT_UNAUTHORIZED`  | The remote computer's access policy                                               | Step 2 |
+| Access Denied        | `769` `CLIENT_UNAUTHORIZED`  | The remote computer's access policy, or (v2.3.8) the target rejected the credentials before the session started — *"rejected the username or password"*. Not retried, to avoid an account lockout | Step 2; for a rejected password, step 1a |
 | Connection Error     | `512` `SERVER_ERROR`         | A protocol violation or a crashed component on the target                         | Step 3 |
 | Session Limit Reached | `797` `CLIENT_TOO_MANY`     | **Strata** refused to start the session: server at capacity, per-user session limit or tunnel rate limit (v2.3.5) | [session-capacity.md](session-capacity.md) |
 | Server Unavailable   | `513` `SERVER_BUSY`          | **Strata** has not finished setup, so no session can start (v2.3.5)               | Complete setup |
 
 The status code itself is not written to the backend log; the heading is the
 user-visible form of it, which is why the exact heading matters.
+
+### 1a. A session that never started
+
+**Admin → Recordings** lists such a session as **FAILED**; hovering the badge
+shows *"the session did not connect: …"* (v2.3.8; earlier versions show
+only *"the session did not connect"*). The audit log has the engine's reason
+for every version:
+
+```sql
+SELECT created_at, details->>'error' AS error
+FROM audit_logs
+WHERE action_type = 'tunnel.failed'
+  AND user_id = (SELECT id FROM users WHERE username = '<user>')
+  AND created_at > now() - interval '3 hours'
+ORDER BY created_at DESC;
+```
+
+| `error` | Cause | Action |
+| ------- | ----- | ------ |
+| `native rdp connect: authentication rejected by target` (or `ssh`) | Wrong or expired password, or the account is locked or not allowed to sign in | Fix the credential profile or checkout. Check whether the account is locked in AD: before v2.3.8 each failure was retried up to 10 times |
+| `native rdp connect: target transport failed: …` | The target is off, unreachable or refusing the port | `nc -vz <host> 3389` from inside the backend container |
+| `native rdp connect: target protocol violation: …` | An RDP negotiation problem (security layer, certificate, Kerberos) | Capture the line and the backend `warn` lines just before it |
+
+On v2.3.7 and earlier, a run of these rows seconds apart for the same user
+is the browser's automatic retry, not the user clicking again.
 
 ### 2. Target-reported ends (RDP)
 

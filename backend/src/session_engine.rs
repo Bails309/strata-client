@@ -1813,7 +1813,8 @@ async fn connect_target(
                 handshake.width,
                 handshake.height,
                 &terminal_appearance(handshake),
-            );
+            )
+            .with_copy_disabled(flag(handshake, "disable-copy"));
             if let Some(typescript) = open_typescript(handshake).await? {
                 rasteriser = rasteriser.with_typescript(typescript);
             }
@@ -1958,7 +1959,8 @@ async fn connect_target(
                 handshake.width,
                 handshake.height,
                 &terminal_appearance(handshake),
-            );
+            )
+            .with_copy_disabled(flag(handshake, "disable-copy"));
             if let Some(typescript) = open_typescript(handshake).await? {
                 rasteriser = rasteriser.with_typescript(typescript);
             }

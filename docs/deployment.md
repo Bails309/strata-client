@@ -629,6 +629,24 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v2.3.8 → v2.3.9 (terminal text selection)
+
+Rebuild the backend and frontend images. **No migration, no `.env` change.**
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+⚠ Recreating the backend ends live sessions.
+
+| Change | Who notices |
+| ------ | ----------- |
+| SSH and Kubernetes terminals: left-drag, double-click or triple-click selects text and copies it to the local clipboard on release | Everyone using SSH or Kubernetes sessions |
+| `disable-copy` now applies to SSH and Kubernetes connections | Connections with `disable-copy` set: text highlights but is not copied |
+
 #### v2.3.7 → v2.3.8 (rejected passwords, dropped sessions and reconnect loops)
 
 Rebuild the backend and frontend images. **No migration, no `.env` change.**

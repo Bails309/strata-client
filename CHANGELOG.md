@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.9] — 2026-10-06
+
+### Patch release — select and copy text in SSH and Kubernetes terminals
+
+### The ask
+
+> *"when connected to an SSH session i don't seem to be able to select any
+> text to copy it from the terminal"*
+>
+> *"wrap this into a 2.3.9 release"*
+
+### Summary
+
+| Area | Change |
+| ---- | ------ |
+| SSH and Kubernetes terminals | Left-drag selects text, double-click a word, triple-click a line; releasing the button copies it to the local clipboard |
+| `disable-copy` | Now honoured by SSH and Kubernetes: the selection is drawn but never leaves the gateway |
+
+### Fixed — text in a terminal could not be selected or copied
+
+**Symptom.** Dragging across text in an SSH session did nothing: no
+highlight, nothing on the clipboard. Right- and middle-click paste still
+worked.
+
+**Root cause.** The browser cannot select the text itself: the Guacamole
+protocol has no text primitive, so the terminal reaches the browser as
+images. Under guacd, its terminal emulator handled the mouse — drawing the
+highlight and sending the selected text as a clipboard stream. The native
+terminal rasteriser introduced in v2.0.0
+([`terminal/mod.rs`](crates/strata-session/src/terminal/mod.rs)) only
+forwarded mouse events to the SSH engine, which uses them for nothing but
+right/middle-click paste. Selection was never implemented.
+
+**Fix.** `RasterisingEngine` handles the left button itself and drives the
+selection built into `alacritty_terminal` (`Term::selection`):
+
+| Gesture | Selection |
+| ------- | --------- |
+| Press, drag, release | `SelectionType::Simple`, from the press to the release, honouring which half of a cell the pointer is on |
+| Double-click (same cell, within 400 ms) | `SelectionType::Semantic` — the word |
+| Triple-click | `SelectionType::Lines` — the whole line, with its line ending |
+| Click without a drag | Clears the selection; nothing is copied |
+
+- The selection is drawn by swapping foreground and background of the
+  selected cells. Only the rows the selection covered before and covers now
+  are repainted, so dragging does not re-encode the whole screen.
+- On release, `Term::selection_to_string` (which joins wrapped lines and
+  trims trailing blanks) is sent as `TargetEvent::Clipboard`, which the
+  encoder frames as a Guacamole clipboard stream and the browser writes to
+  the local clipboard — the same path RDP and VNC copies use.
+- Mouse events still reach the SSH engine, so right/middle-click paste is
+  unchanged.
+- `with_copy_disabled` is set from the connection's `disable-copy` for SSH
+  and Kubernetes. Before v2.3.9 these protocols had no copy path, so the
+  flag had nothing to gate.
+
+Not included: selecting scrollback with the mouse wheel, and block
+(column) selection.
+
+**Scope & safety.** No schema, API or environment change. The text copied
+is what the user can already read on screen, and it goes only to that
+user's browser over their authenticated tunnel. `disable-copy` keeps it on
+the gateway. Recordings are unaffected: a clipboard event is not screen
+output and is recorded like any other clipboard stream.
+
+**Testing.** `strata-session` terminal tests
+`dragging_selects_highlights_and_copies_on_release`,
+`a_double_click_selects_the_word`,
+`a_click_without_a_drag_copies_nothing_and_clears_the_selection`,
+`disable_copy_selects_but_never_reaches_the_clipboard`; the terminal suite
+(33) and backend suite pass, with fmt and clippy clean on both crates.
+
+**Deploy.** Rebuild the backend image and recreate it (ends live
+sessions). No frontend change is required for the feature; rebuild the
+frontend too for the version and What's New card.
+
+### Documentation
+
+| Document | Change |
+| -------- | ------ |
+| [docs/architecture.md](docs/architecture.md) | *Terminal text selection (v2.3.9)* |
+| [docs/security.md](docs/security.md) | Terminal copy path and `disable-copy` for SSH/Kubernetes |
+| [docs/api-reference.md](docs/api-reference.md) | Clipboard streams from SSH/Kubernetes sessions |
+| [docs/deployment.md](docs/deployment.md) | v2.3.8 → v2.3.9 upgrade notes |
+| [docs/faq.md](docs/faq.md) | Copying from an SSH session |
+| [docs/runbooks/clipboard-diagnostics.md](docs/runbooks/clipboard-diagnostics.md) | Terminal copy in the triage |
+
 ## [2.3.8] — 2026-10-06
 
 ### Patch release — a rejected password is reported instead of retried, sessions survive short network stalls, and a connection that keeps dropping stops reconnecting

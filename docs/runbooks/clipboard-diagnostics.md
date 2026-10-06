@@ -66,6 +66,11 @@ Before changing anything:
    **Admin → Connections → _connection_ → Clipboard**, check
    `disable-copy` / `disable-paste`. Both default to `false`; a
    connection with either set to `true` is behaving as configured.
+   Since v2.3.9 this includes SSH and Kubernetes: with `disable-copy`
+   set, a terminal selection is highlighted but never copied. Without
+   it, copying from a terminal needs a left-button drag (or a double- or
+   triple-click) — a single click only clears the selection. Before
+   v2.3.9 terminal sessions had no copy path at all.
 3. **Do not disconnect the user's session yet.** The diagnostic ring
    buffer lives in page memory and is lost on reload. Capture it
    _first_ (step 2 below).

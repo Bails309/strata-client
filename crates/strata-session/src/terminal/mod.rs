@@ -19,9 +19,12 @@ pub mod palette;
 pub mod typescript;
 
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermDamage};
 use alacritty_terminal::vte::ansi::{CursorShape, Processor};
@@ -42,6 +45,13 @@ pub const DEFAULT_FONT_SIZE_PX: f32 = 16.0;
 
 /// Scrollback retained by the emulator.
 const SCROLLBACK_LINES: usize = 5_000;
+
+/// Clicks closer together than this, on the same cell, select a word
+/// (two) or a line (three).
+const MULTI_CLICK: Duration = Duration::from_millis(400);
+
+/// Guacamole mouse mask bit for the left button.
+const LEFT_BUTTON: u8 = 0x01;
 
 /// Terminal appearance, as the connection's parameters describe it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +132,10 @@ pub struct TerminalRenderer {
     last_cursor: Option<(usize, usize)>,
     last_snapshot: Vec<CellSnapshot>,
     force_full: bool,
+    /// Rows the selection highlight covered at the last change.
+    selection_rows: Option<(usize, usize)>,
+    /// Rows to repaint because the selection moved over them.
+    selection_damage: Vec<usize>,
 }
 
 impl std::fmt::Debug for TerminalRenderer {
@@ -174,6 +188,8 @@ impl TerminalRenderer {
             last_cursor: None,
             last_snapshot: Vec::new(),
             force_full: true,
+            selection_rows: None,
+            selection_damage: Vec::new(),
         }
     }
 
@@ -223,6 +239,70 @@ impl TerminalRenderer {
         self.flush()
     }
 
+    /// The grid cell under a pixel position, and which half of it.
+    fn cell_at(&self, x: i32, y: i32) -> (Point, Side) {
+        let (cw, ch) = (
+            self.cell.width.max(1) as i32,
+            self.cell.height.max(1) as i32,
+        );
+        let col = (x.max(0) / cw).min(self.cols as i32 - 1);
+        let row = (y.max(0) / ch).min(self.rows as i32 - 1);
+        let side = if x.max(0) % cw < cw / 2 {
+            Side::Left
+        } else {
+            Side::Right
+        };
+        (Point::new(Line(row), Column(col as usize)), side)
+    }
+
+    /// Start a selection at a pixel position.
+    pub fn start_selection(&mut self, ty: SelectionType, x: i32, y: i32) {
+        let (point, side) = self.cell_at(x, y);
+        self.term.selection = Some(Selection::new(ty, point, side));
+        self.selection_changed();
+    }
+
+    /// Move the end of the selection to a pixel position.
+    pub fn extend_selection(&mut self, x: i32, y: i32) {
+        let (point, side) = self.cell_at(x, y);
+        if let Some(selection) = self.term.selection.as_mut() {
+            selection.update(point, side);
+            self.selection_changed();
+        }
+    }
+
+    /// Remove the selection.
+    pub fn clear_selection(&mut self) {
+        if self.term.selection.take().is_some() {
+            self.selection_changed();
+        }
+    }
+
+    /// The selected text, if anything is selected.
+    #[must_use]
+    pub fn selected_text(&self) -> Option<String> {
+        self.term
+            .selection_to_string()
+            .filter(|text| !text.is_empty())
+    }
+
+    /// Queue a repaint of every row the highlight covered or now covers.
+    fn selection_changed(&mut self) {
+        let rows = self
+            .term
+            .selection
+            .as_ref()
+            .and_then(|s| s.to_range(&self.term))
+            .map(|range| {
+                let clamp = |line: Line| line.0.clamp(0, self.rows as i32 - 1) as usize;
+                (clamp(range.start.line), clamp(range.end.line))
+            });
+        for (first, last) in [self.selection_rows, rows].into_iter().flatten() {
+            self.selection_damage.extend(first..=last);
+        }
+        self.selection_rows = rows;
+    }
+
     /// Render whatever is currently damaged.
     pub fn flush(&mut self) -> Result<Vec<TargetEvent>, EngineError> {
         let rects = self.take_damage();
@@ -266,6 +346,7 @@ impl TerminalRenderer {
             rows: self.rows,
         };
         let cursor = self.cursor_position();
+        let selection_damage = std::mem::take(&mut self.selection_damage);
 
         if std::mem::take(&mut self.force_full) {
             self.term.reset_damage();
@@ -300,6 +381,12 @@ impl TerminalRenderer {
                 lines.push((pos.1, pos.0, pos.0));
             }
             self.last_cursor = cursor;
+        }
+
+        for row in selection_damage {
+            if row < self.rows {
+                lines.push((row, 0, self.cols - 1));
+            }
         }
 
         if lines.is_empty() {
@@ -355,6 +442,7 @@ impl TerminalRenderer {
         let mut cells = vec![blank; self.cols * self.rows];
 
         let content = self.term.renderable_content();
+        let selection = content.selection;
         let cursor = if content.cursor.shape == CursorShape::Hidden {
             None
         } else {
@@ -378,6 +466,9 @@ impl TerminalRenderer {
                 fg = fg.dim();
             }
             if cell.flags.contains(Flags::INVERSE) {
+                std::mem::swap(&mut fg, &mut bg);
+            }
+            if selection.is_some_and(|s| s.contains(indexed.point)) {
                 std::mem::swap(&mut fg, &mut bg);
             }
             let ch = if cell.flags.contains(Flags::HIDDEN) {
@@ -557,6 +648,13 @@ pub struct RasterisingEngine {
     pending: VecDeque<TargetEvent>,
     /// Server-side record of the raw output, when one was configured.
     typescript: Option<Typescript>,
+    /// `disable-copy`: selecting text never reaches the client's clipboard.
+    copy_disabled: bool,
+    mouse_mask: u8,
+    /// When and where the left button last went down, and how many
+    /// clicks in a row that makes.
+    last_click: Option<(Instant, Point)>,
+    clicks: u8,
 }
 
 impl RasterisingEngine {
@@ -605,7 +703,18 @@ impl RasterisingEngine {
             renderer,
             pending,
             typescript: None,
+            copy_disabled: false,
+            mouse_mask: 0,
+            last_click: None,
+            clicks: 0,
         }
+    }
+
+    /// Keep selected text off the client's clipboard (`disable-copy`).
+    #[must_use]
+    pub fn with_copy_disabled(mut self, disabled: bool) -> Self {
+        self.copy_disabled = disabled;
+        self
     }
 
     /// Record raw terminal output to `typescript` as well as rendering it.
@@ -620,6 +729,46 @@ impl RasterisingEngine {
     pub fn grid_size(&self) -> (usize, usize) {
         (self.renderer.cols, self.renderer.rows)
     }
+
+    /// Left-drag selects, a double click a word, a triple click a line;
+    /// releasing the button copies the selection to the client.
+    fn select(&mut self, x: i32, y: i32, mask: u8) -> Result<(), EngineError> {
+        let was_down = self.mouse_mask & LEFT_BUTTON != 0;
+        let down = mask & LEFT_BUTTON != 0;
+        self.mouse_mask = mask;
+        match (was_down, down) {
+            (false, true) => {
+                let (point, _) = self.renderer.cell_at(x, y);
+                let now = Instant::now();
+                self.clicks = match self.last_click {
+                    Some((at, last)) if last == point && now - at < MULTI_CLICK => {
+                        self.clicks % 3 + 1
+                    }
+                    _ => 1,
+                };
+                self.last_click = Some((now, point));
+                let ty = match self.clicks {
+                    1 => SelectionType::Simple,
+                    2 => SelectionType::Semantic,
+                    _ => SelectionType::Lines,
+                };
+                self.renderer.start_selection(ty, x, y);
+            }
+            (true, true) => self.renderer.extend_selection(x, y),
+            (true, false) => match self.renderer.selected_text() {
+                Some(text) if !self.copy_disabled => {
+                    self.pending
+                        .push_back(TargetEvent::Clipboard(Bytes::from(text)));
+                }
+                Some(_) => {}
+                // A click without a drag clears the previous selection.
+                None => self.renderer.clear_selection(),
+            },
+            (false, false) => return Ok(()),
+        }
+        self.pending.extend(self.renderer.flush()?);
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -629,6 +778,9 @@ impl ProtocolEngine for RasterisingEngine {
     }
 
     async fn handle_input(&mut self, input: InputEvent) -> Result<(), EngineError> {
+        if let InputEvent::Mouse { x, y, mask } = input {
+            self.select(x, y, mask)?;
+        }
         if let InputEvent::Resize { width, height, .. } = input {
             let (cols, rows) = self.renderer.grid_for(width, height);
             self.renderer.resize(cols, rows);
@@ -820,6 +972,98 @@ mod tests {
         ] {
             let _ = renderer.advance(chunk).unwrap();
         }
+    }
+
+    /// A wrapper whose screen shows `text`, with nothing left to send.
+    async fn showing(text: &'static [u8], copy_disabled: bool) -> RasterisingEngine {
+        let (engine, events, _inputs) = MockEngine::new(Protocol::Ssh);
+        let font = TerminalFont::discover(DEFAULT_FONT_SIZE_PX).unwrap();
+        let mut wrapper = RasterisingEngine::new(Box::new(engine), font, 640, 480)
+            .with_copy_disabled(copy_disabled);
+        let _ = wrapper.next_event().await.unwrap();
+        events
+            .send(TargetEvent::TerminalOutput(Bytes::from_static(text)))
+            .unwrap();
+        let _ = wrapper.next_event().await.unwrap();
+        wrapper.pending.clear();
+        wrapper
+    }
+
+    /// Send a mouse event inside cell `col` of the first row, on its left
+    /// or right half.
+    async fn mouse(wrapper: &mut RasterisingEngine, col: u32, right: bool, mask: u8) {
+        let cell = wrapper.renderer.cell_metrics();
+        let x = col * cell.width + if right { cell.width - 1 } else { 1 };
+        wrapper
+            .handle_input(InputEvent::Mouse {
+                x: x as i32,
+                y: 1,
+                mask,
+            })
+            .await
+            .unwrap();
+    }
+
+    fn copied(wrapper: &RasterisingEngine) -> Vec<String> {
+        wrapper
+            .pending
+            .iter()
+            .filter_map(|e| match e {
+                TargetEvent::Clipboard(data) => Some(String::from_utf8_lossy(data).into_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn dragging_selects_highlights_and_copies_on_release() {
+        let mut wrapper = showing(b"hello world", false).await;
+        mouse(&mut wrapper, 0, false, LEFT_BUTTON).await;
+        mouse(&mut wrapper, 4, true, LEFT_BUTTON).await;
+        assert!(
+            wrapper
+                .pending
+                .iter()
+                .any(|e| matches!(e, TargetEvent::ImageUpdate { .. })),
+            "the selection was not drawn"
+        );
+        assert!(copied(&wrapper).is_empty(), "copied before the release");
+
+        mouse(&mut wrapper, 4, true, 0).await;
+        assert_eq!(copied(&wrapper), ["hello"]);
+    }
+
+    #[tokio::test]
+    async fn a_double_click_selects_the_word() {
+        let mut wrapper = showing(b"hello world", false).await;
+        for _ in 0..2 {
+            mouse(&mut wrapper, 8, false, LEFT_BUTTON).await;
+            mouse(&mut wrapper, 8, false, 0).await;
+        }
+        assert_eq!(copied(&wrapper), ["world"]);
+    }
+
+    #[tokio::test]
+    async fn a_click_without_a_drag_copies_nothing_and_clears_the_selection() {
+        let mut wrapper = showing(b"hello world", false).await;
+        mouse(&mut wrapper, 0, false, LEFT_BUTTON).await;
+        mouse(&mut wrapper, 4, true, LEFT_BUTTON).await;
+        mouse(&mut wrapper, 4, true, 0).await;
+        wrapper.pending.clear();
+
+        mouse(&mut wrapper, 20, false, LEFT_BUTTON).await;
+        mouse(&mut wrapper, 20, false, 0).await;
+        assert!(copied(&wrapper).is_empty());
+        assert_eq!(wrapper.renderer.selected_text(), None);
+    }
+
+    #[tokio::test]
+    async fn disable_copy_selects_but_never_reaches_the_clipboard() {
+        let mut wrapper = showing(b"hello world", true).await;
+        mouse(&mut wrapper, 0, false, LEFT_BUTTON).await;
+        mouse(&mut wrapper, 4, true, LEFT_BUTTON).await;
+        mouse(&mut wrapper, 4, true, 0).await;
+        assert!(copied(&wrapper).is_empty());
     }
 
     #[tokio::test]

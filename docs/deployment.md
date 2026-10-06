@@ -243,6 +243,7 @@ HTTPS_PORT=8443
 Key performance settings in `common.fragment`:
 
 - `proxy_read_timeout 3600s` / `proxy_send_timeout 3600s` — keeps WebSocket tunnels alive for long RDP/SSH sessions
+- `send_timeout 60s` on `/api/` (v2.3.8) — how long a write to the browser may make no progress. On a WebSocket nginx applies this, not `proxy_send_timeout`; the server-wide 10 s value used to drop a session after a 10 s network stall
 - `proxy_buffering off` — streams tunnel frames immediately with zero buffering
 - `gzip on` — compresses static assets and API responses
 
@@ -372,7 +373,8 @@ If you must use a different reverse proxy (e.g., Traefik, HAProxy, Caddy, or a c
 
 - Route `/api/*` to `backend:8080` with WebSocket upgrade support
 - Route everything else to `frontend:80`
-- Set `proxy_read_timeout` / `proxy_send_timeout` to at least 3600s for tunnel connections
+- Set `proxy_read_timeout` / `proxy_send_timeout` to at least 3600s for tunnel connections, and any WebSocket idle or write timeout towards the browser (nginx `send_timeout`) to at least 60 s
+- Do not cap the total lifetime of a WebSocket connection: a session's tunnel stays open for hours
 - Forward `X-Forwarded-For`, `X-Forwarded-Proto`, and `Host` headers
 - **Set `STRATA_TRUST_XFF=1` on the backend container** (v1.10.6+)
   **and list the proxy in `STRATA_TRUSTED_PROXIES`** (comma-separated
@@ -626,6 +628,29 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 ## Upgrading
 
 ### Version-specific upgrade notes
+
+#### v2.3.7 → v2.3.8 (dropped sessions and reconnect loops)
+
+Rebuild the backend and frontend images. **No migration, no `.env` change.**
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+⚠ Recreating the backend ends live sessions.
+
+| Change | Who notices |
+| ------ | ----------- |
+| nginx allows a write to the browser 60 s without progress on `/api/` (was 10 s), so a short Wi-Fi or VPN stall no longer drops the session | Users on unreliable networks: fewer **Reconnecting…** blips |
+| A tab reconnects automatically at most 5 times in 10 minutes, then shows **Connection Lost** with **Reconnect** | Users whose connection keeps dropping (it used to reconnect forever, opening a new session each time) |
+| The backend's `native session ending` log line carries `session`, `connection`, `user`, `client_ip` and `duration_secs` | Anyone searching backend logs |
+
+If you run your own reverse proxy in front of Strata instead of the bundled
+nginx, check its WebSocket timeouts against
+[Using an External Reverse Proxy Instead](#using-an-external-reverse-proxy-instead).
 
 #### v2.3.6 → v2.3.7 (measured session capacity)
 

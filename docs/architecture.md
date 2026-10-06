@@ -543,6 +543,14 @@ reserved for the browser-side tunnel failing (receive timeout, WebSocket
 error) with no instruction received, which is the only case where retrying
 without asking is always safe.
 
+**Reconnect cap (v2.3.8).** The attempt counter resets whenever the dropped
+session had lived more than 10 s, so a connection that runs for a minute and
+drops again used to reconnect forever — in production, one VPN user's tab
+opened 47 sessions in 85 minutes. `SessionClient` now also records when each
+automatic reconnect started (`autoReconnectsRef`) and, once 5 fall within a
+rolling 10 minutes, stops and shows **Connection Lost** with **Reconnect**.
+A manual reconnect or switching connection clears the record.
+
 #### H.264 GFX passthrough (v0.28.0 – v1.14.6; removed in v2.0.0)
 
 > **Restored in v2.1.0** as opt-in native passthrough on `ironrdp-egfx`. The

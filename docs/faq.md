@@ -170,7 +170,7 @@ Since v2.1.1 the heading tells you what kind of end it was, and the sentence und
 | **Session Limit Reached** | Strata did not start the session: the server is at capacity, or you already have as many sessions open as your role allows (v2.3.5). The sentence underneath says which. | Close a session you no longer need, or try again in a few minutes. If it persists, tell your administrator. |
 | **Server Unavailable** | Strata has not finished its initial setup. | Contact your administrator. |
 
-A separate **Reconnecting…** overlay means the connection between *your browser* and Strata dropped; that one retries automatically. Operators can trace any of these to a log line with the [session-disconnects runbook](runbooks/session-disconnects.md).
+A separate **Reconnecting…** overlay means the connection between *your browser* and Strata dropped; that one retries automatically, up to 5 times in 10 minutes (v2.3.8). If it keeps dropping, it stops with **Connection Lost** — *"The connection kept dropping…"* — which usually points at a VPN, proxy or Wi-Fi problem; press **Reconnect** to try again. Operators can trace any of these to a log line with the [session-disconnects runbook](runbooks/session-disconnects.md).
 
 ### New sessions keep saying *Reconnecting…* (or *Session Limit Reached*) while existing ones work.
 

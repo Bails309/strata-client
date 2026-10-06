@@ -154,24 +154,42 @@ closes **without** Strata saying why. Every Strata-initiated end sends a
 reason first and shows the overlay instead. The browser retries after 1 s,
 and an RDP retry reattaches to the same Windows session, so the user sees a
 few seconds of **Reconnecting…** and then their desktop as they left it.
+A tab reconnects automatically at most 5 times in any 10 minutes; after
+that it stops and shows **Connection Lost** with a **Reconnect** button.
 
-Something between the browser and the backend cut the connection. Check
-each hop, nearest to the user last:
+Something between the browser and the backend cut the connection. Start
+with the backend, which logs every end:
 
 ```bash
-# nginx (frontend container): a write to the browser made no progress
-docker compose logs --since 2h frontend | grep -E "client timed out|prematurely closed"
-
-# backend: how the native session ended
 docker compose logs --since 2h backend | grep "native session ending"
+```
+
+After v2.3.7 each line also carries `session`, `connection`, `user`,
+`client_ip` and `duration_secs`. Up to v2.3.7 the line has only the
+reason; take the per-session detail from the database instead — sessions
+that keep ending within two minutes, by user and connection:
+
+```bash
+docker compose exec postgres-local psql -U strata -d strata -c "
+SELECT username, connection_name, client_ip, count(*) AS sessions,
+       round(avg(duration_secs)) AS avg_secs, min(started_at), max(started_at)
+FROM recordings
+WHERE started_at > now() - interval '2 hours' AND duration_secs < 120
+GROUP BY 1, 2, 3 HAVING count(*) >= 3
+ORDER BY sessions DESC;"
 ```
 
 | Evidence | Cause | Fix |
 | -------- | ----- | --- |
-| nginx `client timed out ... while proxying upgraded connection` | The browser stopped accepting data for longer than nginx's `send_timeout`. Up to v2.3.7 this was 10 s, so a short Wi-Fi, VPN or laptop network stall dropped the tunnel | Upgrade (the tunnel now allows 60 s). If it persists at 60 s, the user's network is stalling for a minute at a time |
-| backend `reason=client closed the socket` or `client socket error`, no nginx line | The browser or something between it and nginx closed the connection: the client's 30 s receive watchdog (no data at all for 30 s), a proxy or load balancer idle timeout, or the network | A load balancer or reverse proxy in front of Strata: set its WebSocket idle timeout to at least 60 s. Otherwise the user's network |
-| backend `reason=gateway shutting down` | The backend restarted | Expected during a deploy |
-| Nothing in either log at that time | The connection never reached Strata's nginx (corporate proxy, VPN gateway) | The proxy's logs |
+| `client closed the socket` lines exactly 60 s apart, at the same second of each minute, for many minutes | Most likely one browser tab in a reconnect loop, each attempt opening a session that the tab closes again. A fixed one-minute rhythm points at a browser clock (Chrome runs the timers of a long-backgrounded tab once a minute) or a VPN that caps WebSocket connections at a minute, rather than a general network fault | Find the user and connection with the query above, confirm the short `avg_secs`, and have them close that tab. Note their browser, version and VPN. After v2.3.7 the tab gives up after 5 automatic reconnects in 10 minutes and shows **Connection Lost** — *"The connection kept dropping, so automatic reconnection has stopped"* |
+| `client closed the socket` or `client socket error` at irregular times, `duration_secs` minutes or hours | The browser or something between it and nginx closed a working connection: the client's 30 s receive watchdog, a proxy or load balancer idle timeout, nginx's `send_timeout` (10 s up to v2.3.7), or the network | A load balancer or reverse proxy in front of Strata: set its WebSocket idle timeout to at least 60 s. Otherwise the user's network |
+| `gateway shutting down` | The backend restarted | Expected during a deploy |
+| Nothing in the backend log at that time | The connection never reached Strata (corporate proxy, VPN gateway) | The proxy's logs |
+
+nginx logs a write timeout to the browser (`client timed out ... while
+proxying upgraded connection`) at `info` level, which the stock `notice`
+error log does not record, so its absence from `docker compose logs
+frontend` proves nothing.
 
 The browser console records the close: `[guac-vendor] close_tunnel called
 code= 514` is the 30 s receive watchdog (`UPSTREAM_TIMEOUT`); `code= 519`

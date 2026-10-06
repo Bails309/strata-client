@@ -32,9 +32,8 @@ logs backend`).
    runs inside the backend process; a restart ends all of them.
 2. Confirm the user saw the **session-ended overlay** (a card with **Exit to
    Dashboard** / **Reconnect**) and not the **Reconnecting…** spinner. The
-   spinner means the link between the _browser_ and Strata dropped, which
-   this runbook does not cover — check the user's network and any proxy in
-   front of Strata first.
+   spinner means the link between the _browser_ and Strata dropped; see
+   [Reconnecting… spinner](#reconnecting-spinner) below.
 
 ## Procedure
 
@@ -147,6 +146,37 @@ WHERE action_type = 'tunnel.watchdog_closed'
   AND created_at > now() - interval '2 hours'
 ORDER BY created_at DESC;
 ```
+
+### Reconnecting… spinner
+
+The spinner appears only when the WebSocket between the browser and Strata
+closes **without** Strata saying why. Every Strata-initiated end sends a
+reason first and shows the overlay instead. The browser retries after 1 s,
+and an RDP retry reattaches to the same Windows session, so the user sees a
+few seconds of **Reconnecting…** and then their desktop as they left it.
+
+Something between the browser and the backend cut the connection. Check
+each hop, nearest to the user last:
+
+```bash
+# nginx (frontend container): a write to the browser made no progress
+docker compose logs --since 2h frontend | grep -E "client timed out|prematurely closed"
+
+# backend: how the native session ended
+docker compose logs --since 2h backend | grep "native session ending"
+```
+
+| Evidence | Cause | Fix |
+| -------- | ----- | --- |
+| nginx `client timed out ... while proxying upgraded connection` | The browser stopped accepting data for longer than nginx's `send_timeout`. Up to v2.3.7 this was 10 s, so a short Wi-Fi, VPN or laptop network stall dropped the tunnel | Upgrade (the tunnel now allows 60 s). If it persists at 60 s, the user's network is stalling for a minute at a time |
+| backend `reason=client closed the socket` or `client socket error`, no nginx line | The browser or something between it and nginx closed the connection: the client's 30 s receive watchdog (no data at all for 30 s), a proxy or load balancer idle timeout, or the network | A load balancer or reverse proxy in front of Strata: set its WebSocket idle timeout to at least 60 s. Otherwise the user's network |
+| backend `reason=gateway shutting down` | The backend restarted | Expected during a deploy |
+| Nothing in either log at that time | The connection never reached Strata's nginx (corporate proxy, VPN gateway) | The proxy's logs |
+
+The browser console records the close: `[guac-vendor] close_tunnel called
+code= 514` is the 30 s receive watchdog (`UPSTREAM_TIMEOUT`); `code= 519`
+(`UPSTREAM_NOT_FOUND`) is the socket closing abnormally, which is what an
+nginx or proxy cut looks like.
 
 ## Verification
 

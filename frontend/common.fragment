@@ -69,6 +69,10 @@ location /api/ {
     # WebSockets / long-lived tunnels
     proxy_read_timeout 3600s;
     proxy_send_timeout 3600s;
+    # Writes to the browser on an upgraded connection use send_timeout, not
+    # proxy_send_timeout. Keep it above the client's 30 s receive watchdog so
+    # a brief network stall does not drop the tunnel at 10 s.
+    send_timeout 60s;
     
     # Disable buffering for real-time streaming
     proxy_buffering off;

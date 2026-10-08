@@ -492,7 +492,9 @@ Configure Kerberos. Writes `krb5.conf` to the shared volume.
 
 #### `PUT /api/admin/settings/recordings`
 
-Toggle session recording.
+Configure session recording and where recordings are kept. Requires
+`can_manage_system`. Audited as `recordings.configured`
+(`details`: `{ enabled, required }`).
 
 **Request Body**
 
@@ -500,9 +502,38 @@ Toggle session recording.
 {
   "enabled": true,
   "required": true,
-  "retention_days": 30
+  "retention_days": 30,
+  "storage_type": "azure_blob",
+  "azure_account_name": "contosorecordings",
+  "azure_container_name": "recordings",
+  "azure_access_key": "<base64 storage account key>"
 }
 ```
+
+| Field | Type | Stored as | Notes |
+| ----- | ---- | --------- | ----- |
+| `enabled` | boolean, **required** | `recordings_enabled` | When `false` no new recording starts, and the background sync worker does nothing — no retention and no upload |
+| `required` | boolean, optional | `recordings_required` | See below |
+| `retention_days` | integer, optional | `recordings_retention_days` | Default `30`. `0` disables retention entirely |
+| `storage_type` | string, optional | `recordings_storage_type` | `local` or `azure_blob`. Any other value is treated as `local`. Note the setting is `azure_blob` while a recording row's `storage_type` reads `azure` |
+| `azure_account_name` | string, optional | `recordings_azure_account_name` | Storage account name, the `<account>` in `https://<account>.blob.core.windows.net` |
+| `azure_container_name` | string, optional | `recordings_azure_container_name` | Default `recordings` when unset |
+| `azure_access_key` | string, optional | `recordings_azure_access_key` | Storage account access key (base64). Sealed with Vault Transit when Vault is configured. The redaction masks `********` and `••••••••` that `GET /api/admin/settings` returns in its place are treated as *no change*; an empty string clears the key |
+
+Omitted optional fields keep their current value. Response:
+`{ "status": "recordings_updated" }`. Errors: `403` without
+`can_manage_system`; `503` while setup is incomplete.
+
+With `azure_blob` selected but the account name or access key missing (or
+the sealed key not unsealable), uploads are skipped and the backend logs
+`recordings: Azure backend selected but config is incomplete; uploads
+disabled` on every pass; recordings stay local. How finished recordings are
+uploaded (8 MiB blocks, oldest first, per-file back-off — v2.3.10) is
+described in [architecture.md § Off-box upload](architecture.md#off-box-upload-to-azure-blob-storage-v2310).
+
+> **Documentation backfill (v2.3.10).** The `storage_type` and three
+> `azure_*` fields have been accepted since Azure storage was introduced
+> but were not listed here before v2.3.10.
 
 `required` (optional, stored as `recordings_required`) refuses a session
 whose recording cannot start and ends one whose recording fails. When it is
@@ -1927,7 +1958,8 @@ Stream a recording for playback. Only accessible for recordings owned by the aut
 **Storage backends**:
 
 - `storage_type = "local"` — file is read from the shared `guac-recordings` Docker volume at `/var/lib/guacamole/recordings/<storage_path>`. Cross-container POSIX permissions are documented in [security.md — Recordings Volume](./security.md). EACCES on the file open closes the WebSocket immediately and the frontend renders a _"Tunnel error"_ badge; check backend logs for _"Failed to open recording file"_ to disambiguate from network-level failures.
-- `storage_type = "azure"` — file is streamed from the configured Azure Storage container over HTTPS via `reqwest`. Auth is via the connection string / managed identity sealed in Vault; POSIX permissions are not involved in this path.
+- `storage_type = "azure"` — file is streamed from the configured Azure Storage container over HTTPS via `reqwest`, with requests signed by Shared Key using the storage account access key (sealed with Vault Transit when Vault is configured; this page said *connection string / managed identity* before v2.3.10, which Strata has never used). POSIX permissions are not involved in this path. A recording uploaded in blocks (v2.3.10) reads back exactly like one uploaded whole, including range requests for seeking.
+- A recording's `storage_type` changes from `local` to `azure` only once its upload has been committed; until then it is played from the volume. A row that stays `local` with Azure configured means the upload has not succeeded yet — see [runbooks/recording-storage.md](runbooks/recording-storage.md).
 
 **Seeking**: the first time a finished recording is played, the backend builds a seek index in the background under `/var/lib/guacamole/recordings/.index/<id>/`. Every 8 MiB or so, at a frame boundary where nothing is half-drawn, it saves a snapshot of the whole screen (each layer as a PNG, plus the cursor, mouse position and audio streams). A `seek` then sends the nearest snapshot before the target and reads the recording only from that point on, instead of replaying it from the start. For H.264 recordings, snapshots are taken only at keyframes that cover the whole screen. Playback falls back to a full replay from the start when there is no index yet, when the recording uses a drawing instruction the index does not understand, or when the file no longer matches the index. Azure recordings are read with an HTTP range request from the snapshot's position. Index folders are removed by the recording retention sweep.
 
@@ -2909,6 +2941,8 @@ Upgrades to a WebSocket connection carrying the Guacamole-style instruction stre
 > target.
 
 > **Terminal selections (v2.3.9 note).** SSH and Kubernetes sessions now send the same `clipboard` → `blob` → `end` stream when the user releases the left button over a text selection; the client needs no change. The engine draws the selection itself from the `mouse` instructions it receives (left button: drag selects; a second or third press on the same cell within 400 ms selects a word or line), and suppresses the stream when the connection sets `disable-copy`.
+
+> **Mouse wheel in terminals (v2.3.10 note).** For SSH and Kubernetes the gateway acts on the scroll bits of `mouse` instructions itself, since the target has no pointer: when bit `0x08` (scroll up) or `0x10` (scroll down) is newly set — the press half of the press-then-release pair `Guacamole.Mouse` sends per notch — the terminal view moves 3 lines through its history and the changed rows come back as ordinary `img` updates. When the program on the target is using the alternate screen (`less`, `vim`), the gateway instead writes three arrow-key sequences to the PTY (`ESC O A` / `ESC O B` in application-cursor mode, `ESC [ A` / `ESC [ B` otherwise). The next non-modifier `key` press returns the view to the live screen. Clients need no change; a client that never sets the scroll bits simply never scrolls. RDP and VNC pass the bits to the target, as before.
 
 > **Clipboard streaming.** The remote → local clipboard is not a single instruction but a stream: the engine sends `clipboard,<idx>,text/plain;`, then one or more `blob,<idx>,<base64>;` instructions, and finally `end,<idx>;`. The browser client (`SessionManager.tsx`) commits the payload to `navigator.clipboard` when it receives `end`. Because RDP's CLIPRDR channel can occasionally open a clipboard stream and never terminate it (delayed-rendering clipboard owners whose format-data request is interrupted), the client applies a **per-stream stall watchdog** with two windows: **2 s** while no `blob` has been received (`CLIPBOARD_OPEN_STALL_MS` — the wedged-channel signature) and **10 s** between blobs once data is flowing (`CLIPBOARD_BLOB_STALL_MS` — a gap there is transport backpressure on a large payload, not a wedge). A window that fires after real progress publishes the partial and **keeps listening**, so a transfer that merely paused still completes; only a window that sees no new data at all abandons the transfer and `sendAck`s the stream so the server can free the index. A zero-blob stall is not flushed (no-clobber guard). This is entirely client-side. The engine's own per-instruction pending-buffer cap remains **16 MiB**.
 

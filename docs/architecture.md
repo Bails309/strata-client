@@ -720,6 +720,63 @@ and covers now (`selection_damage`), and `take_damage` adds them to the
 emulator's own damage; unchanged rows are skipped as usual. Every mouse event
 is still passed to the inner engine, which keeps right/middle-click paste.
 
+Since v2.3.10 every pixel ↔ cell conversion is relative to the viewport
+rather than the live screen (see below), so a selection made while scrolled
+back covers, highlights and copies the history lines on screen.
+
+### Terminal scrollback and the mouse wheel (v2.3.10)
+
+The scrollback of an SSH or Kubernetes session lives in the gateway's
+emulator, not on the target: the target is a PTY with no pointer, and
+`alacritty_terminal` keeps the history (the connection's `scrollback`
+lines). The browser already sends each wheel notch as a `mouse` instruction
+with the scroll-up (`0x08`) or scroll-down (`0x10`) bit set and then a
+release — `Guacamole.Mouse` implements a notch as `click()` of that
+button — so the whole feature lives in
+[`RasterisingEngine::wheel`](../crates/strata-session/src/terminal/mod.rs).
+
+```mermaid
+flowchart TD
+    W["mouse instruction<br/>mask 0x08 / 0x10 newly set"] --> M{Alternate screen<br/>and DECSET 1007?}
+    M -->|no| S["Term::scroll_display(Delta ±3)<br/>full damage → snapshot diff → PNG"]
+    M -->|yes| A{DECCKM<br/>application cursor?}
+    A -->|yes| O["InputEvent::Text<br/>ESC O A / ESC O B × 3"]
+    A -->|no| C["InputEvent::Text<br/>ESC [ A / ESC [ B × 3"]
+    O --> T[inner engine → PTY]
+    C --> T
+    K["key press (not a modifier)<br/>or raw text"] --> B["scroll_to_bottom()"]
+```
+
+| Input | Effect |
+| ----- | ------ |
+| Wheel bit newly set (press edge only; the release that follows is ignored) | Normal screen: move the view `WHEEL_LINES` (3) through the history, clamped to what exists. Alternate screen with alternate-scroll mode on (the default): three ↑ / ↓ arrow keys to the target, in application-cursor form when the program set `DECCKM` |
+| Key press that is not a modifier (`0xffe1`–`0xffee`, `0xfe03`), or raw text | Return to the live screen (`scroll_to_bottom`), then the key reaches the target as before |
+| New output while scrolled back | View stays on the same text: `alacritty_terminal` raises `display_offset` by the lines added |
+
+Mouse-reporting modes (`DECSET 1000`/`1002`/`1003`, as `vim mouse=a` or
+`htop` request) do not suppress the arrow keys: the native SSH and
+Kubernetes engines never forward mouse events to the PTY, so a program that
+asked for mouse reports would otherwise get nothing from the wheel.
+
+**Viewport mapping.** `alacritty_terminal` numbers history lines below
+zero, and `display_iter()` starts at `-display_offset`. The renderer works
+in viewport rows, so it converts in each direction:
+
+| Function | Conversion |
+| -------- | ---------- |
+| `snapshot()` | grid line + `display_offset` → viewport row, for every cell and for the cursor |
+| `cursor_position()` | the same, so a cursor scrolled off the bottom draws nothing and leaves no ghost |
+| `cell_at()` | viewport row − `display_offset` → grid line, so a mouse selection starts on the history line under the pointer |
+| `selection_changed()` | selection range lines + `display_offset` → the viewport rows to repaint |
+
+`Term::scroll_display` marks the emulator fully damaged when the offset
+changes, and the snapshot diff in `flush()` encodes only rows whose cells
+really differ, so a notch costs at most one screen of PNG.
+
+The emulator is per session, not per viewer: scrolling back changes what
+shared-session observers see and what the `.guac` recording captures, which
+is what the user saw.
+
 ### SSH host keys and algorithms (v2.3.6)
 
 ```mermaid
@@ -1612,7 +1669,7 @@ strata-client/
 │           ├── middleware.rs   JWT auth + admin middleware
 │           ├── password.rs    Argon2id parameters + bounded hashing pool
 │           ├── recording_index.rs  Recording seek index (checkpoint every 8 MiB) (v2.3.0)
-│           ├── recordings.rs  Recording config + scheduled retention purge (DB rows, Azure blobs, local files)
+│           ├── recordings.rs  Recording config; sync worker: retention first, then oldest-first Azure block upload with per-file back-off (v2.3.10); retention purge (DB rows, Azure blobs, local files)
 │           ├── refresh_tokens.rs  Refresh-token families, rotation and reuse detection (v2.3.0)
 │           ├── session_cleanup.rs  Periodic active_sessions expiry sweep
 │           ├── session_registry.rs  NVR ring buffer + persistent-state log (v1.9.4) + live session tracking; replay history under one memory budget (v2.3.0)
@@ -1871,6 +1928,7 @@ Step-by-step procedures for on-call engineers live under
 | [dmz-production-certs.md](runbooks/dmz-production-certs.md)   | Issue and install production certificates for the DMZ link (replace the development certificates)            |
 | [login-rate-limiting.md](runbooks/login-rate-limiting.md)     | Users get `429` on sign-in or password change; session admission summary (v2.3.0)                             |
 | [session-capacity.md](runbooks/session-capacity.md)           | New sessions refused with **Session Limit Reached** (before v2.3.5: endless **Reconnecting…**); find and raise the limit (v2.3.5) |
+| [recording-storage.md](runbooks/recording-storage.md)         | Recordings stay **LOCAL** instead of moving to Azure Blob Storage, or the recordings volume is filling up (v2.3.10) |
 
 ## Session-activity bus and proactive token refresh (v1.6.1)
 
@@ -2786,6 +2844,87 @@ session end finalises its recording. While recording,
 seek checkpoint every 8 MiB — the byte offset of an instruction boundary
 plus a prelude that rebuilds the display at that point — so seeking starts
 from the nearest checkpoint instead of replaying from the first byte.
+
+#### Off-box upload to Azure Blob Storage (v2.3.10)
+
+Recordings are always written to the recordings volume first: a live
+recording must be seekable and must not depend on the storage account being
+reachable. With **Storage Backend** set to Azure Blob Storage
+(`recordings_storage_type = azure_blob`), the `recording_sync` worker
+([`services/recordings.rs`](../backend/src/services/recordings.rs),
+`spawn_sync_task`) moves finished recordings off the volume.
+
+| Worker setting | Value |
+| -------------- | ----- |
+| First pass | 20 s after start |
+| Interval | 60 s between pass starts (a long pass delays the next; ticks are not queued) |
+| Pass budget (`iteration_timeout`) | 2 h (10 min before v2.3.10) |
+| Runs when | `recordings_enabled = true` — with recording turned off neither retention nor upload runs |
+
+```mermaid
+sequenceDiagram
+    participant W as recording_sync pass
+    participant FS as recordings volume
+    participant DB as PostgreSQL
+    participant AZ as Azure Blob Storage
+    W->>FS: retention_pass — delete files older than retention_days
+    W->>DB: rows older than retention_days
+    W->>AZ: Delete Blob for azure rows
+    W->>DB: DELETE expired rows
+    W->>FS: upload_pass — list files; skip dot-files, directories,<br/>modified < 30 s, in back-off; sort oldest first
+    loop each candidate
+        W->>W: retry_at[file] = (n+1, now + backoff)
+        loop each 8 MiB block
+            W->>AZ: PUT ?comp=block&blockid=… (≤ 3 tries)
+        end
+        W->>AZ: PUT ?comp=blocklist (≤ 3 tries)
+        W->>DB: UPDATE recordings SET storage_type = 'azure'
+        W->>FS: remove local file; clear retry_at
+    end
+```
+
+**Why blocks.** One `Put Blob` request is capped at 5000 MiB and, before
+v2.3.10, ran under the Azure client's 60 s overall timeout, so a large
+recording on a modest link failed every attempt and one over 5000 MiB could
+never succeed. A block blob accepts up to 50,000 blocks; at 8 MiB
+(`UPLOAD_BLOCK_SIZE`) that is about 390 GiB. Each request has its own
+timeout, `upload_timeout(len)` = 60 s + 1 s per 256 KiB (92 s per block),
+and its own three-attempt retry for transient errors (network, timeout,
+5xx), so a blip costs a block rather than the file. Memory held is one
+8 MiB buffer.
+
+| Request | Query | Canonicalised resource (Shared Key) | Body |
+| ------- | ----- | ----------------------------------- | ---- |
+| `Put Block` | `comp=block&blockid=<id>` | `/<account>/<container>/<blob>\nblockid:<id>\ncomp:block` | 8 MiB of the file (less for the last block) |
+| `Put Block List` | `comp=blocklist` | `/<account>/<container>/<blob>\ncomp:blocklist` | `<BlockList><Latest>id</Latest>…</BlockList>` |
+
+Block IDs are the base64 of a zero-padded six-digit index (`000000` →
+`MDAwMDAw`), so every ID in a blob has the same length, as the service
+requires. A blob built from blocks reads back with an ordinary `Get Blob`, so
+playback, range-request seeking and MP4 conversion are unchanged.
+
+**Why oldest first, with back-off.** `read_dir` returns files in an order
+the filesystem chooses (a hash order on ext4) and repeats it every pass.
+Before v2.3.10 a few files that always failed at the front of that order
+used the whole pass budget, the pass was dropped, and every file behind them
+— large or small — was never tried. `SyncState.retry_at` now holds, per file,
+the number of failed uploads and the earliest next attempt:
+`upload_backoff(n)` = 60 s × 2ⁿ⁻¹, capped at 1 h. The entry is written
+**before** an attempt and removed on success, so a pass cut off mid-upload
+also defers that file. Entries for files that have disappeared are pruned
+every pass.
+
+**Why retention first.** Retention used to run after the upload loop in the
+same pass, so a dropped pass also skipped it and expired recordings piled
+up. Running it first bounds the volume to `retention_days` of recordings
+whatever the upload pass does.
+
+State is in memory: after a restart every local recording is retried, and
+re-uploading a file that was committed but not yet deleted overwrites the
+blob with identical content. Blocks from an interrupted upload stay
+uncommitted and are discarded by Azure after 7 days.
+
+Diagnostics: [runbooks/recording-storage.md](runbooks/recording-storage.md).
 
 ### Trust boundaries tightened
 

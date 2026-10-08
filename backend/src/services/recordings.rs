@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant, SystemTime};
 
 // ── Recording config ───────────────────────────────────────────────────
 
@@ -229,60 +230,134 @@ pub async fn upload_to_azure(
     Ok(())
 }
 
-/// Stream a file from disk to Azure Blob Storage without loading it entirely into memory.
+/// Bytes per Put Block request. A single Put Blob is capped at 5000 MiB.
+const UPLOAD_BLOCK_SIZE: usize = 8 * 1024 * 1024;
+
+/// Azure's limit on committed blocks per blob.
+const MAX_BLOCKS: usize = 50_000;
+
+/// Upload a file as a block blob, one block at a time, so neither the
+/// file's size nor the link's speed is bounded by a single request.
 ///
-/// W3-4 — wraps the single-shot operation in `retry_transient_with_jitter`
-/// so a network blip or 5xx from Azure does not immediately surface as a
-/// recording-upload failure.
+/// W3-4 — each request is retried on transient failure, so a network blip
+/// costs one block rather than the whole recording.
 pub async fn upload_file_to_azure(
     cfg: &AzureBlobConfig,
     blob: &str,
     file_path: &str,
 ) -> anyhow::Result<()> {
+    let mut file = tokio::fs::File::open(file_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Cannot open {file_path}: {e}"))?;
+    let mut buf = vec![0u8; UPLOAD_BLOCK_SIZE];
+    let mut ids = Vec::new();
+    loop {
+        let len = read_block(&mut file, &mut buf)
+            .await
+            .map_err(|e| anyhow::anyhow!("Cannot read {file_path}: {e}"))?;
+        if len == 0 {
+            break;
+        }
+        if ids.len() == MAX_BLOCKS {
+            anyhow::bail!("{file_path} exceeds {MAX_BLOCKS} blocks of {UPLOAD_BLOCK_SIZE} bytes");
+        }
+        let id = block_id(ids.len());
+        let data = bytes::Bytes::copy_from_slice(&buf[..len]);
+        let query = [("blockid", id.as_str()), ("comp", "block")];
+        crate::services::retry::retry_transient_with_jitter(
+            "azure_blob.upload",
+            || put_to_blob(cfg, blob, &query, "application/octet-stream", data.clone()),
+            crate::services::retry::is_http_transient,
+            3,
+            Duration::from_millis(500),
+        )
+        .await?;
+        ids.push(id);
+    }
+
+    let list = bytes::Bytes::from(block_list_xml(&ids));
     crate::services::retry::retry_transient_with_jitter(
         "azure_blob.upload",
-        || upload_file_to_azure_once(cfg, blob, file_path),
+        || {
+            put_to_blob(
+                cfg,
+                blob,
+                &[("comp", "blocklist")],
+                "application/xml",
+                list.clone(),
+            )
+        },
         crate::services::retry::is_http_transient,
         3,
-        std::time::Duration::from_millis(500),
+        Duration::from_millis(500),
     )
     .await
 }
 
-async fn upload_file_to_azure_once(
+/// Fill `buf` from `file`, short only at end of file.
+async fn read_block(file: &mut tokio::fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
+    use tokio::io::AsyncReadExt;
+    let mut filled = 0;
+    while filled < buf.len() {
+        match file.read(&mut buf[filled..]).await? {
+            0 => break,
+            n => filled += n,
+        }
+    }
+    Ok(filled)
+}
+
+/// Block IDs must be base64 and all the same length within a blob.
+fn block_id(index: usize) -> String {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+    B64.encode(format!("{index:06}"))
+}
+
+fn block_list_xml(ids: &[String]) -> String {
+    let mut xml = String::from(r#"<?xml version="1.0" encoding="utf-8"?><BlockList>"#);
+    for id in ids {
+        xml.push_str("<Latest>");
+        xml.push_str(id);
+        xml.push_str("</Latest>");
+    }
+    xml.push_str("</BlockList>");
+    xml
+}
+
+/// The resource line of a Shared Key signature; `query` must be sorted by name.
+fn canonical_resource(cfg: &AzureBlobConfig, blob: &str, query: &[(&str, &str)]) -> String {
+    let mut resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
+    for (name, value) in query {
+        resource.push_str(&format!("\n{name}:{value}"));
+    }
+    resource
+}
+
+/// One signed PUT to `blob`.
+async fn put_to_blob(
     cfg: &AzureBlobConfig,
     blob: &str,
-    file_path: &str,
+    query: &[(&str, &str)],
+    content_type: &str,
+    body: bytes::Bytes,
 ) -> anyhow::Result<()> {
-    let meta = tokio::fs::metadata(file_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("Cannot stat {file_path}: {e}"))?;
-    let file_len = meta.len() as usize;
-
-    let url = cfg.blob_url(blob)?;
+    let mut url = cfg.blob_url(blob)?;
+    url.query_pairs_mut().extend_pairs(query);
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
-    let ct = "application/octet-stream";
-    let x_headers = format!("x-ms-blob-type:BlockBlob\nx-ms-date:{date}\nx-ms-version:2023-11-03");
-    let resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
-    let auth = cfg.sign("PUT", file_len, ct, &x_headers, &resource)?;
-
-    let file = tokio::fs::File::open(file_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("Cannot open {file_path}: {e}"))?;
-    let stream = tokio_util::io::ReaderStream::new(file);
-    let body = reqwest::Body::wrap_stream(stream);
+    let x_headers = format!("x-ms-date:{date}\nx-ms-version:2023-11-03");
+    let resource = canonical_resource(cfg, blob, query);
+    let auth = cfg.sign("PUT", body.len(), content_type, &x_headers, &resource)?;
 
     let client = crate::services::http_client::azure_client();
     let resp = client
         .put(url)
+        .timeout(upload_timeout(body.len() as u64))
         .header("Authorization", auth)
         .header("x-ms-date", &date)
         .header("x-ms-version", "2023-11-03")
-        .header("x-ms-blob-type", "BlockBlob")
-        .header("Content-Type", ct)
-        .header("Content-Length", file_len)
+        .header("Content-Type", content_type)
         .body(body)
         .send()
         .await?;
@@ -294,6 +369,20 @@ async fn upload_file_to_azure_once(
     }
 
     Ok(())
+}
+
+/// Slowest upload rate tolerated before an upload counts as stalled.
+const UPLOAD_MIN_BYTES_PER_SEC: u64 = 256 * 1024;
+
+/// Scaled to the request: a flat timeout fails any body too large to send within it.
+fn upload_timeout(len: u64) -> Duration {
+    Duration::from_secs(60 + len / UPLOAD_MIN_BYTES_PER_SEC)
+}
+
+/// Wait before retrying a file after its `failures`-th failed upload.
+fn upload_backoff(failures: u32) -> Duration {
+    let exp = failures.saturating_sub(1).min(6);
+    Duration::from_secs(60 << exp).min(Duration::from_secs(3600))
 }
 
 /// W3-4 — retrying wrapper around a single GET.
@@ -430,15 +519,31 @@ async fn delete_from_azure_once(cfg: &AzureBlobConfig, blob: &str) -> anyhow::Re
     Ok(())
 }
 
+/// Upload bookkeeping kept across sync passes.
+#[derive(Default)]
+struct SyncState {
+    /// Uploaded files whose local copy could not be removed.
+    synced: HashSet<String>,
+    /// Failed uploads: how many times, and not to be retried before when.
+    retry_at: HashMap<String, (u32, Instant)>,
+}
+
+impl SyncState {
+    fn forget(&mut self, name: &str) {
+        self.synced.remove(name);
+        self.retry_at.remove(name);
+    }
+}
+
 /// W2-4 / W2-7 — shared worker harness: cancellation, per-iteration timeout,
-/// jittered error backoff. The `synced` set is kept across iterations via an
+/// jittered error backoff. The `SyncState` is kept across iterations via an
 /// `Arc<Mutex<_>>` so repeated work is not re-done on every tick.
 pub fn spawn_sync_task(
     state: crate::services::app_state::SharedState,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     use crate::services::worker::{spawn_periodic, PeriodicConfig};
-    let synced = std::sync::Arc::new(tokio::sync::Mutex::new(HashSet::<String>::new()));
+    let synced = std::sync::Arc::new(tokio::sync::Mutex::new(SyncState::default()));
     tracing::info!(
         target: "recordings.diag",
         "recordings: spawning sync task (initial_delay=20s, interval=60s)"
@@ -448,8 +553,8 @@ pub fn spawn_sync_task(
             label: "recording_sync",
             initial_delay: std::time::Duration::from_secs(20),
             interval: std::time::Duration::from_secs(60),
-            // Uploads can be chunky; cap the pass at 10 minutes.
-            iteration_timeout: std::time::Duration::from_secs(10 * 60),
+            // Long enough for one large recording at the minimum upload rate.
+            iteration_timeout: std::time::Duration::from_secs(2 * 60 * 60),
             error_backoff_base: std::time::Duration::from_secs(15),
         },
         shutdown,
@@ -475,7 +580,7 @@ pub fn spawn_sync_task(
 
 async fn sync_pass(
     pool: &sqlx::Pool<sqlx::Postgres>,
-    synced: &mut HashSet<String>,
+    state: &mut SyncState,
     vault: Option<&crate::config::VaultConfig>,
 ) -> anyhow::Result<()> {
     let config = get_config(pool).await?;
@@ -484,7 +589,8 @@ async fn sync_pass(
         enabled = config.enabled,
         storage_type = ?config.storage_type,
         retention_days = config.retention_days,
-        synced_cache_size = synced.len(),
+        synced_cache_size = state.synced.len(),
+        retry_pending = state.retry_at.len(),
         "recordings: sync_pass tick"
     );
     if !config.enabled {
@@ -493,128 +599,178 @@ async fn sync_pass(
 
     let dir = "/var/lib/guacamole/recordings";
 
-    // ── Azure Blob sync (if configured) ──
+    // Retention first: a slow or failing upload pass must not stop expired
+    // recordings being removed.
+    retention_pass(pool, state, vault, &config, dir).await?;
+
     if config.storage_type == StorageType::AzureBlob {
-        let azure = match get_azure_config(pool, vault).await? {
-            Some(c) => c,
-            None => {
-                tracing::warn!(
-                    target: "recordings.diag",
-                    "recordings: storage_type=azure_blob but get_azure_config returned None; skipping upload pass"
-                );
-                return Ok(());
-            }
+        upload_pass(pool, state, vault, dir).await?;
+    }
+    Ok(())
+}
+
+async fn upload_pass(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    state: &mut SyncState,
+    vault: Option<&crate::config::VaultConfig>,
+    dir: &str,
+) -> anyhow::Result<()> {
+    let azure = match get_azure_config(pool, vault).await? {
+        Some(c) => c,
+        None => {
+            tracing::warn!(
+                target: "recordings.diag",
+                "recordings: storage_type=azure_blob but get_azure_config returned None; skipping upload pass"
+            );
+            return Ok(());
+        }
+    };
+    tracing::info!(
+        target: "recordings.diag",
+        account = %azure.account_name,
+        container = %azure.container_name,
+        dir = %dir,
+        "recordings: Azure config loaded; scanning recordings directory"
+    );
+
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(
+                target: "recordings.diag",
+                error = %e,
+                dir = %dir,
+                "recordings: cannot read recordings directory"
+            );
+            return Ok(());
+        }
+    };
+
+    let mut scanned: usize = 0;
+    let mut skipped_too_new: usize = 0;
+    let mut skipped_cached: usize = 0;
+    let mut skipped_backoff: usize = 0;
+    let mut uploaded: usize = 0;
+    let mut failed: usize = 0;
+
+    let now = Instant::now();
+    let mut seen = HashSet::new();
+    let mut candidates: Vec<(SystemTime, String)> = Vec::new();
+    while let Some(entry) = entries.next_entry().await? {
+        let name = entry.file_name().to_string_lossy().to_string();
+        scanned += 1;
+        if name.starts_with('.') {
+            continue;
+        }
+        seen.insert(name.clone());
+        if state.synced.contains(&name) {
+            skipped_cached += 1;
+            continue;
+        }
+        if state.retry_at.get(&name).is_some_and(|(_, at)| *at > now) {
+            skipped_backoff += 1;
+            continue;
+        }
+        let Ok(meta) = entry.metadata().await else {
+            continue;
         };
-        tracing::info!(
-            target: "recordings.diag",
-            account = %azure.account_name,
-            container = %azure.container_name,
-            dir = %dir,
-            "recordings: Azure config loaded; scanning recordings directory"
-        );
-
-        let mut entries = match tokio::fs::read_dir(dir).await {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!(
-                    target: "recordings.diag",
-                    error = %e,
-                    dir = %dir,
-                    "recordings: cannot read recordings directory"
-                );
-                return Ok(());
-            }
-        };
-
-        let mut scanned: usize = 0;
-        let mut skipped_too_new: usize = 0;
-        let mut skipped_cached: usize = 0;
-        let mut uploaded: usize = 0;
-        let mut failed: usize = 0;
-
-        while let Some(entry) = entries.next_entry().await? {
-            let name = entry.file_name().to_string_lossy().to_string();
-            scanned += 1;
-            if name.starts_with('.') {
-                continue;
-            }
-            if synced.contains(&name) {
-                skipped_cached += 1;
-                continue;
-            }
-
-            // Skip files still being written (modified < 30 s ago)
-            if let Ok(meta) = entry.metadata().await {
-                if let Ok(modified) = meta.modified() {
-                    let age = modified.elapsed().unwrap_or_default();
-                    if age < std::time::Duration::from_secs(30) {
-                        skipped_too_new += 1;
-                        tracing::debug!(
-                            target: "recordings.diag",
-                            file = %name,
-                            age_secs = age.as_secs(),
-                            "recordings: skip — file modified <30s ago"
-                        );
-                        continue;
-                    }
-                }
-            }
-
-            let path = format!("{dir}/{name}");
-            tracing::info!(
+        if !meta.is_file() {
+            continue;
+        }
+        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        // Skip files still being written (modified < 30 s ago)
+        let age = modified.elapsed().unwrap_or_default();
+        if age < Duration::from_secs(30) {
+            skipped_too_new += 1;
+            tracing::debug!(
                 target: "recordings.diag",
                 file = %name,
-                "recordings: uploading to Azure Blob"
+                age_secs = age.as_secs(),
+                "recordings: skip — file modified <30s ago"
             );
-            match upload_file_to_azure(&azure, &name, &path).await {
-                Ok(_) => {
-                    uploaded += 1;
-                    synced.insert(name.clone());
-
-                    // Update database metadata to reflect Azure storage
-                    let res = sqlx::query(
-                        "UPDATE recordings SET storage_type = 'azure' WHERE storage_path = $1",
-                    )
-                    .bind(&name)
-                    .execute(pool)
-                    .await;
-                    match res {
-                        Ok(r) => tracing::info!(
-                            target: "recordings.diag",
-                            file = %name,
-                            rows_updated = r.rows_affected(),
-                            "recordings: DB storage_type updated to 'azure'"
-                        ),
-                        Err(e) => tracing::warn!(
-                            target: "recordings.diag",
-                            file = %name,
-                            error = %e,
-                            "recordings: failed to update DB storage_type"
-                        ),
-                    }
-
-                    // Delete local file after successful upload to prevent disk growth
-                    if let Err(e) = tokio::fs::remove_file(&path).await {
-                        tracing::warn!(
-                            "Failed to delete local recording after upload: {name}: {e}"
-                        );
-                    }
-                    tracing::info!("Synced recording to Azure Blob: {name}");
-                }
-                Err(e) => {
-                    failed += 1;
-                    tracing::warn!("Azure Blob upload failed for {name}: {e}");
-                }
-            }
+            continue;
         }
+        candidates.push((modified, name));
+    }
+    state.retry_at.retain(|name, _| seen.contains(name));
+    // Oldest first, so the backlog drains in age order, not directory order.
+    candidates.sort();
 
+    for (_, name) in candidates {
+        // Counted as failed before the attempt, so a pass cut off
+        // mid-upload moves on to other files next time.
+        let failures = state.retry_at.get(&name).map_or(0, |(n, _)| *n) + 1;
+        state.retry_at.insert(
+            name.clone(),
+            (failures, Instant::now() + upload_backoff(failures)),
+        );
+
+        let path = format!("{dir}/{name}");
         tracing::info!(
             target: "recordings.diag",
-            scanned, skipped_too_new, skipped_cached, uploaded, failed,
-            "recordings: Azure sync pass complete"
+            file = %name,
+            "recordings: uploading to Azure Blob"
         );
+        match upload_file_to_azure(&azure, &name, &path).await {
+            Ok(_) => {
+                uploaded += 1;
+                state.retry_at.remove(&name);
+                state.synced.insert(name.clone());
+
+                // Update database metadata to reflect Azure storage
+                let res = sqlx::query(
+                    "UPDATE recordings SET storage_type = 'azure' WHERE storage_path = $1",
+                )
+                .bind(&name)
+                .execute(pool)
+                .await;
+                match res {
+                    Ok(r) => tracing::info!(
+                        target: "recordings.diag",
+                        file = %name,
+                        rows_updated = r.rows_affected(),
+                        "recordings: DB storage_type updated to 'azure'"
+                    ),
+                    Err(e) => tracing::warn!(
+                        target: "recordings.diag",
+                        file = %name,
+                        error = %e,
+                        "recordings: failed to update DB storage_type"
+                    ),
+                }
+
+                // Delete local file after successful upload to prevent disk growth
+                if let Err(e) = tokio::fs::remove_file(&path).await {
+                    tracing::warn!("Failed to delete local recording after upload: {name}: {e}");
+                }
+                tracing::info!("Synced recording to Azure Blob: {name}");
+            }
+            Err(e) => {
+                failed += 1;
+                tracing::warn!(
+                    failures,
+                    retry_in_secs = upload_backoff(failures).as_secs(),
+                    "Azure Blob upload failed for {name}: {e}"
+                );
+            }
+        }
     }
 
+    tracing::info!(
+        target: "recordings.diag",
+        scanned, skipped_too_new, skipped_cached, skipped_backoff, uploaded, failed,
+        "recordings: Azure sync pass complete"
+    );
+    Ok(())
+}
+
+async fn retention_pass(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    state: &mut SyncState,
+    vault: Option<&crate::config::VaultConfig>,
+    config: &RecordingConfig,
+    dir: &str,
+) -> anyhow::Result<()> {
     // ── Retention-based cleanup for local recordings ──
     if config.retention_days > 0 {
         let max_age = std::time::Duration::from_secs(config.retention_days as u64 * 86_400);
@@ -653,7 +809,7 @@ async fn sync_pass(
                                 tracing::warn!("Failed to delete expired recording: {name}: {e}");
                             }
                         } else {
-                            synced.remove(&name);
+                            state.forget(&name);
                             tracing::info!(
                                 "Deleted expired recording (>{} days): {name}",
                                 config.retention_days
@@ -1939,6 +2095,65 @@ mod tests {
     }
 
     // ── parse_storage_type ─────────────────────────────────────────
+
+    #[test]
+    fn upload_timeout_grows_with_the_recording() {
+        assert_eq!(upload_timeout(0), Duration::from_secs(60));
+        // 1 GiB at the minimum rate, on top of the base minute.
+        assert_eq!(upload_timeout(1 << 30), Duration::from_secs(60 + 4096));
+    }
+
+    #[test]
+    fn block_ids_are_base64_and_equal_length() {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine};
+        let first = block_id(0);
+        let last = block_id(MAX_BLOCKS - 1);
+        assert_eq!(first.len(), last.len());
+        assert_eq!(B64.decode(&last).unwrap(), b"049999");
+        assert_ne!(block_id(1), first);
+    }
+
+    #[test]
+    fn block_list_commits_blocks_in_order() {
+        let ids = [block_id(0), block_id(1)];
+        assert_eq!(
+            block_list_xml(&ids),
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?><BlockList><Latest>{}</Latest><Latest>{}</Latest></BlockList>"#,
+                ids[0], ids[1]
+            )
+        );
+    }
+
+    #[test]
+    fn canonical_resource_lists_query_parameters() {
+        let cfg = AzureBlobConfig {
+            account_name: "acct".into(),
+            container_name: "recordings".into(),
+            access_key: String::new(),
+        };
+        assert_eq!(
+            canonical_resource(&cfg, "a.guac", &[]),
+            "/acct/recordings/a.guac"
+        );
+        assert_eq!(
+            canonical_resource(
+                &cfg,
+                "a.guac",
+                &[("blockid", "MDAwMDAw"), ("comp", "block")]
+            ),
+            "/acct/recordings/a.guac\nblockid:MDAwMDAw\ncomp:block"
+        );
+    }
+
+    #[test]
+    fn upload_backoff_doubles_and_caps_at_an_hour() {
+        assert_eq!(upload_backoff(1), Duration::from_secs(60));
+        assert_eq!(upload_backoff(2), Duration::from_secs(120));
+        assert_eq!(upload_backoff(6), Duration::from_secs(1920));
+        assert_eq!(upload_backoff(7), Duration::from_secs(3600));
+        assert_eq!(upload_backoff(u32::MAX), Duration::from_secs(3600));
+    }
 
     #[test]
     fn parse_storage_type_local() {

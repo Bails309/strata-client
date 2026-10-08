@@ -63,3 +63,4 @@ The runbooks listed below cover §26/§28 of the Coding Standards.
 | keyboard-input.md        | Wrong characters, console prompt ignores typing, keypad, stuck keys | Active |
 | login-rate-limiting.md   | `429` on sign-in, password change or session capacity       | Active |
 | session-capacity.md      | New sessions refused at capacity or a per-user limit; raising the budget | Active |
+| recording-storage.md     | Recordings stuck on local storage instead of Azure Blob; recordings volume filling (v2.3.10) | Active |

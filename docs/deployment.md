@@ -629,6 +629,40 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v2.3.9 → v2.3.10 (terminal scrollback, Azure recording upload)
+
+Rebuild the backend and frontend images. **No migration, no `.env` change.**
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+⚠ Recreating the backend ends live sessions.
+
+| Change | Who notices |
+| ------ | ----------- |
+| SSH and Kubernetes terminals: the mouse wheel scrolls back through the history, 3 lines a notch; any key returns to the live prompt; in `less`, `vim` and other full-screen programs the wheel sends arrow keys | Everyone using SSH or Kubernetes sessions |
+| Recordings are uploaded to Azure Blob Storage in 8 MiB blocks, oldest first, with no practical size limit; a failing file backs off for up to an hour instead of blocking the rest | Deployments with **Storage Backend** set to Azure Blob Storage, especially those with recordings stuck on **LOCAL** |
+| Retention runs before uploads on every pass | Deployments whose recordings volume was filling up |
+
+**If recordings were stuck on local storage before the upgrade,** nothing
+needs doing by hand. The first pass runs 20 s after the backend starts:
+retention removes anything past `retention_days`, then the backlog uploads
+oldest first. A large backlog takes several passes. Watch it with:
+
+```bash
+docker compose logs -f backend \
+  | grep -E "Synced recording to Azure Blob|Azure Blob upload failed|Azure sync pass complete"
+```
+
+`Synced recording to Azure Blob: <file>` confirms the new upload path. A
+`403` with `AuthenticationFailed` on every upload means the request
+signature was rejected: report it with the log line. Other failures are
+covered in [runbooks/recording-storage.md](runbooks/recording-storage.md).
+
 #### v2.3.8 → v2.3.9 (terminal text selection)
 
 Rebuild the backend and frontend images. **No migration, no `.env` change.**
@@ -3202,7 +3236,33 @@ Configure via **Admin → Recordings** in the web UI:
 | **Container Name**  | Blob container for recordings (default: `recordings`) |
 | **Access Key**      | Base64-encoded storage account access key             |
 
-Once configured, a background task syncs completed recording files to Azure Blob every 60 seconds. Recordings are always written locally first (guacd requirement), then uploaded. The download endpoint checks local storage first and falls back to Azure Blob, so recordings remain accessible even after local cleanup.
+Once configured, the backend's `recording_sync` worker moves finished recordings to Azure. Recordings are always written to the local volume first — a live recording has to be seekable and must not depend on the storage account being reachable — and uploaded once they have not changed for 30 seconds. The download and playback endpoints check local storage first and fall back to Azure Blob, so a recording stays playable before, during and after its upload.
+
+**How the worker behaves (v2.3.10):**
+
+| Behaviour | Detail |
+| --------- | ------ |
+| Schedule | First pass 20 s after the backend starts, then every 60 s; a pass may run up to 2 h, and the next starts when it finishes |
+| Order within a pass | Retention first (local files, DB rows and blobs older than `retention_days`), then uploads |
+| Upload order | Oldest recording first |
+| Upload method | Block blob: 8 MiB `Put Block` requests, then one `Put Block List`. Largest recording: about 390 GiB (50,000 blocks) |
+| Retries | Each request up to 3 times on a network error, timeout or 5xx. A file whose upload fails is skipped for 1 min, then 2, 4 … up to 1 h between attempts; the other files carry on |
+| Timeouts | Per request: 60 s plus 1 s per 256 KiB — 92 s for a full block. A link slower than 256 KiB/s counts as stalled |
+| After upload | The row's `storage_type` becomes `azure` and the local file is deleted |
+| Recording disabled | With **Enable session recording** off the worker does nothing at all — no uploads and no retention |
+
+**Sizing.** Until a recording is uploaded it occupies the volume, so the
+volume must hold the recordings produced while uploads catch up. Upload
+throughput needs to exceed the rate recordings are written; a busy RDP
+estate can produce several gigabytes an hour. If the backlog keeps growing,
+see [runbooks/recording-storage.md](runbooks/recording-storage.md).
+
+> **Before v2.3.10** each recording went up in one request with a 60-second
+> limit, a recording over 5000 MiB was always refused (`413
+> RequestBodyTooLarge`), and a pass gave up after 10 minutes and restarted in
+> the same order — so a few large recordings could keep every recording
+> behind them, and retention, from ever running. Upgrading clears the
+> backlog without manual steps.
 
 > **Note:** The backend container must have outbound HTTPS access to `<account>.blob.core.windows.net`. Ensure your Docker network or firewall allows this.
 

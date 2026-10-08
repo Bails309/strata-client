@@ -234,13 +234,23 @@ If clipboard access is denied outright (nothing transfers in either direction), 
 
 Since v2.3.9, drag across it with the left mouse button — or double-click a word, triple-click a line. The text is highlighted while you select and is on your clipboard as soon as you let go. Right-click or middle-click pastes into the terminal. A single click clears the selection. If the text highlights but never reaches your clipboard, the connection has `disable-copy` set. The same applies to Kubernetes pod consoles.
 
+### How do I scroll back in an SSH session?
+
+Since v2.3.10, use the mouse wheel: each notch moves three lines through the terminal's history, up to the connection's **Scrollback** setting (1,000 lines unless an administrator changed it). Press any key — other than Shift, Ctrl, Alt and similar on their own — to jump back to the live prompt. You can select and copy text while scrolled back. In full-screen programs such as `less`, `man`, `vim` and `nano` the wheel sends up and down arrow keys instead, because those programs have no scrollback of their own. The same applies to Kubernetes pod consoles. Before v2.3.10 the wheel did nothing in these sessions.
+
 ---
 
 ## Recording & audit
 
 ### Where are recordings stored?
 
-By default in the `guac-recordings` Docker volume on the host. Optionally synced to Azure Blob Storage on session end for durable, memory-efficient streaming playback (configure under **Admin → Storage**).
+By default in the `guac-recordings` Docker volume on the host. Optionally moved to Azure Blob Storage once each session has finished, for durable, memory-efficient streaming playback (configure under **Admin → Recordings**). A recording is always written to the volume first and listed as **LOCAL** until its upload completes, then as **AZURE**.
+
+### Some recordings stay LOCAL and never move to Azure, and the disk is filling up.
+
+On versions before v2.3.10 this was a defect: each recording was uploaded in a single request that had to finish within 60 seconds, Azure refuses any single request over 5000 MiB, and the upload job gave up after ten minutes and started again in the same order — so a few large recordings could block every recording behind them, and the clean-up of old recordings never ran. Upgrade to v2.3.10 or later; the backlog then uploads by itself, oldest first.
+
+On v2.3.10 or later, a recording that is still **LOCAL** a few minutes after its session ended is waiting on a failed upload. The backend log line `Azure Blob upload failed for <file>` gives the reason and when it will be retried. The usual causes are a wrong account name or access key (`403`), a container that does not exist (`404`), or no outbound HTTPS route to `<account>.blob.core.windows.net`. See [runbooks/recording-storage.md](runbooks/recording-storage.md).
 
 ### Every recording shows *failed* with "Permission denied".
 

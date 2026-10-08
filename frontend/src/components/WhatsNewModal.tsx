@@ -30,6 +30,33 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.3.10",
+    subtitle:
+      "Scroll back through SSH and Kubernetes terminals with the mouse wheel, and recordings that reliably move to Azure Blob Storage instead of filling the local disk.",
+    sections: [
+      {
+        title: "Scroll back in the terminal",
+        description:
+          "Each notch of the mouse wheel moves three lines back through an SSH session or Kubernetes pod console, so output that has scrolled off the top can be read and copied again. Press any key to jump back to the live prompt.",
+      },
+      {
+        title: "Full-screen programs scroll too",
+        description:
+          "In less, man, vim, nano and other full-screen programs, the wheel now moves through the document by sending up and down arrow keys, as a desktop terminal does.",
+      },
+      {
+        title: "Recordings reach Azure",
+        description:
+          "Recordings are now uploaded to Azure Blob Storage in small pieces, oldest first, with no practical size limit. A recording that fails to upload waits and tries again later instead of holding up the rest.",
+      },
+      {
+        title: "The local disk stops filling up",
+        description:
+          "Expired recordings are now always cleaned up before uploads start, and recordings already stuck on the server upload on their own after the upgrade.",
+      },
+    ],
+  },
+  {
     version: "2.3.9",
     subtitle: "Select and copy text in SSH and Kubernetes terminals.",
     sections: [

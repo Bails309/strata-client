@@ -22,11 +22,11 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::{Event, EventListener};
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::{Config, Term, TermDamage};
+use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape, Processor};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -52,6 +52,13 @@ const MULTI_CLICK: Duration = Duration::from_millis(400);
 
 /// Guacamole mouse mask bit for the left button.
 const LEFT_BUTTON: u8 = 0x01;
+
+/// Guacamole mouse mask bits for one wheel notch up and down.
+const SCROLL_UP: u8 = 0x08;
+const SCROLL_DOWN: u8 = 0x10;
+
+/// Lines moved per wheel notch, as guacd's terminal does.
+const WHEEL_LINES: usize = 3;
 
 /// Terminal appearance, as the connection's parameters describe it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,6 +246,48 @@ impl TerminalRenderer {
         self.flush()
     }
 
+    /// Lines of history currently scrolled into view.
+    #[must_use]
+    pub fn display_offset(&self) -> usize {
+        self.term.grid().display_offset()
+    }
+
+    /// Scroll the view `lines` into the history (negative: back towards
+    /// the live screen).
+    pub fn scroll(&mut self, lines: i32) {
+        self.term.scroll_display(Scroll::Delta(lines));
+        self.selection_changed();
+    }
+
+    /// Return to the live screen. `true` if the view was scrolled back.
+    pub fn scroll_to_bottom(&mut self) -> bool {
+        if self.display_offset() == 0 {
+            return false;
+        }
+        self.term.scroll_display(Scroll::Bottom);
+        self.selection_changed();
+        true
+    }
+
+    /// A full-screen program is showing, so the wheel should become
+    /// arrow keys (xterm's alternate-scroll mode). Mouse-reporting modes
+    /// are ignored because mouse events are never forwarded to the PTY.
+    fn wheel_sends_arrows(&self) -> bool {
+        self.term
+            .mode()
+            .contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL)
+    }
+
+    /// Arrow-key bytes for one line of wheel movement.
+    fn wheel_arrow(&self, up: bool) -> &'static [u8] {
+        match (self.term.mode().contains(TermMode::APP_CURSOR), up) {
+            (true, true) => b"\x1bOA",
+            (true, false) => b"\x1bOB",
+            (false, true) => b"\x1b[A",
+            (false, false) => b"\x1b[B",
+        }
+    }
+
     /// The grid cell under a pixel position, and which half of it.
     fn cell_at(&self, x: i32, y: i32) -> (Point, Side) {
         let (cw, ch) = (
@@ -252,7 +301,8 @@ impl TerminalRenderer {
         } else {
             Side::Right
         };
-        (Point::new(Line(row), Column(col as usize)), side)
+        let line = Line(row) - self.display_offset();
+        (Point::new(line, Column(col as usize)), side)
     }
 
     /// Start a selection at a pixel position.
@@ -294,7 +344,8 @@ impl TerminalRenderer {
             .as_ref()
             .and_then(|s| s.to_range(&self.term))
             .map(|range| {
-                let clamp = |line: Line| line.0.clamp(0, self.rows as i32 - 1) as usize;
+                let offset = self.display_offset() as i32;
+                let clamp = |line: Line| (line.0 + offset).clamp(0, self.rows as i32 - 1) as usize;
                 (clamp(range.start.line), clamp(range.end.line))
             });
         for (first, last) in [self.selection_rows, rows].into_iter().flatten() {
@@ -423,7 +474,7 @@ impl TerminalRenderer {
         if content.cursor.shape == CursorShape::Hidden {
             return None;
         }
-        let line = content.cursor.point.line.0;
+        let line = content.cursor.point.line.0 + content.display_offset as i32;
         let col = content.cursor.point.column.0;
         if line < 0 || line as usize >= self.rows || col >= self.cols {
             return None;
@@ -442,6 +493,9 @@ impl TerminalRenderer {
         let mut cells = vec![blank; self.cols * self.rows];
 
         let content = self.term.renderable_content();
+        // Grid lines run negative into the history; the viewport row is
+        // the line plus however far back the view is scrolled.
+        let offset = content.display_offset as i32;
         let selection = content.selection;
         let cursor = if content.cursor.shape == CursorShape::Hidden {
             None
@@ -450,7 +504,7 @@ impl TerminalRenderer {
         };
 
         for indexed in content.display_iter {
-            let line = indexed.point.line.0;
+            let line = indexed.point.line.0 + offset;
             if line < 0 {
                 continue;
             }
@@ -488,7 +542,7 @@ impl TerminalRenderer {
         // A block cursor is drawn as an inversion, which is what every
         // terminal does and costs no extra glyph work.
         if let Some(point) = cursor {
-            let line = point.line.0;
+            let line = point.line.0 + offset;
             if line >= 0 {
                 let (row, col) = (line as usize, point.column.0);
                 if row < self.rows && col < self.cols {
@@ -769,6 +823,43 @@ impl RasterisingEngine {
         self.pending.extend(self.renderer.flush()?);
         Ok(())
     }
+
+    /// A wheel notch scrolls the history. In a full-screen program it
+    /// returns arrow keys for the target instead, since the alternate
+    /// screen has no history.
+    fn wheel(&mut self, mask: u8) -> Result<Option<Bytes>, EngineError> {
+        let pressed = mask & !self.mouse_mask;
+        let up = match (pressed & SCROLL_UP != 0, pressed & SCROLL_DOWN != 0) {
+            (true, false) => true,
+            (false, true) => false,
+            _ => return Ok(None),
+        };
+        if self.renderer.wheel_sends_arrows() {
+            let keys = self.renderer.wheel_arrow(up).repeat(WHEEL_LINES);
+            return Ok(Some(Bytes::from(keys)));
+        }
+        let lines = if up {
+            WHEEL_LINES as i32
+        } else {
+            -(WHEEL_LINES as i32)
+        };
+        self.renderer.scroll(lines);
+        self.pending.extend(self.renderer.flush()?);
+        Ok(None)
+    }
+
+    /// Typing returns the view to the live screen, as in any terminal.
+    fn snap_to_bottom(&mut self) -> Result<(), EngineError> {
+        if self.renderer.scroll_to_bottom() {
+            self.pending.extend(self.renderer.flush()?);
+        }
+        Ok(())
+    }
+}
+
+/// Shift, Control, Caps/Shift Lock, Meta, Alt, Super, Hyper and AltGr.
+fn is_modifier(keysym: u32) -> bool {
+    (0xffe1..=0xffee).contains(&keysym) || keysym == 0xfe03
 }
 
 #[async_trait]
@@ -778,8 +869,19 @@ impl ProtocolEngine for RasterisingEngine {
     }
 
     async fn handle_input(&mut self, input: InputEvent) -> Result<(), EngineError> {
-        if let InputEvent::Mouse { x, y, mask } = input {
-            self.select(x, y, mask)?;
+        match &input {
+            InputEvent::Mouse { x, y, mask } => {
+                if let Some(keys) = self.wheel(*mask)? {
+                    self.inner.handle_input(InputEvent::Text(keys)).await?;
+                }
+                self.select(*x, *y, *mask)?;
+            }
+            InputEvent::Key {
+                keysym,
+                pressed: true,
+            } if !is_modifier(*keysym) => self.snap_to_bottom()?,
+            InputEvent::Text(_) => self.snap_to_bottom()?,
+            _ => {}
         }
         if let InputEvent::Resize { width, height, .. } = input {
             let (cols, rows) = self.renderer.grid_for(width, height);
@@ -1124,5 +1226,112 @@ mod tests {
         assert_ne!(wrapper.grid_size(), before);
         // The resize must still reach the target so the PTY agrees.
         assert_eq!(inputs.lock().unwrap().len(), 1);
+    }
+
+    /// One wheel notch: the button goes down, then up.
+    async fn wheel(wrapper: &mut RasterisingEngine, button: u8) {
+        for mask in [button, 0] {
+            wrapper
+                .handle_input(InputEvent::Mouse { x: 1, y: 1, mask })
+                .await
+                .unwrap();
+        }
+    }
+
+    fn history() -> Vec<u8> {
+        (0..100)
+            .flat_map(|i| format!("line {i}\r\n").into_bytes())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_wheel_scrolls_through_the_history() {
+        let text: &'static [u8] = Box::leak(history().into_boxed_slice());
+        let mut wrapper = showing(text, false).await;
+
+        wheel(&mut wrapper, SCROLL_UP).await;
+        assert_eq!(wrapper.renderer.display_offset(), WHEEL_LINES);
+        assert!(
+            wrapper
+                .pending
+                .iter()
+                .any(|e| matches!(e, TargetEvent::ImageUpdate { .. })),
+            "scrolling did not repaint"
+        );
+
+        wheel(&mut wrapper, SCROLL_DOWN).await;
+        assert_eq!(wrapper.renderer.display_offset(), 0);
+    }
+
+    #[tokio::test]
+    async fn typing_returns_to_the_live_screen() {
+        let text: &'static [u8] = Box::leak(history().into_boxed_slice());
+        let mut wrapper = showing(text, false).await;
+        wheel(&mut wrapper, SCROLL_UP).await;
+
+        // A modifier on its own must not jump away from what is being read.
+        wrapper
+            .handle_input(InputEvent::Key {
+                keysym: 0xffe3,
+                pressed: true,
+            })
+            .await
+            .unwrap();
+        assert_eq!(wrapper.renderer.display_offset(), WHEEL_LINES);
+
+        wrapper
+            .handle_input(InputEvent::Key {
+                keysym: u32::from(b'a'),
+                pressed: true,
+            })
+            .await
+            .unwrap();
+        assert_eq!(wrapper.renderer.display_offset(), 0);
+    }
+
+    #[tokio::test]
+    async fn selecting_while_scrolled_back_copies_the_history_shown() {
+        let text: &'static [u8] = Box::leak(history().into_boxed_slice());
+        let mut wrapper = showing(text, false).await;
+        let rows = wrapper.grid_size().1;
+        for _ in 0..10 {
+            wheel(&mut wrapper, SCROLL_UP).await;
+        }
+        let top = 100 + 1 - rows - 10 * WHEEL_LINES;
+        let expected = format!("line {top}");
+        let last = expected.len() as u32 - 1;
+
+        mouse(&mut wrapper, 0, false, LEFT_BUTTON).await;
+        mouse(&mut wrapper, last, true, LEFT_BUTTON).await;
+        mouse(&mut wrapper, last, true, 0).await;
+        assert_eq!(copied(&wrapper), [expected]);
+    }
+
+    #[tokio::test]
+    async fn the_wheel_sends_arrow_keys_to_a_full_screen_program() {
+        let (engine, events, inputs) = MockEngine::new(Protocol::Ssh);
+        let font = TerminalFont::discover(DEFAULT_FONT_SIZE_PX).unwrap();
+        let mut wrapper = RasterisingEngine::new(Box::new(engine), font, 640, 480);
+        let _ = wrapper.next_event().await.unwrap();
+        // Alternate screen, then application cursor keys, as `less` does.
+        events
+            .send(TargetEvent::TerminalOutput(Bytes::from_static(
+                b"\x1b[?1049h\x1b[?1h",
+            )))
+            .unwrap();
+        let _ = wrapper.next_event().await.unwrap();
+
+        wheel(&mut wrapper, SCROLL_DOWN).await;
+        let sent: Vec<_> = inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                InputEvent::Text(data) => Some(data.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent, [Bytes::from_static(b"\x1bOB\x1bOB\x1bOB")]);
+        assert_eq!(wrapper.renderer.display_offset(), 0);
     }
 }

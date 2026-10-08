@@ -7,6 +7,278 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.10] — 2026-10-08
+
+### Patch release — scroll back through SSH and Kubernetes terminals, and recordings that reliably leave the local disk for Azure Blob Storage
+
+### The ask
+
+> *"It isn't currently possible to scroll up or down in an SSH session. Can
+> we fix this?"*
+>
+> *"Can you investigate why some of the recordings stay sat in local and
+> don't get moved to the Azure storage? This means that the local disk fills
+> up with old recordings"*
+
+### Summary
+
+| Area | Change |
+| ---- | ------ |
+| SSH and Kubernetes terminals | The mouse wheel scrolls back through the terminal's history, 3 lines a notch; typing returns to the live screen |
+| Full-screen terminal programs | In `less`, `man`, `vim`, `nano` and anything else on the alternate screen, the wheel sends ↑ / ↓ arrow keys, as xterm does |
+| Azure Blob upload | Recordings are uploaded in 8 MiB blocks (`Put Block` + `Put Block List`) instead of one request: no 5000 MiB ceiling, no 60 s cut-off on the whole file, a failed block retried on its own |
+| Recording sync worker | Retention runs **before** uploads; uploads go oldest first; a failing file backs off (1 min → 1 h) instead of blocking the files behind it; the per-pass budget is 2 h instead of 10 min |
+| Dependencies (backfill, #490) | `katex` pinned to `0.18.10` under `mermaid` for `GHSA-238p-pmpm-9mq7` — shipped on `main` after v2.3.9 without a CHANGELOG entry |
+
+### Added — the mouse wheel scrolls SSH and Kubernetes terminals
+
+**Symptom.** Turning the mouse wheel in an SSH session did nothing: output
+that had scrolled off the top of the screen could not be read again without
+re-running the command or piping it into `less`. The v2.3.9 entry listed
+*"selecting scrollback with the mouse wheel"* as not included.
+
+**Root cause.** Nothing was missing in the browser. `Guacamole.Mouse`
+turns each wheel notch into a `click()` of the scroll-up or scroll-down
+button, which fires the `mousedown` / `mouseup` handlers
+[`SessionManager.tsx`](frontend/src/components/SessionManager.tsx) already
+forwards, so the gateway received `mouse` instructions with mask bit
+`0x08` (up) or `0x10` (down) followed by `0`. RDP and VNC pass those bits to
+the target, which scrolls. For SSH and Kubernetes the target is a PTY with
+no pointer, and the scrollback lives in the gateway's own emulator
+(`alacritty_terminal`, configured with the connection's `scrollback` depth
+since v2.0.0), so the gateway itself has to move the view. The terminal
+rasteriser,
+[`RasterisingEngine`](crates/strata-session/src/terminal/mod.rs), handled
+the left button (v2.3.9 selection) and ignored the wheel bits. Under guacd
+its terminal emulator scrolled the display on those bits, which is why this
+worked before v2.0.0.
+
+**Fix.** `RasterisingEngine::wheel` acts on the **press** edge of either
+wheel bit (Guacamole sends a press and a release per notch, so acting on
+both would scroll twice):
+
+| Screen | Wheel notch does |
+| ------ | ---------------- |
+| Normal screen (shell, command output) | `Term::scroll_display(Scroll::Delta(±3))` — moves the view 3 lines (`WHEEL_LINES`, the same step as guacd) through the history, clamped to the history that exists |
+| Alternate screen (`less`, `man`, `vim`, `nano`, `htop`, `tmux` copy mode) with alternate-scroll mode on (the default, `DECSET 1007`) | Sends three ↑ or ↓ arrow keys to the target as `InputEvent::Text` — `ESC O A` / `ESC O B` when the program has enabled application cursor keys (`DECCKM`), `ESC [ A` / `ESC [ B` otherwise. The alternate screen has no history to scroll, so this is what makes the wheel useful there |
+
+Programs that request mouse reporting (`vim` with `mouse=a`, `htop`) still
+get arrow keys: the native SSH and Kubernetes engines do not forward mouse
+events to the PTY, so a mouse-reporting request could never be honoured and
+honouring it here would leave the wheel dead.
+
+Supporting changes in `TerminalRenderer`:
+
+- **Viewport mapping.** `alacritty_terminal` numbers history lines
+  negatively, and `display_iter()` yields grid lines from `-display_offset`.
+  `snapshot()`, `cursor_position()`, `cell_at()` and `selection_changed()`
+  now add or subtract `display_offset` so the scrolled view, the cursor,
+  mouse selection and the selection repaint all use viewport rows. Without
+  this the scrolled-back view rendered blank (every history line was
+  skipped as `line < 0`) and a selection made while scrolled back copied the
+  wrong lines.
+- **Repaint.** `scroll_display` marks the emulator fully damaged when the
+  offset changes; the existing snapshot diff then encodes only the rows that
+  actually differ.
+- **Back to the live screen.** A key press (`InputEvent::Key` with
+  `pressed`) or raw text input returns the view to the bottom
+  (`scroll_to_bottom`), as in every terminal emulator. Modifier keys on
+  their own — Shift, Control, Caps/Shift Lock, Meta, Alt, Super, Hyper
+  (`0xffe1`–`0xffee`) and AltGr (`0xfe03`) — do not, so holding Ctrl to copy
+  does not jump away from what is being read. New output while scrolled back
+  does not move the view: `alacritty_terminal` raises `display_offset` as
+  lines are added, so the text being read stays put.
+
+Mouse events still reach the inner engine afterwards, so right/middle-click
+paste is unchanged. The frontend is unchanged.
+
+**Scope & safety.** No schema, API, environment-variable or dependency
+change. The arrow keys are generated only from a wheel event the user (or a
+shared-control guest, who can already type) sent, and only reach the target
+after the session's input moderator has accepted that event; they are
+equivalent to the user pressing the arrow keys. Read-only observers send no
+input. The emulator is shared by everyone watching the session, so scrolling
+back changes what observers see and what the `.guac` recording contains —
+which is what the user saw. `disable-copy` still applies to selections made
+while scrolled back.
+
+**Testing.** `strata-session` terminal tests
+`the_wheel_scrolls_through_the_history`,
+`typing_returns_to_the_live_screen`,
+`selecting_while_scrolled_back_copies_the_history_shown` and
+`the_wheel_sends_arrow_keys_to_a_full_screen_program`; the terminal suite
+(37) passes with `cargo fmt --check` and
+`cargo clippy -p strata-session --all-features --all-targets -D warnings`
+clean.
+
+### Fixed — recordings stayed on the local disk instead of moving to Azure Blob Storage
+
+**Symptom.** With **Admin → Recordings → Storage Backend** set to Azure Blob
+Storage, some recordings stayed **LOCAL** indefinitely while others —
+including later and longer ones — moved to **AZURE**. Short sessions were as
+likely to be stuck as long ones (a 52-second recording stayed local while a
+32-minute one uploaded). The recordings volume grew until the disk filled,
+because expired local recordings were not being removed either.
+
+**Evidence.** The production backend log for 2026-10-06 23:35–23:50 UTC:
+
+```text
+azure_blob.upload: attempt 1/3 failed (retrying): error sending request for url (https://<account>.blob.core.windows.net/recordings/…-1791132030196.guac)
+azure_blob.upload: attempt 2/3 failed (retrying): error sending request for url (…-1791132030196.guac)
+Azure Blob upload failed for …-1791132030196.guac: error sending request for url (…)
+Azure Blob upload failed for …-1791188877021.guac: Azure Blob upload failed (413 Payload Too Large): <Code>RequestBodyTooLarge</Code> … <MaxLimit>5242880000</MaxLimit>
+recording_sync: iteration exceeded 600s budget — dropped
+```
+
+Each attempt failed almost exactly 60 seconds after it started, and the
+pass was dropped at 600 seconds, twice in 15 minutes.
+
+**Root cause.** Four defects in
+[`services/recordings.rs`](backend/src/services/recordings.rs) compounded:
+
+| # | Defect | Effect |
+| - | ------ | ------ |
+| 1 | `upload_file_to_azure` sent each recording as **one** streamed `Put Blob` request through `http_client::azure_client()`, whose **60 s overall timeout** covers the whole body | Any recording that could not be sent within a minute at the link's real throughput failed — every attempt, every pass. The timeout is classed as transient (`is_http_transient`), so each file cost three attempts, about 3 minutes, per pass |
+| 2 | A single `Put Blob` is capped by Azure at **5000 MiB** (5,242,880,000 bytes) | A recording above that is refused with `413 RequestBodyTooLarge` however fast the link — it could **never** be uploaded |
+| 3 | The `recording_sync` worker gave each pass **10 minutes** (`iteration_timeout`), then dropped it. Files were visited in `read_dir` order, which on ext4 is a hash order that does not change between passes | Three or four large files at the front of the order used the whole budget every pass. Files behind them — whatever their size — were never reached. This is why small recordings stayed local |
+| 4 | Retention (local-file expiry, then the DB row and Azure blob purge) ran **after** the upload loop in the same pass | A dropped pass never reached it, so expired recordings were never removed and the disk filled |
+
+**Fix.**
+
+1. **Block upload.** `upload_file_to_azure` reads the file in 8 MiB blocks
+   (`UPLOAD_BLOCK_SIZE`) and sends each with `Put Block`
+   (`?comp=block&blockid=<id>`), then commits them in order with
+   `Put Block List` (`?comp=blocklist`, an XML list of `<Latest>` IDs). Block
+   IDs are the base64 of a zero-padded six-digit index (`block_id`), so every
+   ID in a blob has the same length, as Azure requires. A blob can hold
+   50,000 blocks (`MAX_BLOCKS`), so the largest uploadable recording is now
+   about 390 GiB. Each request is retried up to 3 times on a transient
+   failure, so a network blip costs one block, not the file. Memory per
+   upload is one 8 MiB buffer.
+2. **Size-scaled timeout.** Each request carries its own timeout,
+   `upload_timeout(len)` = 60 s + 1 s per 256 KiB (`UPLOAD_MIN_BYTES_PER_SEC`)
+   — 92 s for a full block — overriding the client's flat 60 s. A link slower
+   than 256 KiB/s is treated as stalled.
+3. **Signing.** The Shared Key canonicalised resource now carries the query
+   parameters, sorted by name, one per line (`/<account>/<container>/<blob>\nblockid:<id>\ncomp:block`)
+   — `canonical_resource`. `Put Block` does not send `x-ms-blob-type`; that
+   header belongs only to `Put Blob`.
+4. **Retention first.** `sync_pass` now runs `retention_pass` and then
+   `upload_pass`, so expired recordings are removed even when the upload pass
+   is slow, failing or dropped.
+5. **Oldest first, regular files only.** `upload_pass` collects the
+   candidates (skipping dot-files, directories, anything modified in the last
+   30 s and anything in back-off) and uploads them in modification-time
+   order, so a backlog drains in age order.
+6. **Per-file back-off.** `SyncState.retry_at` records, per file, how many
+   uploads have failed and when to try again: 1, 2, 4 … minutes, capped at an
+   hour (`upload_backoff`). The failure is recorded **before** the attempt
+   and cleared on success, so a pass cut off mid-upload also moves the file
+   back. Entries for files that no longer exist are pruned each pass, and
+   retention clears the entry for every file it deletes.
+7. **Pass budget.** `iteration_timeout` is 2 hours, long enough for a
+   multi-gigabyte recording at the minimum rate; the interval stays 60 s.
+
+Rejected: raising only the client timeout (the 5000 MiB ceiling remains,
+and one slow file still blocks the rest); a separate worker per file
+(concurrent uploads compete for the same uplink and multiply the memory
+held); resuming a partly uploaded blob with `Get Block List` (more
+requests and state for a case the back-off already handles; uncommitted
+blocks are discarded by Azure after 7 days).
+
+Unchanged: the 30-second modification guard (a live recording is flushed
+every 5 s, so it never looks finished), the `UPDATE recordings SET
+storage_type = 'azure'` once a file is committed, removal of the local copy
+after upload, and playback and download from Azure (`Get Blob` reads a blob
+built from blocks exactly like one written whole).
+
+**New log fields.** `recordings: sync_pass tick` adds `retry_pending`;
+`recordings: Azure sync pass complete` adds `skipped_backoff`; the
+`Azure Blob upload failed for <file>` warning adds `failures` and
+`retry_in_secs`.
+
+**Scope & safety.** No schema, API, environment-variable or dependency
+change. The same storage account, container and Vault-sealed access key are
+used; `Put Block` and `Put Block List` are authorised by the same Shared Key
+as `Put Blob`, so no new Azure permission or firewall rule is needed. All
+requests stay HTTPS-only (`https_only(true)` on the client, and
+`blob_url` refuses any other scheme before a credential is attached).
+Blob names are the recording file names the backend generated
+(`<connection-uuid>-<epoch-ms>.guac`); nothing user-supplied reaches the URL.
+
+**Testing.** New backend unit tests `upload_timeout_grows_with_the_recording`,
+`upload_backoff_doubles_and_caps_at_an_hour`,
+`block_ids_are_base64_and_equal_length`, `block_list_commits_blocks_in_order`
+and `canonical_resource_lists_query_parameters`; `services::recordings`
+(41 tests) passes, with `cargo fmt --check` and
+`cargo clippy -p strata-backend --all-targets -D warnings` clean in the
+`rust:1.99-slim-trixie` container. **Not verified against a live storage
+account before release:** `blob_url` always targets
+`<account>.blob.core.windows.net`, so the Azurite emulator cannot be used.
+See *Deploy* for the check to run after upgrading.
+
+**Deploy.**
+
+```bash
+docker compose build backend frontend
+docker compose up -d
+```
+
+⚠ Recreating the backend ends live sessions. On the first pass (20 s after
+start, then every 60 s) retention runs, then the backlog uploads oldest
+first. Confirm with:
+
+```bash
+docker compose logs -f backend | grep -E "Synced recording to Azure Blob|Azure Blob upload failed|Azure sync pass complete"
+```
+
+`Synced recording to Azure Blob: <file>` lines mean the block upload is
+working. `403 AuthenticationFailed` on uploads would mean the request
+signing is wrong — report it with the log line. A large backlog can take
+several passes; `skipped_backoff` and `retry_pending` show what is waiting.
+See [docs/runbooks/recording-storage.md](docs/runbooks/recording-storage.md).
+
+### Security — `katex` pinned under `mermaid` (backfill of #490)
+
+Merged to `main` on 2026-10-06 after v2.3.9 was cut, and first shipped in
+this release. It had no CHANGELOG entry.
+
+| Advisory | Package | Affected → fixed | Exposure in Strata |
+| -------- | ------- | ---------------- | ------------------ |
+| `GHSA-238p-pmpm-9mq7` / `CVE-2026-103923` (Low, CVSS 4.0 2.1) | `katex` (npm) | `>= 0.11.0, < 0.18.2`; was `0.16.47` → `0.18.10` | **None in practice.** KaTeX could treat properties inherited from an already-polluted `Object.prototype` as renderer options — notably `trust` — so attacker-controlled maths could produce links or load external resources. It needs both a separate prototype-pollution bug and attacker-controlled expressions. In Strata `katex` is reached only through `mermaid`, which is lazy-loaded on the `/docs` page and renders diagrams from documentation bundled at build time, with `securityLevel: "strict"` |
+
+`mermaid` 12.x still requires `katex ^0.16.47`, so the fix is an `overrides`
+entry in [`frontend/package.json`](frontend/package.json):
+`"katex": "0.18.10"`, which resolves under
+`node_modules/mermaid/node_modules/katex` (its `commander` dependency moves
+`8.3.0` → `15.0.0`). KaTeX 0.17 and 0.18 changed only an internal API and
+CSS class prefixes, neither used by mermaid's `renderToString` call. `0.18.11`
+is deprecated upstream for an accidental breaking change that `0.19` carries,
+so the pin is exact.
+
+### Documentation
+
+| Document | Change |
+| -------- | ------ |
+| [README.md](README.md) | Terminal scrollback in *Protocols & display*; Azure Blob bullet describes block upload; release row |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | *Recording & Export* data flow: periodic block upload, retention first |
+| [docs/architecture.md](docs/architecture.md) | New *Terminal scrollback and the mouse wheel (v2.3.10)*; new *Off-box upload to Azure Blob Storage (v2.3.10)*; text-selection section notes viewport mapping; `recordings.rs` directory entry; runbook table |
+| [docs/security.md](docs/security.md) | *Terminal scrollback (v2.3.10)*; *Session Recording & Retention* rewritten for block upload, ordering and back-off; Azure authentication corrected to Shared Key; `katex` in *Handled advisories* |
+| [docs/api-reference.md](docs/api-reference.md) | Mouse-wheel note on the WebSocket tunnel; `PUT /api/admin/settings/recordings` storage fields (backfill — `storage_type` and the three `azure_*` fields were never documented); Azure authentication corrected on the stream endpoint |
+| [docs/deployment.md](docs/deployment.md) | v2.3.9 → v2.3.10 upgrade notes; *Azure Blob Storage* section rewritten (sync behaviour, sizing, diagnostics) |
+| [docs/faq.md](docs/faq.md) | Scrolling an SSH session; recordings stuck on local storage |
+| [docs/runbooks/recording-storage.md](docs/runbooks/recording-storage.md) | **New** — recordings not reaching Azure, recordings volume filling up |
+
+**Corrections (backfill).** [docs/security.md](docs/security.md) and
+[docs/api-reference.md](docs/api-reference.md) said Azure-stored recordings
+authenticate with *"the connection string / managed identity sealed in
+Vault"*. Strata has only ever used the storage account **access
+key** with Shared Key signing, sealed with Vault Transit when Vault is
+configured. [docs/deployment.md](docs/deployment.md) said recordings are
+written locally first as a *"guacd requirement"*; since v2.0.0 the native
+engine writes them, and local-first is what makes a live recording seekable
+and safe from an upload outage.
+
 ## [2.3.9] — 2026-10-06
 
 ### Patch release — select and copy text in SSH and Kubernetes terminals

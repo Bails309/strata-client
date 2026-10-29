@@ -65,3 +65,28 @@ unmaintained advisory carries no reachable risk here. Revisit if a vulnerability
 is ever filed against it.
 """
 
+[[IgnoredVulns]]
+id = "GHSA-qwgh-2vcv-g2f7"
+reason = """
+`block-buffer` < 0.12.1 inline cursor corruption if a caller-supplied
+`compress` or `gen_block` closure panics and the caller catches the panic with
+`std::panic::catch_unwind` and continues using the same `EagerBuffer` /
+`ReadBuffer`.
+
+The direct `0.12.x` instance in `Cargo.lock` is already at the patched `0.12.1`.
+`0.10.4` remains locked only via `digest 0.10.7`, which is still required by
+current `sqlx 0.8.6`, `axum 0.8.9`, `tungstenite 0.29.0`, and `ironrdp-pdu 0.9.0`
+(no `0.10.x` backport exists upstream).
+
+The bug is not reachable in `0.10.4` here for two independent reasons:
+(1) `block-buffer 0.10.4` stores its cursor `pos: u8` as a separate struct
+field on `BlockBuffer`, not inline in the last/first byte of the block (inline
+cursor storage was introduced in the `0.12` line); and (2) the `digest 0.10`
+hash compression functions (`sha1`, `sha2`, `md-5`, `blake2`) are infallible
+and never panic or unwind across `catch_unwind`.
+
+Remove when upstream crates (`sqlx`, `axum`, `tungstenite`, `ironrdp-pdu`)
+finish migrating from `digest 0.10` to `digest 0.11`.
+"""
+
+

@@ -22,7 +22,7 @@
 // `kube` client pulls in roughly 80+ transitive dependencies (k8s-openapi,
 // hyper, tower-http, kube-derive, …) just so we can read a YAML file.
 // That's a lot of attack surface and build time for what is, at heart,
-// "find five strings in a YAML document". `serde_yaml` + a tiny set of
+// "find five strings in a YAML document". `serde-saphyr` + a tiny set of
 // typed structs is sufficient.
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -105,7 +105,7 @@ struct UserInner {
     /// Presence-only — if the user uses an exec plugin we surface a
     /// warning to the operator.
     #[serde(default)]
-    exec: Option<serde_yaml::Value>,
+    exec: Option<serde_json::Value>,
     #[serde(default)]
     token: Option<String>,
 }
@@ -151,7 +151,7 @@ pub fn parse_kubeconfig(
         ));
     }
 
-    let raw: RawKubeconfig = serde_yaml::from_str(yaml)
+    let raw: RawKubeconfig = serde_saphyr::from_str(yaml)
         .map_err(|e| AppError::Validation(format!("invalid kubeconfig YAML: {e}")))?;
 
     let mut out = ParsedKubeconfig {

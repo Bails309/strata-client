@@ -30,6 +30,28 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.3.11",
+    subtitle:
+      "A security and maintenance release: the SSH engine moves to russh 0.65.0, Kerberos AD sync subprocess arguments are hardened, and all OpenSSF Scorecard and RustSec advisories are closed.",
+    sections: [
+      {
+        title: "Hardened SSH and SFTP engine (russh 0.65.0)",
+        description:
+          "Remote SSH and SFTP sessions now use russh 0.65.0, which protects the client against malicious or misbehaving SSH targets (bounding extension messages, rejecting zero-sized packet limits, and guarding certificate parsing) and fixes a CPU spin when a session sits at an interactive login prompt past the keepalive interval.",
+      },
+      {
+        title: "Kerberos AD sync & supply-chain hardening",
+        description:
+          "Kerberos Active Directory sync now validates kinit and ldapsearch arguments at the subprocess boundary against flag injection, kubeconfig YAML parsing moves from unmaintained serde_yaml/unsafe-libyaml to safe Rust serde-saphyr, and tokio, rustls, rustls-webpki, webpki-roots, crypto-bigint, ctutils, libz-sys, nginx and frontend packages are updated.",
+      },
+      {
+        title: "For administrators",
+        description:
+          "Rebuild the backend and frontend images as usual. There is no database migration and no configuration change.",
+      },
+    ],
+  },
+  {
     version: "2.3.10",
     subtitle:
       "Scroll back through SSH and Kubernetes terminals with the mouse wheel, and recordings that reliably move to Azure Blob Storage instead of filling the local disk.",

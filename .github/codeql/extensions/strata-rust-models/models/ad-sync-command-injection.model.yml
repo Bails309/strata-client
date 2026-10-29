@@ -1,0 +1,137 @@
+# Barrier models for the Kerberos AD sync subprocess argument validators.
+#
+# `rust/command-line-injection` treats every argument passed to
+# `tokio::process::Command::args` as a `command-injection` sink, even though
+# `Command` invokes `execve` directly without a shell. In `POST /api/admin/ad-sync/test`,
+# an administrator supplies an `AdSyncConfig` payload and asks Strata to test
+# connectivity. When `auth_method == "kerberos"`, `ldap_query_kerberos` spawns
+# `kinit` and `ldapsearch` with those fields.
+#
+# What makes this safe against both command injection (CWE-78) and argument/flag
+# injection (CWE-88) is that every caller-supplied value passes through
+# `validate_kinit_args` or `validate_ldapsearch_args` before reaching `Command::args`:
+# - `keytab_path` must be an absolute path with no leading `-` or control bytes.
+# - `krb5_principal` must be non-empty with no leading `-`, whitespace, or control bytes.
+# - `ldap_url` must be `ldap://` or `ldaps://` followed only by a valid host[:port].
+# - `search_base` must have no leading `-` or control bytes.
+# - `search_filter` must be enclosed in balanced `(...)` with bounded depth and no control bytes.
+#
+# `CommandInjection::ModelsAsDataBarrier` reads barriers of kind `command-injection`,
+# so declaring barriers on the validators' return values stops the taint flow at
+# the validation boundary while keeping `rust/command-line-injection` active
+# everywhere else.
+#
+# Both canonical-path spellings are listed; see safeguard-request-forgery.
+extensions:
+  - addsTo:
+      pack: codeql/rust-all
+      extensible: barrierModel
+    data:
+      - [
+          "strata_backend::services::ad_sync::validate_kinit_args",
+          "ReturnValue",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata_backend::services::ad_sync::validate_kinit_args",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata_backend::services::ad_sync::validate_kinit_args",
+          "ReturnValue.Field[core::result::Result::Ok(0)].TupleElement[0]",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata_backend::services::ad_sync::validate_kinit_args",
+          "ReturnValue.Field[core::result::Result::Ok(0)].TupleElement[1]",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata_backend::services::ad_sync::validate_ldapsearch_args",
+          "ReturnValue",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata_backend::services::ad_sync::validate_ldapsearch_args",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata_backend::services::ad_sync::validate_ldapsearch_args",
+          "ReturnValue.Field[core::result::Result::Ok(0)].TupleElement[0]",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata_backend::services::ad_sync::validate_ldapsearch_args",
+          "ReturnValue.Field[core::result::Result::Ok(0)].TupleElement[1]",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata_backend::services::ad_sync::validate_ldapsearch_args",
+          "ReturnValue.Field[core::result::Result::Ok(0)].TupleElement[2]",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata-backend::services::ad_sync::validate_kinit_args",
+          "ReturnValue",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata-backend::services::ad_sync::validate_kinit_args",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata-backend::services::ad_sync::validate_kinit_args",
+          "ReturnValue.Field[core::result::Result::Ok(0)].TupleElement[0]",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata-backend::services::ad_sync::validate_kinit_args",
+          "ReturnValue.Field[core::result::Result::Ok(0)].TupleElement[1]",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata-backend::services::ad_sync::validate_ldapsearch_args",
+          "ReturnValue",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata-backend::services::ad_sync::validate_ldapsearch_args",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata-backend::services::ad_sync::validate_ldapsearch_args",
+          "ReturnValue.Field[core::result::Result::Ok(0)].TupleElement[0]",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata-backend::services::ad_sync::validate_ldapsearch_args",
+          "ReturnValue.Field[core::result::Result::Ok(0)].TupleElement[1]",
+          "command-injection",
+          "manual",
+        ]
+      - [
+          "strata-backend::services::ad_sync::validate_ldapsearch_args",
+          "ReturnValue.Field[core::result::Result::Ok(0)].TupleElement[2]",
+          "command-injection",
+          "manual",
+        ]

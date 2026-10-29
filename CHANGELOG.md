@@ -7,6 +7,131 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.11] — 2026-10-29
+
+### Patch release — `russh` 0.65.0, Kerberos AD sync argument hardening (CodeQL `rust/command-line-injection`), and 8 OpenSSF Scorecard / OSV advisories resolved
+
+### The ask
+
+> *"Can we migrate russh to the latest v0.65.0"*
+>
+> CodeQL `rust/command-line-injection` (`CWE-078` / `CWE-088`) on [`backend/src/services/ad_sync.rs`](backend/src/services/ad_sync.rs) (`ldap_query_kerberos`)
+>
+> OpenSSF Scorecard `Vulnerabilities`: `GHSA-qwgh-2vcv-g2f7`, `RUSTSEC-2026-0387`, `RUSTSEC-2026-0385`, `RUSTSEC-2026-0418`, `RUSTSEC-2026-0381`, `RUSTSEC-2026-0386`, `RUSTSEC-2024-0449`, `GHSA-mrhx-c7xc-m3w5`
+
+### Summary
+
+| Area | Change | Runtime effect |
+| ---- | ------ | -------------- |
+| SSH engine | `russh` `0.64.1` → **`0.65.0`** | Closes 3 client/shared advisories (`GHSA-4p9f-7p9m-5vfg`, `GHSA-fw5c-8223-6h42`, `GHSA-3hm4-p7h4-rvwp`) and 3 agent-server advisories (`GHSA-9wfm-jcj8-jfv9`, `GHSA-662x-8wvj-2276`, `GHSA-vp5q-ff62-jwqv`); fixes keepalive timer CPU spin before authentication (`#791`) and channel window accounting (`#790`) |
+| AD sync (Kerberos) | `validate_kinit_args` and `validate_ldapsearch_args` enforce strict argument invariants before `kinit` and `ldapsearch` are spawned; CodeQL barrier model in `strata-rust-models` `0.0.3` | Closes CWE-88 flag injection and unvalidated `POST /api/admin/ad-sync/test` payloads |
+| Supply chain (Scorecard / OSV / RustSec) | `tokio` `1.53.1` → **`1.54.1`** (`RUSTSEC-2026-0386`), `crypto-bigint` `0.7.5` → **`0.7.10`** (`RUSTSEC-2026-0387`), `ctutils` `0.4.2` → **`0.4.7`** (`RUSTSEC-2026-0385`), `libz-sys` `1.1.29` → **`1.1.31`** (`RUSTSEC-2026-0418`), `rustls-webpki` `0.103.15` → **`0.103.16`** (`RUSTSEC-2026-0382`), `webpki-roots` `1.0.9` → **`1.0.11`** (`RUSTSEC-2026-0381`), `serde_yaml` / `unsafe-libyaml` replaced with **`serde-saphyr` `2.0.0`** (`RUSTSEC-2024-0449`), `yoke` / `yoke-derive` `0.8.3` → **`0.8.4`** (un-yanked), `zod` `4.4.3` → **`4.6.7`** (`GHSA-mrhx-c7xc-m3w5`), and `GHSA-qwgh-2vcv-g2f7` (`block-buffer 0.10.4`) documented in `osv-scanner.toml` | Closes all OpenSSF Scorecard and `cargo audit` findings |
+| TLS | `rustls` `0.23.45` → `0.23.46` (#503) | Routine patch update |
+| Frontend & container | `nginx` `1.31.6-alpine` → `1.31.8-alpine` (#500); `dompurify` `3.4.17` (#502); `react` / `react-dom` `19.3.1`, `i18next` `26.5.11`, `marked` `18.1.1`, `mermaid` `12.2.0`, `react-i18next` `17.1.9`, `undici` `8.12.3` (#504); `vite` `8.3.5` (#499) and dev/E2E tooling (#495, #501) | Routine minor/patch dependency hygiene |
+
+### Security — 8 OpenSSF Scorecard / OSV-Scanner findings closed
+
+| Advisory | Package | Resolution |
+| -------- | ------- | ---------- |
+| `RUSTSEC-2026-0386` | `tokio` (Rust) | `1.53.1` → **`1.54.1`**. Fixes I/O safety soundness in `AsyncFd::new` and related constructors (not called directly by Strata). |
+| `RUSTSEC-2026-0387` | `crypto-bigint` (Rust) | `0.7.5` → **`0.7.10`**. Constant-time fixes across big-integer operations used by `russh` / `rsa`. |
+| `RUSTSEC-2026-0385` | `ctutils` (Rust) | `0.4.2` → **`0.4.7`**. Constant-time mask generation and `u128` comparison fixes. |
+| `RUSTSEC-2026-0418` / `GHSA-8p3x-q3q3-q3v5` | `libz-sys` (Rust) | `1.1.29` → **`1.1.31`**. Build script no longer writes environment variables into the build directory. |
+| `RUSTSEC-2026-0382` | `rustls-webpki` (Rust) | `0.103.15` → **`0.103.16`**. Certificate verification fix preventing acceptance of distrusted intermediates. |
+| `RUSTSEC-2026-0381` / `CVE-2026-111943` | `webpki-roots` (Rust) | `1.0.9` → **`1.0.11`** (`0.26.11` was already patched and delegates to `1.0.11`). Removes trust in distrusted emSign intermediates. |
+| `RUSTSEC-2024-0449` | `unsafe-libyaml` (Rust) | **Removed.** Replaced `serde_yaml 0.9.34+deprecated` (and its C-transpiled `unsafe-libyaml` dependency) with **`serde-saphyr 2.0.0`** (`deserialize` feature only) in `backend/src/services/kubernetes.rs` for kubeconfig import parsing. |
+| `GHSA-mrhx-c7xc-m3w5` / `CVE-2023-54404` | `zod` (npm) | `4.4.3` → **`4.6.7`** in `frontend/package-lock.json` (`dev` transitive of `eslint-plugin-react-hooks`, never bundled). |
+| `GHSA-qwgh-2vcv-g2f7` | `block-buffer` (Rust) | Direct `0.12` line is already at the patched `0.12.1`. `0.10.4` remains via `digest 0.10.7` (`sqlx`, `axum`, `tungstenite`, `ironrdp-pdu`), does not use inline cursor storage (which was introduced in `0.12`), and is called only with infallible hash compression functions without `catch_unwind`; documented in [`osv-scanner.toml`](osv-scanner.toml). |
+
+### Security — Kerberos AD sync subprocess argument hardening (`rust/command-line-injection`)
+
+CodeQL's `rust/command-line-injection` query (`CWE-078` / `CWE-088`) flagged `ldap_query_kerberos` in [`backend/src/services/ad_sync.rs`](backend/src/services/ad_sync.rs), where `POST /api/admin/ad-sync/test` builds an `AdSyncConfig` from the admin request body and passes its fields to `tokio::process::Command::new("kinit")` and `tokio::process::Command::new("ldapsearch")`.
+
+Although `tokio::process::Command` invokes `execve` directly without a shell (so shell metacharacters are not interpreted), two real gaps existed:
+
+1. `test_ad_sync_connection` in `routes/admin.rs` did not call `validate_ldap_url` or `validate_ldap_filter` (unlike `create_ad_sync_config` and `update_ad_sync_config`).
+2. Positional arguments (`search_base`, `search_filter`, `keytab_path`, `krb5_principal`, `ldap_url`) were not checked against leading `-` option flags (CWE-88 argument injection — e.g. a `search_base` or `filter` starting with `-` being parsed as an `ldapsearch` flag) or control characters right where the subprocesses are constructed.
+
+`ldap_query_kerberos` now validates every caller-supplied argument through `validate_kinit_args` and `validate_ldapsearch_args` before spawning either process:
+- `keytab_path` must be an absolute path with no leading `-` or control characters.
+- `krb5_principal` must be non-empty with no leading `-`, whitespace, or control characters.
+- `ldap_url` must start with `ldap://` or `ldaps://` followed only by a valid `host[:port]` authority.
+- `search_base` must not start with `-` or contain control characters.
+- `search_filter` must be enclosed in balanced `(...)` (which also precludes leading `-` flags), with depth ≤ 32, length ≤ 2048, and no control characters.
+
+A `command-injection` barrier model (`.github/codeql/extensions/strata-rust-models/models/ad-sync-command-injection.model.yml`, pack bumped to `0.0.3`) records the two validators for CodeQL while leaving `rust/command-line-injection` active across the rest of the repository.
+
+### Changed — `russh` 0.64.1 → 0.65.0
+
+**`russh` 0.64.1 → 0.65.0** (`crates/strata-session`). Only `russh` itself moved in `Cargo.lock` for the SSH upgrade; `russh-cryptovec` (`0.62.0`), `russh-util` (`0.52.0`) and `russh-sftp` (`3.0.0`) are unchanged. Both breaking changes in `v0.65.0` are outside Strata's call sites:
+
+- `server::Handler::auth_publickey_offered` and `server::Handler::auth_publickey` now take `server::PublicKeyOffer` and `server::VerifiedPublicKey` (#785) — Strata uses `russh` exclusively as an SSH **client** (`client::Handler`).
+- Removal of the no-op `async-trait` crate feature (#786) — `strata-session` already builds `russh` with `default-features = false, features = ["ring", "flate2"]` (plus `russh/rsa` via `ssh-rsa`).
+
+#### Security advisories addressed in `russh` 0.65.0
+
+| Advisory | Component | Reachability in Strata |
+| -------- | --------- | ---------------------- |
+| [GHSA-4p9f-7p9m-5vfg](https://github.com/Eugeny/russh/security/advisories/GHSA-4p9f-7p9m-5vfg) — unbounded allocations via repeated `EXT_INFO` packets on the SSH client | `russh::client` | **Reachable post-connect from a malicious SSH target.** A target server could send repeated `EXT_INFO` messages to grow client memory over time. Now bounded. |
+| [GHSA-fw5c-8223-6h42](https://github.com/Eugeny/russh/security/advisories/GHSA-fw5c-8223-6h42) — peer-declared zero maximum packet size permanently stalls channel writes | Channel flow control | **Reachable post-authentication from a malicious SSH target.** A peer advertising a maximum packet size of `0` could hang channel writes on that session. |
+| [GHSA-3hm4-p7h4-rvwp](https://github.com/Eugeny/russh/security/advisories/GHSA-3hm4-p7h4-rvwp) — pre-authentication stack exhaustion via nested OpenSSH certificates | Certificate parsing | **Reachable during host-key check if a target presents a crafted nested OpenSSH certificate.** Now rejected without exhausting the stack. |
+| [GHSA-9wfm-jcj8-jfv9](https://github.com/Eugeny/russh/security/advisories/GHSA-9wfm-jcj8-jfv9), [GHSA-662x-8wvj-2276](https://github.com/Eugeny/russh/security/advisories/GHSA-662x-8wvj-2276), [GHSA-vp5q-ff62-jwqv](https://github.com/Eugeny/russh/security/advisories/GHSA-vp5q-ff62-jwqv) | `russh::keys::agent::server` / `pageant` | **Not reachable.** Strata never runs an SSH agent server, never uses Pageant, and declines agent forwarding by design. |
+
+#### Client bug fixes picked up from `russh` 0.65.0
+
+- **Keepalive timer before authentication (#791).** Re-arms the client keepalive timer when it fires before authentication completes instead of spinning the client session task on a CPU core — relevant when an SSH connection waits at Strata's interactive in-terminal `Login as:` / `Password:` prompt longer than the 30-second keepalive interval.
+- **Channel window accounting on window adjust (#790)** and **session recovery when a `Signer` fails after `PK_OK` (#788)**.
+
+### Scope & safety
+
+| Area | Change |
+| ---- | ------ |
+| Schema | None |
+| REST / WebSocket API | None |
+| Environment variables | None |
+| Runtime dependencies | `russh` `0.64.1` → `0.65.0`, `tokio` `1.53.1` → `1.54.1`, `crypto-bigint` `0.7.5` → `0.7.10`, `ctutils` `0.4.2` → `0.4.7`, `libz-sys` `1.1.29` → `1.1.31`, `rustls-webpki` `0.103.15` → `0.103.16`, `webpki-roots` `1.0.9` → `1.0.11`, `rustls` `0.23.45` → `0.23.46`, `yoke` / `yoke-derive` `0.8.3` → `0.8.4`, `serde_yaml` (`unsafe-libyaml`) replaced by `serde-saphyr` `2.0.0`; `nginx` `1.31.8-alpine`; `zod` `4.6.7` (dev) and frontend packages as listed |
+| Behaviour | None for normal sessions; hardens SSH client against malicious target peers and fixes pre-auth keepalive CPU spin |
+
+### Testing
+
+All on `rust:1.99-slim-trixie`, with `russh` 0.65.0 in the lockfile:
+
+| Check | Result |
+| ----- | ------ |
+| `cargo audit -f ../Cargo.lock --deny unsound --deny unmaintained` | **0 vulnerabilities, 0 warnings** |
+| `cargo deny --all-features check bans licenses sources` | `bans ok, licenses ok, sources ok` |
+| `cargo test -p strata-session --all-features` | **285 passed**, 0 failed |
+| `cargo test -p strata-backend services::ad_sync::tests` | **43 passed**, 0 failed |
+| `cargo test -p strata-backend services::kubernetes::tests` | **6 passed**, 0 failed |
+| `cargo clippy -p strata-session --all-features --all-targets -- -D warnings` | Clean (0 warnings) |
+| `cargo clippy -p strata-backend --all-targets -- -D warnings` | Clean (0 warnings) |
+| `cargo fmt -p strata-backend -- --check` | Clean |
+| `npm --prefix frontend audit --package-lock-only` | 0 vulnerabilities |
+| `RUSSH_VERSION=0.65.0 bash scripts/check-vendored-forks.sh` | All three vendored forks still required |
+
+### Documentation
+
+| Document | Change |
+| -------- | ------ |
+| [README.md](README.md) | v2.3.11 release row in What's New |
+| [WHATSNEW.md](WHATSNEW.md) & [`WhatsNewModal.tsx`](frontend/src/components/WhatsNewModal.tsx) | v2.3.11 release summary and in-app What's New card |
+| [docs/security.md](docs/security.md) | Kerberos AD sync subprocess argument validation section; CodeQL barrier-model inventory; `GHSA-qwgh-2vcv-g2f7` and `RUSTSEC-2026-0192` suppression notes; Handled Advisories rows for `russh` `0.65.0`, `tokio` `1.54.1`, `crypto-bigint` `0.7.10`, `ctutils` `0.4.7`, `libz-sys` `1.1.31`, `rustls-webpki` `0.103.16`, `webpki-roots` `1.0.11`, `unsafe-libyaml` → `serde-saphyr` `2.0.0`, `zod` `4.6.7`, and `block-buffer` `0.10.4` |
+| [docs/architecture.md](docs/architecture.md) | `russh` `0.65.0` notes under SSH engine; Kerberos AD sync argument validation; `kubernetes.rs` (`serde-saphyr`) and `ad_sync_admin.rs` in the repository map |
+| [docs/api-reference.md](docs/api-reference.md) | Kerberos `keytab_path` / `krb5_principal` invariants and `POST /api/admin/ad-sync-configs/test` validation note; `serde-saphyr` note on `POST /api/admin/kubernetes/parse-kubeconfig` |
+| [docs/deployment.md](docs/deployment.md) | v2.3.10 → v2.3.11 upgrade notes |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Supply-chain gate and `serde-saphyr` / barrier-model summary |
+
+### Deploy
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+No migration and no `.env` change.
+
 ## [2.3.10] — 2026-10-08
 
 ### Patch release — scroll back through SSH and Kubernetes terminals, and recordings that reliably leave the local disk for Azure Blob Storage

@@ -646,7 +646,8 @@ docker compose up -d
 | ------ | ----------- |
 | `russh` `0.65.0` in the SSH engine (bounds `EXT_INFO` packets, rejects zero max packet size, guards nested OpenSSH certificates, fixes pre-auth keepalive CPU spin and channel window accounting) | Nobody in normal operation; sessions waiting at an interactive `Login as:` / `Password:` prompt past 30 s no longer spin a CPU core |
 | Kerberos AD sync validates `kinit` and `ldapsearch` arguments against flag injection and malformed URLs/filters at the subprocess boundary | Nobody in normal operation |
-| `rustls` `0.23.46`, `nginx` `1.31.8-alpine`, and routine frontend dependency updates | Nobody |
+| Kubeconfig import (`POST /api/admin/kubernetes/parse-kubeconfig`) uses `serde-saphyr` `2.0.0` in place of unmaintained `serde_yaml` / `unsafe-libyaml` | Nobody in normal operation |
+| `tokio` `1.54.1`, `crypto-bigint` `0.7.10`, `ctutils` `0.4.7`, `libz-sys` `1.1.31`, `rustls-webpki` `0.103.16`, `webpki-roots` `1.0.11`, `rustls` `0.23.46`, `nginx` `1.31.8-alpine`, and frontend dependency updates | Nobody |
 
 #### v2.3.9 → v2.3.10 (terminal scrollback, Azure recording upload)
 

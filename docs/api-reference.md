@@ -1563,7 +1563,8 @@ heterogeneous — exec-plugin and bearer-token auth result in
 warnings rather than errors, and file-path references for cert
 material (`certificate-authority: /path/to/ca.crt`) are deliberately
 **not** followed (the backend has no business reading random admin-
-controlled file paths).
+controlled file paths). Since v2.3.11 the YAML body is deserialized with
+`serde-saphyr` (safe Rust YAML 1.2) rather than `serde_yaml` / `unsafe-libyaml`.
 
 ---
 
@@ -4119,8 +4120,8 @@ Create a new AD sync source.
 | `protocol`                  | `"rdp"` \| `"ssh"` \| `"vnc"`           | No       | `"rdp"`                            | Protocol for imported connections                                                                                                                                                                                                                                                      |
 | `default_port`              | integer                                 | No       | 3389                               | Default port for imported connections                                                                                                                                                                                                                                                  |
 | `auth_method`               | `"simple"` \| `"kerberos"`              | No       | `"simple"`                         | LDAP authentication method                                                                                                                                                                                                                                                             |
-| `keytab_path`               | string                                  | No       | —                                  | Path to keytab file (kerberos auth)                                                                                                                                                                                                                                                    |
-| `krb5_principal`            | string                                  | No       | —                                  | Kerberos principal (kerberos auth)                                                                                                                                                                                                                                                     |
+| `keytab_path`               | string                                  | No       | —                                  | Path to keytab file (kerberos auth; must be an absolute path without leading `-` or control characters — v2.3.11)                                                                                                                                                                         |
+| `krb5_principal`            | string                                  | No       | —                                  | Kerberos principal (kerberos auth; must not start with `-` or contain whitespace or control characters — v2.3.11)                                                                                                                                                                         |
 | `folder_id`                 | UUID                                    | No       | null                               | Connection folder for imported connections                                                                                                                                                                                                                                              |
 | `domain_override`           | string                                  | No       | null                               | Force domain on imported connections                                                                                                                                                                                                                                                   |
 | `tls_skip_verify`           | boolean                                 | No       | false                              | Skip TLS certificate verification                                                                                                                                                                                                                                                      |
@@ -4180,7 +4181,7 @@ Delete an AD sync source. Imported connections remain but will no longer sync.
 
 ### `POST /api/admin/ad-sync-configs/test`
 
-Test an AD sync connection without persisting. Validates connectivity, bind, and search — returns a count and preview of the first 10 discovered objects.
+Test an AD sync connection without persisting. Validates connectivity, bind, and search — returns a count and preview of the first 10 discovered objects. When `auth_method == "kerberos"`, `validate_kinit_args` and `validate_ldapsearch_args` enforce strict argument invariants on `keytab_path`, `krb5_principal`, `ldap_url`, `search_bases` and `search_filter` before spawning `kinit` or `ldapsearch` (v2.3.11; see [security.md](security.md#kerberos-ad-sync-subprocess-argument-validation-v2311)).
 
 **Request Body**: Same as the create endpoint.
 

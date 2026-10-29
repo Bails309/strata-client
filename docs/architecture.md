@@ -200,7 +200,7 @@ The central orchestrator. Responsibilities:
 - **Tunnel** — authenticates the WebSocket upgrade, resolves the target, and hands the socket to the engine ([`backend/src/tunnel.rs`](../backend/src/tunnel.rs), ~190 lines since v2.0.0)
 - **Metrics** — per-session bandwidth tracking (bytes in/out) with aggregate metrics endpoint
 - **Config push** — generates `krb5.conf` (multi-realm), toggles recordings, manages SSO settings
-- **AD sync** — scheduled LDAP/LDAPS queries against Active Directory to discover and import computer accounts; supports simple bind and Kerberos keytab auth, custom CA certificates, multiple search bases per source, gMSA/MSA exclusion filters, and configurable connection defaults (RDP performance flags, session recording parameters, keyboard layout, and since v2.3.1 a stored Trusted CA that every synced RDP connection verifies its host against). Since v2.3.2 a sync replaces a connection's parameters with the defaults **except** the per-host trust pins the connection already holds (`host-key`, `host-key-fingerprint`, `sftp-host-key`, `cert-fingerprints`), so keys approved through **Verify Host Keys** survive re-syncs (`PER_HOST_PINS` / `merged_extra_sql()` in [`services/ad_sync.rs`](../backend/src/services/ad_sync.rs))
+- **AD sync** — scheduled LDAP/LDAPS queries against Active Directory to discover and import computer accounts; supports simple bind and Kerberos keytab auth (`kinit` + `ldapsearch` GSSAPI, with strict argument validation at the subprocess boundary via `validate_kinit_args` and `validate_ldapsearch_args` since v2.3.11), custom CA certificates, multiple search bases per source, gMSA/MSA exclusion filters, and configurable connection defaults (RDP performance flags, session recording parameters, keyboard layout, and since v2.3.1 a stored Trusted CA that every synced RDP connection verifies its host against). Since v2.3.2 a sync replaces a connection's parameters with the defaults **except** the per-host trust pins the connection already holds (`host-key`, `host-key-fingerprint`, `sftp-host-key`, `cert-fingerprints`), so keys approved through **Verify Host Keys** survive re-syncs (`PER_HOST_PINS` / `merged_extra_sql()` in [`services/ad_sync.rs`](../backend/src/services/ad_sync.rs))
 - **Password management** — privileged account password checkout and rotation for AD-managed service accounts; configurable password generation policy, LDAP `unicodePwd` reset, Vault-sealed credential storage, approval workflows with explicit account-to-role scoping (each approval role is mapped to specific managed AD accounts), dedicated "Search Base OUs" for user discovery (allowing separate scoping from device discovery), **scheduled future-dated checkouts** (requests between now + 30 s and now + 14 days sit idle with no credential material until the scheduled moment, at which point the existing 60-second expiration worker activates them), **emergency approval bypass (break-glass)** per AD sync config — gated by `pm_allow_emergency_bypass`, requires ≥ 10-character justification, **hard-capped at 30 minutes** server-side, writes a dedicated `checkout.emergency_bypass` audit event, surfaces an ⚡ Emergency badge across Credentials and Approvals views, background workers for checkout expiration and zero-knowledge auto-rotation, requester username resolution for approver visibility, and decided-by tracking with self-approval detection
 - **Connection health checks** — background TCP probing of every connection's hostname:port every 2 minutes; results (online/offline/unknown) persisted and exposed via API for dashboard status indicators. The dashboard re-reads the status of the rows on screen every 30 seconds and when the tab becomes visible again (`useDashboardConnections`, via `GET /api/user/connections/page?ids=…`), patching them in place, so a host coming back online re-enables **Connect** within about 2½ minutes without leaving the page (v2.3.6; before, the page showed the status it loaded with until it was reopened). Since v2.2.0 `POST /api/admin/connections/{id}/probe` runs the same check for one connection on demand (`health_check::probe_one`) and also returns the TCP connect latency; see [Admin console](#admin-console-fleet-folders-and-roles-v220)
 - **DNS configuration** — admin-configurable nameservers and search suffixes used by the session engine to resolve **target** hostnames in-process; applies to new sessions with no restart. Strata's own infrastructure lookups stay on Docker's embedded resolver. See [Target hostname resolution](#target-hostname-resolution-v200).
@@ -804,7 +804,12 @@ flowchart LR
 
 The backend enables `strata-session`'s `ssh-rsa` feature (russh `rsa`),
 which reuses the `rsa 0.10.0-rc.18` already compiled for RDP; see
-[security.md](security.md#ssh-host-key-modes-v236).
+[security.md](security.md#ssh-host-key-modes-v236). Since v2.3.11 the engine
+runs on `russh 0.65.0`, which bounds server `EXT_INFO` packets, rejects a
+peer-declared zero maximum packet size, guards OpenSSH certificate parsing
+against deep nesting, re-arms the pre-authentication keepalive timer so a
+session waiting at an interactive `Login as:` / `Password:` prompt past 30 s
+does not spin a CPU core (`#791`), and fixes channel window accounting (`#790`).
 
 #### H.264 GFX reference-frame corruption (recovery path in v0.27.0)
 
@@ -1653,7 +1658,8 @@ strata-client/
 │       │   └── user.rs    User-facing endpoints
 │       └── services/      Business logic
 │           ├── app_state.rs   Shared state + boot phase
-│           ├── ad_sync.rs     AD LDAP sync engine (multi-base, multi-auth)
+│           ├── ad_sync.rs     AD LDAP sync engine (multi-base, simple + Kerberos keytab auth with subprocess argument validation)
+│           ├── ad_sync_admin.rs  AD sync configuration CRUD and failing-sync queries
 │           ├── admission.rs   Session admission: memory budget + per-user session limit (v2.3.0)
 │           ├── audit.rs       Audit writes through `audit_append` (v2 hash chain)
 │           ├── audit_verify.rs  Chain verifier, keyed checkpoints, Vault-signed anchor file (v2.3.0)
@@ -1666,6 +1672,7 @@ strata-client/
 │           ├── health_check.rs  Background TCP health probes for connections (one replica per pass via a worker lease)
 │           ├── kerberos.rs    Multi-realm krb5.conf generation
 │           ├── keyed_lock.rs  Per-key single-flight locks for cache misses (v2.3.0)
+│           ├── kubernetes.rs  Kubeconfig YAML parser (`serde-saphyr`, v1.4.0 / v2.3.11)
 │           ├── middleware.rs   JWT auth + admin middleware
 │           ├── password.rs    Argon2id parameters + bounded hashing pool
 │           ├── recording_index.rs  Recording seek index (checkpoint every 8 MiB) (v2.3.0)
@@ -2989,7 +2996,8 @@ supervises a workload on the user's behalf:
   Vault-encrypted credential profile and are remapped from the
   profile's password slot into the `client-key` parameter at
   handshake time (see `routes/tunnel.rs`). Operators import their
-  `~/.kube/config` via `POST /api/admin/kubernetes/parse-kubeconfig`,
+  `~/.kube/config` via `POST /api/admin/kubernetes/parse-kubeconfig`
+  (parsed in-process with safe Rust `serde-saphyr` since v2.3.11),
   which extracts the cluster server URL, namespace, CA cert and
   client cert into the form and shows the private key once for the
   operator to paste into a credential profile.

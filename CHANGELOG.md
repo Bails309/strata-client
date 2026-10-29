@@ -109,6 +109,18 @@ All on `rust:1.99-slim-trixie`, with `russh` 0.65.0 in the lockfile:
 | `npm --prefix frontend audit --package-lock-only` | 0 vulnerabilities |
 | `RUSSH_VERSION=0.65.0 bash scripts/check-vendored-forks.sh` | All three vendored forks still required |
 
+### Documentation
+
+| Document | Change |
+| -------- | ------ |
+| [README.md](README.md) | v2.3.11 release row in What's New |
+| [WHATSNEW.md](WHATSNEW.md) & [`WhatsNewModal.tsx`](frontend/src/components/WhatsNewModal.tsx) | v2.3.11 release summary and in-app What's New card |
+| [docs/security.md](docs/security.md) | Kerberos AD sync subprocess argument validation section; CodeQL barrier-model inventory; `GHSA-qwgh-2vcv-g2f7` and `RUSTSEC-2026-0192` suppression notes; Handled Advisories rows for `russh` `0.65.0`, `tokio` `1.54.1`, `crypto-bigint` `0.7.10`, `ctutils` `0.4.7`, `libz-sys` `1.1.31`, `rustls-webpki` `0.103.16`, `webpki-roots` `1.0.11`, `unsafe-libyaml` → `serde-saphyr` `2.0.0`, `zod` `4.6.7`, and `block-buffer` `0.10.4` |
+| [docs/architecture.md](docs/architecture.md) | `russh` `0.65.0` notes under SSH engine; Kerberos AD sync argument validation; `kubernetes.rs` (`serde-saphyr`) and `ad_sync_admin.rs` in the repository map |
+| [docs/api-reference.md](docs/api-reference.md) | Kerberos `keytab_path` / `krb5_principal` invariants and `POST /api/admin/ad-sync-configs/test` validation note; `serde-saphyr` note on `POST /api/admin/kubernetes/parse-kubeconfig` |
+| [docs/deployment.md](docs/deployment.md) | v2.3.10 → v2.3.11 upgrade notes |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Supply-chain gate and `serde-saphyr` / barrier-model summary |
+
 ### Deploy
 
 ```bash

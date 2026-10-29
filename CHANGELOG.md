@@ -9,19 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.3.11] — 2026-10-29
 
-### Patch release — `russh` 0.65.0 and routine dependency updates
+### Patch release — `russh` 0.65.0, Kerberos AD sync argument hardening (CodeQL `rust/command-line-injection`), and routine dependency updates
 
 ### The ask
 
 > *"Can we migrate russh to the latest v0.65.0"*
+>
+> CodeQL `rust/command-line-injection` (`CWE-078` / `CWE-088`) on [`backend/src/services/ad_sync.rs`](backend/src/services/ad_sync.rs) (`ldap_query_kerberos`)
 
 ### Summary
 
 | Area | Change | Runtime effect |
 | ---- | ------ | -------------- |
 | SSH engine | `russh` `0.64.1` → **`0.65.0`** | Closes 3 client/shared advisories (`GHSA-4p9f-7p9m-5vfg`, `GHSA-fw5c-8223-6h42`, `GHSA-3hm4-p7h4-rvwp`) and 3 agent-server advisories (`GHSA-9wfm-jcj8-jfv9`, `GHSA-662x-8wvj-2276`, `GHSA-vp5q-ff62-jwqv`); fixes keepalive timer CPU spin before authentication (`#791`) and channel window accounting (`#790`) |
+| AD sync (Kerberos) | `validate_kinit_args` and `validate_ldapsearch_args` enforce strict argument invariants before `kinit` and `ldapsearch` are spawned; CodeQL barrier model in `strata-rust-models` `0.0.3` | Closes CWE-88 flag injection and unvalidated `POST /api/admin/ad-sync/test` payloads |
 | TLS | `rustls` `0.23.45` → `0.23.46` (#503) | Routine patch update |
 | Frontend & container | `nginx` `1.31.6-alpine` → `1.31.8-alpine` (#500); `dompurify` `3.4.17` (#502); `react` / `react-dom` `19.3.1`, `i18next` `26.5.11`, `marked` `18.1.1`, `mermaid` `12.2.0`, `react-i18next` `17.1.9`, `undici` `8.12.3` (#504); `vite` `8.3.5` (#499) and dev/E2E tooling (#495, #501) | Routine minor/patch dependency hygiene |
+
+### Security — Kerberos AD sync subprocess argument hardening (`rust/command-line-injection`)
+
+CodeQL's `rust/command-line-injection` query (`CWE-078` / `CWE-088`) flagged `ldap_query_kerberos` in [`backend/src/services/ad_sync.rs`](backend/src/services/ad_sync.rs), where `POST /api/admin/ad-sync/test` builds an `AdSyncConfig` from the admin request body and passes its fields to `tokio::process::Command::new("kinit")` and `tokio::process::Command::new("ldapsearch")`.
+
+Although `tokio::process::Command` invokes `execve` directly without a shell (so shell metacharacters are not interpreted), two real gaps existed:
+
+1. `test_ad_sync_connection` in `routes/admin.rs` did not call `validate_ldap_url` or `validate_ldap_filter` (unlike `create_ad_sync_config` and `update_ad_sync_config`).
+2. Positional arguments (`search_base`, `search_filter`, `keytab_path`, `krb5_principal`, `ldap_url`) were not checked against leading `-` option flags (CWE-88 argument injection — e.g. a `search_base` or `filter` starting with `-` being parsed as an `ldapsearch` flag) or control characters right where the subprocesses are constructed.
+
+`ldap_query_kerberos` now validates every caller-supplied argument through `validate_kinit_args` and `validate_ldapsearch_args` before spawning either process:
+- `keytab_path` must be an absolute path with no leading `-` or control characters.
+- `krb5_principal` must be non-empty with no leading `-`, whitespace, or control characters.
+- `ldap_url` must start with `ldap://` or `ldaps://` followed only by a valid `host[:port]` authority.
+- `search_base` must not start with `-` or contain control characters.
+- `search_filter` must be enclosed in balanced `(...)` (which also precludes leading `-` flags), with depth ≤ 32, length ≤ 2048, and no control characters.
+
+A `command-injection` barrier model (`.github/codeql/extensions/strata-rust-models/models/ad-sync-command-injection.model.yml`, pack bumped to `0.0.3`) records the two validators for CodeQL while leaving `rust/command-line-injection` active across the rest of the repository.
 
 ### Changed — `russh` 0.64.1 → 0.65.0
 
@@ -61,8 +82,10 @@ All on `rust:1.99-slim-trixie`, with `russh` 0.65.0 in the lockfile:
 | Check | Result |
 | ----- | ------ |
 | `cargo test -p strata-session --all-features` | **285 passed**, 0 failed |
+| `cargo test -p strata-backend services::ad_sync::tests` | **43 passed**, 0 failed |
 | `cargo clippy -p strata-session --all-features --all-targets -- -D warnings` | Clean (0 warnings) |
-| `cargo check -p strata-backend` | Clean |
+| `cargo clippy -p strata-backend --all-targets -- -D warnings` | Clean (0 warnings) |
+| `cargo fmt -p strata-backend -- --check` | Clean |
 | `RUSSH_VERSION=0.65.0 bash scripts/check-vendored-forks.sh` | All three vendored forks still required |
 
 ### Deploy

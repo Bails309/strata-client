@@ -718,20 +718,143 @@ async fn ldap_query_simple(
 
 // ── Kerberos keytab auth (kinit + ldapsearch subprocess) ───────────────
 
+const DEFAULT_COMPUTER_FILTER: &str =
+    "(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))";
+
+/// Validate the Kerberos `kinit` arguments (`keytab_path`, `krb5_principal`).
+///
+/// Even though `kinit` is spawned directly via `execve` without a shell, an
+/// unchecked string starting with `-` would be parsed as a `kinit` option flag
+/// (CWE-88 argument injection), and control bytes or empty strings have no
+/// valid meaning in a keytab path or Kerberos principal.
+pub(crate) fn validate_kinit_args<'a>(
+    keytab_raw: Option<&'a str>,
+    principal_raw: Option<&'a str>,
+) -> anyhow::Result<(&'a str, &'a str)> {
+    let principal = principal_raw
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Kerberos principal is required for keytab auth"))?;
+    let keytab = keytab_raw
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Keytab path is required for keytab auth"))?;
+
+    if principal.starts_with('-')
+        || principal.len() > 256
+        || principal.bytes().any(|b| b <= 0x20 || b == 0x7f)
+    {
+        anyhow::bail!(
+            "Invalid Kerberos principal: must not start with '-' or contain whitespace or control characters"
+        );
+    }
+
+    if keytab.starts_with('-')
+        || keytab.len() > 1024
+        || keytab.bytes().any(|b| b < 0x20 || b == 0x7f)
+        || !std::path::Path::new(keytab).is_absolute()
+    {
+        anyhow::bail!(
+            "Invalid keytab path: must be an absolute path without leading '-' or control characters"
+        );
+    }
+
+    Ok((keytab, principal))
+}
+
+/// Validate the `ldapsearch` arguments (`ldap_url`, `search_base`, `search_filter`).
+///
+/// Called unconditionally before spawning `ldapsearch` so that both stored
+/// configs and `POST /api/admin/ad-sync/test` payloads are checked in one place:
+/// - `ldap_url` must be a valid `ldap://` or `ldaps://` URL with a bare host
+///   (and optional `:port`), no whitespace, and no path/query/userinfo.
+/// - `search_base` must not start with `-` or contain control characters.
+/// - `filter` must be a parenthesised LDAP filter with balanced parentheses,
+///   bounded length/depth, and no control characters.
+pub(crate) fn validate_ldapsearch_args<'a>(
+    ldap_url_raw: &'a str,
+    search_base_raw: &'a str,
+    search_filter_raw: &'a str,
+) -> anyhow::Result<(&'a str, &'a str, &'a str)> {
+    let ldap_url = ldap_url_raw.trim();
+    let rest = ldap_url
+        .strip_prefix("ldaps://")
+        .or_else(|| ldap_url.strip_prefix("ldap://"))
+        .ok_or_else(|| anyhow::anyhow!("LDAP URL must use ldap:// or ldaps://"))?;
+    let host_port = rest.strip_suffix('/').unwrap_or(rest);
+    if host_port.is_empty()
+        || host_port.starts_with('-')
+        || host_port.len() > 260
+        || !host_port
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':' | b'[' | b']'))
+    {
+        anyhow::bail!(
+            "Invalid LDAP URL: must contain only scheme and host[:port] with no path, credentials, or whitespace"
+        );
+    }
+
+    let search_base = search_base_raw.trim();
+    if search_base.starts_with('-')
+        || search_base.len() > 1024
+        || search_base.bytes().any(|b| b < 0x20 || b == 0x7f)
+    {
+        anyhow::bail!(
+            "Invalid LDAP search base: must not start with '-' or contain control characters"
+        );
+    }
+
+    let filter = if search_filter_raw.trim().is_empty() {
+        DEFAULT_COMPUTER_FILTER
+    } else {
+        let f = search_filter_raw.trim();
+        if f.len() > 2048
+            || !f.starts_with('(')
+            || !f.ends_with(')')
+            || f.bytes()
+                .any(|b| b == 0 || (b < 0x20 && b != b'\t') || b == 0x7f)
+        {
+            anyhow::bail!(
+                "Invalid LDAP search filter: must be enclosed in parentheses and free of control characters"
+            );
+        }
+        let mut depth: usize = 0;
+        for c in f.chars() {
+            match c {
+                '(' => {
+                    depth = depth.saturating_add(1);
+                    if depth > 32 {
+                        anyhow::bail!("Invalid LDAP search filter: nesting depth exceeds 32");
+                    }
+                }
+                ')' => {
+                    if depth == 0 {
+                        anyhow::bail!("Invalid LDAP search filter: unbalanced parentheses");
+                    }
+                    depth -= 1;
+                }
+                _ => {}
+            }
+        }
+        if depth != 0 {
+            anyhow::bail!("Invalid LDAP search filter: unbalanced parentheses");
+        }
+        f
+    };
+
+    Ok((ldap_url, search_base, filter))
+}
+
 async fn ldap_query_kerberos(
     config: &AdSyncConfig,
     search_base: &str,
 ) -> anyhow::Result<Vec<DiscoveredComputer>> {
-    let principal = config
-        .krb5_principal
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Kerberos principal is required for keytab auth"))?;
-    let keytab = config
-        .keytab_path
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Keytab path is required for keytab auth"))?;
+    let (keytab, principal) = validate_kinit_args(
+        config.keytab_path.as_deref(),
+        config.krb5_principal.as_deref(),
+    )?;
+    let (ldap_url, search_base, filter) =
+        validate_ldapsearch_args(&config.ldap_url, search_base, &config.search_filter)?;
 
     if !std::path::Path::new(keytab).exists() {
         anyhow::bail!("Keytab file not found: {keytab}");
@@ -766,16 +889,10 @@ async fn ldap_query_kerberos(
         _ => "sub",
     };
 
-    let filter = if config.search_filter.is_empty() {
-        "(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))"
-    } else {
-        &config.search_filter
-    };
-
     let mut cmd = tokio::process::Command::new("ldapsearch");
     cmd.args([
         "-H",
-        &config.ldap_url,
+        ldap_url,
         "-Y",
         "GSSAPI",
         "-b",
@@ -1609,5 +1726,72 @@ mod tests {
         assert!(repr.contains("PC1"));
         assert!(repr.contains("pc1.test.local"));
         assert!(repr.contains("Test host"));
+    }
+
+    // ── Subprocess argument sanitizers (CWE-78 / CWE-88) ──────────────
+
+    #[test]
+    fn validate_kinit_args_accepts_valid_keytab_and_principal() {
+        let (kt, princ) =
+            validate_kinit_args(Some("/etc/krb5.keytab"), Some("svc-ldap@CORP.LOCAL")).unwrap();
+        assert_eq!(kt, "/etc/krb5.keytab");
+        assert_eq!(princ, "svc-ldap@CORP.LOCAL");
+    }
+
+    #[test]
+    fn validate_kinit_args_rejects_option_flags_and_relative_paths() {
+        // Leading '-' would be interpreted as a flag by kinit (CWE-88).
+        assert!(validate_kinit_args(Some("-c/tmp/evil"), Some("svc@CORP")).is_err());
+        assert!(validate_kinit_args(Some("/etc/krb5.keytab"), Some("-S")).is_err());
+        // Relative keytab paths or whitespace/control chars are rejected.
+        assert!(validate_kinit_args(Some("relative/krb5.keytab"), Some("svc@CORP")).is_err());
+        assert!(validate_kinit_args(Some("/etc/krb5.keytab"), Some("svc @CORP")).is_err());
+        assert!(validate_kinit_args(Some("/etc/krb5\0.keytab"), Some("svc@CORP")).is_err());
+        assert!(validate_kinit_args(None, Some("svc@CORP")).is_err());
+        assert!(validate_kinit_args(Some("/etc/krb5.keytab"), None).is_err());
+    }
+
+    #[test]
+    fn validate_ldapsearch_args_accepts_valid_inputs_and_defaults_empty_filter() {
+        let (url, base, filter) =
+            validate_ldapsearch_args("ldaps://dc01.corp.local:636/", "DC=corp,DC=local", "")
+                .unwrap();
+        assert_eq!(url, "ldaps://dc01.corp.local:636/");
+        assert_eq!(base, "DC=corp,DC=local");
+        assert_eq!(filter, DEFAULT_COMPUTER_FILTER);
+
+        let (_, _, custom) = validate_ldapsearch_args(
+            "ldap://[2001:db8::1]:389",
+            "OU=Servers,DC=corp,DC=local",
+            "(&(objectClass=computer)(cn=web-*))",
+        )
+        .unwrap();
+        assert_eq!(custom, "(&(objectClass=computer)(cn=web-*))");
+    }
+
+    #[test]
+    fn validate_ldapsearch_args_rejects_flag_injection_and_malformed_inputs() {
+        // Bad scheme or URL containing path/query/whitespace/credentials
+        assert!(validate_ldapsearch_args("http://dc.corp.local", "DC=corp", "").is_err());
+        assert!(
+            validate_ldapsearch_args("ldaps://user@dc.corp.local/DC=corp", "DC=corp", "").is_err()
+        );
+        assert!(validate_ldapsearch_args("ldaps://-badhost", "DC=corp", "").is_err());
+        assert!(validate_ldapsearch_args("ldaps://dc.corp.local -e", "DC=corp", "").is_err());
+
+        // Search base starting with '-' (option flag injection) or containing control chars
+        assert!(validate_ldapsearch_args("ldaps://dc.corp.local", "-f/etc/passwd", "").is_err());
+        assert!(
+            validate_ldapsearch_args("ldaps://dc.corp.local", "DC=corp\nDC=local", "").is_err()
+        );
+
+        // Filter not enclosed in '(' ... ')' (could be parsed as an option flag if starting with '-')
+        assert!(
+            validate_ldapsearch_args("ldaps://dc.corp.local", "DC=corp", "-y/etc/shadow").is_err()
+        );
+        assert!(
+            validate_ldapsearch_args("ldaps://dc.corp.local", "DC=corp", "(unbalanced").is_err()
+        );
+        assert!(validate_ldapsearch_args("ldaps://dc.corp.local", "DC=corp", "(cn=a\0b)").is_err());
     }
 }

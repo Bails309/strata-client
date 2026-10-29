@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 | ---- | ------ | -------------- |
 | SSH engine | `russh` `0.64.1` → **`0.65.0`** | Closes 3 client/shared advisories (`GHSA-4p9f-7p9m-5vfg`, `GHSA-fw5c-8223-6h42`, `GHSA-3hm4-p7h4-rvwp`) and 3 agent-server advisories (`GHSA-9wfm-jcj8-jfv9`, `GHSA-662x-8wvj-2276`, `GHSA-vp5q-ff62-jwqv`); fixes keepalive timer CPU spin before authentication (`#791`) and channel window accounting (`#790`) |
 | AD sync (Kerberos) | `validate_kinit_args` and `validate_ldapsearch_args` enforce strict argument invariants before `kinit` and `ldapsearch` are spawned; CodeQL barrier model in `strata-rust-models` `0.0.3` | Closes CWE-88 flag injection and unvalidated `POST /api/admin/ad-sync/test` payloads |
-| Supply chain (Scorecard / OSV) | `tokio` `1.53.1` → **`1.54.1`** (`RUSTSEC-2026-0386`), `crypto-bigint` `0.7.5` → **`0.7.10`** (`RUSTSEC-2026-0387`), `ctutils` `0.4.2` → **`0.4.7`** (`RUSTSEC-2026-0385`), `libz-sys` `1.1.29` → **`1.1.31`** (`RUSTSEC-2026-0418`), `webpki-roots` `1.0.9` → **`1.0.11`** (`RUSTSEC-2026-0381`), `serde_yaml` / `unsafe-libyaml` replaced with **`serde-saphyr` `2.0.0`** (`RUSTSEC-2024-0449`), `zod` `4.4.3` → **`4.6.7`** (`GHSA-mrhx-c7xc-m3w5`), and `GHSA-qwgh-2vcv-g2f7` (`block-buffer 0.10.4`) documented in `osv-scanner.toml` | Closes all 8 OpenSSF Scorecard vulnerability findings |
+| Supply chain (Scorecard / OSV / RustSec) | `tokio` `1.53.1` → **`1.54.1`** (`RUSTSEC-2026-0386`), `crypto-bigint` `0.7.5` → **`0.7.10`** (`RUSTSEC-2026-0387`), `ctutils` `0.4.2` → **`0.4.7`** (`RUSTSEC-2026-0385`), `libz-sys` `1.1.29` → **`1.1.31`** (`RUSTSEC-2026-0418`), `rustls-webpki` `0.103.15` → **`0.103.16`** (`RUSTSEC-2026-0382`), `webpki-roots` `1.0.9` → **`1.0.11`** (`RUSTSEC-2026-0381`), `serde_yaml` / `unsafe-libyaml` replaced with **`serde-saphyr` `2.0.0`** (`RUSTSEC-2024-0449`), `yoke` / `yoke-derive` `0.8.3` → **`0.8.4`** (un-yanked), `zod` `4.4.3` → **`4.6.7`** (`GHSA-mrhx-c7xc-m3w5`), and `GHSA-qwgh-2vcv-g2f7` (`block-buffer 0.10.4`) documented in `osv-scanner.toml` | Closes all OpenSSF Scorecard and `cargo audit` findings |
 | TLS | `rustls` `0.23.45` → `0.23.46` (#503) | Routine patch update |
 | Frontend & container | `nginx` `1.31.6-alpine` → `1.31.8-alpine` (#500); `dompurify` `3.4.17` (#502); `react` / `react-dom` `19.3.1`, `i18next` `26.5.11`, `marked` `18.1.1`, `mermaid` `12.2.0`, `react-i18next` `17.1.9`, `undici` `8.12.3` (#504); `vite` `8.3.5` (#499) and dev/E2E tooling (#495, #501) | Routine minor/patch dependency hygiene |
 
@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 | `RUSTSEC-2026-0387` | `crypto-bigint` (Rust) | `0.7.5` → **`0.7.10`**. Constant-time fixes across big-integer operations used by `russh` / `rsa`. |
 | `RUSTSEC-2026-0385` | `ctutils` (Rust) | `0.4.2` → **`0.4.7`**. Constant-time mask generation and `u128` comparison fixes. |
 | `RUSTSEC-2026-0418` / `GHSA-8p3x-q3q3-q3v5` | `libz-sys` (Rust) | `1.1.29` → **`1.1.31`**. Build script no longer writes environment variables into the build directory. |
+| `RUSTSEC-2026-0382` | `rustls-webpki` (Rust) | `0.103.15` → **`0.103.16`**. Certificate verification fix preventing acceptance of distrusted intermediates. |
 | `RUSTSEC-2026-0381` / `CVE-2026-111943` | `webpki-roots` (Rust) | `1.0.9` → **`1.0.11`** (`0.26.11` was already patched and delegates to `1.0.11`). Removes trust in distrusted emSign intermediates. |
 | `RUSTSEC-2024-0449` | `unsafe-libyaml` (Rust) | **Removed.** Replaced `serde_yaml 0.9.34+deprecated` (and its C-transpiled `unsafe-libyaml` dependency) with **`serde-saphyr 2.0.0`** (`deserialize` feature only) in `backend/src/services/kubernetes.rs` for kubeconfig import parsing. |
 | `GHSA-mrhx-c7xc-m3w5` / `CVE-2023-54404` | `zod` (npm) | `4.4.3` → **`4.6.7`** in `frontend/package-lock.json` (`dev` transitive of `eslint-plugin-react-hooks`, never bundled). |
@@ -88,7 +89,7 @@ A `command-injection` barrier model (`.github/codeql/extensions/strata-rust-mode
 | Schema | None |
 | REST / WebSocket API | None |
 | Environment variables | None |
-| Runtime dependencies | `russh` `0.64.1` → `0.65.0`, `tokio` `1.53.1` → `1.54.1`, `crypto-bigint` `0.7.5` → `0.7.10`, `ctutils` `0.4.2` → `0.4.7`, `libz-sys` `1.1.29` → `1.1.31`, `webpki-roots` `1.0.9` → `1.0.11`, `rustls` `0.23.45` → `0.23.46`, `serde_yaml` (`unsafe-libyaml`) replaced by `serde-saphyr` `2.0.0`; `nginx` `1.31.8-alpine`; `zod` `4.6.7` (dev) and frontend packages as listed |
+| Runtime dependencies | `russh` `0.64.1` → `0.65.0`, `tokio` `1.53.1` → `1.54.1`, `crypto-bigint` `0.7.5` → `0.7.10`, `ctutils` `0.4.2` → `0.4.7`, `libz-sys` `1.1.29` → `1.1.31`, `rustls-webpki` `0.103.15` → `0.103.16`, `webpki-roots` `1.0.9` → `1.0.11`, `rustls` `0.23.45` → `0.23.46`, `yoke` / `yoke-derive` `0.8.3` → `0.8.4`, `serde_yaml` (`unsafe-libyaml`) replaced by `serde-saphyr` `2.0.0`; `nginx` `1.31.8-alpine`; `zod` `4.6.7` (dev) and frontend packages as listed |
 | Behaviour | None for normal sessions; hardens SSH client against malicious target peers and fixes pre-auth keepalive CPU spin |
 
 ### Testing
@@ -97,6 +98,8 @@ All on `rust:1.99-slim-trixie`, with `russh` 0.65.0 in the lockfile:
 
 | Check | Result |
 | ----- | ------ |
+| `cargo audit -f ../Cargo.lock --deny unsound --deny unmaintained` | **0 vulnerabilities, 0 warnings** |
+| `cargo deny --all-features check bans licenses sources` | `bans ok, licenses ok, sources ok` |
 | `cargo test -p strata-session --all-features` | **285 passed**, 0 failed |
 | `cargo test -p strata-backend services::ad_sync::tests` | **43 passed**, 0 failed |
 | `cargo test -p strata-backend services::kubernetes::tests` | **6 passed**, 0 failed |

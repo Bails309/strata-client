@@ -629,6 +629,24 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v2.3.10 → v2.3.11 (russh 0.65.0, dependency hygiene)
+
+Rebuild the backend and frontend images. **No migration, no `.env` change, no behaviour change.**
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+⚠ Recreating the backend ends live sessions.
+
+| Change | Who notices |
+| ------ | ----------- |
+| `russh` `0.65.0` in the SSH engine (bounds `EXT_INFO` packets, rejects zero max packet size, guards nested OpenSSH certificates, fixes pre-auth keepalive CPU spin and channel window accounting) | Nobody in normal operation; sessions waiting at an interactive `Login as:` / `Password:` prompt past 30 s no longer spin a CPU core |
+| `rustls` `0.23.46`, `nginx` `1.31.8-alpine`, and routine frontend dependency updates | Nobody |
+
 #### v2.3.9 → v2.3.10 (terminal scrollback, Azure recording upload)
 
 Rebuild the backend and frontend images. **No migration, no `.env` change.**

@@ -111,11 +111,14 @@ tracing = { workspace = true }
 # (#766); its `legacy-ed25519-pkcs8-parser` removal changes nothing here,
 # because that opt-in feature was never enabled. 0.64.1 fixes
 # GHSA-4wc5-f2rc-q74m (agent server; unreachable here, agent forwarding is declined).
+# 0.65.0 fixes GHSA-4p9f-7p9m-5vfg (unbounded EXT_INFO allocations on the client),
+# GHSA-fw5c-8223-6h42 (zero max packet size stalling channel writes), and
+# GHSA-3hm4-p7h4-rvwp (stack exhaustion via nested OpenSSH certificates).
 #
 # `ring` rather than the default `aws-lc-rs`: aws-lc is a C library, and
 # removing C from the session tier is the point of this crate. rustls
 # already standardises the workspace on ring.
-russh = { version = "0.64.1", optional = true, default-features = false, features = [
+russh = { version = "0.65.0", optional = true, default-features = false, features = [
     "ring",
     "flate2",
 ] }

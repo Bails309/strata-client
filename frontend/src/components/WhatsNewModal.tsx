@@ -30,6 +30,23 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "2.3.11",
+    subtitle:
+      "A maintenance and security release: the SSH engine moves to russh 0.65.0 alongside routine dependency updates. Nothing changes in how you use Strata.",
+    sections: [
+      {
+        title: "Hardened SSH and SFTP engine (russh 0.65.0)",
+        description:
+          "Remote SSH and SFTP sessions now use russh 0.65.0, which protects the client against malicious or misbehaving SSH targets (bounding extension messages, rejecting zero-sized packet limits, and guarding certificate parsing) and fixes a CPU spin when a session sits at an interactive login prompt past the keepalive interval.",
+      },
+      {
+        title: "For administrators",
+        description:
+          "Rebuild the backend and frontend images as usual. There is no database migration and no configuration change.",
+      },
+    ],
+  },
+  {
     version: "2.3.10",
     subtitle:
       "Scroll back through SSH and Kubernetes terminals with the mouse wheel, and recordings that reliably move to Azure Blob Storage instead of filling the local disk.",

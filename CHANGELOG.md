@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.11] — 2026-10-29
+
+### Patch release — `russh` 0.65.0 and routine dependency updates
+
+### The ask
+
+> *"Can we migrate russh to the latest v0.65.0"*
+
+### Summary
+
+| Area | Change | Runtime effect |
+| ---- | ------ | -------------- |
+| SSH engine | `russh` `0.64.1` → **`0.65.0`** | Closes 3 client/shared advisories (`GHSA-4p9f-7p9m-5vfg`, `GHSA-fw5c-8223-6h42`, `GHSA-3hm4-p7h4-rvwp`) and 3 agent-server advisories (`GHSA-9wfm-jcj8-jfv9`, `GHSA-662x-8wvj-2276`, `GHSA-vp5q-ff62-jwqv`); fixes keepalive timer CPU spin before authentication (`#791`) and channel window accounting (`#790`) |
+| TLS | `rustls` `0.23.45` → `0.23.46` (#503) | Routine patch update |
+| Frontend & container | `nginx` `1.31.6-alpine` → `1.31.8-alpine` (#500); `dompurify` `3.4.17` (#502); `react` / `react-dom` `19.3.1`, `i18next` `26.5.11`, `marked` `18.1.1`, `mermaid` `12.2.0`, `react-i18next` `17.1.9`, `undici` `8.12.3` (#504); `vite` `8.3.5` (#499) and dev/E2E tooling (#495, #501) | Routine minor/patch dependency hygiene |
+
+### Changed — `russh` 0.64.1 → 0.65.0
+
+**`russh` 0.64.1 → 0.65.0** (`crates/strata-session`). Only `russh` itself moved in `Cargo.lock` for the SSH upgrade; `russh-cryptovec` (`0.62.0`), `russh-util` (`0.52.0`) and `russh-sftp` (`3.0.0`) are unchanged. Both breaking changes in `v0.65.0` are outside Strata's call sites:
+
+- `server::Handler::auth_publickey_offered` and `server::Handler::auth_publickey` now take `server::PublicKeyOffer` and `server::VerifiedPublicKey` (#785) — Strata uses `russh` exclusively as an SSH **client** (`client::Handler`).
+- Removal of the no-op `async-trait` crate feature (#786) — `strata-session` already builds `russh` with `default-features = false, features = ["ring", "flate2"]` (plus `russh/rsa` via `ssh-rsa`).
+
+#### Security advisories addressed in `russh` 0.65.0
+
+| Advisory | Component | Reachability in Strata |
+| -------- | --------- | ---------------------- |
+| [GHSA-4p9f-7p9m-5vfg](https://github.com/Eugeny/russh/security/advisories/GHSA-4p9f-7p9m-5vfg) — unbounded allocations via repeated `EXT_INFO` packets on the SSH client | `russh::client` | **Reachable post-connect from a malicious SSH target.** A target server could send repeated `EXT_INFO` messages to grow client memory over time. Now bounded. |
+| [GHSA-fw5c-8223-6h42](https://github.com/Eugeny/russh/security/advisories/GHSA-fw5c-8223-6h42) — peer-declared zero maximum packet size permanently stalls channel writes | Channel flow control | **Reachable post-authentication from a malicious SSH target.** A peer advertising a maximum packet size of `0` could hang channel writes on that session. |
+| [GHSA-3hm4-p7h4-rvwp](https://github.com/Eugeny/russh/security/advisories/GHSA-3hm4-p7h4-rvwp) — pre-authentication stack exhaustion via nested OpenSSH certificates | Certificate parsing | **Reachable during host-key check if a target presents a crafted nested OpenSSH certificate.** Now rejected without exhausting the stack. |
+| [GHSA-9wfm-jcj8-jfv9](https://github.com/Eugeny/russh/security/advisories/GHSA-9wfm-jcj8-jfv9), [GHSA-662x-8wvj-2276](https://github.com/Eugeny/russh/security/advisories/GHSA-662x-8wvj-2276), [GHSA-vp5q-ff62-jwqv](https://github.com/Eugeny/russh/security/advisories/GHSA-vp5q-ff62-jwqv) | `russh::keys::agent::server` / `pageant` | **Not reachable.** Strata never runs an SSH agent server, never uses Pageant, and declines agent forwarding by design. |
+
+#### Client bug fixes picked up from `russh` 0.65.0
+
+- **Keepalive timer before authentication (#791).** Re-arms the client keepalive timer when it fires before authentication completes instead of spinning the client session task on a CPU core — relevant when an SSH connection waits at Strata's interactive in-terminal `Login as:` / `Password:` prompt longer than the 30-second keepalive interval.
+- **Channel window accounting on window adjust (#790)** and **session recovery when a `Signer` fails after `PK_OK` (#788)**.
+
+### Scope & safety
+
+| Area | Change |
+| ---- | ------ |
+| Schema | None |
+| REST / WebSocket API | None |
+| Environment variables | None |
+| Runtime dependencies | `russh` `0.64.1` → `0.65.0`, `rustls` `0.23.45` → `0.23.46`; `nginx` `1.31.8-alpine`; frontend runtime & dev packages as listed |
+| Behaviour | None for normal sessions; hardens SSH client against malicious target peers and fixes pre-auth keepalive CPU spin |
+
+### Testing
+
+All on `rust:1.99-slim-trixie`, with `russh` 0.65.0 in the lockfile:
+
+| Check | Result |
+| ----- | ------ |
+| `cargo test -p strata-session --all-features` | **285 passed**, 0 failed |
+| `cargo clippy -p strata-session --all-features --all-targets -- -D warnings` | Clean (0 warnings) |
+| `cargo check -p strata-backend` | Clean |
+| `RUSSH_VERSION=0.65.0 bash scripts/check-vendored-forks.sh` | All three vendored forks still required |
+
+### Deploy
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+No migration and no `.env` change.
+
 ## [2.3.10] — 2026-10-08
 
 ### Patch release — scroll back through SSH and Kubernetes terminals, and recordings that reliably leave the local disk for Azure Blob Storage
